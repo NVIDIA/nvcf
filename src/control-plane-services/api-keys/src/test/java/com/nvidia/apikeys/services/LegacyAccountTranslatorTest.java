@@ -70,6 +70,12 @@ class LegacyAccountTranslatorTest {
     }
 
     @Test
+    void findServiceIdIsEmptyForUnmappedLegacyServiceId() {
+        assertThat(translator.findServiceId(SERVICE_ID_1)).contains(SERVICE_NAME);
+        assertThat(translator.findServiceId("other-service")).isEmpty();
+    }
+
+    @Test
     void toLegacyTranslatesServiceIdsAndDropsNcaId() {
         assertThat(translator.toLegacy(LEGACY_KEY_V2)).isEqualTo(KEY_VO_1);
     }
@@ -92,6 +98,32 @@ class LegacyAccountTranslatorTest {
                 BadRequestException.class,
                 () -> translator.toLegacy(key),
                 "Unknown issuer service: 'other-service'");
+    }
+
+    @Test
+    void toIntrospectionKeyTranslatesLegacyAccountServiceIds() {
+        assertThat(translator.toIntrospectionKey(LEGACY_KEY_V2)).isEqualTo(KEY_VO_1);
+    }
+
+    @Test
+    void toIntrospectionKeyKeepsUnmappedLegacyIssuer() {
+        var key = LEGACY_KEY_V2.toBuilder().issuerServiceId("other-service").build();
+
+        assertThat(translator.toIntrospectionKey(key).getIssuerServiceId())
+                .isEqualTo("other-service");
+    }
+
+    @Test
+    void toIntrospectionKeyKeepsOtherAccountServiceIds() {
+        var key = KEY_V2_VO_1.toBuilder()
+                .issuerServiceId(SERVICE_NAME)
+                .audienceServiceIds(Set.of(SERVICE_NAME))
+                .build();
+
+        var introspectionKey = translator.toIntrospectionKey(key);
+
+        assertThat(introspectionKey.getIssuerServiceId()).isEqualTo(SERVICE_NAME);
+        assertThat(introspectionKey.getAudienceServiceIds()).containsExactly(SERVICE_NAME);
     }
 
     @Test

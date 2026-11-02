@@ -20,6 +20,7 @@ package com.nvidia.apikeys.validators;
 import com.nvidia.apikeys.caching.CachingKeysLoader;
 import com.nvidia.apikeys.caching.IntrospectionKeyOwnerValidator;
 import com.nvidia.apikeys.dto.introspection.IntrospectionRequest;
+import com.nvidia.apikeys.vo.IntrospectionKeyVo;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.boot.exceptions.BootResponseException;
@@ -40,17 +41,18 @@ public class IntrospectionValidator {
     private final CachingKeysLoader cachingKeysLoader;
 
     public KeyVo validate(IntrospectionRequest request, String apiKeyHash) {
-        KeyVo key = cachingKeysLoader.loadKeyByHash(apiKeyHash);
+        IntrospectionKeyVo introspectionKey = cachingKeysLoader.loadKeyByHash(apiKeyHash);
+        KeyVo key = introspectionKey.key();
 
         assertKeyIsActive(key);
         assertAudienceServiceMatches(request, key);
 
-        performKeyOwnerValidations(key);
+        performKeyOwnerValidations(introspectionKey);
 
         return key;
     }
 
-    private void performKeyOwnerValidations(KeyVo key) {
+    private void performKeyOwnerValidations(IntrospectionKeyVo key) {
         try {
             introspectionKeyOwnerValidator.assertKeyOwnerValid(key);
         } catch (Exception e) {

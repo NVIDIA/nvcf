@@ -17,24 +17,26 @@
 
 package com.nvidia.apikeys.caching;
 
-import static com.nvidia.apikeys.TestData.KEY_OWNER_VO_1;
 import static com.nvidia.apikeys.TestData.KEY_VO_1;
+import static com.nvidia.apikeys.TestData.NCA_ID_1;
+import static com.nvidia.apikeys.TestData.SERVICE_ID_1;
 import static com.nvidia.apikeys.TestData.USER_KEY_OWNER_ID_1;
 import static com.nvidia.apikeys.utils.TestUtils.assertThrowsExceptionWithDetails;
 import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import com.nvidia.apikeys.persistance.dao.KeysDao;
+import com.nvidia.apikeys.services.KeysV2Service;
+import com.nvidia.apikeys.vo.IntrospectionKeyVo;
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
-import com.nvidia.apikeys.vo.KeyOwnerVo;
 import com.nvidia.apikeys.vo.KeyVo;
-import com.nvidia.boot.exceptions.NotFoundException;
 import com.nvidia.boot.exceptions.BadRequestException;
-import java.util.Optional;
+import com.nvidia.boot.exceptions.NotFoundException;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,79 +47,80 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @ExtendWith(MockitoExtension.class)
 class IntrospectionKeyOwnerValidatorTest {
 
+    private static final IntrospectionKeyVo KEY_1 = new IntrospectionKeyVo(NCA_ID_1, KEY_VO_1);
+    private static final String OTHER_SERVICE_ID = "other-service";
+
     @Mock
-    private KeysDao keysDao;
+    private KeysV2Service keysV2Service;
 
     @InjectMocks
     private IntrospectionKeyOwnerValidator validator;
 
-    @Test
-    void assertKeyOwnerValid_shouldFetchUserInfo() {
-        when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1))
-                .thenReturn(Optional.of(KEY_OWNER_VO_1));
-
-        IntStream.range(0, 100).forEach(i -> validator.assertKeyOwnerValid(KEY_VO_1));
-        validator.invalidateCaches();
-        IntStream.range(0, 100).forEach(i -> validator.assertKeyOwnerValid(KEY_VO_1));
-
-        verify(keysDao, times(2))
-                .getKeyOwner(USER, USER_KEY_OWNER_ID_1);
+    private void givenStatus(String ncaId, String ownerId, String issuerServiceId,
+                             KeyOwnerStatus status) {
+        when(keysV2Service.getEffectiveOwnerStatus(ncaId, USER, ownerId, issuerServiceId))
+                .thenReturn(status);
     }
 
     @Test
-    void assertKeyOwnerValid_shouldThrowIfNoKeyOwner() {
-        when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1)).thenReturn(Optional.empty());
-        assertThrowsExceptionWithDetails(
-                BadRequestException.class, () -> validator.assertKeyOwnerValid(KEY_VO_1),
-                "Invalid key owner");
+    void assertKeyOwnerValid_shouldCacheOwnerStatus() {
+        givenStatus(NCA_ID_1, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KeyOwnerStatus.ACTIVE);
+
+        IntStream.range(0, 100).forEach(i -> validator.assertKeyOwnerValid(KEY_1));
+        validator.invalidateCaches();
+        IntStream.range(0, 100).forEach(i -> validator.assertKeyOwnerValid(KEY_1));
+
+        verify(keysV2Service, times(2))
+                .getEffectiveOwnerStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1);
     }
 
     @Test
     void assertKeyOwnerValid_shouldThrowIfNotActive() {
-        KeyOwnerVo suspendedOwner = KEY_OWNER_VO_1.toBuilder()
-                .ownerStatus(KeyOwnerStatus.SUSPENDED)
-                .build();
-        when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1))
-                .thenReturn(Optional.of(suspendedOwner));
+        givenStatus(NCA_ID_1, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KeyOwnerStatus.SUSPENDED);
 
         assertThrowsExceptionWithDetails(
-                NotFoundException.class, () -> validator.assertKeyOwnerValid(KEY_VO_1),
+                NotFoundException.class, () -> validator.assertKeyOwnerValid(KEY_1),
+                "Key not found.");
+    }
+
+    @Test
+    void assertKeyOwnerValid_shouldCheckTheKeysIssuerService() {
+        givenStatus(NCA_ID_1, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KeyOwnerStatus.ACTIVE);
+        givenStatus(NCA_ID_1, USER_KEY_OWNER_ID_1, OTHER_SERVICE_ID, KeyOwnerStatus.SUSPENDED);
+        var otherServiceKey = new IntrospectionKeyVo(
+                NCA_ID_1, KEY_VO_1.toBuilder().issuerServiceId(OTHER_SERVICE_ID).build());
+
+        validator.assertKeyOwnerValid(KEY_1);
+        assertThrowsExceptionWithDetails(
+                NotFoundException.class, () -> validator.assertKeyOwnerValid(otherServiceKey),
+                "Key not found.");
+    }
+
+    @Test
+    void assertKeyOwnerValid_shouldCacheEachAccountSeparately() {
+        givenStatus(NCA_ID_1, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KeyOwnerStatus.ACTIVE);
+        givenStatus("nca-2", USER_KEY_OWNER_ID_1, SERVICE_ID_1, KeyOwnerStatus.SUSPENDED);
+
+        validator.assertKeyOwnerValid(KEY_1);
+        assertThrowsExceptionWithDetails(
+                NotFoundException.class,
+                () -> validator.assertKeyOwnerValid(new IntrospectionKeyVo("nca-2", KEY_VO_1)),
                 "Key not found.");
     }
 
     @Test
     void assertKeyOwnerValid_shouldHandleCacheLoadFailure() {
-        when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1))
+        when(keysV2Service.getEffectiveOwnerStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1,
+                                                   SERVICE_ID_1))
                 .thenThrow(new RuntimeException("Database error"));
 
         IllegalStateException exception = assertThrows(
                 IllegalStateException.class,
-                () -> validator.assertKeyOwnerValid(KEY_VO_1)
+                () -> validator.assertKeyOwnerValid(KEY_1)
         );
         assertThat(exception.getMessage()).isEqualTo("Failed to retrieve key owner details");
         assertThat(exception.getCause()).isInstanceOf(RuntimeException.class);
         assertThat(exception.getCause().getMessage()).contains("Database error");
-    }
-
-    @Test
-    void invalidateCaches_shouldForceCacheReload() {
-        when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1))
-                .thenReturn(Optional.of(KEY_OWNER_VO_1));
-
-        // First call - cache miss
-        validator.assertKeyOwnerValid(KEY_VO_1);
-        
-        // Second call - cache hit
-        validator.assertKeyOwnerValid(KEY_VO_1);
-        
-        // Invalidate cache
-        validator.invalidateCaches();
-        
-        // Third call - cache miss after invalidation
-        validator.assertKeyOwnerValid(KEY_VO_1);
-
-        verify(keysDao, times(2))
-                .getKeyOwner(USER, USER_KEY_OWNER_ID_1);
     }
 
     @Test
@@ -128,9 +131,10 @@ class IntrospectionKeyOwnerValidatorTest {
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> validator.assertKeyOwnerValid(invalidKey),
+                () -> validator.assertKeyOwnerValid(new IntrospectionKeyVo(NCA_ID_1, invalidKey)),
                 "Invalid key owner"
         );
+        verifyNoInteractions(keysV2Service);
     }
 
     @Test
@@ -141,32 +145,26 @@ class IntrospectionKeyOwnerValidatorTest {
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> validator.assertKeyOwnerValid(invalidKey),
+                () -> validator.assertKeyOwnerValid(new IntrospectionKeyVo(NCA_ID_1, invalidKey)),
                 "Invalid key owner"
         );
+        verifyNoInteractions(keysV2Service);
     }
 
     @Test
     void assertKeyOwnerValid_shouldHandleCacheSizeLimit() {
-        when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1))
-                .thenReturn(Optional.of(KEY_OWNER_VO_1));
+        when(keysV2Service.getEffectiveOwnerStatus(any(), any(), any(), any()))
+                .thenReturn(KeyOwnerStatus.ACTIVE);
 
-        // Create 1000 different keys to reach cache size limit
         for (int i = 0; i < 1000; i++) {
             KeyVo key = KEY_VO_1.toBuilder()
                     .ownerId("user-" + i)
                     .build();
-            KeyOwnerVo owner = KEY_OWNER_VO_1.toBuilder()
-                    .ownerId("user-" + i)
-                    .build();
-            when(keysDao.getKeyOwner(USER, "user-" + i))
-                    .thenReturn(Optional.of(owner));
-            validator.assertKeyOwnerValid(key);
+            validator.assertKeyOwnerValid(new IntrospectionKeyVo(NCA_ID_1, key));
         }
 
-        // Verify that the cache is working correctly even at capacity
-        validator.assertKeyOwnerValid(KEY_VO_1);
-        verify(keysDao, times(1))
-                .getKeyOwner(USER, USER_KEY_OWNER_ID_1);
+        validator.assertKeyOwnerValid(KEY_1);
+        verify(keysV2Service, times(1))
+                .getEffectiveOwnerStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1);
     }
 }

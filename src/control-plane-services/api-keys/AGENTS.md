@@ -64,6 +64,31 @@ legacy routing in these two classes instead of the DAOs or controllers.
 maps every model column to a same-named value-object field, so a new column on
 an encrypted model also needs that field on its `@ValueObject`.
 
+Controllers marked `@V1KeyManagement` serve the v1 key management API and use
+only the legacy tables. `apikeys.v1-key-management-enabled=false` makes them
+return 410 through `V1KeyManagementInterceptor`. Introspection, authorization
+evaluation, and service lookups stay available. Startup fails if the legacy key
+migration is enabled while v1 key management is still on.
+
+`com.nvidia.apikeys.migration` copies legacy keys into `keys_v2` and
+`keys_by_owner_and_account_and_service` when
+`apikeys.migration.legacy-keys.enabled` is true. A run holds a lease row in
+`row_update_lock` through `LegacyKeyMaintenance`. While the lease exists,
+`KeysV2Service` returns 503 for legacy-account key updates and deletes on every
+replica, whether or not the task is enabled there. Ship the 503 check with the
+task disabled first, and enable it only after every replica runs that build.
+A clean run writes a `("legacy_key_migration", "completed")` row with no TTL
+before it releases the lease. Every later run finds it and ends without taking
+the lease. Delete that row to run the migration again.
+After the key copy, the same run copies legacy owner status into the v2 owner
+status tables and writes `("legacy_key_migration", "owner_status_completed")`.
+`LegacyMigrationState` caches both markers. Once the owner status marker is
+seen, `KeysV2Service` uses the v2 owner status tables for the legacy account
+and still writes account-level changes to the legacy column. Deleting a marker
+takes effect only after a pod restart.
+The authorization throttle always uses the `keys_v2` lock name, so a migrated
+key keeps its interval.
+
 `KeyManagementFacade` holds the operations behind the key-owner, account-admin
 and platform-admin endpoints under `/v2/api-keys/<actor>`. Controllers only map
 their paths to facade calls with a `KeyManagementActor`. The actor selects the

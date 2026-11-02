@@ -19,8 +19,8 @@ package com.nvidia.apikeys.caching;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
-import com.nvidia.apikeys.services.ValidatingKeyLoader;
-import com.nvidia.apikeys.vo.KeyVo;
+import com.nvidia.apikeys.services.IntrospectionKeyLoader;
+import com.nvidia.apikeys.vo.IntrospectionKeyVo;
 import com.nvidia.boot.exceptions.NotFoundException;
 import java.time.Clock;
 import java.time.Duration;
@@ -33,15 +33,15 @@ import org.springframework.stereotype.Service;
 @Service
 public class CachingKeysLoader {
 
-    private final ValidatingKeyLoader keyLoader;
-    private final PrefetchingCache<String, KeyVo> prefetchingCache;
+    private final IntrospectionKeyLoader keyLoader;
+    private final PrefetchingCache<String, IntrospectionKeyVo> prefetchingCache;
     private final Cache<String, Boolean> invalidKeysCache;
 
-    public CachingKeysLoader(ValidatingKeyLoader keyLoader, Clock clock) {
+    public CachingKeysLoader(IntrospectionKeyLoader keyLoader, Clock clock) {
         this.keyLoader = keyLoader;
 
         prefetchingCache = new PrefetchingCache<>(
-                keyLoader::getKeyByHashIfExists, clock, Duration.ofSeconds(60));
+                keyLoader::getKeyByHash, clock, Duration.ofSeconds(60));
 
         invalidKeysCache = CacheBuilder.newBuilder()
                 .maximumSize(1000)
@@ -49,25 +49,24 @@ public class CachingKeysLoader {
                 .build();
     }
 
-    public KeyVo loadKeyByHash(String apiKeyHash) {
+    public IntrospectionKeyVo loadKeyByHash(String apiKeyHash) {
         if (invalidKeysCache.getIfPresent(apiKeyHash) != null) {
             throw new NotFoundException("Key not found");
         }
 
-        KeyVo key;
+        Optional<IntrospectionKeyVo> key;
         try {
-            Optional<KeyVo> optionalKeyVo = prefetchingCache.get(apiKeyHash);
-            if (optionalKeyVo.isPresent()) {
-                key = optionalKeyVo.get();
-            } else {
-                invalidKeysCache.put(apiKeyHash, Boolean.TRUE);
-                throw new NotFoundException("Key not found");
-            }
+            key = prefetchingCache.get(apiKeyHash);
         } catch (ExecutionException e) {
             log.error("failed to load key from prefetching cache, falling back", e);
-            key = keyLoader.loadKeyByHash(apiKeyHash);
+            return keyLoader.getKeyByHash(apiKeyHash)
+                    .orElseThrow(() -> new NotFoundException("Key not found"));
         }
-        return key;
+        if (key.isEmpty()) {
+            invalidKeysCache.put(apiKeyHash, Boolean.TRUE);
+            throw new NotFoundException("Key not found");
+        }
+        return key.get();
     }
 
     public void invalidate() {

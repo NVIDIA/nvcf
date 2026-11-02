@@ -33,4 +33,23 @@ public class RowUpdateLockDao {
         return repository.lock(tableName, recordKey, updatedAt, ttl);
     }
 
+    /**
+     * Extends the TTL of a lock this caller holds. Returns false when the lock expired or another
+     * caller holds it.
+     */
+    public boolean renew(String tableName, String recordKey, Instant token, int ttl) {
+        return repository.renew(tableName, recordKey, token, token, ttl);
+    }
+
+    /**
+     * Releases a lock only when this caller still holds it.
+     */
+    public boolean unlock(String tableName, String recordKey, Instant token) {
+        return repository.unlock(tableName, recordKey, token);
+    }
+
+    public boolean isLocked(String tableName, String recordKey) {
+        return repository.findByTableNameAndRecordKey(tableName, recordKey).isPresent();
+    }
+
 }

@@ -54,6 +54,23 @@ public class KeysDao {
 
 
     public SavedKeyVo save(KeyVo key, KeyOwnerVo owner) {
+        write(key, owner);
+        return readBack(key);
+    }
+
+    /**
+     * Writes the key rows without the owner's static status columns, so a key update never
+     * changes owner status. Null columns are not inserted.
+     */
+    public SavedKeyVo saveKeyOnly(KeyVo key) {
+        write(key, KeyOwnerVo.builder()
+                .ownerType(key.getOwnerType())
+                .ownerId(key.getOwnerId())
+                .build());
+        return readBack(key);
+    }
+
+    private void write(KeyVo key, KeyOwnerVo owner) {
         // write key record
         KeyModel keyModel = keyConverter.voToModel(key);
 
@@ -71,7 +88,10 @@ public class KeysDao {
         if (!writeResult.wasApplied()) {
             throw new CassandraException("Failed to write key into db");
         }
+    }
 
+    private SavedKeyVo readBack(KeyVo key) {
+        KeyByOwnerAndServiceVo keyByOwnerAndServiceVo;
         // read saved values back
         key = getKeyByHash(key.getKeyHash())
                 .orElseThrow(() -> new CassandraException("Failed to read saved key"));

@@ -66,21 +66,42 @@ public class LegacyAccountTranslator {
                         MESG_UNKNOWN_ISSUER_SERVICE.formatted(serviceId)));
     }
 
-    public String toServiceId(String legacyServiceId) {
+    public Optional<String> findServiceId(String legacyServiceId) {
         return serviceIdMap().entrySet().stream()
                 .filter(entry -> Strings.CS.equals(entry.getValue(), legacyServiceId))
                 .map(Map.Entry::getKey)
-                .findFirst()
-                .orElse(legacyServiceId);
+                .findFirst();
+    }
+
+    public String toServiceId(String legacyServiceId) {
+        return findServiceId(legacyServiceId).orElse(legacyServiceId);
     }
 
     public KeyVo toLegacy(KeyV2Vo key) {
+        return toKeyVo(key, toLegacyIssuerServiceId(key.getIssuerServiceId()),
+                       this::toLegacyServiceId);
+    }
+
+    /**
+     * Introspection view of a v2 key. Legacy account keys use legacy service IDs, as v1 callers
+     * expect. An issuer without a mapping is kept as it is. Other accounts are not translated.
+     */
+    public KeyVo toIntrospectionKey(KeyV2Vo key) {
+        if (isLegacy(key.getNcaId())) {
+            return toKeyVo(key, toLegacyServiceId(key.getIssuerServiceId()),
+                           this::toLegacyServiceId);
+        }
+        return toKeyVo(key, key.getIssuerServiceId(), UnaryOperator.identity());
+    }
+
+    private static KeyVo toKeyVo(
+            KeyV2Vo key, String issuerServiceId, UnaryOperator<String> audienceTranslation) {
         return KeyVo.builder()
                 .keyStatus(key.getKeyStatus())
                 .ownerType(key.getOwnerType())
                 .ownerId(key.getOwnerId())
-                .issuerServiceId(toLegacyIssuerServiceId(key.getIssuerServiceId()))
-                .audienceServiceIds(translate(key.getAudienceServiceIds(), this::toLegacyServiceId))
+                .issuerServiceId(issuerServiceId)
+                .audienceServiceIds(translate(key.getAudienceServiceIds(), audienceTranslation))
                 .keyId(key.getKeyId())
                 .keyHash(key.getKeyHash())
                 .createdAt(key.getCreatedAt())
