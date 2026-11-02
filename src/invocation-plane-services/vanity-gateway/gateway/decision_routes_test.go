@@ -742,3 +742,41 @@ func mustLLMGatewayDirector(t *testing.T, endpoint string) *LLMGatewayDirector {
 	require.NoError(t, err)
 	return director
 }
+
+// On the LLM Gateway path the decision routes replace only the model value,
+// so the rest of the body reaches the gateway byte for byte.
+func TestDecisionRoutesLLMPathReplacesOnlyTheModelValue(t *testing.T) {
+	const target = `"` + decisionFunctionID + "/" + decisionModel + `"`
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{
+			name: "key order, spacing and escapes kept",
+			body: "{ \"z\":1,\n  \"input\" : \"a<b && c>d \\u00e9\",\"model\" :\t\"" + decisionModel + "\" , \"state\":{\"model\":\"inner\"} }",
+			want: "{ \"z\":1,\n  \"input\" : \"a<b && c>d \\u00e9\",\"model\" :\t" + target + " , \"state\":{\"model\":\"inner\"} }",
+		},
+		{
+			name: "every top-level model member is replaced",
+			body: `{"model":"` + decisionModel + `","x":[1,2],"model":"other/fn"}`,
+			want: `{"model":` + target + `,"x":[1,2],"model":` + target + `}`,
+		},
+		{
+			name: "a model key in another case is replaced too",
+			body: `{"model":"` + decisionModel + `","MODEL":"other/fn"}`,
+			want: `{"model":` + target + `,"MODEL":` + target + `}`,
+		},
+	} {
+		for _, path := range []string{decisionsPath, systemOnePath} {
+			t.Run(path+" "+tc.name, func(t *testing.T) {
+				requests := make(chan capturedRequest, 1)
+				backend := captureServer(t, requests, nil)
+				mux := openAIMux(t, decisionMappings(true, true, llmDecision), "http://nvcf.invalid", backend.URL)
+
+				rec := postDecision(t, mux, path, tc.body, nil)
+
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				assert.Equal(t, tc.want, awaitRequest(t, requests).body)
+			})
+		}
+	}
+}
