@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# As deploy-pid1, with HF_HOME set by the chart: the model lands where the chart says.
+kind: Deployment
+launch: exec
+hfHome: /data/hf

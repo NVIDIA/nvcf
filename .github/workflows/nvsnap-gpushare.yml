@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Compile nvsnap's gpushare C code (libnvsnap_gpushare.so, nvsnap-gpu-suspend
+# and its GPU tests) for amd64 and arm64 with warnings as errors. The Bazel row
+# for nvsnap covers its Go code only, so without this job a change to the C
+# code is first compiled when the agent base image is built. Runs only when the
+# C code, its build or this workflow changes; no GPU is needed to compile.
+
+name: nvsnap gpushare
+
+on:
+  push:
+    branches: [main, 'release-**']
+    paths: &paths
+      - 'src/compute-plane-services/nvsnap/docker/agent/gpushare/**'
+      - 'src/compute-plane-services/nvsnap/tests/gpushare/**'
+      - 'src/compute-plane-services/nvsnap/docker/agent/Dockerfile.base'
+      - 'src/compute-plane-services/nvsnap/scripts/check-gpushare-build.sh'
+      - '.github/workflows/nvsnap-gpushare.yml'
+  pull_request:
+    branches: [main, 'release-**']
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nvsnap-gpushare-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build gpushare (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        if: matrix.platform == 'linux/arm64'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Compile with warnings as errors
+        env:
+          PLATFORMS: ${{ matrix.platform }}
+        run: src/compute-plane-services/nvsnap/scripts/check-gpushare-build.sh

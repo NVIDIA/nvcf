@@ -32,7 +32,7 @@ limitations under the License.
 // calls Prepare; this module is intentionally a leaf concerned only
 // with mount lifecycle so it stays testable without checkpointstore.
 //
-// See docs/proposals/rootfs-restore-overlayfs.md for the full design.
+// See docs/ARCHITECTURE.md §2 for the full design.
 
 package agent
 

@@ -28,8 +28,13 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 )
+
+// The election's Lease elector is what vouches for a leader's stamped
+// hash in the capture watcher.
+var _ rootfsonly.StampVerifier = (*election.LeaseElector)(nil)
 
 // RootfsCaptureConfig configures the optional rootfs-only capture
 // loop. The backend is always Local — gpdrox/PVC-fanout was removed
@@ -160,21 +165,33 @@ func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig)
 		MountinfoProcRoot: "", // empty → mountinfo.DefaultProcRoot()
 		CacheDir:          a.config.RootfsCapture.PodCacheDir,
 		Log:               a.log.WithField("subsys", "rootfsonly.capture"),
-		// Push each successful capture to nvsnap-blobstore (same-cluster
-		// tier-3 fallback) AND, when cross-cluster replication is enabled,
-		// to this cluster's home bucket (the L4 cross-cluster tier).
-		// Both are best-effort; failures are logged and don't roll back
-		// the capture.
+		// When cross-cluster replication is enabled, push each successful
+		// capture to this cluster's home bucket (the L4 cross-cluster
+		// tier). Best-effort; failures are logged and don't roll back the
+		// capture.
 		PostCommit: a.postCaptureCommit,
+	}
+	if criuIsDefault() {
+		// CRIU captures the whole process; the cachedir capture watcher
+		// would only take a second, lesser capture of labeled pods (and
+		// none of an elected one: there is no election under CRIU). The
+		// backend above still serves the webhook and the restores.
+		a.log.Info("rootfs-only capture watcher not started: the capture method is CRIU")
+		return backend, nil
 	}
 	watcher := &rootfsonly.Watcher{
 		Capturer:    capturer,
-		Composer:    &rootfsonly.HashInputComposer{CUDADriverMajor: cfg.CUDADriverMajor},
+		Composer:    a.hashComposer(),
 		KubeClient:  kubeClient,
 		NodeName:    a.config.NodeName,
 		WarmupDelay: cfg.WarmupDelay,
 		Concurrency: cfg.Concurrency,
 		Log:         a.log.WithField("subsys", "rootfsonly.watcher"),
+	}
+	// A pod's stamped hash is honoured only when its election vouches
+	// for it; with the election off, none is.
+	if v, ok := a.elector.(rootfsonly.StampVerifier); ok {
+		watcher.Stamps = v
 	}
 
 	a.log.WithFields(map[string]any{
@@ -195,7 +212,7 @@ func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig)
 }
 
 // buildAgentBackend constructs the checkpointstore backend the agent
-// writes captures to. Chain layout (per docs/design/ROOTFS-EVERYWHERE.md):
+// writes captures to. Chain layout (per docs/ARCHITECTURE.md §2):
 //
 //   - LocalBackend         — per-node hostPath cache (restore-fast on same node)
 //   - ConfigMapBackend     — manifest CM (cluster-wide hash → metadata lookup)
@@ -205,7 +222,7 @@ func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig)
 // PerCapturePVCBackend is appended only if the L2 config (a.l2Backend) is
 // wired — it requires a working RWX-capable StorageClass + VolumeSnapshotClass.
 // When missing, the chain degrades to Local + ConfigMap and restore falls
-// back to L3 (peer cascade) / L4 (nvsnap-blobstore).
+// back to L3 (peer cascade).
 func buildAgentBackend(cfg RootfsCaptureConfig, kubeClient kubernetes.Interface, a *Agent) (checkpointstore.Backend, error) {
 	inner, err := checkpointstore.NewLocal(cfg.CacheDir)
 	if err != nil {
@@ -242,8 +259,43 @@ func buildKubeClient() (kubernetes.Interface, error) {
 
 func loadKubeConfig() (*rest.Config, error) {
 	if cfg, err := rest.InClusterConfig(); err == nil {
-		return cfg, nil
+		return withClientLimits(cfg), nil
 	}
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, nil).ClientConfig()
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, nil).ClientConfig()
+	if err != nil {
+		return nil, err
+	}
+	return withClientLimits(cfg), nil
+}
+
+// KubeClientQPS and KubeClientBurst bound every Kubernetes client the
+// agent builds. The admission webhook shares its client with the reapers
+// and watchers; at client-go's default of 5 requests a second a burst of
+// background lists queues admission calls past the apiserver's webhook
+// timeout, and the pod is then admitted without nvsnap. The apiserver's
+// own priority and fairness still protects it.
+var (
+	KubeClientQPS   float32 = 50
+	KubeClientBurst         = 100
+)
+
+func withClientLimits(cfg *rest.Config) *rest.Config {
+	cfg.QPS, cfg.Burst = KubeClientQPS, KubeClientBurst
+	return cfg
+}
+
+// hashComposer composes a pod's capture identity. The webhook (election,
+// seed, lookup) and the capture watcher both use it, so a capture is filed
+// under the hash admission looks up, salt and tenant included.
+func (a *Agent) hashComposer() *rootfsonly.HashInputComposer {
+	major := a.config.RootfsCapture.CUDADriverMajor
+	if major == 0 {
+		major = 580
+	}
+	return &rootfsonly.HashInputComposer{
+		CUDADriverMajor: major,
+		Salt:            a.config.Webhook.CacheSalt,
+		Tenant:          a.tenantScope,
+	}
 }

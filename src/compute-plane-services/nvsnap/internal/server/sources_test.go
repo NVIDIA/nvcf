@@ -95,9 +95,6 @@ func TestPeerAddCheckpoint_RoundTrip(t *testing.T) {
 	if len(got.Peers) != 1 || got.Peers[0].NodeName != "node-A" || got.Peers[0].AgentURL != "http://10.0.0.1:8081" {
 		t.Errorf("peers = %+v, want [{node-A, http://10.0.0.1:8081}]", got.Peers)
 	}
-	if got.BlobURI != "" {
-		t.Errorf("blob_uri = %q, want empty (5d.1 only)", got.BlobURI)
-	}
 }
 
 // TestPeerAddCheckpoint_UnknownCheckpoint — registering for a
@@ -145,7 +142,7 @@ func TestPeerRemoveCheckpoint_Idempotent(t *testing.T) {
 }
 
 // TestGetCheckpointSources_NoPeers — fresh checkpoint, no peers
-// registered. Cascade gets back an empty list and empty blob URI;
+// registered. Cascade gets back an empty list;
 // the receiver surfaces the failure. NOT a 500.
 func TestGetCheckpointSources_NoPeers(t *testing.T) {
 	s := newTestServerWithCatalog(t)
@@ -167,7 +164,7 @@ func TestGetCheckpointSources_NoPeers(t *testing.T) {
 }
 
 // TestRegisterCheckpoint_HappyPath — the agent's post-capture
-// registration call. After this, peer-add / blob-uploaded /
+// registration call. After this, peer-add /
 // /sources all have a row to anchor on. Idempotent on re-call.
 func TestRegisterCheckpoint_HappyPath(t *testing.T) {
 	s := newTestServerWithCatalog(t)
@@ -237,7 +234,7 @@ func TestRegisterCheckpoint_Idempotent(t *testing.T) {
 }
 
 // TestRegisterCheckpoint_UnlocksLaterOps — after register, peer-add
-// and blob-uploaded both succeed. This is the bug the fix
+// succeeds. This is the bug the fix
 // addresses: previously they 404'd because no row existed.
 func TestRegisterCheckpoint_UnlocksLaterOps(t *testing.T) {
 	s := newTestServerWithCatalog(t)
@@ -262,14 +259,6 @@ func TestRegisterCheckpoint_UnlocksLaterOps(t *testing.T) {
 		t.Errorf("peer-add after register: %d (was 404 before fix)", rr.Code)
 	}
 
-	// blob-uploaded should also succeed.
-	blobBody, _ := json.Marshal(blobUploadedRequest{BlobURI: "http://nvsnap-blobstore:9000"})
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/checkpoints/"+id+"/blob-uploaded", bytes.NewReader(blobBody))
-	rr = httptest.NewRecorder()
-	s.router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusNoContent {
-		t.Errorf("blob-uploaded after register: %d (was 404 before fix)", rr.Code)
-	}
 }
 
 // TestRegisterCheckpoint_BadRequest — missing required fields → 400.
@@ -288,65 +277,6 @@ func TestRegisterCheckpoint_BadRequest(t *testing.T) {
 		if rr.Code != http.StatusBadRequest {
 			t.Errorf("case %d: status = %d, want 400", i, rr.Code)
 		}
-	}
-}
-
-// TestBlobUploaded_HappyPath — agent uploader's success callback.
-// Sets s3_uri so /sources surfaces it as the tier-3 fallback.
-func TestBlobUploaded_HappyPath(t *testing.T) {
-	s := newTestServerWithCatalog(t)
-	seedCheckpointForServer(t, s, "ckpt-blob")
-
-	body, _ := json.Marshal(blobUploadedRequest{
-		BlobURI: "http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000",
-	})
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/checkpoints/ckpt-blob/blob-uploaded", bytes.NewReader(body))
-	rr := httptest.NewRecorder()
-	s.router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
-	}
-
-	// /sources should now surface the blob URI.
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/checkpoints/ckpt-blob/sources", http.NoBody)
-	rr = httptest.NewRecorder()
-	s.router.ServeHTTP(rr, req)
-	var got sourcesResponse
-	_ = json.NewDecoder(rr.Body).Decode(&got)
-	if got.BlobURI == "" {
-		t.Errorf("blob_uri empty after blob-uploaded callback")
-	}
-}
-
-// TestBlobUploaded_BadRequest — missing blob_uri or malformed JSON →
-// 400; checkpoint id unknown → 404. Catches agent bugs early.
-func TestBlobUploaded_BadRequest(t *testing.T) {
-	s := newTestServerWithCatalog(t)
-	seedCheckpointForServer(t, s, "ckpt-known")
-
-	cases := []struct {
-		name, path, body string
-		want             int
-	}{
-		{"unknown-id", "/api/v1/checkpoints/ghost/blob-uploaded",
-			`{"blob_uri":"http://x"}`, http.StatusNotFound},
-		{"empty-uri", "/api/v1/checkpoints/ckpt-known/blob-uploaded",
-			`{"blob_uri":""}`, http.StatusBadRequest},
-		{"missing-uri", "/api/v1/checkpoints/ckpt-known/blob-uploaded",
-			`{}`, http.StatusBadRequest},
-		{"bad-json", "/api/v1/checkpoints/ckpt-known/blob-uploaded",
-			`{not json`, http.StatusBadRequest},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewBufferString(tc.body))
-			rr := httptest.NewRecorder()
-			s.router.ServeHTTP(rr, req)
-			if rr.Code != tc.want {
-				t.Errorf("status = %d, want %d", rr.Code, tc.want)
-			}
-		})
 	}
 }
 

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Resolve sibling-repo dependencies under the conventional CONTRIBUTING.md
-# layout. Sourced by build/test scripts; sets globals like LIBZMQ_SRC etc.
+# layout. Sourced by build/test scripts; sets globals like CRIU_SOURCE.
 #
 # Lookup order for each component <name>:
 #   1. $<UPPER_NAME>_SRC if set by the caller — used verbatim
@@ -16,7 +16,7 @@ _nvsnap_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 nvsnap_resolve_sibling() {
     # nvsnap_resolve_sibling <env-var-name> <sibling-dir-name>
-    # Example: nvsnap_resolve_sibling LIBZMQ_SRC libzmq
+    # Example: nvsnap_resolve_sibling CRIU_SOURCE criu
     local var_name="$1"
     local sib_name="$2"
     local current

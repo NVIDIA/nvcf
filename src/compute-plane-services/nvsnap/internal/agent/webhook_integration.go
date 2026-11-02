@@ -19,11 +19,13 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
@@ -42,12 +44,6 @@ type WebhookConfig struct {
 	KeyFile    string // PEM key
 	Path       string // default "/mutate"
 
-	// AutoInject configures the image refs the webhook stamps into
-	// auto-injected init containers when a pod carries
-	// nvsnap.io/auto-inject: "true". Empty fields disable that branch
-	// (the webhook fails open and admits the pod unchanged).
-	AutoInject webhook.AutoInjectImages
-
 	// L2WaitImage is the nvsnap-l2-wait init-container image ref
 	// (nvsnap#147). When set, restore pods admitted with
 	// nvsnap.io/restore-from get a nvsnap-l2-wait init container that
@@ -57,6 +53,23 @@ type WebhookConfig struct {
 	// finishes snap+clone (whichever is faster between kubelet's
 	// retry cadence and snap+clone wall time).
 	L2WaitImage string
+
+	// AgentPlacement is the agent DaemonSet's nodeSelector and node
+	// affinity as JSON (webhook.AgentPlacement), set by the chart.
+	AgentPlacement string
+
+	// DynamoNamespace is the fixed Dynamo namespace for Dynamo components
+	// (webhook.Mutator.DynamoNamespace).
+	DynamoNamespace string
+	// DynamoLeaseTTL is webhook.Mutator.DynamoLeaseTTL.
+	DynamoLeaseTTL int
+	// CaptureLivenessBudget is webhook.Mutator.CaptureLivenessBudget.
+	CaptureLivenessBudget int
+
+	// CacheSalt is folded into every cache identity the webhook composes
+	// (rootfsonly.HashInputComposer.Salt). Bump it to start fresh captures
+	// cluster-wide; empty leaves identities unchanged.
+	CacheSalt string
 
 	// HostBundleRoot is the on-host path the agent DaemonSet stages
 	// the restore bundle into (default /var/lib/nvsnap/bundle). Function
@@ -125,8 +138,19 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		return fmt.Errorf("webhook: cert and key files required")
 	}
 
+	var placement webhook.AgentPlacement
+	if cfg.AgentPlacement != "" {
+		if err := json.Unmarshal([]byte(cfg.AgentPlacement), &placement); err != nil {
+			return fmt.Errorf("webhook: agent placement: %w", err)
+		}
+	}
+
 	mut := &webhook.Mutator{
-		Backend: backend,
+		Backend:               backend,
+		AgentPlacement:        placement,
+		DynamoNamespace:       cfg.DynamoNamespace,
+		DynamoLeaseTTL:        cfg.DynamoLeaseTTL,
+		CaptureLivenessBudget: cfg.CaptureLivenessBudget,
 		// nvsnap#194 + #88: per-pod OverlayFS unions over every captured
 		// volume (rootfs-extract subpaths AND hostPath/emptyDir user-data
 		// volumes). The Mutator calls PrepareOverlay synchronously during
@@ -152,9 +176,19 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// Storage profile of the L2 StorageClass: the cachedir restore
 		// reads its prewarm policy (on/off, reader count). nil = defaults.
 		StorageProfile: a.l2Profile,
-		Composer: &rootfsonly.HashInputComposer{
-			CUDADriverMajor: a.config.RootfsCapture.CUDADriverMajor,
-		},
+		// One-downloader election for chart pods; nil when off or L2 is
+		// off (docs/design/helm-chart-cache-election.md).
+		Elector: a.elector,
+		// Write-once model volume for Helm functions; nil when off.
+		ModelVolume:       a.modelVolume,
+		CacheVolume:       a.cacheVolume,
+		ModelWaitDeadline: a.config.ModelVolume.WaitDeadline,
+		ModelHostRoot:     a.modelHostRoot(),
+		ViewMinter:        a.modelViewMinter(),
+		// The election shares a cache only within one GPU architecture,
+		// established from the nodes a pod may run on.
+		ArchScope: a.electionScope,
+		Composer:  a.hashComposer(),
 		// EnsureLocal is intentionally left nil for the demo / for-speed
 		// flow. The Mutator emits nodeAffinity = CapturedOnNodes, which
 		// guarantees kubelet resolves the injected hostPath volumeMounts
@@ -162,8 +196,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// transfer at restore time. EnsureCaptureLocal is still wired
 		// behind the agent's HTTP API for future "any GPU node" flows
 		// where an init container fetches the bytes asynchronously.
-		Log:        a.log.WithField("subsys", "webhook.mutate"),
-		AutoInject: cfg.AutoInject,
+		Log: a.log.WithField("subsys", "webhook.mutate"),
 		// nvsnap#147: L2 restore gating. When L2WaitImage is set,
 		// the webhook prepends a nvsnap-l2-wait init container that
 		// blocks the main container on pvc_promote_state == "ready".
@@ -173,10 +206,20 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// (helm sets it from .Values.agent.l2.waitImage).
 		L2WaitImage:     a.config.Webhook.L2WaitImage,
 		NvSnapServerURL: a.config.CatalogURL,
-		// nvsnap#147: restore-entrypoint hostPath inject. Empty =
+		// nvsnap#147: node bundle hostPath for the rootfs L2 restore. Empty =
 		// default "/var/lib/nvsnap/bundle" (matches the agent
 		// DaemonSet's nvsnap-bundle-stage initContainer destination).
 		HostBundleRoot: a.config.Webhook.HostBundleRoot,
+		// New pods mount the bundle version this node's agent staged.
+		BundleID: a.currentBundle(),
+		// gpushare: per-pod chunk stores live on the node-local checkpoint
+		// disk, next to the checkpoints they are collected into.
+		GPUShareHostRoot: filepath.Join(a.checkpointHostRoot(), GPUSharePodStoresSubdir),
+		// CRIU captures restore into their pods (criu_auto_restore.go).
+		CheckpointHostRoot: a.checkpointHostRoot(),
+		// On a CRIU cluster every GPU pod runs under the gpushare library,
+		// which keeps GPU memory out of the CRIU image.
+		GPUShareByDefault: criuIsDefault(),
 		// nvsnap#202: restore-prep strategy. When "init-container",
 		// the webhook emits a nvsnap-mount-prep init container instead
 		// of doing the OverlayFS mount syscalls during admission.
@@ -184,6 +227,35 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		MountPrepInitImage:  cfg.MountPrepInitImage,
 		AgentHostPort:       cfg.AgentHostPort,
 		AgentBaseURL:        cfg.AgentBaseURL,
+	}
+	if raw := os.Getenv("NVSNAP_WEBHOOK_DEBUG_ENV"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &mut.DebugEnv); err != nil {
+			a.log.WithError(err).Warn("webhook: NVSNAP_WEBHOOK_DEBUG_ENV is not a valid debug env list; ignoring it")
+			mut.DebugEnv = nil
+		}
+	}
+	if criuIsDefault() {
+		// A CRIU capture freezes the pods it captures; only those get
+		// their liveness probes widened.
+		mut.CaptureCandidate = a.captureCandidate
+		mut.CRIUCapture = true
+	}
+	if a.kubeClient != nil {
+		mut.Kube = a.kubeClient
+	}
+	if a.kubeClient != nil {
+		// A checkpoint that failed to restore starts its next pods fresh.
+		mut.CRIURestoreBlocked = a.criuRestorer().Blocked
+		// An explicit CRIU restore admits only captures of the pod's scope.
+		mut.CRIUScope = a.criuGroupScope
+		if criuIsDefault() {
+			// Helm instances restore from their group captures.
+			mut.CRIUGroups = a.lookupCRIUGroupFor
+			mut.CRIUGroupAdmits = a.criuGroupAdmits
+			mut.CRIUCompanionAdmits = a.criuCompanionAdmits
+			mut.CRIUCompanionSlot = a.claimCompanionSlot
+			a.specCacheURI = mut.SpecCacheURI
+		}
 	}
 	handler := &webhook.Handler{
 		Mutator: mut,
@@ -207,4 +279,13 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		}
 	}()
 	return nil
+}
+
+// modelViewMinter is the webhook's view minter; nil (a nil interface)
+// when there is none.
+func (a *Agent) modelViewMinter() webhook.ViewMinter {
+	if a.modelMinter == nil {
+		return nil
+	}
+	return a.modelMinter
 }

@@ -1,0 +1,193 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+package agent
+
+// The engine's own view of its size is the check on how nvsnap grouped its
+// pods. Workloads come in shapes nvsnap does not know (a new operator, a
+// hand-written chart, an engine started from a script); checkpointing part
+// of an engine that spans more pods would stall the rest of it. So an
+// instance is captured only when its pods hold every GPU the engine says
+// it uses, and an engine that says it spans nodes is never captured as a
+// single pod.
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
+)
+
+var (
+	tensorParallelFlags   = []string{"--tensor-parallel-size", "--tensor_parallel_size", "--tp-size", "--tp_size", "--tp", "-tp"}
+	pipelineParallelFlags = []string{"--pipeline-parallel-size", "--pipeline_parallel_size", "--pp-size", "--pp_size", "--pp", "-pp"}
+	tensorParallelEnv     = []string{"NIM_TENSOR_PARALLEL_SIZE", "TENSOR_PARALLEL_SIZE"}
+	pipelineParallelEnv   = []string{"NIM_PIPELINE_PARALLEL_SIZE", "PIPELINE_PARALLEL_SIZE"}
+	// multiNodeFlags only appear on an engine that spans nodes.
+	multiNodeFlags = []string{"--nnodes", "--node-rank", "--node_rank", "--dist-init-addr", "--master-addr", "--master_addr",
+		"--data-parallel-address", "--headless"}
+)
+
+// engineWords are the words of the container's command line; a shell
+// script given inline is split into its words too.
+func engineWords(c *corev1.Container) []string {
+	var words []string
+	for _, a := range append(append([]string{}, c.Command...), c.Args...) {
+		words = append(words, strings.Fields(a)...)
+	}
+	return words
+}
+
+// flagValue returns the integer value of the first of flags on the
+// command line ("--f N" or "--f=N").
+func flagValue(words, flags []string) (int, bool) {
+	for i, w := range words {
+		for _, f := range flags {
+			v := ""
+			switch {
+			case w == f && i+1 < len(words):
+				v = words[i+1]
+			case strings.HasPrefix(w, f+"="):
+				v = strings.TrimPrefix(w, f+"=")
+			default:
+				continue
+			}
+			if n, err := strconv.Atoi(strings.Trim(v, `"'`)); err == nil && n > 0 {
+				return n, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func envValue(c *corev1.Container, names []string) (int, bool) {
+	for _, e := range c.Env {
+		for _, n := range names {
+			if e.Name == n {
+				if v, err := strconv.Atoi(e.Value); err == nil && v > 0 {
+					return v, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+func gpuLimit(c *corev1.Container) int64 {
+	q, ok := c.Resources.Limits["nvidia.com/gpu"]
+	if !ok {
+		return 0
+	}
+	return q.Value()
+}
+
+// instanceCoversEngine returns why the ranks are not a whole engine, or nil.
+func instanceCoversEngine(ranks []*corev1.Pod) error {
+	var gpus int64
+	need := 1
+	multiNode := ""
+	for _, p := range ranks {
+		for i := range p.Spec.Containers {
+			c := &p.Spec.Containers[i]
+			g := gpuLimit(c)
+			if g == 0 {
+				continue
+			}
+			gpus += g
+			words := engineWords(c)
+			tp, ok := flagValue(words, tensorParallelFlags)
+			if !ok {
+				tp, _ = envValue(c, tensorParallelEnv)
+			}
+			pp, ok := flagValue(words, pipelineParallelFlags)
+			if !ok {
+				pp, _ = envValue(c, pipelineParallelEnv)
+			}
+			need = max(need, max(tp, 1)*max(pp, 1))
+			for _, w := range words {
+				for _, f := range multiNodeFlags {
+					if w == f || strings.HasPrefix(w, f+"=") {
+						multiNode = f
+					}
+				}
+			}
+		}
+	}
+	if int64(need) > gpus {
+		return fmt.Errorf("the engine uses %d GPUs (tensor x pipeline parallel) but the %d pod(s) nvsnap found hold %d", need, len(ranks), gpus)
+	}
+	if multiNode != "" && len(ranks) == 1 {
+		return fmt.Errorf("the engine spans nodes (%s) but nvsnap found it as one pod", multiNode)
+	}
+	return nil
+}
+
+// freezeTolerated refuses an instance one of whose pods would be
+// restarted by the kubelet during its capture. Capturing stops the whole
+// instance, its pods held (pod_hold.go), for as long as saving the GPU
+// memory and the dump take: minutes for a large model. Nothing of the
+// instance counts that time, but the kubelet still probes, and a liveness
+// probe that gives up first restarts a container being dumped. The
+// webhook gives every pod it admits at least livenessBudget seconds of
+// probe tolerance; a pod admitted with less is not captured. A zero
+// budget is not checked.
+func freezeTolerated(members []*corev1.Pod, livenessBudget int) error {
+	for _, p := range members {
+		if t, ok := webhook.LivenessTolerance(p); ok && livenessBudget > 0 && t < livenessBudget {
+			return fmt.Errorf("pod %s: its liveness probe tolerates %d s of silence, less than the %d s capture budget", p.Name, t, livenessBudget)
+		}
+	}
+	return nil
+}
+
+// agentLabelSelector selects the node agents' pods (the chart's selector).
+const agentLabelSelector = "app=nvsnap-agent"
+
+// agentsSettled refuses to start a capture while the node agents are not
+// all up on one revision: a rollout restarts them one by one, and a member
+// whose agent restarts mid-capture fails it.
+func (a *Agent) agentsSettled(ctx context.Context, members []*corev1.Pod) error {
+	pods, err := a.kubeClient.CoreV1().Pods(a.criuFailedNamespace()).List(ctx, metav1.ListOptions{LabelSelector: agentLabelSelector})
+	if err != nil {
+		return fmt.Errorf("list the node agents: %w", err)
+	}
+	nodes := make([]string, 0, len(members))
+	for _, m := range members {
+		nodes = append(nodes, m.Spec.NodeName)
+	}
+	return agentsSettledOn(pods.Items, nodes)
+}
+
+// agentsSettledOn reports why agents (the node agents' pods) are not
+// settled for a capture on nodes: one terminating or not Ready, two
+// revisions (a rollout in progress), or a node without an agent.
+func agentsSettledOn(agents []corev1.Pod, nodes []string) error {
+	rev, onNode := "", map[string]bool{}
+	for i := range agents {
+		p := &agents[i]
+		if p.DeletionTimestamp != nil {
+			return fmt.Errorf("agent %s on %s is terminating", p.Name, p.Spec.NodeName)
+		}
+		if h := p.Labels["controller-revision-hash"]; rev == "" {
+			rev = h
+		} else if h != rev {
+			return fmt.Errorf("agents run two revisions (%s, %s): a rollout is in progress", rev, h)
+		}
+		if !rootfsonly.IsPodReady(p) {
+			return fmt.Errorf("agent %s on %s is not ready", p.Name, p.Spec.NodeName)
+		}
+		onNode[p.Spec.NodeName] = true
+	}
+	for _, n := range nodes {
+		if !onNode[n] {
+			return fmt.Errorf("no agent runs on node %s", n)
+		}
+	}
+	return nil
+}

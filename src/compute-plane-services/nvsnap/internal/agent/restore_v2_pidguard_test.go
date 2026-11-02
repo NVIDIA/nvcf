@@ -18,15 +18,10 @@ limitations under the License.
 package agent
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
-	"time"
-
-	"github.com/sirupsen/logrus"
 )
 
 // fakeProc builds a procfs stand-in. Each entry is hostPID -> (nsLink, NSpid
@@ -66,7 +61,7 @@ type procEntry = struct {
 	nspid string
 }
 
-func TestPlaceholderMaxNSPID(t *testing.T) {
+func TestPlaceholderPIDs_Max(t *testing.T) {
 	tests := []struct {
 		name    string
 		procs   map[int]procEntry
@@ -121,7 +116,7 @@ func TestPlaceholderMaxNSPID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			base := fakeProc(t, tt.procs)
-			got, err := placeholderMaxNSPID(base, tt.hostPID)
+			got, _, err := placeholderPIDs(base, tt.hostPID)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected an error, got max=%d", got)
@@ -172,56 +167,25 @@ func TestNSPIDOfUsesInnermostNamespace(t *testing.T) {
 	}
 }
 
-// The wait exists because the pod reports Running before its shell has finished
-// sourcing profile.d, so the reservation lands seconds later. Sampling once
-// rejected placeholders that were about to be fine -- observed against
-// nim-llama-8b before the wait was added.
-func TestAwaitPlaceholderPIDReservation(t *testing.T) {
-	log := logrus.NewEntry(logrus.New())
-	log.Logger.SetOutput(io.Discard)
-
-	t.Run("returns as soon as the reservation is visible", func(t *testing.T) {
-		base := fakeProc(t, map[int]procEntry{
-			5000: {ns: "pid:[111]", nspid: "1"},
-			5001: {ns: "pid:[111]", nspid: "100002"},
-		})
-		got, err := awaitPlaceholderPIDReservationFor(base, 5000, 5*time.Second, log)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+func TestParsePstreeIDs(t *testing.T) {
+	ids, err := parsePstreeIDs([]byte(`{"magic":"PSTREE","entries":[
+		{"pid":45,"ppid":0,"pgid":45,"sid":7,"threads":[45,46,47]},
+		{"pid":591,"ppid":45,"pgid":45,"sid":7,"threads":[591]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int{45, 46, 47, 591, 7} {
+		if !ids[id] {
+			t.Errorf("task id %d missing from %v", id, ids)
 		}
-		if got != 100002 {
-			t.Errorf("got %d, want 100002", got)
-		}
-	})
-
-	t.Run("errors when the reservation never lands", func(t *testing.T) {
-		base := fakeProc(t, map[int]procEntry{
-			5000: {ns: "pid:[111]", nspid: "1"},
-			5001: {ns: "pid:[111]", nspid: "363"},
-		})
-		start := time.Now()
-		got, err := awaitPlaceholderPIDReservationFor(base, 5000, 1200*time.Millisecond, log)
-		if err == nil {
-			t.Fatalf("expected an error, got max=%d", got)
-		}
-		// The highest pid seen belongs in the message: it is what tells an
-		// operator the bump did not run, rather than that it ran and was low.
-		if !strings.Contains(err.Error(), "363") {
-			t.Errorf("error should report the highest pid seen, got: %v", err)
-		}
-		if elapsed := time.Since(start); elapsed < 1200*time.Millisecond {
-			t.Errorf("returned after %s, should have waited the full timeout", elapsed)
-		}
-	})
-
-	t.Run("does not fail the restore when the namespace cannot be read", func(t *testing.T) {
-		// A procfs read error is ambiguous, not proof of a missing reservation.
-		_, err := awaitPlaceholderPIDReservationFor(t.TempDir(), 5000, 600*time.Millisecond, log)
-		if err == nil {
-			t.Fatal("expected an error describing the unreadable namespace")
-		}
-		if !strings.Contains(err.Error(), "could not read") {
-			t.Errorf("want a read-failure message distinct from a missing reservation, got: %v", err)
-		}
-	})
+	}
+	if len(ids) != 5 {
+		t.Errorf("ids = %v, want 5", ids)
+	}
+	if _, err := parsePstreeIDs([]byte(`{"entries":[]}`)); err == nil {
+		t.Error("an empty pstree is an error")
+	}
+	if _, err := parsePstreeIDs([]byte(`not json`)); err == nil {
+		t.Error("unreadable crit output is an error")
+	}
 }
