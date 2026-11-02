@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[package]
+name = "nvstor-server"
+version = "0.2.0"
+edition = "2021"
+license.workspace = true
+publish = false
+description = "nvstor storage server: S3, NFS v4.2, NBD, S3 over RDMA and TCP, native wire protocol, health and metrics"
+
+[[bin]]
+name = "nvstor-server"
+path = "src/main.rs"
+
+[dependencies]
+nvstor-core = { path = "../../crates/nvstor-core" }
+nvstor-metadata = { path = "../../crates/nvstor-metadata" }
+nvstor-storage = { path = "../../crates/nvstor-storage", features = ["io-uring"] }
+nvstor-object = { path = "../../crates/nvstor-object" }
+nvstor-block = { path = "../../crates/nvstor-block" }
+nvstor-client = { path = "../../crates/nvstor-client" }
+nvstor-iam = { path = "../../crates/nvstor-iam" }
+nvstor-kms = { path = "../../crates/nvstor-kms" }
+nvstor-raft = { path = "../../crates/nvstor-raft" }
+nvstor-nfs = { path = "../../crates/nvstor-nfs" }
+nvstor-placement = { path = "../../crates/nvstor-placement" }
+nvstor-rdma = { path = "../../crates/nvstor-rdma" }
+bincode = "1"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4"] }
+prometheus = "0.13"
+tower = "0.5"
+hostname = "0.4"
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
