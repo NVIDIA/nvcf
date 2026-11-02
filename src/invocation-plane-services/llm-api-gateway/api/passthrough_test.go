@@ -20,6 +20,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -396,10 +397,16 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 			}))
 			t.Cleanup(upstream.Close)
 			e := newPassthroughAPI(t, upstream.URL)
+			handlerErr := captureHandlerError(e)
 
 			clientBody := `{"model":"fn-alpha/company-name/model-name","input":"hi","stream":true}`
 			rec := servePassthroughRequest(t, e, "/v1/responses", clientBody)
 			require.Equal(t, http.StatusOK, rec.Code)
+
+			// The client keeps its 200; logs, metrics and traces record a 502.
+			var httpErr *echo.HTTPError
+			require.ErrorAs(t, *handlerErr, &httpErr)
+			require.Equal(t, http.StatusBadGateway, httpErr.Code)
 
 			body := rec.Body.String()
 			require.True(t, strings.HasPrefix(body, tt.upstreamBody), body)
@@ -489,6 +496,53 @@ func TestResponsesStreamSendsNoFailureEventWhenClientGoesAway(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, created, rec.Body.String())
+}
+
+func TestResponsesStreamSendsNoFailureEventWhenClientWriteFails(t *testing.T) {
+	t.Parallel()
+
+	created := "event: response.created\n" +
+		`data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_1","object":"response","status":"in_progress"}}` + "\n\n"
+	upstream := newPassthroughUpstream(t, "text/event-stream", created)
+	e := newPassthroughAPI(t, upstream.server.URL)
+	handlerErr := captureHandlerError(e)
+
+	clientBody := `{"model":"fn-alpha/company-name/model-name","input":"hi","stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(clientBody))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := &failingWriteRecorder{ResponseRecorder: httptest.NewRecorder()}
+	e.ServeHTTP(rec, req)
+
+	// The request context is still live, as when net/http has not yet noticed
+	// the closed connection; the failed write alone shows the client is gone.
+	require.ErrorIs(t, *handlerErr, errClientGone)
+	var httpErr *echo.HTTPError
+	require.False(t, errors.As(*handlerErr, &httpErr), "client write failure recorded as %v", *handlerErr)
+}
+
+var errClientGone = errors.New("client connection closed")
+
+// failingWriteRecorder fails every body write, as a closed client connection
+// would.
+type failingWriteRecorder struct {
+	*httptest.ResponseRecorder
+}
+
+func (r *failingWriteRecorder) Write([]byte) (int, error) {
+	return 0, errClientGone
+}
+
+// captureHandlerError records the error the route handler returns, which the
+// gateway middleware turns into the status it logs and counts.
+func captureHandlerError(e *echo.Echo) *error {
+	var handlerErr error
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			handlerErr = next(c)
+			return handlerErr
+		}
+	})
+	return &handlerErr
 }
 
 // cancelOnWriteRecorder cancels the client request after the first body

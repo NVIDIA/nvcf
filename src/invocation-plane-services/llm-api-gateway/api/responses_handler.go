@@ -315,8 +315,9 @@ func (h *ResponsesHandlers) relayNativeResponsesStream(
 		h.recordNativeResponsesProviderTime(c, start, true)
 	}
 	h.finalizeNativeResponsesUsage(c, request, stream.terminal, true)
-	// A client that went away is not an upstream failure.
-	if stream.terminal == nil && c.Request().Context().Err() == nil {
+	// A client that went away is not an upstream failure. A failed write can
+	// come before net/http cancels the request context, so check both.
+	if stream.terminal == nil && !stream.clientWriteFailed && c.Request().Context().Err() == nil {
 		return failNativeResponsesStream(c, stream, err)
 	}
 	return err
@@ -440,7 +441,8 @@ type nativeResponsesStream struct {
 	sequenceNumber  *int
 	// endedMidEvent means the relayed bytes stop inside an event, so the
 	// client needs a blank line before any further event.
-	endedMidEvent bool
+	endedMidEvent     bool
+	clientWriteFailed bool
 }
 
 func (s *nativeResponsesStream) observe(block []byte) {
@@ -476,6 +478,7 @@ func consumeNativeResponsesSSE(
 		if len(line) > 0 {
 			if writer != nil {
 				if _, writeErr := writer.Write(line); writeErr != nil {
+					stream.clientWriteFailed = true
 					return stream, writeErr
 				}
 			}
