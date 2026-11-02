@@ -489,6 +489,14 @@ const DECISION_ECHO_HEADERS: [&str; 5] = [
     "x-request-id",
     "x-vendor-test",
 ];
+/// Caller credentials a gateway must not forward. The echo reports only
+/// whether any arrived, never a value.
+const DECISION_CREDENTIAL_HEADERS: [&str; 4] = [
+    "authorization",
+    "x-api-key",
+    "proxy-authorization",
+    "cookie",
+];
 const DECISION_MOCK_PROBABILITY: f64 = 0.99;
 const DECISION_MOCK_RETRY_AFTER_SECONDS: &str = "7";
 
@@ -498,7 +506,7 @@ enum DecisionRoute {
     Systemone,
 }
 
-/// Canned OpenAI Decisions response. The body is not validated, so tests can
+/// Canned OpenAI Decisions response. Any JSON object is accepted, so tests can
 /// send large or loosely shaped payloads.
 pub(crate) async fn decisions(
     State(state): State<AppState>,
@@ -526,7 +534,16 @@ async fn decision_response(
     body: Bytes,
     route: DecisionRoute,
 ) -> Response {
-    let request: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let request = match parse_decision_body(&body) {
+        Some(request) => request,
+        None => {
+            return decision_error(
+                route,
+                StatusCode::BAD_REQUEST,
+                "request body must be a JSON object",
+            );
+        }
+    };
     let model = request
         .get("model")
         .and_then(serde_json::Value::as_str)
@@ -536,7 +553,6 @@ async fn decision_response(
         DecisionRoute::Systemone => TestEndpoint::Systemone,
     };
     state.record_request(&headers, endpoint, &model).await;
-    let _request_slot = state.acquire_request_slot().await;
     let input_tokens = optional_header(&headers, "x-input-tokens")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or_else(|| (body.len() / 4).max(1));
@@ -547,10 +563,9 @@ async fn decision_response(
         request_id = %request_id,
         model = %model,
         input_tokens = input_tokens,
-        body_len = body.len(),
+        body_length = body.len(),
         "received decision request"
     );
-    state.emit_counters(&request_id, &model, input_tokens, output_tokens, true);
 
     let mock_error = query
         .as_deref()
@@ -559,25 +574,42 @@ async fn decision_response(
         .find_map(|pair| pair.strip_prefix("mock_error="));
     match mock_error {
         Some("429") => {
-            let mut response = decision_error(route, StatusCode::TOO_MANY_REQUESTS);
+            let mut response =
+                decision_error(route, StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded");
             response.headers_mut().insert(
                 axum::http::header::RETRY_AFTER,
                 axum::http::HeaderValue::from_static(DECISION_MOCK_RETRY_AFTER_SECONDS),
             );
             return response;
         }
-        Some("400") => return decision_error(route, StatusCode::BAD_REQUEST),
+        Some("400") => return decision_error(route, StatusCode::BAD_REQUEST, "Invalid question"),
         _ => {}
     }
 
+    let (_, mut pacing) = state
+        .prepare_request(&model, &request_id, None, input_tokens, output_tokens)
+        .await;
+    pacing
+        .whole_response(&state, &request_id, output_tokens)
+        .await;
+
     let echo: serde_json::Map<String, serde_json::Value> = DECISION_ECHO_HEADERS
         .iter()
-        .map(|name| ((*name).to_string(), optional_header(&headers, name).into()))
+        .filter_map(|name| {
+            optional_header(&headers, name).map(|value| ((*name).to_string(), value.into()))
+        })
         .chain([
-            ("body_len".to_string(), body.len().into()),
+            ("body_length".to_string(), body.len().into()),
             (
                 "body_sha256".to_string(),
                 crate::sha256::sha256_hex(&body).into(),
+            ),
+            (
+                "credentials_received".to_string(),
+                DECISION_CREDENTIAL_HEADERS
+                    .iter()
+                    .any(|name| headers.contains_key(*name))
+                    .into(),
             ),
         ])
         .collect();
@@ -586,14 +618,17 @@ async fn decision_response(
             let answers: Vec<_> = request
                 .get("questions")
                 .and_then(serde_json::Value::as_array)
-                .map(|questions| {
-                    questions
-                        .iter()
-                        .enumerate()
-                        .map(|(index, question)| decisions_answer(index, question))
-                        .collect()
-                })
-                .unwrap_or_default();
+                .filter(|questions| !questions.is_empty())
+                .map_or_else(
+                    || vec![serde_json::json!({"type": "predicate", "probability": DECISION_MOCK_PROBABILITY})],
+                    |questions| {
+                        questions
+                            .iter()
+                            .enumerate()
+                            .map(|(index, question)| decisions_answer(index, question))
+                            .collect()
+                    },
+                );
             serde_json::json!({
                 "model": model,
                 "answers": answers,
@@ -611,13 +646,21 @@ async fn decision_response(
             let answers: serde_json::Map<String, serde_json::Value> = request
                 .get("questions")
                 .and_then(serde_json::Value::as_object)
-                .map(|questions| {
-                    questions
-                        .iter()
-                        .map(|(name, question)| (name.clone(), systemone_answer(question)))
-                        .collect()
-                })
-                .unwrap_or_default();
+                .filter(|questions| !questions.is_empty())
+                .map_or_else(
+                    || {
+                        serde_json::Map::from_iter([(
+                            "question".to_string(),
+                            systemone_answer(&serde_json::Value::Null),
+                        )])
+                    },
+                    |questions| {
+                        questions
+                            .iter()
+                            .map(|(name, question)| (name.clone(), systemone_answer(question)))
+                            .collect()
+                    },
+                );
             serde_json::json!({
                 "model": model,
                 "answers": answers,
@@ -626,6 +669,7 @@ async fn decision_response(
             })
         }
     };
+    state.emit_counters(&request_id, &model, input_tokens, output_tokens, true);
     let mut response = Json(payload).into_response();
     if let Some(value) = headers.get("typesafe-danger-zone-images") {
         response
@@ -633,6 +677,23 @@ async fn decision_response(
             .insert("x-mock-echo-typesafe-danger-zone-images", value.clone());
     }
     response
+}
+
+/// Parses one JSON object, as the decision backends require. Anything else,
+/// including trailing data, is a client error.
+fn parse_decision_body(body: &[u8]) -> Option<serde_json::Value> {
+    let request: serde_json::Value = serde_json::from_slice(body).ok()?;
+    request.is_object().then_some(request)
+}
+
+/// Expected score for the mock probabilities: the probability-weighted level
+/// index, as a float.
+fn weighted_score(probabilities: &[f64]) -> f64 {
+    probabilities
+        .iter()
+        .enumerate()
+        .map(|(index, probability)| index as f64 * probability)
+        .sum()
 }
 
 fn question_type(question: &serde_json::Value) -> &str {
@@ -704,7 +765,7 @@ fn decisions_answer(index: usize, question: &serde_json::Value) -> serde_json::V
             serde_json::json!({
                 "type": kind,
                 "name": name,
-                "score": 0,
+                "score": weighted_score(&probabilities),
                 "probabilities": labels.iter().zip(&probabilities).enumerate()
                     .map(|(value, (label, probability))| serde_json::json!({"value": value, "label": label, "probability": probability}))
                     .collect::<Vec<_>>(),
@@ -757,7 +818,7 @@ fn systemone_answer(question: &serde_json::Value) -> serde_json::Value {
             let probabilities = option_probabilities(labels.len());
             serde_json::json!({
                 "type": "score",
-                "score": 0,
+                "score": weighted_score(&probabilities),
                 "confidence": DECISION_MOCK_PROBABILITY,
                 "legend": labels.iter().enumerate()
                     .map(|(index, label)| (index.to_string(), label.clone()))
@@ -778,13 +839,13 @@ fn systemone_answer(question: &serde_json::Value) -> serde_json::Value {
 
 /// Error bodies follow each route's native shape: OpenAI style for decisions,
 /// FastAPI style for System One.
-fn decision_error(route: DecisionRoute, status: StatusCode) -> Response {
+fn decision_error(route: DecisionRoute, status: StatusCode, message: &str) -> Response {
     let rate_limited = status == StatusCode::TOO_MANY_REQUESTS;
     match route {
         DecisionRoute::Decisions if rate_limited => error_response(
             status,
             serde_json::json!({
-                "message": "Rate limit exceeded",
+                "message": message,
                 "type": "rate_limit_error",
                 "param": null,
                 "code": "rate_limit_exceeded",
@@ -793,7 +854,7 @@ fn decision_error(route: DecisionRoute, status: StatusCode) -> Response {
         DecisionRoute::Decisions => error_response(
             status,
             serde_json::json!({
-                "message": "Invalid question",
+                "message": message,
                 "type": "invalid_request_error",
                 "param": "questions",
                 "code": "invalid_question",
@@ -801,14 +862,18 @@ fn decision_error(route: DecisionRoute, status: StatusCode) -> Response {
         ),
         DecisionRoute::Systemone if rate_limited => (
             status,
-            Json(serde_json::json!({"detail": "Rate limit exceeded"})),
+            Json(serde_json::json!({"detail": [{
+                "loc": ["body"],
+                "msg": message,
+                "type": "value_error",
+            }]})),
         )
             .into_response(),
         DecisionRoute::Systemone => (
             status,
             Json(serde_json::json!({"detail": [{
                 "loc": ["body", "questions"],
-                "msg": "Invalid question",
+                "msg": message,
                 "type": "value_error",
             }]})),
         )
