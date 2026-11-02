@@ -18,6 +18,7 @@ limitations under the License.
 package api
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -358,27 +359,24 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 		`data: {"type":"response.created","sequence_number":4,"response":{"id":"resp_1","object":"response","created_at":1,"model":"company-name/model-name","status":"in_progress","output":[]}}` + "\n\n"
 	createdNoSequence := "event: response.created\n" +
 		`data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":1,"model":"company-name/model-name","status":"in_progress","output":[]}}` + "\n\n"
+	unfinished := "event: response.in_progress\ndata: {\"type\":\"resp"
 
 	tests := []struct {
-		name           string
-		upstreamBody   string
-		dropMidway     bool
-		wantSeparator  string
+		name         string
+		upstreamBody string
+		dropMidway   bool
+		wantRelayed  string
+		// wantResponseID is empty when no response.created came, so the
+		// gateway sends its own before response.failed.
 		wantResponseID string
 		wantSequence   int
 	}{
-		{name: "empty stream", upstreamBody: "", wantSequence: 0},
-		{name: "ends after non terminal event", upstreamBody: created, wantResponseID: "resp_1", wantSequence: 5},
-		{name: "connection drops mid stream", upstreamBody: created, dropMidway: true, wantResponseID: "resp_1", wantSequence: 5},
-		{name: "no sequence numbers", upstreamBody: createdNoSequence, wantResponseID: "resp_1", wantSequence: 0},
-		{
-			name:           "connection drops mid line",
-			upstreamBody:   created + "event: response.in_progress\ndata: {\"type\":\"resp",
-			dropMidway:     true,
-			wantSeparator:  "\n\n",
-			wantResponseID: "resp_1",
-			wantSequence:   5,
-		},
+		{name: "empty stream", wantSequence: 1},
+		{name: "ends after non terminal event", upstreamBody: created, wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5},
+		{name: "connection drops mid stream", upstreamBody: created, dropMidway: true, wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5},
+		{name: "no sequence numbers", upstreamBody: createdNoSequence, wantRelayed: createdNoSequence, wantResponseID: "resp_1", wantSequence: 0},
+		{name: "connection drops mid event", upstreamBody: created + unfinished, dropMidway: true, wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5},
+		{name: "stream ends mid event", upstreamBody: created + unfinished, wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5},
 	}
 
 	for _, tt := range tests {
@@ -409,12 +407,16 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 			require.Equal(t, http.StatusBadGateway, httpErr.Code)
 
 			body := rec.Body.String()
-			require.True(t, strings.HasPrefix(body, tt.upstreamBody), body)
-			failedEvent := strings.TrimPrefix(body, tt.upstreamBody+tt.wantSeparator)
-			require.True(t, strings.HasPrefix(failedEvent, "event: response.failed\ndata: "), body)
-			require.True(t, strings.HasSuffix(failedEvent, "\n\n"), body)
+			require.True(t, strings.HasPrefix(body, tt.wantRelayed), body)
+			require.True(t, strings.HasSuffix(body, "\n\n"), body)
+			wantTypes := []string{"response.failed"}
+			if tt.wantResponseID == "" {
+				wantTypes = []string{"response.created", "response.failed"}
+			}
+			rawEvents := strings.Split(strings.TrimSuffix(strings.TrimPrefix(body, tt.wantRelayed), "\n\n"), "\n\n")
+			require.Len(t, rawEvents, len(wantTypes), body)
 
-			var event struct {
+			type gatewayEvent struct {
 				Type           string `json:"type"`
 				SequenceNumber int    `json:"sequence_number"`
 				Response       struct {
@@ -428,12 +430,18 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 					} `json:"error"`
 				} `json:"response"`
 			}
-			data := strings.TrimSuffix(strings.TrimPrefix(failedEvent, "event: response.failed\ndata: "), "\n\n")
-			require.NoError(t, json.Unmarshal([]byte(data), &event), data)
-			require.Equal(t, "response.failed", event.Type)
+			events := make([]gatewayEvent, len(rawEvents))
+			for i, raw := range rawEvents {
+				prefix := "event: " + wantTypes[i] + "\ndata: "
+				require.True(t, strings.HasPrefix(raw, prefix), body)
+				require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(raw, prefix)), &events[i]), raw)
+				require.Equal(t, wantTypes[i], events[i].Type)
+				require.Equal(t, "response", events[i].Response.Object)
+				require.Equal(t, "company-name/model-name", events[i].Response.Model)
+			}
+
+			event := events[len(events)-1]
 			require.Equal(t, tt.wantSequence, event.SequenceNumber)
-			require.Equal(t, "response", event.Response.Object)
-			require.Equal(t, "company-name/model-name", event.Response.Model)
 			require.Equal(t, "failed", event.Response.Status)
 			require.Equal(t, "server_error", event.Response.Error.Code)
 			require.Equal(t, "responses proxy stream ended without a terminal response event", event.Response.Error.Message)
@@ -441,6 +449,9 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 				require.Equal(t, tt.wantResponseID, event.Response.ID)
 			} else {
 				require.True(t, strings.HasPrefix(event.Response.ID, "resp_"), event.Response.ID)
+				require.Equal(t, event.Response.ID, events[0].Response.ID)
+				require.Equal(t, tt.wantSequence-1, events[0].SequenceNumber)
+				require.Equal(t, "in_progress", events[0].Response.Status)
 			}
 		})
 	}
@@ -465,6 +476,41 @@ func TestResponsesStreamKeepsTerminalStreamWhenConnectionDropsAfterIt(t *testing
 	rec := servePassthroughRequest(t, e, "/v1/responses", clientBody)
 
 	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, completed, rec.Body.String())
+}
+
+func TestResponsesStreamReadsUncompressedStreamWhenClientAcceptsGzip(t *testing.T) {
+	t.Parallel()
+
+	completed := "event: response.completed\n" +
+		`data: {"type":"response.completed","sequence_number":0,"response":{"id":"resp_1","object":"response","status":"completed","output":[]}}` + "\n\n"
+	// The upstream compresses whenever the request allows it.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set(echo.HeaderContentType, "text/event-stream")
+		if !strings.Contains(r.Header.Get(echo.HeaderAcceptEncoding), "gzip") {
+			_, _ = io.WriteString(w, completed)
+			return
+		}
+		w.Header().Set(echo.HeaderContentEncoding, "gzip")
+		gz := gzip.NewWriter(w)
+		_, _ = io.WriteString(gz, completed)
+		_ = gz.Close()
+	}))
+	t.Cleanup(upstream.Close)
+	e := newPassthroughAPI(t, upstream.URL)
+	handlerErr := captureHandlerError(e)
+
+	clientBody := `{"model":"fn-alpha/company-name/model-name","input":"hi","stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(clientBody))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set(echo.HeaderAcceptEncoding, "gzip")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.NoError(t, *handlerErr)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Empty(t, rec.Header().Get(echo.HeaderContentEncoding))
 	require.Equal(t, completed, rec.Body.String())
 }
 
@@ -578,6 +624,19 @@ func TestConsumeNativeResponsesSSEKeepsUsageForUnknownOutputItems(t *testing.T) 
 	require.Equal(t, uint32(4), usage.PromptTokens)
 	require.Equal(t, uint32(5), usage.CompletionTokens)
 	require.Equal(t, uint32(9), usage.TotalTokens)
+}
+
+func TestConsumeNativeResponsesSSERelaysTerminalEventWithoutTrailingBlankLine(t *testing.T) {
+	t.Parallel()
+
+	sse := "event: response.completed\n" +
+		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[]}}` + "\n"
+
+	var relayed strings.Builder
+	stream, err := consumeNativeResponsesSSE(strings.NewReader(sse), &relayed)
+	require.NoError(t, err)
+	require.NotNil(t, stream.terminal)
+	require.Equal(t, sse, relayed.String())
 }
 
 func TestNativeResponsesStreamObserveFindsOnlyTerminalResponses(t *testing.T) {
