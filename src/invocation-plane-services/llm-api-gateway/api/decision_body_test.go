@@ -22,7 +22,7 @@ func TestDecisionRoutesForwardBodyBytesExceptModel(t *testing.T) {
 
 	const template = "{\n  \"z\" : 1,\t\"model\":  %s ,\n" +
 		`  "a": {"q": "<b>&</b>", "model": "fn-alpha/nested-is-kept", "n": 9007199254740993, "f": 1.50},` + "\n" +
-		`  "e": "café \"quoted\" \/ ` + "é" + `",` +
+		`  "e": "caf\u00e9 \"quoted\" \/ ` + "\u00e9" + `",` +
 		`  "list": [ 1 , [ ] , { } , null , true ],` +
 		`  "dup": 1, "dup": 2` + "\n}\n"
 	for _, route := range decisionRoutes {
