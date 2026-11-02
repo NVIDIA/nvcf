@@ -56,6 +56,12 @@ Features the fork carries on top of upstream:
    level and leaving workers checkpointed.
 4. Tolerance for an epoll fd shared across fork-inherited processes
    (engine worker trees share the parent's epoll instance).
+5. External slavery restored per mount (mount-v2). Mounts with one
+   external master but different roots, each restored from its own
+   external mountpoint, copy the master from their own source rather than
+   the group's first. CRI-O binds resolv.conf, hostname and .containerenv
+   into every container this way. Covered by zdtm
+   `mnt_ext_multiple_binds`.
 
 Upstream renamed `--compress-region` to `--compress-block` and split the
 CUDA plugin into CLI and Driver API backends; the fork follows upstream
@@ -85,6 +91,8 @@ Candidates, in order of readiness:
   the feature upstream users ask for most. Needs the SQPOLL and
   multi-ring cases split into reviewable patches.
 - Late device restore failure propagation: small and uncontroversial.
+- Per-mount external slavery source: a fix of upstream behaviour with a
+  zdtm test; ready to send.
 - Portable ghost links: needs an upstream discussion about image format
   compatibility.
 
