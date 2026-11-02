@@ -109,4 +109,5 @@ push-oci:
 
 .PHONY: test
 test:
+	bash ./tests/migration-client.sh
 	bash ./tests/nonroot-icms-migrations.sh

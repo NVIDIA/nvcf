@@ -181,3 +181,15 @@ Returns a YAML list of {name: ...} objects or nothing.
 - name: {{ .Values.sis.imagePullSecret.name }}
 {{- end -}}
 {{- end -}}
+
+{{/* Select a bundled kubectl for both LLS migrations and HMAC rotation. */}}
+{{- define "sis.kubectlEnv" -}}
+{{- $minor := get .Values.sis.lls.hmacRotation "kubectlMinor" | toString -}}
+{{- if not (has $minor (list "" "1.36" "1.37")) -}}
+{{- fail "sis.lls.hmacRotation.kubectlMinor must be empty, 1.36, or 1.37" -}}
+{{- end -}}
+{{- if $minor -}}
+- name: NVCF_KUBECTL_MINOR
+  value: {{ $minor | quote }}
+{{- end -}}
+{{- end -}}
