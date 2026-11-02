@@ -21,8 +21,7 @@ var errDecisionBodyTooDeep = errors.New("request body is nested more than 64 lev
 // Each image slot counts a flat imageTokens and its payload is never counted,
 // so a large base64 image cannot hide or inflate the estimate. Image slots are
 // each element of an "images" array, each value of an "assets" object, and any
-// string that is a base64 image data URL (data:image/<type>;base64, followed
-// by base64 characters only).
+// string that is a base64 image data URL (see isBase64ImageDataURL).
 //
 // A nested object with type "input_image" counts as one image in place of its
 // image_url and base64 fields; its other strings still count as text. The root
@@ -167,27 +166,43 @@ func skipContainer(dec *json.Decoder, depth int) error {
 	return nil
 }
 
-// isBase64ImageDataURL reports whether text is a base64 image data URL: it
-// matches ^data:image/[^;]+;base64, and the rest is only base64 characters
-// (standard or URL-safe alphabet, with = padding). Prose behind the prefix is
-// text, so the prefix cannot make a prompt count as one image. It reads text
-// once and does not allocate.
+// maxImageSubtypeLength bounds the media subtype of an image data URL.
+const maxImageSubtypeLength = 64
+
+// isBase64ImageDataURL reports whether text is a base64 image data URL:
+// "data:image/", a subtype of 1 to 64 characters from [A-Za-z0-9.+-] (a
+// subset of the RFC 6838 restricted name characters), ";base64,", and then
+// only base64 characters (standard or URL-safe alphabet, with = padding).
+// Prose in the subtype or behind the prefix is text, so neither can make a
+// prompt count as one image. It reads text once and does not allocate.
 func isBase64ImageDataURL(text string) bool {
 	const prefix, marker = "data:image/", ";base64,"
 	if !strings.HasPrefix(text, prefix) {
 		return false
 	}
 	rest := text[len(prefix):]
-	semicolon := strings.IndexByte(rest, ';')
-	if semicolon <= 0 || !strings.HasPrefix(rest[semicolon:], marker) {
+	subtype := 0
+	for subtype < len(rest) && subtype <= maxImageSubtypeLength && isImageSubtypeByte(rest[subtype]) {
+		subtype++
+	}
+	if subtype == 0 || subtype > maxImageSubtypeLength || !strings.HasPrefix(rest[subtype:], marker) {
 		return false
 	}
-	for _, b := range []byte(rest[semicolon+len(marker):]) {
+	for _, b := range []byte(rest[subtype+len(marker):]) {
 		if !isBase64Byte(b) {
 			return false
 		}
 	}
 	return true
+}
+
+func isImageSubtypeByte(b byte) bool {
+	switch {
+	case 'A' <= b && b <= 'Z', 'a' <= b && b <= 'z', '0' <= b && b <= '9':
+		return true
+	default:
+		return b == '.' || b == '+' || b == '-'
+	}
 }
 
 func isBase64Byte(b byte) bool {

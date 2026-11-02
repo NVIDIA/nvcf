@@ -95,7 +95,8 @@ unchanged. Responses are not streamed; `stream` is ignored.
   `NVCF_DECISION_IMAGE_TOKENS` (default `1024`) and its base64 is never
   counted. An image is an element of `images`, a value of `assets`, or any
   string that is `data:image/<type>;base64,` followed only by base64
-  characters. Other text behind that prefix counts as text. A nested object with
+  characters, where `<type>` is 1 to 64 characters from `A-Z`, `a-z`, `0-9`,
+  `.`, `+`, and `-`. Any other text counts as text. A nested object with
   `type` set to `input_image` counts one image in place of its `image_url`
   and `base64` fields; its other strings still count as text. The top-level
   object is never counted as an image.

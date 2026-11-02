@@ -88,19 +88,26 @@ func TestIsBase64ImageDataURL(t *testing.T) {
 	t.Parallel()
 
 	for text, want := range map[string]bool{
-		"data:image/png;base64,iVBORw0KGgo=":    true,
-		"data:image/png;base64,QUJD+/9=":        true,
-		"data:image/webp;base64,QUJD-_9":        true,
-		"data:image/png;base64,":                true,
-		"data:image/png;base64,QUJD QUJD":       false,
-		"data:image/png;base64,QUJD\nQUJD":      false,
-		"data:image/png;base64,Is the sky red?": false,
-		"data:image/;base64,QUJD":               false,
-		"data:;base64,QUJD":                     false,
-		"data:text/plain;base64,QUJD":           false,
-		"data:image/png,QUJD":                   false,
-		"data:image/png;charset=x;base64,QUJD":  false,
-		"prefix data:image/png;base64,QUJD":     false,
+		"data:image/png;base64,iVBORw0KGgo=":                     true,
+		"data:image/png;base64,QUJD+/9=":                         true,
+		"data:image/webp;base64,QUJD-_9":                         true,
+		"data:image/png;base64,":                                 true,
+		"data:image/png;base64,QUJD QUJD":                        false,
+		"data:image/png;base64,QUJD\nQUJD":                       false,
+		"data:image/png;base64,Is the sky red?":                  false,
+		"data:image/;base64,QUJD":                                false,
+		"data:;base64,QUJD":                                      false,
+		"data:text/plain;base64,QUJD":                            false,
+		"data:image/png,QUJD":                                    false,
+		"data:image/svg+xml;base64,QUJD":                         true,
+		"data:image/vnd.ms-photo;base64,QUJD":                    true,
+		"data:image/x.custom-1;base64,QUJD":                      true,
+		"data:image/a b;base64,QUJD":                             false,
+		"data:image/png/x;base64,QUJD":                           false,
+		"data:image/" + strings.Repeat("a", 65) + ";base64,QUJD": false,
+		"data:image/" + strings.Repeat("a", 64) + ";base64,QUJD": true,
+		"data:image/png;charset=x;base64,QUJD":                   false,
+		"prefix data:image/png;base64,QUJD":                      false,
 	} {
 		require.Equal(t, want, isBase64ImageDataURL(text), text)
 	}
@@ -116,10 +123,24 @@ func TestEstimatedTokenCountForDecisionBodyImagePrefixedProseIsText(t *testing.T
 	require.Equal(t, estimatedTokenCountForText(prose), got)
 }
 
+// Prose placed in the media subtype counts as text, not one image.
+func TestEstimatedTokenCountForDecisionBodyProseInImageSubtypeIsText(t *testing.T) {
+	t.Parallel()
+
+	prose := "data:image/" + strings.Repeat("Is the sky red? ", 1<<16) + ";base64,QUJD"
+	got, err := estimatedTokenCountForDecisionBody([]byte(`{"predicate":"`+prose+`"}`), 1000)
+	require.NoError(t, err)
+	require.Equal(t, estimatedTokenCountForText(prose), got)
+}
+
 func TestIsBase64ImageDataURLDoesNotAllocate(t *testing.T) {
-	text := "data:image/png;base64," + strings.Repeat("QUJD", 1<<16)
-	allocs := testing.AllocsPerRun(10, func() { _ = isBase64ImageDataURL(text) })
-	require.Zero(t, allocs)
+	for _, text := range []string{
+		"data:image/svg+xml;base64," + strings.Repeat("QUJD", 1<<16),
+		"data:image/" + strings.Repeat("Is the sky red? ", 1<<12) + ";base64,QUJD",
+	} {
+		allocs := testing.AllocsPerRun(10, func() { _ = isBase64ImageDataURL(text) })
+		require.Zero(t, allocs)
+	}
 }
 
 func TestEstimatedTokenCountForDecisionBodyImageTokensIsConfigurable(t *testing.T) {
