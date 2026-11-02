@@ -112,6 +112,7 @@ java_oci_image(
         "ULIMIT_FLAG": "1",
         "JDK_JAVA_OPTIONS": "-XX:+UseG1GC -XX:InitialRAMPercentage=70.0 -XX:+EnableDynamicAgentLoading -XX:MaxRAMPercentage=70.0",
     },
+    user = "1000:1000",
     workdir = "/home/app",
 )
 
@@ -125,5 +126,6 @@ java_image_contract_test(
         "ULIMIT_FLAG": "1",
         "JDK_JAVA_OPTIONS": "-XX:+UseG1GC -XX:InitialRAMPercentage=70.0 -XX:+EnableDynamicAgentLoading -XX:MaxRAMPercentage=70.0",
     },
+    user = "1000:1000",
     workdir = "/home/app",
 )
