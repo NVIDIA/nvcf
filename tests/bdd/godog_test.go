@@ -575,7 +575,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	decisionRoutes := newDecisionRoutesFake("", &llmRoutingHTTPFake{seen: map[string]bool{}})
 	vanityShadow := newVanityShadowFake("", decisionRoutes)
 	vanityShadow.attach(runner)
-	decisionRoutes.attach(runner)
+	decisionRoutes.attach(runner, suite.Config.RepoRoot)
 	suite.HTTP = vanityShadow
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile.feature")
