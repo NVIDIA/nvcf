@@ -166,6 +166,7 @@ go_test(
         "criu_group_lifecycle_test.go",
         "criu_group_test.go",
         "dump_settle_test.go",
+        "dump_snapshot_rootfs_test.go",
         "dump_snapshot_test.go",
         "exec_sessions_test.go",
         "failure_logs_test.go",
