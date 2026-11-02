@@ -19,6 +19,7 @@ func TestEstimatedTokenCountForDecisionBody(t *testing.T) {
 	question := estimatedTokenCountForText("Is it red?")
 	bigBase64 := strings.Repeat("QUJD", 100_000)
 	smallBase64 := "QUJD"
+	inputImage := estimatedTokenCountForText("input_image")
 
 	for _, tc := range []struct {
 		name string
@@ -29,8 +30,10 @@ func TestEstimatedTokenCountForDecisionBody(t *testing.T) {
 		{"nested strings in arrays and objects count", `{"input":"hello","questions":[{"predicate":"Is it red?"}]}`, hello + question},
 		{"numbers booleans and null do not count", `{"n":12345,"b":true,"x":null}`, 0},
 		{"empty string counts nothing", `{"input":""}`, 0},
-		{"input_image object is one image", `{"input":[{"type":"input_image","image_url":"data:image/png;base64,` + bigBase64 + `","detail":"high"}]}`, imageTokens},
-		{"input_image base64 length does not matter", `{"input":[{"type":"input_image","image_url":"data:image/png;base64,` + smallBase64 + `"}]}`, imageTokens},
+		{"input_image object is one image plus its other text", `{"input":[{"type":"input_image","image_url":"data:image/png;base64,` + bigBase64 + `","detail":"high"}]}`, imageTokens + inputImage + estimatedTokenCountForText("high")},
+		{"input_image base64 length does not matter", `{"input":[{"type":"input_image","image_url":"data:image/png;base64,` + smallBase64 + `"}]}`, imageTokens + inputImage},
+		{"input_image base64 field is the image", `{"input":[{"type":"input_image","base64":"` + bigBase64 + `"}]}`, imageTokens + inputImage},
+		{"input_image image fields count one image", `{"input":[{"image_url":"u","base64":"` + bigBase64 + `","type":"input_image"}]}`, imageTokens + inputImage},
 		{"images array counts each element", `{"images":["` + bigBase64 + `","` + smallBase64 + `",{"mediaType":"image/png","base64":"` + smallBase64 + `"}],"state":"hello"}`, 3*imageTokens + hello},
 		{"assets map counts each value", `{"assets":{"a":{"mediaType":"image/png","base64":"` + bigBase64 + `"},"b":"data:image/jpeg;base64,` + smallBase64 + `"}}`, 2 * imageTokens},
 		{"assets with several object values", `{"assets":{"a":{"x":"1"},"b":{"y":[1,2]},"c":{"z":{}},"d":"hello"},"state":"hello"}`, 4*imageTokens + hello},
@@ -39,7 +42,7 @@ func TestEstimatedTokenCountForDecisionBody(t *testing.T) {
 		{"images key that is not an array is walked as text", `{"images":"hello"}`, hello},
 		{"duplicate keys are all counted", `{"input":"hello","input":"hello"}`, 2 * hello},
 		{"duplicate images keys are all counted", `{"images":["a"],"images":["b","c"]}`, 3 * imageTokens},
-		{"mixed text and images", `{"input":"hello","images":["x"],"questions":[{"type":"input_image","image_url":"u"},{"predicate":"Is it red?"}]}`, hello + 2*imageTokens + question},
+		{"mixed text and images", `{"input":"hello","images":["x"],"questions":[{"type":"input_image","image_url":"u"},{"predicate":"Is it red?"}]}`, hello + 2*imageTokens + inputImage + question},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -47,6 +50,36 @@ func TestEstimatedTokenCountForDecisionBody(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
+	}
+}
+
+// TestEstimatedTokenCountForDecisionBodyResistsImageBypass checks that a field
+// or prefix a backend ignores cannot turn prompt text into one flat image.
+func TestEstimatedTokenCountForDecisionBodyResistsImageBypass(t *testing.T) {
+	t.Parallel()
+
+	text := strings.Repeat("Is the sky red? ", 10_000)
+	textTokens := estimatedTokenCountForText(text)
+	for _, imageTokens := range []int{0, 1000} {
+		for _, tc := range []struct {
+			name string
+			body string
+			min  int
+		}{
+			{"root input_image type", `{"model":"fn/m","type":"input_image","questions":[{"predicate":"` + text + `"}]}`, textTokens},
+			{"nested input_image keeps non-image text", `{"questions":[{"type":"input_image","predicate":"` + text + `"}]}`, textTokens},
+			{"data url with empty media type", `{"questions":[{"predicate":"data:;base64,` + text + `"}]}`, textTokens},
+			{"data prefix with base64 marker later", `{"questions":[{"predicate":"data:` + text + `;base64,x"}]}`, textTokens},
+			{"non-image data url", `{"questions":[{"predicate":"data:text/plain;base64,` + text + `"}]}`, textTokens},
+			{"image media type without base64 marker", `{"questions":[{"predicate":"data:image/png,` + text + `"}]}`, textTokens},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				got, err := estimatedTokenCountForDecisionBody([]byte(tc.body), imageTokens)
+				require.NoError(t, err)
+				require.GreaterOrEqual(t, got, tc.min)
+			})
+		}
 	}
 }
 

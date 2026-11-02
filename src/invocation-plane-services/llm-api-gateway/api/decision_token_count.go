@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"regexp"
 	"strings"
 )
 
@@ -20,8 +21,13 @@ var errDecisionBodyTooDeep = errors.New("request body is nested more than 64 lev
 // route request without knowing its schema. Every string leaf counts as text.
 // Each image slot counts a flat imageTokens and its payload is never counted,
 // so a large base64 image cannot hide or inflate the estimate. Image slots are
-// objects with type "input_image", each element of an "images" array, each
-// value of an "assets" object, and any string that is a base64 data URL.
+// each element of an "images" array, each value of an "assets" object, and any
+// string that is a base64 image data URL (data:image/<type>;base64,...).
+//
+// A nested object with type "input_image" counts as one image in place of its
+// image_url and base64 fields; its other strings still count as text. The root
+// object is never an image, so a field the backend ignores cannot turn the
+// whole prompt into one image.
 //
 // The body is read in one pass over decoder tokens with a stack of at most
 // maxDecisionBodyDepth frames, so time is linear and extra memory does not
@@ -73,8 +79,8 @@ func estimatedTokenCountForDecisionBody(raw []byte, imageTokens int) (int, error
 				frame := stack[len(stack)-1]
 				stack = stack[:len(stack)-1]
 				value, done = frame.total, true
-				if frame.image {
-					value = imageTokens
+				if frame.image && len(stack) > 0 {
+					value = frame.total - frame.imageFieldTotal + imageTokens
 				}
 			}
 		case string:
@@ -87,7 +93,7 @@ func estimatedTokenCountForDecisionBody(raw []byte, imageTokens int) (int, error
 				continue
 			}
 			switch {
-			case top != nil && top.slots, isBase64DataURL(t):
+			case top != nil && top.slots, isBase64ImageDataURL(t):
 				value = imageTokens
 			default:
 				value = estimatedTokenCountForText(t)
@@ -113,8 +119,16 @@ func estimatedTokenCountForDecisionBody(raw []byte, imageTokens int) (int, error
 		}
 		top := &stack[len(stack)-1]
 		top.total += value
+		if top.object && isImageField(top.key) {
+			top.imageFieldTotal += value
+		}
 		top.haveKey = false
 	}
+}
+
+// isImageField reports whether key holds the image of an input_image object.
+func isImageField(key string) bool {
+	return key == "image_url" || key == "base64"
 }
 
 // decisionFrame is the state of one open object or array.
@@ -125,6 +139,9 @@ type decisionFrame struct {
 	slots   bool   // each child is an image slot
 	image   bool   // this object has type "input_image"
 	total   int
+	// imageFieldTotal is the part of total from image_url and base64 values,
+	// replaced by one image when the object is an input_image.
+	imageFieldTotal int
 }
 
 // skipContainer consumes tokens up to the close of the container whose opening
@@ -150,6 +167,11 @@ func skipContainer(dec *json.Decoder, depth int) error {
 	return nil
 }
 
-func isBase64DataURL(text string) bool {
-	return strings.HasPrefix(text, "data:") && strings.Contains(text, ";base64,")
+// base64ImageDataURL matches the start of a base64 image data URL. The media
+// type must be an image so a prefix such as "data:;base64," cannot make text
+// count as one image.
+var base64ImageDataURL = regexp.MustCompile(`^data:image/[^;]+;base64,`)
+
+func isBase64ImageDataURL(text string) bool {
+	return strings.HasPrefix(text, "data:image/") && base64ImageDataURL.MatchString(text)
 }

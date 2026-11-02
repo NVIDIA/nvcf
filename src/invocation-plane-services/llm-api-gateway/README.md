@@ -91,8 +91,11 @@ formats. Responses are not streamed; `stream` is ignored.
   estimate is sent to Stargate as `x-input-tokens` and `x-token-estimate`. The
   estimate counts every string in the body as text. Each image counts a flat
   `NVCF_DECISION_IMAGE_TOKENS` (default `1024`) and its base64 is never
-  counted. An image is an object with `type` set to `input_image`, an element
-  of `images`, a value of `assets`, or any string that is a base64 data URL.
+  counted. An image is an element of `images`, a value of `assets`, or any
+  string that starts with `data:image/<type>;base64,`. A nested object with
+  `type` set to `input_image` counts one image in place of its `image_url`
+  and `base64` fields; its other strings still count as text. The top-level
+  object is never counted as an image.
 - Client headers, including `TypeSafe-Danger-Zone-Images`, reach the model
   server.
 - `/v1/decisions` returns errors in the OpenAI shape. `/v1/systemone` returns

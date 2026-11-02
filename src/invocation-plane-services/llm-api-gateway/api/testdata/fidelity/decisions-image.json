@@ -1,5 +1,5 @@
 {
-  "description": "A decisions request with an input_image data URL forwards the image unchanged; the estimate counts the image as the flat default of 1024 tokens whatever the base64 length.",
+  "description": "A decisions request with an input_image data URL forwards the image unchanged; the estimate counts the image as the flat default of 1024 tokens whatever the base64 length, and the input_image type string as text.",
   "path": "/v1/decisions",
   "request": {
     "model": "fn-alpha/company/model",
@@ -47,7 +47,7 @@
       }
     ]
   },
-  "upstream_input_tokens": "1077",
+  "upstream_input_tokens": "1085",
   "upstream_affinity_key": "",
   "upstream_response": {
     "json": {
