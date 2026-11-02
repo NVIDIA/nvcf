@@ -2940,7 +2940,7 @@ class ReservedReleaseVersionTest(unittest.TestCase):
             git(root, "tag", "-a", f"{self.SERVICE['path']}/v{version}", "-m", "published")
         git(root, "switch", "main")
         (directory / "source.txt").write_text("main fix\n")
-        self.commit_all(root, "fix(notary): main fix")
+        self.commit_all(root, "fix(notary): main fix\n\nKeep caller-visible behavior unchanged.")
         self.main_fix = git_out(root, "rev-parse", "HEAD").strip()
         (root / "unrelated.txt").write_text("unrelated\n")
         self.commit_all(root, "fix(other): unrelated change")
@@ -2984,6 +2984,7 @@ class ReservedReleaseVersionTest(unittest.TestCase):
             notes = self.github_release.create_release.call_args.args[2]
             self.assertIn("v1.14.7", notes)
             self.assertIn("main fix", notes)
+            self.assertIn("Keep caller-visible behavior unchanged.", notes)
             self.assertNotIn("maintenance only", notes)
             self.assertNotIn("unrelated change", notes)
             self.assertEqual(

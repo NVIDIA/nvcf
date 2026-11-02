@@ -1276,16 +1276,19 @@ def semantic_release_changes(root, service, candidate):
     _version, baseline = release_baseline(root, service)
     history = f"{baseline}..HEAD" if baseline else "HEAD"
     commits = run(
-        ["git", "log", "--format=%H %s", history, "--", service["path"]],
+        ["git", "log", "--format=%H", history, "--", service["path"]],
         cwd=root, capture=True,
     ).splitlines()
+    changes = run(
+        ["git", "log", "--format=- %h %s%n%b", history, "--", service["path"]],
+        cwd=root, capture=True,
+    ).strip()
     reason = (
         f"semantic-release selected {candidate}; the published version advances past "
         "versions already allocated on this release line.\n\n"
         f"Changes since {baseline or 'the start of the service history'}:\n"
     )
-    reason += "\n".join(f"- {commit}" for commit in commits)
-    return reason, [commit.partition(" ")[0] for commit in commits]
+    return reason + changes, commits
 
 
 # Release levels, ordered. `None` is "releases nothing"; comparing by rank is how
