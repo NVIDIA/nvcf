@@ -61,6 +61,10 @@ spec:
           args:
             - -c
             - /scripts/deploy.sh {{ include "nvcf-openbao.namespace" . }} {{ $serverFullname }} helm
+          {{- with (include "nvcf-openbao.kubectlEnv" .) }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: init-script
               readOnly: true

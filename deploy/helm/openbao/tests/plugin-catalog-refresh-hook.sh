@@ -19,6 +19,7 @@ test "$(yq -r '.openbao.injector.agentImage.tag' "${upgrade_values}")" = "${open
 chart_dir="${test_root}/helm"
 cp -R "${chart_source}" "${chart_dir}"
 helm dependency build "${chart_dir}" >/dev/null
+helm lint "${chart_dir}" -f "${values_file}"
 rendered="${test_root}/rendered.yaml"
 helm template openbao "${chart_dir}" -f "${values_file}" >"${rendered}"
 
@@ -80,3 +81,45 @@ migrations_weight="$(awk '
 test "${migrations_weight}" = "1"
 
 echo "OpenBao plugin catalog refresh hook render checks passed"
+
+# Package with unrelated metadata to catch accidental appVersion image fallback.
+helm package "${chart_dir}" --version 99.0.0 --app-version 99.0.0 -d "${test_root}" >/dev/null
+package="${test_root}/$(yq -r '.name' "${chart_source}/Chart.yaml")-99.0.0.tgz"
+for minor in '' 1.36 1.37; do
+  selector_args=()
+  if [[ -n "${minor}" ]]; then
+    selector_args=(--set-string "openbao.migrations.kubectlMinor=${minor}")
+  fi
+  helm template openbao "${package}" -f "${values_file}" \
+    "${selector_args[@]}" >"${rendered}"
+  for hook in openbao-server-initialize-cluster openbao-server-migrations; do
+    container="select(.kind == \"Job\" and .metadata.name == \"${hook}\") | .spec.template.spec.containers[0]"
+    test "$(yq -r "${container} | .image" "${rendered}")" = "example.com/nvcf/nvcf-openbao-migrations:${migrations_tag}"
+    test "$(yq -r "${container} | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "${rendered}")" = "${minor}"
+    if [[ -n "${minor}" ]]; then
+      test "$(yq -r "${container} | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value | tag" "${rendered}")" = '!!str'
+    fi
+  done
+  test "$(yq -r 'select(.kind == "StatefulSet") | .spec.template.spec.containers[] | select(.name == "openbao") | .image' "${rendered}")" = "example.com/nvcf/nvcf-openbao:${openbao_tag}"
+  test "$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[].env[] | select(.name == "AGENT_INJECT_VAULT_IMAGE") | .value' "${rendered}" | sed 's/.*://')" = "${openbao_tag}"
+done
+
+# Consumer overrides still win in both migration-image consumers.
+helm template openbao "${package}" -f "${values_file}" \
+  --set-string openbao.migrations.kubectlMinor=1.36 \
+  --set openbao.migrations.image.registry=mirror.example.com \
+  --set openbao.migrations.image.repository=custom/migrations \
+  --set openbao.migrations.image.tag=override >"${rendered}"
+for hook in openbao-server-initialize-cluster openbao-server-migrations; do
+  test "$(yq -r "select(.kind == \"Job\" and .metadata.name == \"${hook}\") | .spec.template.spec.containers[0].image" "${rendered}")" = mirror.example.com/custom/migrations:override
+done
+for invalid in 1.35 1.38 false; do
+  if helm template openbao "${chart_dir}" -f "${values_file}" \
+    --set-string "openbao.migrations.kubectlMinor=${invalid}" >"${test_root}/invalid.log" 2>&1; then
+    echo "unsupported kubectl minor ${invalid} was accepted" >&2
+    exit 1
+  fi
+  grep -Fq 'openbao.migrations.kubectlMinor must be empty, 1.36, or 1.37' "${test_root}/invalid.log"
+done
+
+echo "OpenBao migration client and packaged image checks passed"
