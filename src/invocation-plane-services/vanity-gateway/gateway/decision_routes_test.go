@@ -780,3 +780,45 @@ func TestDecisionRoutesLLMPathReplacesOnlyTheModelValue(t *testing.T) {
 		}
 	}
 }
+
+// endpoint.type names the route; upstream.kind tells dashboards whether the
+// request went through the LLM Gateway or straight to the function.
+func TestNativeRoutesSetUpstreamKindSpanAttribute(t *testing.T) {
+	for _, path := range []string{decisionsPath, systemOnePath, messagesPath} {
+		for _, llm := range []bool{false, true} {
+			wantKind, wantEndpoint := "direct", map[string]string{decisionsPath: "decisions", systemOnePath: "systemone", messagesPath: "anthropic"}[path]
+			if llm {
+				wantKind = "llm_gateway"
+			}
+			t.Run(path+" "+wantKind, func(t *testing.T) {
+				tp, exp := newTestTracerProvider()
+				defer tp.Shutdown(context.Background())
+				backend := captureServer(t, make(chan capturedRequest, 1), nil)
+				var mutate func(*config.ModelFunctionDetails)
+				if llm {
+					mutate = llmDecision
+				}
+				mappings := decisionMappings(true, true, mutate)
+				mappings.AnthropicMessages = mappings.TypeSafeSystemOne
+				director, err := NewModelDirector(mappings, regexp.MustCompile("^$"), mustVanityDirector(t, backend.URL), mustLLMGatewayDirector(t, backend.URL), nil)
+				require.NoError(t, err)
+				handler := map[string]http.HandlerFunc{decisionsPath: director.ServeDecisions, systemOnePath: director.ServeSystemOne, messagesPath: director.ServeMessages}[path]
+
+				req := openAIRequest(t, path, `{"model":"`+decisionModel+`"}`)
+				req.Header.Set("Content-Type", "application/json")
+				ctx, span := tp.Tracer("test").Start(req.Context(), "native-test")
+				rec := httptest.NewRecorder()
+				handler(rec, req.WithContext(ctx))
+				span.End()
+
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				got, ok := spanAttr(exp.GetSpans()[0], attribute.Key("upstream.kind"))
+				require.True(t, ok, "upstream.kind must be set")
+				assert.Equal(t, wantKind, got.AsString())
+				endpoint, ok := spanAttr(exp.GetSpans()[0], attribute.Key("endpoint.type"))
+				require.True(t, ok)
+				assert.Equal(t, wantEndpoint, endpoint.AsString())
+			})
+		}
+	}
+}
