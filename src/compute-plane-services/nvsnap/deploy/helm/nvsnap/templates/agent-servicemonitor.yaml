@@ -28,9 +28,12 @@ metadata:
     {{ $k }}: {{ $v | toString | quote }}
     {{- end }}
 spec:
+  # The headless agent Service alone: the node-local one has the same
+  # agent labels and would scrape every agent twice.
   selector:
     matchLabels:
-      {{- include "nvsnap.agent.selectorLabels" . | nindent 6 }}
+      nvsnap.io/metrics: agent
+      app.kubernetes.io/instance: {{ .Release.Name }}
   namespaceSelector:
     matchNames: [{{ .Release.Namespace | quote }}]
   endpoints:
