@@ -251,11 +251,13 @@ impl StatsAggregator {
                         completed_sample_recorded = true;
                     }
                 }
+                RequestObservationEndpoint::Decisions => {}
             }
         }
 
-        let embedding_input_changed = observation.endpoint
-            == RequestObservationEndpoint::Embeddings
+        // Non-streaming requests report input throughput only until a
+        // streaming request has measured it.
+        let embedding_input_changed = !observation.endpoint.is_streaming()
             && observation.state == RequestObservationState::Complete
             && !model_state.request_input_intervals.has_observed_rate()
             && apply_input_throughput_sample(
@@ -344,9 +346,7 @@ pub(super) fn observed_output_tps(
     output_tokens: u64,
 ) -> Option<f64> {
     let observation = &event.observation;
-    if observation.endpoint == RequestObservationEndpoint::Embeddings
-        || output_tokens < config.min_output_tokens
-    {
+    if !observation.endpoint.is_streaming() || output_tokens < config.min_output_tokens {
         return None;
     }
     tps_for_units(
