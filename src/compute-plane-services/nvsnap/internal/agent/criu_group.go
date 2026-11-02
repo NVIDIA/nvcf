@@ -470,6 +470,9 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	}
 	if b := blocking(findings); len(b) > 0 {
 		log.WithField("blocking", len(b)).Warn("CRIU group capture: skipped; the preflight found what would fail it")
+		if why := configurationRefusal(b); why != "" {
+			c.recordRefusal(ctx, key, leader, len(uris), why, log)
+		}
 		return false
 	}
 	record, err := c.claimGroupRecord(ctx, key, leader, len(uris))
@@ -760,6 +763,34 @@ func (c *criuAutoRestorer) claimGroupRecord(ctx context.Context, key string, lea
 		return nil, nil
 	}
 	return updated, err
+}
+
+// recordRefusal records on group record key that the preflight refuses
+// every capture of the configuration (configurationRefusal): the capture
+// is failed for the current agent bundle without freezing the instance,
+// so the configuration falls back to the cachedir (criu_fallback.go) and
+// a new bundle tries CRIU again. The record is claimed as for a capture,
+// so only one agent writes it, and it counts as an attempt.
+func (c *criuAutoRestorer) recordRefusal(ctx context.Context, key string, leader *corev1.Pod, size int, why string, log *logrus.Entry) {
+	record, err := c.claimGroupRecord(ctx, key, leader, size)
+	if err != nil {
+		log.WithError(err).Warn("CRIU group capture: cannot record the preflight's refusal")
+		return
+	}
+	if record == nil {
+		return // another agent holds it
+	}
+	if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
+		if d["state"] != criuGroupStateCapturing || d["startedAt"] != record.Data["startedAt"] {
+			return false
+		}
+		d["state"], d["reason"] = criuGroupStateFailed, truncate(why, groupReasonMax)
+		return true
+	}); err != nil {
+		log.WithError(err).Warn("CRIU group capture: cannot record the preflight's refusal")
+		return
+	}
+	log.Warn("CRIU group capture: recorded as failed; the preflight refuses every capture of this configuration under this agent version")
 }
 
 // updateGroupRecord applies change to the group record of key; change

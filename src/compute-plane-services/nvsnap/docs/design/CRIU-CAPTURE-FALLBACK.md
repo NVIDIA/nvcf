@@ -92,6 +92,12 @@ The capture preflight already blocks a capture whose processes hold RDMA devices
 every socket of every member's processes (through `pidfd_getfd`, on a duplicate it closes) and blocks a capture of a
 process that holds an MPTCP socket, naming it. The instance is never frozen for a capture that cannot succeed. Capturing such processes is tracked in #2926.
 
+A block every pod of the configuration would hit is recorded as a failed capture of the current agent bundle
+(`configurationRefusal` in `internal/agent/capture_preflight.go`, `recordRefusal` in `criu_group.go`): today only an MPTCP socket, which the
+program opens itself. The configuration then falls back (§2.2) without being frozen, and a new bundle tries CRIU
+again. The other blocks can clear (a pod restarted after an agent upgrade, RDMA devices released, a companion opted
+in), so they only skip the capture, as before.
+
 ### 2.4 A failed dump resumes the workload
 
 `errSourceLeftSuspended` today makes the caller replace the source pods: correct when the GPU state cannot be
