@@ -43,7 +43,7 @@ llmRequestRouter:
   image:
     registry: ""
     repository: ""
-    tag: "0.26.1"
+    tag: "0.29.2"
     # When set, the Pod image is repository@digest and tag is ignored for the
     # image. The backend router uses this digest only when every
     # backendRouter.image field is empty, so clear its pinned tag to apply it.
@@ -122,7 +122,7 @@ llmRequestRouter:
     image:
       registry: ""
       repository: ""
-      tag: "0.25.0"
+      tag: "0.29.2"
       pullPolicy: ""
     # Addresses workers dial to reach the router. The gRPC address is an
     # explicit HTTP(S) URI; the reverse-tunnel address remains host:port. Both
