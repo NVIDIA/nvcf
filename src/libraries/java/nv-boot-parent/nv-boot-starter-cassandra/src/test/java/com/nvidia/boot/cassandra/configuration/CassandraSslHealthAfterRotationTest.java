@@ -29,10 +29,8 @@ import com.datastax.oss.driver.api.core.CqlSession;
 import com.datastax.oss.driver.api.core.CqlSessionBuilder;
 import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.datastax.oss.driver.api.core.cql.Row;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -54,21 +52,19 @@ import org.springframework.mock.env.MockEnvironment;
  * <p>
  * The health indicator is built the same way Spring Boot's {@code SslHealthContributorAutoConfiguration}
  * builds it: {@link SslHealthIndicator} over {@link SslInfo} over the application's
- * {@link org.springframework.boot.ssl.SslBundles}. The clock is fixed between the expiry of the
- * "stale" certificate (valid one year from generation) and the expiry of the "fresh" certificate
- * (valid for 100 years), so the stale certificate is expired and the fresh one is valid.
+ * {@link org.springframework.boot.ssl.SslBundles}. Certificates are generated in memory: the "stale"
+ * one expired yesterday and the "fresh" one is valid for ten years.
  */
 class CassandraSslHealthAfterRotationTest {
 
     private static final String BUNDLE_NAME = "cassandra-ssl";
     private static final String CERT_PROPERTY =
             "spring.ssl.bundle.pem." + BUNDLE_NAME + ".keystore.certificate";
-    private static final String STALE_CERT = "classpath:ssl/stale-cert.pem";
-    private static final String STALE_KEY = "classpath:ssl/stale-key.pem";
-    private static final String FRESH_CERT = "classpath:ssl/fresh-cert.pem";
-    private static final String FRESH_KEY = "classpath:ssl/fresh-key.pem";
-    private static final Clock CLOCK_AFTER_STALE_EXPIRY =
-            Clock.fixed(Instant.parse("2035-01-01T00:00:00Z"), ZoneOffset.UTC);
+    private static final Instant NOW = Instant.now();
+    private static final TestCertificates.PemMaterial STALE = TestCertificates.selfSigned(
+            "stale-cassandra-client", NOW.minus(Duration.ofDays(730)), NOW.minus(Duration.ofDays(1)));
+    private static final TestCertificates.PemMaterial FRESH = TestCertificates.selfSigned(
+            "rotated-cassandra-client", NOW.minus(Duration.ofDays(1)), NOW.plus(Duration.ofDays(3650)));
 
     private GenericApplicationContext applicationContext;
     private DefaultSslBundleRegistry registry;
@@ -94,19 +90,19 @@ class CassandraSslHealthAfterRotationTest {
         applicationContext.refresh();
 
         sslProperties = new SslProperties();
-        sslProperties.getBundle().getPem().put(BUNDLE_NAME, pemProperties(STALE_CERT, STALE_KEY));
+        sslProperties.getBundle().getPem().put(BUNDLE_NAME, pemProperties(STALE));
 
         registry = new DefaultSslBundleRegistry();
         registry.registerBundle(BUNDLE_NAME, PropertiesSslBundle.get(
                 sslProperties.getBundle().getPem().get(BUNDLE_NAME), applicationContext));
 
         healthIndicator = new SslHealthIndicator(
-                new SslInfo(registry, CLOCK_AFTER_STALE_EXPIRY), Duration.ofDays(14));
+                new SslInfo(registry), Duration.ofDays(14));
 
         environment = new MockEnvironment();
         environment.setProperty("spring.cassandra.username", "u");
         environment.setProperty("spring.cassandra.password", "p");
-        environment.setProperty(CERT_PROPERTY, STALE_CERT);
+        environment.setProperty(CERT_PROPERTY, STALE.certificate());
 
         delegateSession = mock(CqlSession.class);
         session = new CassandraSslBundleConfiguration.RefreshingCqlSession(
@@ -200,22 +196,22 @@ class CassandraSslHealthAfterRotationTest {
     }
 
     private void rotateCertificate() {
-        sslProperties.getBundle().getPem().put(BUNDLE_NAME, pemProperties(FRESH_CERT, FRESH_KEY));
-        environment.setProperty(CERT_PROPERTY, FRESH_CERT);
+        sslProperties.getBundle().getPem().put(BUNDLE_NAME, pemProperties(FRESH));
+        environment.setProperty(CERT_PROPERTY, FRESH.certificate());
     }
 
     private String subjectOfFirstCertificate() {
-        return new SslInfo(registry, CLOCK_AFTER_STALE_EXPIRY)
+        return new SslInfo(registry)
                 .getBundle(BUNDLE_NAME)
                 .getCertificateChains().get(0)
                 .getCertificates().get(0)
                 .getSubject();
     }
 
-    private static PemSslBundleProperties pemProperties(String certificate, String privateKey) {
+    private static PemSslBundleProperties pemProperties(TestCertificates.PemMaterial pem) {
         var props = new PemSslBundleProperties();
-        props.getKeystore().setCertificate(certificate);
-        props.getKeystore().setPrivateKey(privateKey);
+        props.getKeystore().setCertificate(pem.certificate());
+        props.getKeystore().setPrivateKey(pem.privateKey());
         return props;
     }
 }

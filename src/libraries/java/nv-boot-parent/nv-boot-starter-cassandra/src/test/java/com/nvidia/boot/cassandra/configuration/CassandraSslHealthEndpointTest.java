@@ -34,9 +34,8 @@ import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.datastax.oss.driver.api.core.context.DriverContext;
 import com.datastax.oss.driver.api.core.cql.Row;
 import com.datastax.oss.driver.api.core.cql.Statement;
-import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
@@ -47,8 +46,6 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
-import org.springframework.boot.info.SslInfo;
-import org.springframework.boot.ssl.SslBundles;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.cloud.context.environment.EnvironmentChangeEvent;
@@ -58,6 +55,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -68,9 +67,8 @@ import org.springframework.test.web.servlet.MockMvc;
  * <p>
  * The startup bundle holds the "stale" certificate. Rotation is simulated the way Spring Cloud does
  * it: the PEM properties change, configuration properties are rebound, and
- * {@link RefreshScopeRefreshedEvent} is published. The clock behind {@link SslInfo} is fixed between
- * the expiry of the stale certificate (one year after generation) and the fresh one (100 years), so
- * the stale certificate is expired and the fresh one is valid whenever the test runs.
+ * {@link RefreshScopeRefreshedEvent} is published. Certificates are generated in memory and passed as
+ * inline PEM: the stale one expired yesterday and the fresh one is valid for ten years.
  * <p>
  * Registering the rotated bundle makes the registry invoke the update handler that
  * {@code RefreshingCqlSession} registers, which rebuilds the session a second time. Each build
@@ -87,9 +85,7 @@ import org.springframework.test.web.servlet.MockMvc;
                 "spring.cassandra.username=u",
                 "spring.cassandra.password=p",
                 "management.endpoints.web.exposure.include=health",
-                "management.endpoint.health.show-details=always",
-                CassandraSslHealthEndpointTest.CERT_PROPERTY + "=classpath:ssl/stale-cert.pem",
-                CassandraSslHealthEndpointTest.KEY_PROPERTY + "=classpath:ssl/stale-key.pem"
+                "management.endpoint.health.show-details=always"
         })
 @AutoConfigureMockMvc
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -103,6 +99,18 @@ class CassandraSslHealthEndpointTest {
             "spring.ssl.bundle.pem." + BUNDLE_NAME + ".keystore.private-key";
 
     private static final String SSL_HEALTH_URL = "/actuator/health/ssl";
+
+    private static final Instant NOW = Instant.now();
+    private static final TestCertificates.PemMaterial STALE = TestCertificates.selfSigned(
+            "stale-cassandra-client", NOW.minus(Duration.ofDays(730)), NOW.minus(Duration.ofDays(1)));
+    private static final TestCertificates.PemMaterial FRESH = TestCertificates.selfSigned(
+            "rotated-cassandra-client", NOW.minus(Duration.ofDays(1)), NOW.plus(Duration.ofDays(3650)));
+
+    @DynamicPropertySource
+    static void startupCertificate(DynamicPropertyRegistry registry) {
+        registry.add(CERT_PROPERTY, STALE::certificate);
+        registry.add(KEY_PROPERTY, STALE::privateKey);
+    }
 
     @Autowired
     private MockMvc mockMvc;
@@ -145,8 +153,8 @@ class CassandraSslHealthEndpointTest {
     private void rotateCertificateAndRefresh() {
         applicationContext.getEnvironment().getPropertySources().addFirst(new MapPropertySource(
                 "rotated-ssl",
-                Map.of(CERT_PROPERTY, "classpath:ssl/fresh-cert.pem",
-                       KEY_PROPERTY, "classpath:ssl/fresh-key.pem")));
+                Map.of(CERT_PROPERTY, FRESH.certificate(),
+                       KEY_PROPERTY, FRESH.privateKey())));
         applicationContext.publishEvent(
                 new EnvironmentChangeEvent(applicationContext, Set.of(CERT_PROPERTY, KEY_PROPERTY)));
         applicationContext.publishEvent(new RefreshScopeRefreshedEvent());
@@ -193,12 +201,6 @@ class CassandraSslHealthEndpointTest {
             when(driverContext.getSessionName()).thenReturn("test-session");
             when(session.getContext()).thenReturn(driverContext);
             return session;
-        }
-
-        @Bean
-        SslInfo sslInfo(SslBundles sslBundles) {
-            return new SslInfo(sslBundles,
-                    Clock.fixed(Instant.parse("2035-01-01T00:00:00Z"), ZoneOffset.UTC));
         }
     }
 }
