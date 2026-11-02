@@ -1445,3 +1445,27 @@ func TestStargateMessagesCredentialsStopBeforeWorker(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 }
+
+func TestStargateDecisionRouteCredentialsStopBeforeWorker(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		t.Run(path, func(t *testing.T) {
+			p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+			require.NoError(t, err)
+			p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie"} {
+					require.Empty(t, r.Header.Values(name), name)
+				}
+				require.Equal(t, "fn-decisions", r.Header.Get(headerRoutingKey))
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+			})}
+			resp, err := p.Proxy(context.Background(),
+				&requestctx.RequestContext{BearerToken: "caller-secret", RoutingKey: "fn-decisions"},
+				&ProxyRequest{Method: "POST", Path: path, Header: http.Header{
+					"Authorization": {"Bearer injected"}, "X-Api-Key": {"secret"},
+					"Proxy-Authorization": {"secret"}, "Cookie": {"session=secret"},
+				}, Body: io.NopCloser(strings.NewReader(`{}`))})
+			require.NoError(t, err)
+			defer resp.Body.Close()
+		})
+	}
+}

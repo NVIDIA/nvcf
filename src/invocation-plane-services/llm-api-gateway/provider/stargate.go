@@ -447,12 +447,13 @@ func (p *StargateProvider) Proxy(
 			outbound.Header.Set(headerAuthorization, "Bearer "+bearerToken)
 		}
 	}
-	// Caller credentials authorize NVCF, never the Messages model server.
-	// Enforce this before Stargate so older Pylon workers cannot leak them.
-	if request.Path == "/v1/messages" {
-		outbound.Header.Del(headerAuthorization)
-		outbound.Header.Del("X-API-Key")
-		outbound.Header.Del("Proxy-Authorization")
+	// Caller credentials authorize NVCF, never the Messages or decision model
+	// server. Enforce this before Stargate so Pylon workers that forward
+	// Authorization cannot leak them.
+	if stripsCallerCredentials(request.Path) {
+		for _, name := range callerCredentialHeaders {
+			outbound.Header.Del(name)
+		}
 	}
 
 	if request.InputTokens > 0 {
@@ -477,6 +478,20 @@ func (p *StargateProvider) Proxy(
 		Header:     resp.Header.Clone(),
 		Body:       &proxyResponseBody{ReadCloser: resp.Body, cancel: cancel},
 	}, nil
+}
+
+// callerCredentialHeaders carry the caller's NVCF credentials or session.
+var callerCredentialHeaders = []string{headerAuthorization, "X-Api-Key", "Proxy-Authorization", "Cookie"}
+
+// stripsCallerCredentials reports whether path is a route whose model server
+// must never see the caller's credentials.
+func stripsCallerCredentials(path string) bool {
+	switch path {
+	case "/v1/messages", "/v1/decisions", "/v1/systemone":
+		return true
+	default:
+		return false
+	}
 }
 
 type proxyResponseBody struct {

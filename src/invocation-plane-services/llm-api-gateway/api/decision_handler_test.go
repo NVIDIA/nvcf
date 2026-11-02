@@ -126,6 +126,9 @@ func TestDecisionRoutesForwardBodyAndHeaders(t *testing.T) {
 			body := strings.Replace(route.body, `"hello"`, `"hello","images":["QUJD","QUJD"]`, 1)
 			req := decisionRequest(route, body)
 			req.Header.Set("TypeSafe-Danger-Zone-Images", "true")
+			req.Header.Set("X-Api-Key", "caller-key")
+			req.Header.Set("Proxy-Authorization", "Basic caller")
+			req.Header.Set("Cookie", "session=caller")
 			rec := httptest.NewRecorder()
 			e.ServeHTTP(rec, req)
 
@@ -139,7 +142,10 @@ func TestDecisionRoutesForwardBodyAndHeaders(t *testing.T) {
 			require.Equal(t, decisionTestModel, upstreamRequest.Model)
 			require.Equal(t, "fn-alpha", upstreamRequest.RoutingKey)
 			require.Equal(t, "true", upstreamRequest.Header.Get("TypeSafe-Danger-Zone-Images"))
-			require.Equal(t, "Bearer caller-token", upstreamRequest.Header.Get("Authorization"))
+			// Caller credentials authorize NVCF, never the decision model server.
+			for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie"} {
+				require.Empty(t, upstreamRequest.Header.Values(name), name)
+			}
 			outbound := jsonObject(t, upstreamRequest.Body)
 			require.JSONEq(t, `"`+decisionTestModel+`"`, string(outbound["model"]))
 			require.JSONEq(t, `["QUJD","QUJD"]`, string(outbound["images"]))
