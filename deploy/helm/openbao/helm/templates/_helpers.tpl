@@ -91,6 +91,11 @@ Usage: {{ include "openbao.image" (dict "image" .Values.openbao.migrations.image
 {{- fail "openbao.migrations.kubectlMinor must be empty, 1.36, or 1.37" -}}
 {{- end -}}
 {{- if $minor -}}
+{{- range .Values.openbao.migrations.env -}}
+{{- if eq .name "NVCF_KUBECTL_MINOR" -}}
+{{- fail "set openbao.migrations.kubectlMinor or NVCF_KUBECTL_MINOR in openbao.migrations.env, not both" -}}
+{{- end -}}
+{{- end -}}
 - name: NVCF_KUBECTL_MINOR
   value: {{ $minor | quote }}
 {{- end -}}
