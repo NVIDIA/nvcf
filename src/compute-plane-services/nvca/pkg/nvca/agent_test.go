@@ -847,6 +847,105 @@ func TestAgentRegisterWithICMSUpdatesQueueManagerCredentials(t *testing.T) {
 	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
 }
 
+// TestAgentStartRetriesInitialICMSRegistrationFailureInsteadOfFailingStart is a
+// regression test for NVBug 6843402: an initial ICMS registration failure (e.g.
+// an HTTP 409 Conflict because the configured resource overhead would remove an
+// instance type that still has active instances) must not make Start return an
+// error. Start must instead retry with backoff, stay NotReady (so a rolling
+// update never cuts over to this replica) while remaining alive (so it never
+// crash-loops), and return successfully once registration eventually succeeds.
+func TestAgentStartRetriesInitialICMSRegistrationFailureInsteadOfFailingStart(t *testing.T) {
+	logCtx, logHook := core.WithTestingLogger(newTestContext())
+	ctx, cancel := context.WithCancel(logCtx)
+	t.Cleanup(cancel)
+
+	oldInitial, oldMax := initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval
+	initialICMSRegistrationRetryInterval = time.Millisecond
+	maxICMSRegistrationRetryInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		initialICMSRegistrationRetryInterval = oldInitial
+		maxICMSRegistrationRetryInterval = oldMax
+	})
+
+	registeredCredentials := getTestQueueCreds(true)
+	icmsClient := newBlockingRecordingICMSClient(
+		registrationResult{err: fmt.Errorf(
+			"register with ICMS: HTTP 409: cluster registration failed, active instances exists for removed [NCP.GPU.TESLA_1x] instanceTypes")},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    registeredCredentials,
+		}},
+	)
+
+	agentOpts := AgentOptions{
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			OAuthTokenScope:      "byoc_registration",
+			OAuthClientID:        "foo",
+			OAuthClientSecretKey: "bar",
+		},
+		NCAId:                          "randomNCAId123",
+		ClusterName:                    "bartnvbackend",
+		ClusterID:                      "clusterid-1",
+		ClusterDescription:             "this is a test cluster",
+		ClusterGroupName:               "group of all A30",
+		ComputeBackend:                 "k8s",
+		CloudProvider:                  "on-prem",
+		NamespaceLabels:                labels.Set{"foo": "bar"},
+		K8sVersion:                     "1.27.8",
+		CredRenewInterval:              DefaultCredRenewInterval,
+		HeartbeatInterval:              DefaultHeartBeatInterval,
+		SyncQueueInterval:              defaultSyncQueueInterval,
+		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
+		SyncAcknowledgeRequestInterval: ackReqInterval,
+		GPUCapacity:                    2,
+		FeatureFlagFetcher:             featureflag.DefaultFetcher,
+		MetricsRegisterer:              prometheus.NewRegistry(),
+	}
+	agent := newMockAgentSingleGPU(t, ctx, agentOpts)
+	agent.icmsClient = icmsClient
+
+	startErrCh := make(chan error, 1)
+	go func() { startErrCh <- agent.Start(ctx) }()
+
+	// The first attempt fails. Start must not have returned yet: it's retrying.
+	requireRegistrationAttempt(t, icmsClient, 0)
+	select {
+	case err := <-startErrCh:
+		t.Fatalf("Start returned (err=%v) after the first registration failure instead of retrying", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, http.StatusServiceUnavailable)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+
+	icmsClient.release(0)
+
+	// The retry is logged as a warning, not an error, and the process keeps running.
+	requireRegistrationAttempt(t, icmsClient, 1)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for _, entry := range logHook.AllEntries() {
+			if entry.Message == "Failed to register with ICMS, retrying in 1ms" {
+				assert.Equal(ct, logrus.WarnLevel, entry.Level)
+				return
+			}
+		}
+		assert.Fail(ct, "expected a retry warning log entry")
+	}, 5*time.Second, 10*time.Millisecond)
+
+	// The second attempt succeeds. Start must now return cleanly.
+	icmsClient.release(1)
+	select {
+	case err := <-startErrCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Start to return after registration succeeded")
+	}
+
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, http.StatusOK)
+	require.Len(t, icmsClient.requests(), 2)
+}
+
 func TestAgent_getTelemetryAttributes(t *testing.T) {
 	ctx := context.Background()
 	agentOpts := AgentOptions{
@@ -2919,8 +3018,25 @@ func (m *mockHealthStatusCache) RefreshStatus(_ context.Context) (types.AgentHea
 	return m.status, nil
 }
 
+// TestStartReadinessNotSetOnICMSRegistrationFailure is a regression test for
+// NVBug 6843402. A persistent ICMS registration failure (e.g. a 409 Conflict
+// because the configured resource overhead would remove an instance type that
+// still has active instances) must not make Start return an error or crash the
+// process: Start retries with backoff instead, and readiness must never be
+// armed while registration keeps failing, so a rolling update never cuts over
+// to this replica. Start only returns once registration succeeds or ctx is
+// canceled (clean shutdown), which this test exercises via cancellation.
 func TestStartReadinessNotSetOnICMSRegistrationFailure(t *testing.T) {
-	ctx := newTestContext()
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	oldInitial, oldMax := initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval
+	initialICMSRegistrationRetryInterval = time.Millisecond
+	maxICMSRegistrationRetryInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		initialICMSRegistrationRetryInterval = oldInitial
+		maxICMSRegistrationRetryInterval = oldMax
+	})
 
 	agentOpts := AgentOptions{
 		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
@@ -2953,12 +3069,19 @@ func TestStartReadinessNotSetOnICMSRegistrationFailure(t *testing.T) {
 		registerErr: fmt.Errorf("409 Conflict: instance type rename with active functions"),
 	}
 
-	err := ag.Start(ctx)
-	require.Error(t, err, "Start should fail when ICMS registration returns an error")
+	startErrCh := make(chan error, 1)
+	go func() { startErrCh <- ag.Start(ctx) }()
 
-	// Readiness must never be armed when Start() fails during ICMS registration.
+	// Start must not return while registration keeps failing: it retries instead.
+	select {
+	case err := <-startErrCh:
+		t.Fatalf("Start returned (err=%v) instead of retrying the persistent registration failure", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// Readiness must never be armed while registration keeps failing.
 	_, ok := ag.readinessCheckGetter.GetCheck()
-	assert.False(t, ok, "readiness check should not be set when ICMS registration fails")
+	assert.False(t, ok, "readiness check should not be set while ICMS registration keeps failing")
 
 	// The health server is started early in Start(), so the /healthz endpoint should
 	// respond with 503 since readiness was never armed.
@@ -2966,7 +3089,16 @@ func TestStartReadinessNotSetOnICMSRegistrationFailure(t *testing.T) {
 	if assert.NoError(t, httpErr, "health endpoint should be reachable") {
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
-			"readiness endpoint should return 503 when Start() fails before arming readiness")
+			"readiness endpoint should return 503 while registration keeps failing and readiness is never armed")
+	}
+
+	// Canceling ctx (pod shutdown) must make Start return promptly instead of retrying forever.
+	cancel()
+	select {
+	case err := <-startErrCh:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Start to return after context cancellation")
 	}
 }
 
