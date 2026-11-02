@@ -41,15 +41,12 @@ const (
 	messagesPath  = "/v1/messages"
 )
 
-// System One error codes. The gateway also uses them as the code on the
-// OpenAI-shaped decisions errors, except where openAIErrorCode says otherwise.
+// Error kinds a caller passes to writeNativeError. Only a 400 needs one: the
+// status alone cannot tell a JSON syntax error from any other bad request.
+// nativeErrorCode derives every other code from the status.
 const (
-	errKindInvalidJSON         = "invalid_json"
-	errKindInvalidRequest      = "invalid_request"
-	errKindNotFound            = "not_found"
-	errKindRequestTooLarge     = "request_too_large"
-	errKindInternal            = "internal_error"
-	errKindProviderUnavailable = "provider_unavailable"
+	errKindInvalidJSON    = "invalid_json"
+	errKindInvalidRequest = "invalid_request"
 )
 
 const nativeProtocolKey contextKey = tooManyRequestsKey + 1
@@ -117,27 +114,77 @@ func writeProtocolError(writer http.ResponseWriter, protocol nativeProtocol, sta
 	return true
 }
 
-func openAIErrorCode(status int, kind string) string {
+// nativeErrorCode is the error code for a gateway-written error on the
+// decision routes. The LLM Gateway uses the same table, so a client sees the
+// same code whichever service rejected the request.
+func nativeErrorCode(protocol nativeProtocol, status int, kind string) string {
 	switch status {
+	case http.StatusBadRequest:
+		if kind == errKindInvalidJSON {
+			return errKindInvalidJSON
+		}
+		return errKindInvalidRequest
+	case http.StatusUnauthorized:
+		return "invalid_api_key"
+	case http.StatusForbidden:
+		return "forbidden"
 	case http.StatusNotFound:
-		return "model_not_found"
+		if protocol == nativeProtocolDecisions {
+			return "model_not_found"
+		}
+		return "not_found"
 	case http.StatusGone:
-		return "model_expired"
+		if protocol == nativeProtocolDecisions {
+			return "model_expired"
+		}
+		return "not_found"
+	case http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case http.StatusUnsupportedMediaType:
+		return "unsupported_media_type"
+	case http.StatusTooManyRequests:
+		return "rate_limit_exceeded"
+	case statusClientClosedRequest:
+		return "request_cancelled"
+	case http.StatusBadGateway, http.StatusServiceUnavailable, statusOverloaded:
+		return "provider_unavailable"
+	case http.StatusGatewayTimeout:
+		return "provider_timeout"
 	}
-	return kind
+	if status >= http.StatusInternalServerError {
+		return "internal_error"
+	}
+	return errKindInvalidRequest
+}
+
+// statusOverloaded is the non-standard 529 some model servers return.
+const statusOverloaded = 529
+
+// openAIErrorType is the OpenAI error type for a status on /v1/decisions.
+func openAIErrorType(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case statusOverloaded:
+		return "overloaded_error"
+	}
+	if status >= http.StatusInternalServerError {
+		return "server_error"
+	}
+	return "invalid_request_error"
 }
 
 func writeDecisionsError(writer http.ResponseWriter, status int, kind, message string) {
-	errorType := "invalid_request_error"
-	if status >= http.StatusInternalServerError {
-		errorType = "server_error"
-	}
 	writer.Header().Set(contentTypeHeader, contentTypeApplicationJSON)
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(OpenAIError{Error: CustomOpenAIError{
 		Message: message,
-		Type:    errorType,
-		Code:    openAIErrorCode(status, kind),
+		Type:    openAIErrorType(status),
+		Code:    nativeErrorCode(nativeProtocolDecisions, status, kind),
 	}})
 }
 
@@ -159,7 +206,7 @@ func writeSystemOneError(writer http.ResponseWriter, status int, kind, message s
 	writer.Header().Set(contentTypeHeader, contentTypeApplicationJSON)
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(systemOneError{
-		Error:     systemOneErrorDetail{Code: kind, Message: message, RequestID: requestID},
+		Error:     systemOneErrorDetail{Code: nativeErrorCode(nativeProtocolSystemOne, status, kind), Message: message, RequestID: requestID},
 		RequestID: requestID,
 	})
 }
