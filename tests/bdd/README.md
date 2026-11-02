@@ -66,11 +66,12 @@ settings, and the cluster needs two free 1x GPU instances. It serves OpenAI
 routes on `vanity-openai.localhost`.
 The decision route scenarios (`@llm-decision-routes`) cover `POST /v1/decisions`
 and `POST /v1/systemone` through the LLM gateway and through the Vanity Gateway.
-They deploy the in-repo sample from `SAMPLE_LLM_DECISIONS_IMAGE`, which must
-serve both routes. The released `5.1.0` sample does not, so until a release
-includes them build the image from this checkout and make the cluster able to
-pull it. The default is
-`nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local`:
+They are opt-in. `TestSingleClusterHelmfile` skips them unless
+`SAMPLE_LLM_DECISIONS_IMAGE` is set, because they also need LLM gateway,
+Stargate, Pylon and Vanity Gateway builds that serve the routes, which the
+pinned stack may not include yet. Set it to an image of the in-repo sample that
+serves both routes. If the latest released sample does not serve them yet,
+build the image from this checkout and make the cluster able to pull it:
 
 ```sh
 docker build --platform linux/amd64 \
@@ -78,11 +79,11 @@ docker build --platform linux/amd64 \
   examples/function-samples/openai-compatible-sample
 k3d image import -c ncp-local \
   nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local
+export SAMPLE_LLM_DECISIONS_IMAGE=nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local
 ```
 
-Or push a tag and set `SAMPLE_LLM_DECISIONS_IMAGE` to it. The scenarios need the
-LLM gateway, Stargate, Pylon and Vanity Gateway builds that serve the routes,
-and the Vanity scenario needs two free 1x GPU instances.
+Or push a tag and set `SAMPLE_LLM_DECISIONS_IMAGE` to it. The Vanity scenario
+needs two free 1x GPU instances.
 
 Each `-run` argument is anchored with `^...$` so the live entry point
 runs without also matching its `...FeatureFileWiresToSteps` wiring
@@ -110,7 +111,7 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
   SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   SAMPLE_LLM_ECHO_IMAGE=<optional-image-reference> \
-  SAMPLE_LLM_DECISIONS_IMAGE=<optional-image-reference> \
+  SAMPLE_LLM_DECISIONS_IMAGE=<optional-image-reference-enables-decision-routes> \
   go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
 
 # Single-cluster HA Helmfile feature: installs the control plane with

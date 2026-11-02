@@ -380,3 +380,40 @@ func TestDecisionRouteScenariosRejectBrokenGateways(t *testing.T) {
 		})
 	}
 }
+
+// TestDecisionRouteScenariosSkipWithoutDecisionsImage runs the decision
+// scenarios with the live tag filter and no SAMPLE_LLM_DECISIONS_IMAGE, so the
+// pinned released stack never sees them.
+func TestDecisionRouteScenariosSkipWithoutDecisionsImage(t *testing.T) {
+	scenarios := decisionScenarios(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv(sampleLLMDecisionsImageEnv, "")
+	runner := newFakeRunner(map[string]harness.Result{})
+	suite := newWiringSuite(t, runner)
+	fake := newDecisionRoutesFake("", &llmRoutingHTTPFake{seen: map[string]bool{}})
+	suite.HTTP = fake
+	sc := steps.NewScenarioContext(suite)
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name:                "decision-routes-opt-in",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) { steps.RegisterAll(ctx, sc) },
+		Options: &godog.Options{
+			Format: "pretty", Output: &out, Strict: true, Tags: singleClusterHelmfileTags(),
+			FeatureContents: []godog.Feature{{Name: "decisions", Contents: []byte("Feature: Decision routes\n" + scenarios)}},
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("feature failed without SAMPLE_LLM_DECISIONS_IMAGE, want the scenarios skipped:\n%s", out.String())
+	}
+	if len(runner.runs) != 0 {
+		t.Fatalf("decision scenarios ran commands without SAMPLE_LLM_DECISIONS_IMAGE: %v", runner.runs)
+	}
+
+	t.Setenv(sampleLLMDecisionsImageEnv, "nvcr.io/test-org/test-team/openai-compatible-decisions:test")
+	if tags := singleClusterHelmfileTags(); tags != "" {
+		t.Fatalf("tags with SAMPLE_LLM_DECISIONS_IMAGE set = %q, want every scenario", tags)
+	}
+}

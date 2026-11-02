@@ -3087,21 +3087,27 @@ func TestSingleClusterHelmfile(t *testing.T) {
 	if os.Getenv(sampleLLMEchoImageEnv) == "" {
 		t.Setenv(sampleLLMEchoImageEnv, "nvcr.io/"+os.Getenv("SAMPLE_NGC_ORG")+"/"+os.Getenv("SAMPLE_NGC_TEAM")+"/"+sampleLLMEchoDefaultImage)
 	}
-	if os.Getenv(sampleLLMDecisionsImageEnv) == "" {
-		t.Setenv(sampleLLMDecisionsImageEnv, "nvcr.io/"+os.Getenv("SAMPLE_NGC_ORG")+"/"+os.Getenv("SAMPLE_NGC_TEAM")+"/"+sampleLLMDecisionsDefaultImage)
+	tags := singleClusterHelmfileTags()
+	if tags != "" {
+		t.Logf("%s is not set, so the @llm-decision-routes scenarios are skipped", sampleLLMDecisionsImageEnv)
 	}
-	runLiveFeature(t, "single-cluster-helmfile.feature")
+	runLiveFeatureTags(t, "single-cluster-helmfile.feature", tags)
 }
 
 // sampleLLMDecisionsImageEnv selects the OpenAI-compatible sample the decision
-// route scenarios deploy. The image must serve /v1/decisions and /v1/systemone,
-// which the released sample does not until a release includes them, so it
-// defaults to the :local tag an operator builds from the same checkout and
-// imports into the cluster.
-const (
-	sampleLLMDecisionsImageEnv     = "SAMPLE_LLM_DECISIONS_IMAGE"
-	sampleLLMDecisionsDefaultImage = "nvcf-openai-compatible-sample:local"
-)
+// route scenarios deploy. The scenarios are opt-in: they also need gateway,
+// Stargate, Pylon and Vanity Gateway builds that serve the routes, so they run
+// only when an operator sets this variable.
+const sampleLLMDecisionsImageEnv = "SAMPLE_LLM_DECISIONS_IMAGE"
+
+// singleClusterHelmfileTags excludes the decision route scenarios unless
+// SAMPLE_LLM_DECISIONS_IMAGE is set.
+func singleClusterHelmfileTags() string {
+	if os.Getenv(sampleLLMDecisionsImageEnv) == "" {
+		return "~@llm-decision-routes"
+	}
+	return ""
+}
 
 // sampleLLMEchoImageEnv selects the OpenAI-compatible sample the LLM
 // field-fidelity scenario deploys. It defaults to the released in-repo sample
