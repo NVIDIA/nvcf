@@ -189,6 +189,11 @@ func (f *decisionRoutesFake) Do(ctx context.Context, method, rawURL string, head
 	if !f.serves(u, payload.Model, known) {
 		return f.notFound(u, payload.Model), nil
 	}
+	if strings.Contains(body, "data:image/") && f.mark("image-body-rejected") {
+		return harness.HTTPResponse{Status: 413, Body: mustJSON(map[string]any{
+			"error": map[string]any{"message": "request too large", "type": "invalid_request_error", "code": "request_too_large"},
+		})}, nil
+	}
 	return f.backend(u, headers, payload.Questions), nil
 }
 
@@ -231,13 +236,31 @@ func (f *decisionRoutesFake) notFound(u *url.URL, model string) harness.HTTPResp
 // the mock_error controls. The gateway under test passes all of it through.
 func (f *decisionRoutesFake) backend(u *url.URL, headers map[string]string, questions json.RawMessage) harness.HTTPResponse {
 	systemOne := u.Path == systemOneRoute
+	var response harness.HTTPResponse
 	switch u.Query().Get("mock_error") {
 	case "429":
-		return f.mockError(systemOne, http.StatusTooManyRequests, "mock rate limit", "rate_limit_error")
+		response = f.mockError(systemOne, http.StatusTooManyRequests, "mock rate limit", "rate_limit_error")
 	case "400":
-		return f.mockError(systemOne, http.StatusBadRequest, "mock validation error", "invalid_request_error")
+		response = f.mockError(systemOne, http.StatusBadRequest, "mock validation error", "invalid_request_error")
+	default:
+		return f.success(u, headers, questions)
 	}
-	echo := map[string]any{}
+	if u.Host == decisionVanityHost && response.Status == http.StatusTooManyRequests && f.mark("vanity-retry-after-lost") {
+		response.Header.Del("Retry-After")
+	}
+	if u.Host == decisionVanityHost && f.mark("vanity-error-rewritten") {
+		response.Body = mustJSON(map[string]any{"error": map[string]any{"message": "upstream error", "type": "server_error"}})
+	}
+	return response
+}
+
+func (f *decisionRoutesFake) success(u *url.URL, headers map[string]string, questions json.RawMessage) harness.HTTPResponse {
+	systemOne := u.Path == systemOneRoute
+	// The gateway strips caller credentials and sets X-Input-Tokens.
+	echo := map[string]any{"credentials_received": f.mark("credentials-forwarded")}
+	if !f.mark("input-tokens-dropped") {
+		echo["x-input-tokens"] = "12"
+	}
 	for _, name := range []string{"typesafe-danger-zone-images", "x-vendor-test"} {
 		for header, value := range headers {
 			if !strings.EqualFold(header, name) {
@@ -410,6 +433,8 @@ func TestDecisionRouteScenariosRejectBrokenGateways(t *testing.T) {
 		"", "answers-reordered", "vendor-header-dropped", "systemone-not-isolated",
 		"systemone-404-openai-shape", "request-id-mismatch", "retry-after-lost",
 		"error-body-rewritten", "vanity-section-leak", "models-without-endpoints",
+		"input-tokens-dropped", "credentials-forwarded", "image-body-rejected",
+		"vanity-retry-after-lost", "vanity-error-rewritten",
 	}
 	for _, broken := range brokenModes {
 		t.Run(broken, func(t *testing.T) {
