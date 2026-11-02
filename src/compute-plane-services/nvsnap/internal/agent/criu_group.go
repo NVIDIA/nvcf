@@ -321,6 +321,11 @@ func (a *Agent) captureCandidate(ctx context.Context, pod *corev1.Pod) bool {
 }
 
 func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1.Pod) {
+	if pod.Annotations[webhook.FallbackReasonAnnotation] != "" {
+		// Admitted to fall back (criu_fallback.go): its cachedir is
+		// captured instead, and a CRIU placeholder would not have it.
+		return
+	}
 	if name := c.a.identityBlocksCapture(pod); name != "" && rootfsonly.IsPodReady(pod) && pod.Annotations[cacheURIAnnotation] != "" {
 		if _, seen := c.attempted.LoadOrStore("identity/"+string(pod.UID), struct{}{}); !seen {
 			c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "env": name}).
@@ -465,6 +470,9 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	}
 	if b := blocking(findings); len(b) > 0 {
 		log.WithField("blocking", len(b)).Warn("CRIU group capture: skipped; the preflight found what would fail it")
+		if why := configurationRefusal(b); why != "" {
+			c.recordRefusal(ctx, key, scope, uris, len(ranks), leader, why, log)
+		}
 		return false
 	}
 	record, err := c.claimGroupRecord(ctx, key, leader, len(uris))
@@ -670,7 +678,7 @@ func (c *criuAutoRestorer) writeGroupAliases(ctx context.Context, key, scope str
 func criuGroupRecaptures(data map[string]string, now time.Time, bundle string) bool {
 	n, _ := strconv.Atoi(data["captures"])
 	switch data["state"] {
-	case criuGroupStateFailed:
+	case criuGroupStateFailed, criuGroupStateGPUShareFailed:
 		return n < criuGroupMaxCaptures && data[groupAgentBundleKey] != bundle
 	case criuGroupStateRestoreFailed:
 		return n < criuGroupMaxCaptures
@@ -755,6 +763,38 @@ func (c *criuAutoRestorer) claimGroupRecord(ctx context.Context, key string, lea
 		return nil, nil
 	}
 	return updated, err
+}
+
+// recordRefusal records on group record key that the preflight refuses
+// every capture of the configuration (configurationRefusal): the capture
+// is failed for the current agent bundle without freezing the instance,
+// so the configuration falls back to the cachedir (criu_fallback.go) and
+// a new bundle tries CRIU again. The record is claimed as for a capture,
+// so only one agent writes it, and it counts as an attempt. Like a
+// capture's record, it gets the aliases admission looks it up by: an
+// instance with companions is keyed by all its members, its pods by their
+// own configuration.
+func (c *criuAutoRestorer) recordRefusal(ctx context.Context, key, scope string, uris []string, ranks int, leader *corev1.Pod, why string, log *logrus.Entry) {
+	record, err := c.claimGroupRecord(ctx, key, leader, len(uris))
+	if err != nil {
+		log.WithError(err).Warn("CRIU group capture: cannot record the preflight's refusal")
+		return
+	}
+	if record == nil {
+		return // another agent holds it
+	}
+	if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
+		if d["state"] != criuGroupStateCapturing || d["startedAt"] != record.Data["startedAt"] {
+			return false
+		}
+		d["state"], d["reason"] = criuGroupStateFailed, truncate(why, groupReasonMax)
+		return true
+	}); err != nil {
+		log.WithError(err).Warn("CRIU group capture: cannot record the preflight's refusal")
+		return
+	}
+	c.writeGroupAliases(ctx, key, scope, uris, ranks, log)
+	log.Warn("CRIU group capture: recorded as failed; the preflight refuses every capture of this configuration under this agent version")
 }
 
 // updateGroupRecord applies change to the group record of key; change

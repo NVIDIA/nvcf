@@ -15,6 +15,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -237,8 +238,10 @@ func treeBytes(dir string) int64 {
 // restored engine reopens these files, and CRIU refuses any whose mode
 // differs from the dump. Without, for a set whose copies were made
 // root's, the copy is opened to any user (it is the pod's scratch, not the
-// shared volume). It never fails the pod: a missing or broken source
-// leaves the cache empty and the engine compiles as it would have anyway.
+// shared volume). With --marker it first waits for the source to be
+// brought to the node, and past --deadline copies nothing. It never fails
+// the pod: a missing or broken source leaves the cache empty and the
+// engine compiles as it would have anyway.
 func seedCmd(args []string) {
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
 	from := fs.String("from", "", "source directory")
@@ -246,13 +249,25 @@ func seedCmd(args []string) {
 	label := fs.String("label", "", "what is seeded, for the log")
 	index := fs.String("index", "", "file under --to listing the seeded paths")
 	keepOwners := fs.Bool("keep-owners", false, "give every entry its owner and full mode in --from instead of opening the copy to any user")
+	marker := fs.String("marker", "", "wait for this file before copying: --from is being brought to the node")
+	links := fs.String("links", "", "JSON manifest whose \"links\" (path under --to: target) are made after the copy")
+	deadline := fs.Int("deadline", 900, "seconds to wait for --marker; past them nothing is copied")
 	_ = fs.Parse(args)
-	if fi, err := os.Stat(*from); err == nil && fi.IsDir() {
+	if *marker != "" && !awaitMarker(*marker, time.Duration(*deadline)*time.Second, 2*time.Second) {
+		fmt.Printf("nvsnap: %s not ready after %ds; the engine starts without it\n", *label, *deadline)
+		*from = ""
+	}
+	if fi, err := os.Stat(*from); *from != "" && err == nil && fi.IsDir() {
 		if err := copyTree(*from, *to, *keepOwners); err != nil {
 			fmt.Fprintln(os.Stderr, "nvsnap: seed:", err)
 		}
 	}
 	_ = os.MkdirAll(*to, 0o777)
+	if *from != "" && *links != "" {
+		if err := makeLinks(*links, *to); err != nil {
+			fmt.Fprintln(os.Stderr, "nvsnap: seed links:", err)
+		}
+	}
 	if !*keepOwners {
 		openToAll(*to)
 	}
@@ -261,6 +276,49 @@ func seedCmd(args []string) {
 		_ = os.WriteFile(filepath.Join(*to, *index), []byte(strings.Join(files, "\n")+"\n"), 0o666)
 	}
 	fmt.Printf("nvsnap: seeded %s, %d files\n", *label, len(files))
+}
+
+// makeLinks makes the symbolic links manifest lists under dir: each path,
+// confined to dir, pointing where it pointed in the capture. A link whose
+// path is taken is left as it is.
+func makeLinks(manifest, dir string) error {
+	b, err := os.ReadFile(manifest)
+	if err != nil {
+		return err
+	}
+	var m struct {
+		Links map[string]string `json:"links"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	for rel, target := range m.Links {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if r, err := filepath.Rel(dir, p); err != nil || r == "." || strings.HasPrefix(r, "..") {
+			return fmt.Errorf("link %q is outside %s", rel, dir)
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0o777); err != nil {
+			return err
+		}
+		if err := os.Symlink(target, p); err != nil && !os.IsExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// awaitMarker waits for marker, polling every poll, for at most deadline.
+func awaitMarker(marker string, deadline, poll time.Duration) bool {
+	start := time.Now()
+	for {
+		if exists(marker) {
+			return true
+		}
+		if time.Since(start) >= deadline {
+			return false
+		}
+		time.Sleep(poll)
+	}
 }
 
 // copyTree copies src's contents into dst, keeping modes, times and
