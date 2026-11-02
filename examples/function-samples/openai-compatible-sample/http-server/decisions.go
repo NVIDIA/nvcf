@@ -176,12 +176,26 @@ func handleDecisionRoute(w http.ResponseWriter, r *http.Request, systemOne bool)
 
 func parseDecisionRequest(raw []byte) (decisionRequest, error) {
 	var request decisionRequest
+	var body json.RawMessage
 	decoder := json.NewDecoder(bytes.NewReader(raw))
-	if err := decoder.Decode(&request); err != nil {
+	if err := decoder.Decode(&body); err != nil {
 		return request, errors.New("request body must be a JSON object")
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return request, errors.New("request body must contain one JSON object")
+	}
+	if !bytes.HasPrefix(bytes.TrimSpace(body), []byte("{")) {
+		return request, errors.New("request body must be a JSON object")
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field == "model" {
+			return request, errors.New("model must be a string")
+		}
+		if errors.As(err, &typeErr) && typeErr.Field != "" {
+			return request, fmt.Errorf("%s has the wrong type", typeErr.Field)
+		}
+		return request, errors.New("request body must be a JSON object")
 	}
 	return request, nil
 }

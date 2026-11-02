@@ -228,6 +228,9 @@ func TestDecisionRoutesRejectInvalidBodies(t *testing.T) {
 			"string":      `"x"`,
 			"two objects": `{} {}`,
 			"empty":       ``,
+			"null":        `null`,
+			"number":      `1`,
+			"boolean":     `true`,
 		} {
 			t.Run(path+" "+name, func(t *testing.T) {
 				recorder := postJSON(t, path, body)
@@ -235,6 +238,33 @@ func TestDecisionRoutesRejectInvalidBodies(t *testing.T) {
 					t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
 				}
 				assertJSONError(t, recorder.Body.Bytes())
+			})
+		}
+	}
+}
+
+func TestDecisionRoutesExplainWhichPartOfTheBodyIsInvalid(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		for body, want := range map[string]string{
+			`null`:                         "request body must be a JSON object",
+			`[1,2]`:                        "request body must be a JSON object",
+			`{"model":1,"questions":[]}`:   "model must be a string",
+			`{"model":"m","questions":[]}`: "",
+		} {
+			t.Run(path+" "+body, func(t *testing.T) {
+				recorder := postJSON(t, path, body)
+				if want == "" {
+					if recorder.Code != http.StatusOK {
+						t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+					}
+					return
+				}
+				if recorder.Code != http.StatusBadRequest {
+					t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+				}
+				if !strings.Contains(recorder.Body.String(), want) {
+					t.Fatalf("body = %s, want message %q", recorder.Body.String(), want)
+				}
 			})
 		}
 	}
