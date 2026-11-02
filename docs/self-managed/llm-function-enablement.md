@@ -24,15 +24,16 @@ container exposes paths such as `/v1/chat/completions`, `/v1/responses`, or
 `/v1/embeddings`.
 
 The addon also serves the beta decision model routes, `POST /v1/decisions` and
-`POST /v1/systemone`. The gateway passes their bodies through unchanged and
-does not stream them. Declare each route the container serves in
+`POST /v1/systemone`. The gateway forwards their bodies unchanged except for
+the model value, does not forward the caller's credentials, and does not stream
+responses. Declare each route the container serves in
 `models[].llmConfig.uris` when you create the function, for example
 `--llm-model "name=<model>,uris=/v1/decisions|/v1/systemone"`. The `uris` of a
 function cannot change after creation, and a model gets a `404` on a decision
-route that it does not declare. Through the Vanity Gateway, a function that
-serves both routes should use `usePexec: false`, because a `usePexec: true`
-function reaches only its default path. See the
-[LLM Gateway guide](../overview/llm-gateway.md#decision-models-beta).
+route that it does not declare. The gateway does not limit request body size
+by default, so limit it in front of the gateway when you enable these routes.
+See the [LLM Gateway guide](../overview/llm-gateway.md#decision-models-beta),
+including how to map these models in the Vanity Gateway.
 
 When enabled, the stack creates:
 
@@ -1049,12 +1050,18 @@ The `type` follows the HTTP status. For example, `401` is
 `code: "overloaded_error"`.
 
 On `/v1/systemone`, they use the System One format, with `error.code`,
-`error.message`, and `error.request_id`. See the
+`error.message`, and `error.request_id`. On `/v1/decisions` and
+`/v1/systemone`, `error.code` follows the decision route code table. See the
 [LLM Gateway guide](../overview/llm-gateway.md#decision-models-beta) for the
 codes.
 
 On `/v1/decisions` and `/v1/systemone`, model server errors are returned
-unchanged, whatever their shape, size, or encoding.
+unchanged, whatever their shape, size, or encoding, with one exception. For
+older request router builds that do not mark their own errors with
+`X-Stargate-Error-Code`, the gateway treats a `413`, `499`, `502`, `503`, or
+`504` with an empty body as a router error and rewrites it in the route's
+format. A model server response with one of these statuses and an empty body is
+therefore rewritten too.
 
 On the other endpoints, model server errors already in the endpoint's format are returned unchanged,
 including the server's `type` and `code`. Other model server bodies are
