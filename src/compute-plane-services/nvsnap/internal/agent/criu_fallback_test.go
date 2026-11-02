@@ -599,3 +599,72 @@ func TestForgetFallback(t *testing.T) {
 		}
 	}
 }
+
+// Only a block every pod of the configuration would hit marks it failed:
+// a socket a checkpoint cannot save. The others can clear.
+func TestConfigurationRefusal(t *testing.T) {
+	mptcp := PreflightFinding{Pod: "engine-0", Severity: preflightBlock, Check: "socket", Detail: "process 7 (nats-server) holds MPTCP sockets"}
+	for name, c := range map[string]struct {
+		fs   []PreflightFinding
+		want bool
+	}{
+		"mptcp":              {[]PreflightFinding{mptcp}, true},
+		"mptcp among others": {[]PreflightFinding{{Severity: preflightBlock, Check: "rdma"}, mptcp}, true},
+		"socket warning":     {[]PreflightFinding{{Severity: preflightWarn, Check: "socket"}}, false},
+		"rdma":               {[]PreflightFinding{{Severity: preflightBlock, Check: "rdma"}}, false},
+		"bundle":             {[]PreflightFinding{{Severity: preflightBlock, Check: "bundle"}}, false},
+		"ghost file":         {[]PreflightFinding{{Severity: preflightBlock, Check: "ghost-file"}}, false},
+		"liveness":           {[]PreflightFinding{{Severity: preflightBlock, Check: "liveness"}}, false},
+		"gpushare":           {[]PreflightFinding{{Severity: preflightBlock, Check: "gpushare"}}, false},
+		"none":               {nil, false},
+	} {
+		got := configurationRefusal(c.fs)
+		if (got != "") != c.want {
+			t.Errorf("%s: %q, want refusal %v", name, got, c.want)
+		}
+		if c.want && !strings.Contains(got, "engine-0: process 7 (nats-server) holds MPTCP sockets") {
+			t.Errorf("%s: %q does not name the member and its finding", name, got)
+		}
+	}
+}
+
+// A refusal of every capture is recorded as a failed capture of the
+// current bundle: the configuration falls back, is not claimed again
+// under this bundle, and a new bundle tries CRIU again.
+func TestRecordRefusal(t *testing.T) {
+	a, _ := fallbackAgent(t)
+	c := &criuAutoRestorer{a: a}
+	key := fnKey(t, a)
+	log := logrus.NewEntry(logrus.New())
+	leader := ready(enginePod(0))
+	c.recordRefusal(context.Background(), key, leader, 1, "preflight: engine-0: MPTCP", log)
+	d := getRecord(t, a, criuGroupConfigMapName(key))
+	if d["state"] != criuGroupStateFailed || d["reason"] != "preflight: engine-0: MPTCP" || d["captures"] != "1" || d[groupAgentBundleKey] != fbBundle {
+		t.Fatalf("record %v", d)
+	}
+	if got := criuFallbackReason(d, time.Now(), fbBundle); got != criuGroupStateFailed {
+		t.Errorf("fallback reason %q, want failed", got)
+	}
+	// Under this bundle the record is not claimed again.
+	c.recordRefusal(context.Background(), key, leader, 1, "preflight: again", log)
+	if again := getRecord(t, a, criuGroupConfigMapName(key)); again["reason"] != "preflight: engine-0: MPTCP" || again["captures"] != "1" {
+		t.Errorf("refusal recorded twice under one bundle: %v", again)
+	}
+	// A new bundle may try CRIU again: the record is claimed for it.
+	if !criuGroupRecaptures(d, time.Now(), "next-bundle") {
+		t.Error("a new bundle would not try CRIU again")
+	}
+}
+
+// A record another agent claimed for a capture meanwhile is left alone.
+func TestRecordRefusalLeavesAnotherCapture(t *testing.T) {
+	a, _ := fallbackAgent(t)
+	key := fnKey(t, a)
+	a2, _ := fallbackAgent(t, record(criuGroupConfigMapName(key), map[string]string{
+		"state": criuGroupStateCapturing, "captures": "1", "startedAt": time.Now().UTC().Format(time.RFC3339), groupAgentBundleKey: fbBundle}))
+	c := &criuAutoRestorer{a: a2}
+	c.recordRefusal(context.Background(), key, ready(enginePod(0)), 1, "preflight: x", logrus.NewEntry(logrus.New()))
+	if d := getRecord(t, a2, criuGroupConfigMapName(key)); d["state"] != criuGroupStateCapturing {
+		t.Errorf("another agent's capture was overwritten: %v", d)
+	}
+}
