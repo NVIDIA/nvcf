@@ -18,6 +18,10 @@
 # pre-upgrade so the auth role and sign policies exist before the server pods
 # come up and the Vault Agent tries to log in.
 {{- $bao := .Values.nvcfUi.openbaoMigrations }}
+{{- $kubectlMinor := $bao.kubectlMinor | toString }}
+{{- if not (has $kubectlMinor (list "" "1.36" "1.37")) }}
+{{- fail "nvcfUi.openbaoMigrations.kubectlMinor must be empty, 1.36, or 1.37" }}
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -76,6 +80,10 @@ spec:
           image: "{{ include "nvcf-ui.openbaoMigrationsImage" . }}"
           imagePullPolicy: {{ $bao.image.pullPolicy }}
           env:
+            {{- if $kubectlMinor }}
+            - name: NVCF_KUBECTL_MINOR
+              value: {{ $kubectlMinor | quote }}
+            {{- end }}
             - name: CORE_MIGRATIONS_ENABLED
               value: "false"
             - name: ADDONS_NVCF_UI_ENABLED

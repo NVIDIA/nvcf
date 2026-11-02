@@ -220,14 +220,16 @@ llmRequestRouter:
     # entrypoint accumulator -> Job fails on backoff exhaustion.
     allowedDomains: ""
     # nvcf-openbao-migrations image. The chart picks up the same image
-    # that the k8s-openbao Helm hook uses; supply registry/repository/tag
-    # via the stack chart's global image overrides.
+    # that the k8s-openbao Helm hook uses. Supply registry/repository via
+    # the stack chart's global image overrides; the tag can also be overridden.
     image:
       # registry: must be supplied in additional values
       # repository: must be supplied in additional values
-      # tag: must be supplied in additional values
-      tag: ""
+      tag: "0.19.10"
       pullPolicy: IfNotPresent
+    # Empty uses the image default. Select "1.36" for Kubernetes 1.35;
+    # "1.37" is also supported by the migration image.
+    kubectlMinor: ""
     imagePullSecrets: []
     # OpenBao connection. When baoService is empty, the template derives
     # `openbao-server.<pki.namespace>.svc.cluster.local`.
