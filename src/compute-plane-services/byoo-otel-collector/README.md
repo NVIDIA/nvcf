@@ -224,6 +224,29 @@ The collector renders an exporter for these provider and signal pairs. Any other
 - `protocol` does not change the exporter, which always uses OTLP/HTTP. It only sets the OTLP protocol that NVCA injects into workload containers for sending spans to the collector. Use `GRPC` unless your NVCA release injects `http/protobuf` for HTTP telemetry ([#2676](https://github.com/NVIDIA/nvcf/issues/2676)). Earlier releases inject `http`, which SDKs that follow the OpenTelemetry spec, such as Dynamo, reject.
 - `KRATOS_THANOS` accepts metrics only. A `KRATOS_THANOS` telemetry with type `TRACES` fails to render.
 
+#### OTEL_COLLECTOR Authentication
+
+`OTEL_COLLECTOR` exports logs, metrics, and traces over OTLP/HTTP to the base URL in `endpoint`. The collector appends the standard signal paths, such as `/v1/traces`. The secret sets how the exporter authenticates:
+
+- A string is a bearer token, sent as `Authorization: Bearer <value>`.
+- An object can hold `token`, `clientCert` and `clientKey`, and `caFile`. It needs `token`, the `clientCert` and `clientKey` pair, or both. `token` is sent as a bearer token. The pair is used as the mTLS client certificate. `caFile` is used as the CA for the receiver and can go with either. Certificates and keys are PEM text.
+
+```json
+{
+  "provider": "OTEL_COLLECTOR",
+  "protocol": "HTTP",
+  "endpoint": "https://otel.example.com:4318",
+  "types": ["LOGS", "METRICS", "TRACES"],
+  "secret": {
+    "name": "<secret-name>",
+    "value": {"clientCert": "<pem>", "clientKey": "<pem>", "caFile": "<pem>"}
+  }
+}
+```
+
+- If only one of `clientCert` and `clientKey` is set, the collector fails to render its config and names the missing key. A blank value counts as missing.
+- The collector reads these files when it renders its config at startup. As with `KRATOS`, the extracted files survive container restarts, so moving a telemetry from an object secret back to a string, or removing `caFile`, needs a new deployment or a recreated pod.
+
 ### 🏷️ Attribute Enrichment
 
 All traces, logs, and metrics have OpenTelemetry attributes added to their metadata. See the [complete attributes list](generator/doc/README.md#opentelemetry-attributes) for detailed information.
