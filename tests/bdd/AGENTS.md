@@ -72,9 +72,11 @@ logic into `dsl/`.
 - The decision route scenarios (`@llm-decision-routes`) use
   `SAMPLE_LLM_DECISIONS_IMAGE`, an in-repo sample image that serves
   `/v1/decisions` and `/v1/systemone` with a header echo and the `mock_error`
-  query controls. It defaults to the `:local` sample tag, so existing scenarios
-  keep their images. The scenarios sit after the field-fidelity scenario under
-  a `# Beta decision routes` comment, which `TestLLMRoutingFeaturesRejectIncompleteAndMisroutedResponses`
+  query controls. The scenarios are opt-in: `TestSingleClusterHelmfile`
+  excludes `@llm-decision-routes` unless the variable is set, and
+  `TestDecisionRouteScenariosSkipWithoutDecisionsImage` covers that. Do not
+  default it in `godog_test.go`. The scenarios sit after the field-fidelity
+  scenario under a `# Beta decision routes` comment, which `TestLLMRoutingFeaturesRejectIncompleteAndMisroutedResponses`
   uses to stop its slice; their wiring test is
   `TestDecisionRouteScenariosRejectBrokenGateways`.
 - The BYOO feature reads its task sample from `SAMPLE_BYOO_TASK_IMAGE` and its
