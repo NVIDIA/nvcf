@@ -41,6 +41,7 @@ public final class TelemetryProviderValidator {
     private static final String CLIENT_CERT = "clientCert";
     private static final String CLIENT_KEY = "clientKey";
     private static final String CA_FILE = "caFile";
+    private static final String TOKEN = "token";
 
     // Signals the collector exports for each provider.
     static final Map<TelemetryProviderEnum, Set<TelemetryTypeEnum>> SUPPORTED_TYPES =
@@ -61,7 +62,6 @@ public final class TelemetryProviderValidator {
 
     private static final Set<TelemetryProviderEnum> STRING_SECRET_PROVIDERS = EnumSet.of(
             TelemetryProviderEnum.DATADOG,
-            TelemetryProviderEnum.OTEL_COLLECTOR,
             TelemetryProviderEnum.SERVICENOW,
             TelemetryProviderEnum.SPLUNK);
 
@@ -104,6 +104,9 @@ public final class TelemetryProviderValidator {
     private static final String MESG_SECRET_TLS_PAIR =
             "Telemetry provider '%s' with types %s: secret fields 'clientCert' and 'clientKey' "
                     + "must be set together";
+    private static final String MESG_SECRET_OTEL_COLLECTOR_AUTH_MISSING =
+            "Telemetry provider '%s' with types %s: secret needs 'token', 'clientCert' and "
+                    + "'clientKey', or both";
     private static final String MESG_SECRET_TLS_MISSING =
             "Telemetry provider '%s' with types %s: secret needs 'clientCert' and 'clientKey', "
                     + "'caFile', or both";
@@ -182,6 +185,11 @@ public final class TelemetryProviderValidator {
                                             JsonNode value) {
         validateExtractable(provider, value);
         if (requestedTypes.isEmpty()) {
+            return;
+        }
+
+        if (provider == TelemetryProviderEnum.OTEL_COLLECTOR) {
+            validateOtelCollectorSecret(provider, requestedTypes, value);
             return;
         }
 
@@ -271,6 +279,29 @@ public final class TelemetryProviderValidator {
         if (!hasCert && !hasContent(value, CA_FILE)) {
             throw new BadRequestException(
                     MESG_SECRET_TLS_MISSING.formatted(provider, requestedTypes));
+        }
+    }
+
+    // OTEL_COLLECTOR reads a string secret as a bearer token. An object secret holds a bearer
+    // token, a client certificate pair, or both, plus an optional caFile.
+    private static void validateOtelCollectorSecret(TelemetryProviderEnum provider,
+                                                    Set<TelemetryTypeEnum> requestedTypes,
+                                                    JsonNode value) {
+        if (value.isString()) {
+            if (StringUtils.isBlank(value.asString())) {
+                throw new BadRequestException(
+                        MESG_SECRET_MUST_BE_STRING.formatted(provider, requestedTypes));
+            }
+            return;
+        }
+        var hasCert = hasContent(value, CLIENT_CERT);
+        var hasKey = hasContent(value, CLIENT_KEY);
+        if (hasCert != hasKey) {
+            throw new BadRequestException(MESG_SECRET_TLS_PAIR.formatted(provider, requestedTypes));
+        }
+        if (!hasCert && !hasContent(value, TOKEN)) {
+            throw new BadRequestException(MESG_SECRET_OTEL_COLLECTOR_AUTH_MISSING.formatted(
+                    provider, requestedTypes));
         }
     }
 

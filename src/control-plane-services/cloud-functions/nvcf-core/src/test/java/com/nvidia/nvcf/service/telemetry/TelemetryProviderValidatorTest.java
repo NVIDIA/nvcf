@@ -164,6 +164,18 @@ class TelemetryProviderValidatorTest {
                 Arguments.of(TelemetryProviderEnum.SERVICENOW, TRACES, new StringNode("token")),
                 Arguments.of(TelemetryProviderEnum.OTEL_COLLECTOR, ALL_TYPES,
                              new StringNode("token")),
+                // OTEL_COLLECTOR also takes an object with a bearer token, a client
+                // certificate pair, or both, and an optional caFile.
+                Arguments.of(TelemetryProviderEnum.OTEL_COLLECTOR, ALL_TYPES,
+                             object("token", "token")),
+                Arguments.of(TelemetryProviderEnum.OTEL_COLLECTOR, ALL_TYPES, object(
+                        "clientCert", "cert", "clientKey", "key")),
+                Arguments.of(TelemetryProviderEnum.OTEL_COLLECTOR, ALL_TYPES, object(
+                        "clientCert", "cert", "clientKey", "key", "caFile", "ca")),
+                Arguments.of(TelemetryProviderEnum.OTEL_COLLECTOR, METRICS, object(
+                        "token", "token", "clientCert", "cert", "clientKey", "key")),
+                Arguments.of(TelemetryProviderEnum.OTEL_COLLECTOR, TRACES, object(
+                        "token", "token", "caFile", "ca")),
                 Arguments.of(TelemetryProviderEnum.GRAFANA_CLOUD, ALL_TYPES, object(
                         "instanceId", "123", "apiKey", "key")),
                 Arguments.of(TelemetryProviderEnum.KRATOS, LOGS, object(
@@ -257,6 +269,20 @@ class TelemetryProviderValidatorTest {
                              "needs 'clientCert' and 'clientKey', 'caFile', or both"),
                 Arguments.of(TelemetryProviderEnum.PROMETHEUS, METRICS, new StringNode("token"),
                              "with types [METRICS]: secret value must be a JSON object"),
+                Arguments.of(TelemetryProviderEnum.OTEL_COLLECTOR, LOGS, new StringNode(" "),
+                             "with types [LOGS]: secret value must be a non-empty string"),
+                Arguments.of(TelemetryProviderEnum.OTEL_COLLECTOR, METRICS,
+                             object("clientCert", "cert", "caFile", "ca"),
+                             "'clientCert' and 'clientKey' must be set together"),
+                Arguments.of(TelemetryProviderEnum.OTEL_COLLECTOR, TRACES,
+                             object("token", "token", "clientKey", "key"),
+                             "'clientCert' and 'clientKey' must be set together"),
+                Arguments.of(TelemetryProviderEnum.OTEL_COLLECTOR, ALL_TYPES,
+                             object("caFile", "ca"),
+                             "secret needs 'token', 'clientCert' and 'clientKey', or both"),
+                Arguments.of(TelemetryProviderEnum.OTEL_COLLECTOR, LOGS,
+                             object("token", " ", "apiKey", "key"),
+                             "secret needs 'token', 'clientCert' and 'clientKey', or both"),
                 // Every secret must be extractable by the collector.
                 Arguments.of(TelemetryProviderEnum.KRATOS, LOGS,
                              JSON_MAPPER.createObjectNode().put("clientCert", "cert")

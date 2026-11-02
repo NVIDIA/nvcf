@@ -269,7 +269,7 @@ counts as not set.
 | `GRAFANA_CLOUD` | Yes | Yes | Yes | Grafana Cloud OTLP endpoint | Object with `instanceId` and `apiKey`. |
 | `KRATOS` | Yes | No | Yes | Full OTLP HTTP logs or traces URL, used as is | Logs: object with `collectorId`, `clientCert`, and `clientKey`. Traces: object with `clientCert` and `clientKey`, and optionally `caFile` and `collectorId`. Certificates and keys are PEM text. |
 | `KRATOS_THANOS` | No | Yes | No | Remote-write URL | Object with `clientCert` and `clientKey`, `caFile`, or all three. All values are PEM text. |
-| `OTEL_COLLECTOR` | Yes | Yes | Yes | OTLP HTTP base URL, for example `https://otel.example.com:4318` | String. Sent as `Authorization: Bearer <value>`. |
+| `OTEL_COLLECTOR` | Yes | Yes | Yes | OTLP HTTP base URL, for example `https://otel.example.com:4318` | String, sent as `Authorization: Bearer <value>`. Or an object with `token`, `clientCert` and `clientKey`, or both, and optionally `caFile`. Certificates and keys are PEM text. |
 | `PROMETHEUS` | No | Yes | No | Remote-write URL | Object with `clientCert` and `clientKey`, `caFile`, or all three. All values are PEM text. |
 | `SERVICENOW` | No | No | Yes | OTLP gRPC endpoint | String. A token that starts with `otel_` is sent in the `otel-token` header. Any other token is sent in the `lightstep-access-token` header. |
 | `SPLUNK` | Yes | No | No | Splunk HTTP Event Collector (HEC) URL | String. The HEC token. |
@@ -277,6 +277,13 @@ counts as not set.
 Use `OTEL_COLLECTOR` to send to any OTLP HTTP receiver, including your own
 OpenTelemetry Collector. The collector appends the standard OTLP signal paths,
 such as `/v1/logs`, to the base URL.
+
+For a receiver that requires mutual TLS, give `OTEL_COLLECTOR` an object
+secret. The collector uses `clientCert` and `clientKey` as its client
+certificate, sends `token` as a bearer token, and trusts `caFile` as the
+receiver CA. Set `clientCert` and `clientKey` together. The object needs
+`token`, the certificate pair, or both. Object secrets need a BYOO collector
+release that supports them. An older collector fails to start with one.
 
 `KRATOS` sends `collectorId` in the `collector-id` header. For `PROMETHEUS` and
 `KRATOS_THANOS`, a client certificate needs a client key.
