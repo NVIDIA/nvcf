@@ -525,7 +525,7 @@ migration_selector='select(.kind == "Job" and .metadata.name == "addons-llm-migr
 migration_container="${migration_selector} | .spec.template.spec.containers[0]"
 
 render_migration_case() {
-  helm template llm-request-router ./llm-request-router \
+  helm template llm-request-router "${migration_chart:-./llm-request-router}" \
     --namespace nvcf \
     --set llmRequestRouter.image.repository=stargate \
     --set llmRequestRouter.pki.enabled=true \
@@ -538,6 +538,24 @@ migration_manifest="${tmp_dir}/migration.yaml"
 render_migration_case > "${migration_manifest}"
 [ "$(yq -rN "${migration_container} | .image" "${migration_manifest}")" = "mirror/openbao-migrations:${migration_tag}" ] || fail "migration image default changed"
 [ -z "$(yq -rN "${migration_container} | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "${migration_manifest}")" ] || fail "default selector must use the image default"
+
+# Older saved values do not contain the new selector. Reusing them must keep
+# the image default, including when Helm removes an explicit null value.
+cp -R ./llm-request-router "${tmp_dir}/legacy-chart"
+yq -i 'del(.llmRequestRouter.pki.kubectlMinor)' "${tmp_dir}/legacy-chart/values.yaml"
+(
+  migration_chart="${tmp_dir}/legacy-chart"
+  render_migration_case
+) > "${migration_manifest}"
+[ -z "$(yq -rN "${migration_container} | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "${migration_manifest}")" ] || fail "missing selector must use the image default"
+render_migration_case --set llmRequestRouter.pki.kubectlMinor=null > "${migration_manifest}"
+[ -z "$(yq -rN "${migration_container} | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "${migration_manifest}")" ] || fail "null selector must use the image default"
+for invalid in false 0; do
+  if render_migration_case --set "llmRequestRouter.pki.kubectlMinor=${invalid}" > /dev/null 2> "${tmp_dir}/invalid-client.err"; then
+    fail "unsupported falsy migration client selector rendered"
+  fi
+  grep -Fq 'llmRequestRouter.pki.kubectlMinor must be empty, 1.36, or 1.37' "${tmp_dir}/invalid-client.err" || fail "missing falsy selector validation"
+done
 
 for minor in 1.36 1.37; do
   render_migration_case \
