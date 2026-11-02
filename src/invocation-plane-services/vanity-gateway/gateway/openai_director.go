@@ -832,7 +832,7 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 	if !ok {
 		_ = request.Body.Close()
 		markGatewayRejected(writer, request)
-		if !writeNativeError(writer, request, http.StatusNotFound, errKindNotFound, "model not found") {
+		if !writeNativeError(writer, request, http.StatusNotFound, "", "model not found") {
 			http.NotFound(writer, request)
 		}
 		return resolvedOpenAIRequest{}, true
@@ -1273,7 +1273,7 @@ func isDecisionRoute(request *http.Request) bool {
 // requestReadFailure maps a failure to read or parse the request body to the
 // status, error code and message of the route's native error.
 func requestReadFailure(protocol nativeProtocol, err error) (int, string, string) {
-	status, kind := http.StatusInternalServerError, errKindInternal
+	status, kind := http.StatusInternalServerError, ""
 	message := "failed to read request"
 	if protocol == nativeProtocolMessages {
 		message = "failed to read Messages request"
@@ -1286,7 +1286,7 @@ func requestReadFailure(protocol nativeProtocol, err error) (int, string, string
 	}
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
-		status, kind, message = http.StatusRequestEntityTooLarge, errKindRequestTooLarge, "request body is too large"
+		status, kind, message = http.StatusRequestEntityTooLarge, "", "request body is too large"
 	}
 	if errors.Is(err, errModelFieldMissing) {
 		kind, message = errKindInvalidRequest, "model field is required"
