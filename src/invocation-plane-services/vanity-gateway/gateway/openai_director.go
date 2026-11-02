@@ -934,7 +934,7 @@ func (d *ModelDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, m
 	var droppedTargetModels []string
 	finishers := make([]func(error), 0, len(shadows))
 	for _, shadow := range shadows {
-		shadowBody, err := d.rewriteShadowBody(rawBody, shadow.modelName)
+		shadowBody, err := d.rewriteShadowBody(resolved.request, rawBody, shadow.modelName)
 		if err != nil {
 			zap.L().Warn("shadow body rewrite failed, dropping target", append(
 				middleware.TraceFields(resolved.request.Context()),
@@ -986,9 +986,15 @@ func (d *ModelDirector) randomShadowBucket() int {
 	return rand.IntN(100)
 }
 
-func (d *ModelDirector) rewriteShadowBody(body []byte, modelName string) ([]byte, error) {
+// rewriteShadowBody points a shadow copy at its target model. Decision routes
+// replace only the model value so the shadow keeps every other byte, as the
+// primary does.
+func (d *ModelDirector) rewriteShadowBody(request *http.Request, body []byte, modelName string) ([]byte, error) {
 	if d.shadowBodyRewriter != nil {
 		return d.shadowBodyRewriter(body, modelName)
+	}
+	if isDecisionRoute(request) {
+		return replaceTopLevelModel(body, modelName)
 	}
 	return rewriteShadowRequestModel(body, modelName)
 }
