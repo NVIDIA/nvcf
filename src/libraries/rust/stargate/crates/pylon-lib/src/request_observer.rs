@@ -53,6 +53,15 @@ pub enum RequestObservationEndpoint {
     ChatCompletions,
     Responses,
     Embeddings,
+    /// `/v1/decisions` and `/v1/systemone`: one JSON response per request.
+    Decisions,
+}
+
+impl RequestObservationEndpoint {
+    /// Whether the endpoint streams generated output over SSE.
+    pub fn is_streaming(self) -> bool {
+        matches!(self, Self::ChatCompletions | Self::Responses)
+    }
 }
 
 #[derive(Debug)]

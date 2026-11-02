@@ -1118,7 +1118,8 @@ fn input_usage_expected(
                     .and_then(|body| body.get("stream_options")?.get("include_usage")?.as_bool())
                     == Some(true)
         }
-        Some(RequestObservationEndpoint::Embeddings) | None => false,
+        Some(RequestObservationEndpoint::Embeddings | RequestObservationEndpoint::Decisions)
+        | None => false,
     }
 }
 
@@ -1182,6 +1183,7 @@ fn request_observation_endpoint(
         Some("/v1/chat/completions") => Some(RequestObservationEndpoint::ChatCompletions),
         Some("/v1/responses") => Some(RequestObservationEndpoint::Responses),
         Some("/v1/embeddings") => Some(RequestObservationEndpoint::Embeddings),
+        Some("/v1/decisions" | "/v1/systemone") => Some(RequestObservationEndpoint::Decisions),
         _ => None,
     }
 }
@@ -2542,6 +2544,56 @@ mod tests {
             metadata_observations.last().unwrap().observation().state,
             crate::RequestObservationState::Failed
         );
+    }
+
+    #[tokio::test]
+    async fn decision_routes_are_observed_as_non_streaming_requests() {
+        for path in ["/v1/decisions", "/v1/systemone"] {
+            for (status, terminal_state) in [
+                (StatusCode::OK, crate::RequestObservationState::Complete),
+                (
+                    StatusCode::BAD_REQUEST,
+                    crate::RequestObservationState::Failed,
+                ),
+            ] {
+                let (result, transport, observations) = run_observed_response(
+                    path,
+                    br#"{"model":"model-a","questions":[]}"#,
+                    status,
+                    Some("application/json"),
+                    r#"{"answers":[]}"#,
+                )
+                .await;
+                result.expect("the decision response should be forwarded");
+
+                assert_eq!(transport.response_heads, [status], "{path}");
+                assert_eq!(
+                    transport.response_events,
+                    [bytes::Bytes::from_static(br#"{"answers":[]}"#)],
+                    "{path}"
+                );
+                let states: Vec<_> = observations
+                    .iter()
+                    .map(|event| event.observation().state)
+                    .collect();
+                assert_eq!(
+                    states.first(),
+                    Some(&crate::RequestObservationState::UpstreamConnecting),
+                    "{path} {status}: {states:?}"
+                );
+                let terminal = observations.last().unwrap().observation();
+                assert_eq!(terminal.state, terminal_state, "{path} {status}");
+                assert_eq!(
+                    terminal.endpoint,
+                    RequestObservationEndpoint::Decisions,
+                    "{path}"
+                );
+                assert_eq!(terminal.input_tokens, 12, "{path}");
+                assert_eq!(terminal.upstream_status, Some(status.as_u16()), "{path}");
+                assert!(!terminal.embedding_items_observed, "{path}");
+                assert_eq!(terminal.output_messages, 0, "{path}");
+            }
+        }
     }
 
     #[tokio::test]
