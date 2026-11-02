@@ -970,9 +970,10 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
     # canned answers and header echo prove what reached it.
     # SAMPLE_LLM_DECISIONS_IMAGE must be an image of the in-repo
     # openai-compatible sample that serves both routes. One function declares
-    # two models: bdd-decision-both on both routes and bdd-decision-only on
-    # /v1/decisions alone. A model is enabled for a route only when its uris
-    # list that route. Depends on the earlier install and registration
+    # three models: bdd-decision-both on both routes, bdd-decision-only on
+    # /v1/decisions alone, and bdd-decision-limited on both routes with a token
+    # rate limit of 1 per week, which every request exceeds. A model is enabled
+    # for a route only when its uris list that route. Depends on the earlier install and registration
     # scenarios.
     @llm-function-type @llm-decision-routes
     Scenario: LLM gateway serves the decisions and systemone routes and keeps each model on its declared routes
@@ -989,6 +990,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | --health-timeout | PT30S                                                                                    |
         | --llm-model      | name=bdd-decision-both,uris=/v1/decisions\|/v1/systemone,routingMethod=round_robin       |
         | --llm-model      | name=bdd-decision-only,uris=/v1/decisions,routingMethod=round_robin                      |
+        | --llm-model      | name=bdd-decision-limited,uris=/v1/decisions\|/v1/systemone,routingMethod=round_robin,tokenRateLimit=1-W |
       And I export the function selected by NVCF CLI to environment variables "BDD_DECISION_FUNCTION_ID" and "BDD_DECISION_VERSION_ID"
       And function "${BDD_DECISION_FUNCTION_ID}" version "${BDD_DECISION_VERSION_ID}" is deleted at scenario teardown
       And function "${BDD_DECISION_FUNCTION_ID}" version "${BDD_DECISION_VERSION_ID}" is undeployed at scenario teardown
@@ -1056,8 +1058,9 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP response JSON field "echo.x-input-tokens" should be at least 1
       And the HTTP response JSON field "echo.credentials_received" should equal "false"
 
-      # A request with a small inline image reaches the backend. Image data is
-      # not counted as text, so the request still meters at least one token.
+      # A request with a small inline image reaches the backend. The image
+      # meters a flat 1024 tokens by default and its base64 data is not
+      # counted as text. The same request without the image meters less.
       Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
       And the HTTP request header "Content-Type" is "application/json"
       And the HTTP request header "TypeSafe-Danger-Zone-Images" is "true"
@@ -1068,8 +1071,18 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Then the HTTP status should be 200
       And the HTTP response JSON field "answers.0.type" should equal "predicate"
       And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
-      And the HTTP response JSON field "echo.x-input-tokens" should be at least 1
+      And the HTTP response JSON field "echo.x-input-tokens" should be at least 1024
       And the HTTP response JSON field "echo.credentials_received" should equal "false"
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/decisions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":[{"role":"user","content":[{"type":"input_text","text":"bdd-image"}]}],"questions":[{"type":"predicate","name":"red","instructions":"Is it red?"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "echo.x-input-tokens" should be at least 1
+      And the HTTP response JSON field "echo.x-input-tokens" should be less than 1024
+
       # Route isolation: bdd-decision-only declares /v1/decisions alone, so
       # the declared route works and /v1/systemone is a 404 in the System One
       # error shape (error.code, error.message, error.request_id and a
@@ -1105,6 +1118,52 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         """
       Then the HTTP status should be 404
       And the HTTP response JSON field "error.type" should equal "invalid_request_error"
+
+      # Errors the gateway generates use the native shape of the route. An
+      # invalid API key is a 401 with code invalid_api_key.
+      Given the HTTP request header "Authorization" is "Bearer bdd-invalid-api-key"
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/decisions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":"bdd-401","questions":[{"type":"predicate","instructions":"Is it allowed?"}]}
+        """
+      Then the HTTP status should be 401
+      And the HTTP response JSON field "error.type" should equal "authentication_error"
+      And the HTTP response JSON field "error.code" should equal "invalid_api_key"
+
+      Given the HTTP request header "Authorization" is "Bearer bdd-invalid-api-key"
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/systemone" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","state":{"text":"bdd-401"},"questions":{"seen":{"type":"noul"}}}
+        """
+      Then the HTTP status should be 401
+      And the HTTP response JSON field "error.code" should equal "invalid_api_key"
+      And I export the HTTP response JSON field "error.request_id" to environment variable "BDD_SYSTEMONE_401_REQUEST_ID"
+      And the HTTP response JSON field "request_id" should equal "${BDD_SYSTEMONE_401_REQUEST_ID}"
+
+      # bdd-decision-limited allows 1 token a week, so the gateway rejects the
+      # first request with a 429 before it reaches the backend.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/decisions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-limited","input":"bdd-gateway-429","questions":[{"type":"predicate","instructions":"Is it limited?"}]}
+        """
+      Then the HTTP status should be 429
+      And the HTTP response JSON field "error.type" should equal "rate_limit_error"
+      And the HTTP response JSON field "error.code" should equal "rate_limit_exceeded"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/systemone" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-limited","state":{"text":"bdd-gateway-429"},"questions":{"seen":{"type":"noul"}}}
+        """
+      Then the HTTP status should be 429
+      And the HTTP response JSON field "error.code" should equal "rate_limit_exceeded"
+      And I export the HTTP response JSON field "error.request_id" to environment variable "BDD_SYSTEMONE_429_REQUEST_ID"
+      And the HTTP response JSON field "request_id" should equal "${BDD_SYSTEMONE_429_REQUEST_ID}"
 
       # Backend errors pass through unchanged: status, Retry-After and body.
       Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
