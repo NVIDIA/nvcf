@@ -671,8 +671,8 @@ transfer (exit 1): the GPU copy is all or nothing. The JSON line fills
 `gpu`, `gpu_bytes` and `gpu_ready_seconds`.
 
 The container needs the CUDA driver library: with the NVIDIA container
-runtime, set `NVIDIA_DRIVER_CAPABILITIES=compute,utility` (the image in
-`deploy/nvstor-peer/` does).
+runtime, set `NVIDIA_DRIVER_CAPABILITIES=compute,utility` (the
+`nvstor-peer-image` Bazel target does, see the README).
 
 ## Protocol in brief
 
