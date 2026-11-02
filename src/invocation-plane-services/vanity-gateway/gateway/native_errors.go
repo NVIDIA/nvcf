@@ -54,18 +54,6 @@ const (
 
 const nativeProtocolKey contextKey = tooManyRequestsKey + 1
 
-func protocolForPath(urlPath string) nativeProtocol {
-	switch urlPath {
-	case messagesPath:
-		return nativeProtocolMessages
-	case decisionsPath:
-		return nativeProtocolDecisions
-	case systemOnePath:
-		return nativeProtocolSystemOne
-	}
-	return nativeProtocolNone
-}
-
 // withNativeProtocol records the protocol of the route the client called.
 // applyExecTarget rewrites URL.Path when usePexec is set, so the path alone
 // cannot name the protocol once a request is being proxied.
@@ -73,13 +61,25 @@ func withNativeProtocol(request *http.Request, protocol nativeProtocol) *http.Re
 	return request.WithContext(context.WithValue(request.Context(), nativeProtocolKey, protocol))
 }
 
-// requestProtocol returns the protocol stored at route entry, falling back to
-// the request path for requests that never went through a route entry.
+// requestProtocol returns the protocol stored at route entry. Generic vanity
+// path entries never store one, so they keep the problem+json shape even when
+// their path matches a native route.
 func requestProtocol(request *http.Request) nativeProtocol {
-	if protocol, ok := request.Context().Value(nativeProtocolKey).(nativeProtocol); ok {
+	protocol, _ := request.Context().Value(nativeProtocolKey).(nativeProtocol)
+	return protocol
+}
+
+// proxyErrorProtocol is the protocol for errors written by the reverse proxy
+// error handler. Vanity path entries at /v1/messages used the Anthropic shape
+// for these errors before the protocol was stored, and keep it.
+func proxyErrorProtocol(request *http.Request) nativeProtocol {
+	if protocol := requestProtocol(request); protocol != nativeProtocolNone {
 		return protocol
 	}
-	return protocolForPath(request.URL.Path)
+	if request.URL.Path == messagesPath {
+		return nativeProtocolMessages
+	}
+	return nativeProtocolNone
 }
 
 // endpointTypeForPath is the endpoint.type span value for a request path.
@@ -100,7 +100,11 @@ func endpointTypeForPath(urlPath, fallback string) string {
 // the client called and reports whether it did. It writes nothing for the
 // OpenAI chat-style routes, which keep their own error handling.
 func writeNativeError(writer http.ResponseWriter, request *http.Request, status int, kind, message string) bool {
-	switch requestProtocol(request) {
+	return writeProtocolError(writer, requestProtocol(request), status, kind, message)
+}
+
+func writeProtocolError(writer http.ResponseWriter, protocol nativeProtocol, status int, kind, message string) bool {
+	switch protocol {
 	case nativeProtocolMessages:
 		writeAnthropicError(writer, status, message)
 	case nativeProtocolDecisions:
