@@ -344,7 +344,20 @@ crate.from_cargo(
     ],
     supported_platform_triples = SUPPORTED_TRIPLES,
 )
-use_repo(crate, "nvcf_invocation_crates", "rs_autoscaler_crates", "stargate_crates")
+# nvstor: RDMA storage (src/compute-plane-services/nvstor). Linux only: the
+# crates use ibverbs, io_uring and Linux syscalls. Bazel builds nvstor-peer and
+# the crates it depends on; the target link needs libibverbs (rdma-core) for the
+# target architecture, see the nvstor README.
+crate.from_cargo(
+    name = "nvstor_crates",
+    cargo_lockfile = "//src/compute-plane-services/nvstor:Cargo.lock",
+    manifests = ["//src/compute-plane-services/nvstor:Cargo.toml"],
+    supported_platform_triples = [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+    ],
+)
+use_repo(crate, "nvcf_invocation_crates", "nvstor_crates", "rs_autoscaler_crates", "stargate_crates")
 
 # ============================================================================
 # C++ cross-compilation (multi-arch container builds).
