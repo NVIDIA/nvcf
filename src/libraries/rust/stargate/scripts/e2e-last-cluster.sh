@@ -459,14 +459,15 @@ sha256_stdin() {
     if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
 }
 
-# The body the gateway should forward. It decodes the top-level JSON object,
-# sets model to the routed model, and re-marshals with sorted top-level keys and
-# compact separators. Member values are kept as raw JSON, so nested key order is
-# unchanged. jq builds the same bytes for this ASCII body, so the comparison is
-# on raw bytes, not on a canonical form.
+# The body the gateway should forward: the original bytes with only the model
+# value replaced by the routed model. write_decision_body puts the model member
+# first, so the rest of the file is copied byte for byte. The members are not in
+# sorted order, so a gateway that re-marshals the body fails the digest check.
 expected_forwarded_body() {
-    jq -c --arg model "${model}" '.model = $model | to_entries | sort_by(.key) | from_entries' "$1" |
-        tr -d '\n'
+    local prefix
+    prefix=$(printf '{"model":"%s/%s"' "${routing_key}" "${model}")
+    printf '{"model":"%s"' "${model}"
+    tail -c +$((${#prefix} + 1)) "$1"
 }
 
 expected_forwarded_digest() {
