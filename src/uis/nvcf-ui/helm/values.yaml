@@ -77,12 +77,15 @@ nvcfUi:
     # fails, blocking the release.
     backoffLimit: 3
     # nvcf-openbao-migrations image. registry is optional; repository and tag are
-    # required when enabled. Supply via the stack's image overrides.
+    # required. Supply custom locations via the stack's image overrides.
     image:
       registry: ""
       repository: nvcf-openbao-migrations
-      tag: "0.16.2"
+      tag: "0.19.10"
       pullPolicy: IfNotPresent
+    # Empty uses the image default. Select "1.36" for Kubernetes 1.35;
+    # "1.37" is also supported by the migration image.
+    kubectlMinor: ""
     # OpenBao connection. When baoService is empty, the template derives
     # openbao-server.<namespace>.svc.cluster.local.
     baoService: ""

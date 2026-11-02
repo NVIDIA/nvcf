@@ -22,6 +22,10 @@
 # fail-hard via restartPolicy: OnFailure + backoffLimit.
 {{- if .Values.llmRequestRouter.pki.enabled }}
 {{- $pki := .Values.llmRequestRouter.pki }}
+{{- $kubectlMinor := get $pki "kubectlMinor" | toString }}
+{{- if not (has $kubectlMinor (list "" "1.36" "1.37")) }}
+{{- fail "llmRequestRouter.pki.kubectlMinor must be empty, 1.36, or 1.37" }}
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -63,6 +67,10 @@ spec:
             capabilities:
               drop: [ALL]
           env:
+            {{- if $kubectlMinor }}
+            - name: NVCF_KUBECTL_MINOR
+              value: {{ $kubectlMinor | quote }}
+            {{- end }}
             - name: CORE_MIGRATIONS_ENABLED
               value: "false"
             - name: ADDONS_LLM_ENABLED
