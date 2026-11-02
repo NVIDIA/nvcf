@@ -13,8 +13,10 @@ import (
 	"time"
 )
 
-// A dump's snapshot is the copy of the container's replay mounts (/dev/shm
-// and the like) that a restore puts back before CRIU maps them. Processes
+// A dump's snapshot is what a restore puts back beside CRIU's images: the
+// copy of the container's replay mounts (/dev/shm and the like), which a
+// restore puts back before CRIU maps them, and the archive of the
+// container's overlay upperdir (rootfs_diff.go). Processes
 // that share memory through files there keep their place in those files in
 // their own memory: vLLM's engine and its workers pass every step through
 // rings in /dev/shm, each process holding its own ring index. The copy must
@@ -22,6 +24,12 @@ import (
 // earlier, the engine's steps in between move the rings on, and the
 // restored processes wait on each other for good (seen: a copy taken 36 s
 // before the dump; every restore of it hung).
+//
+// The upperdir must be archived then too: once CRIU kills the tree, the
+// runtime replaces the container, and the old upperdir lasts only as long
+// as the runtime keeps the exited container (seen: an archive that lost
+// files mid-read, and a restore that then missed a file only the upperdir
+// had).
 //
 // CRIU runs its post-dump action with the tree still stopped. The action
 // script asks for the snapshot ("snapshot" in its directory) and waits
@@ -39,9 +47,9 @@ const dumpHookDir = ".dump-hook"
 // snapshot: its restore would map stale copies.
 func snapshotNotTaken(cause error) error {
 	if cause != nil {
-		return fmt.Errorf("the dump's snapshot of the replay mounts failed: %w", cause)
+		return fmt.Errorf("the dump's snapshot (replay mounts, rootfs diff) failed: %w", cause)
 	}
-	return errors.New("criu's post-dump hook never asked for the snapshot of the replay mounts; the checkpoint would restore stale copies")
+	return errors.New("criu's post-dump hook never asked for the snapshot of the replay mounts and the rootfs diff; the checkpoint would restore stale copies")
 }
 
 // snapshotHook is the action script's request for the snapshot, in dir as

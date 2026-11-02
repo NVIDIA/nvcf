@@ -165,10 +165,12 @@ When the pod is Ready, the agent on its node:
    `dumpV2`); a container whose workload is pid 1 is dumped from outside its
    pid namespace with its mounts declared external
    (`internal/agent/pidns_capture.go`);
-3. saves the container's writable layer as `rootfs-diff.tar`
-   (`internal/agent/rootfs_diff.go` `archiveOverlayDir`) and the contents of
-   its in-memory mounts that are on the allowlist (`internal/agent/replay_mounts.go`
-   `ReplayMountAllowlist`);
+3. from CRIU's post-dump hook, with the tree still stopped and before CRIU
+   kills it, saves the contents of the container's in-memory mounts that are
+   on the allowlist (`internal/agent/replay_mounts.go`
+   `ReplayMountAllowlist`) and its writable layer as `rootfs-diff.tar`
+   (`internal/agent/rootfs_diff.go` `archiveOverlayDir`); a failed archive
+   fails the dump (`internal/agent/dump_snapshot.go`);
 4. moves the chunk store into the checkpoint, registers the node in the
    catalog as the checkpoint's first source, records the capture with its
    tenant scope (`internal/agent/criu_auto_restore.go` `recordCRIUCapture`),
