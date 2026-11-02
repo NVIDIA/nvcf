@@ -99,6 +99,27 @@ func TestStackValuesForRun_NeedsTheNamedEnvironmentFile(t *testing.T) {
 	assert.False(t, ok, "base.yaml without prod.yaml does not describe the install")
 }
 
+// An environment file that exists but cannot be read or parsed is not read
+// at all: LoadStackValues would skip it, and base.yaml alone, whose
+// highAvailability.mode is preferred, would then describe an install the
+// environment file may set to enforced or none. A failed read is covered by
+// TestValuesFileReadable in internal/selfhosted, which injects it.
+func TestStackValuesForRun_NeedsAReadableEnvironmentFile(t *testing.T) {
+	stack := stackWithEnvs(t, "prod")
+	withStackFlag(t, &selfHostedControlPlaneStack, stack)
+	t.Setenv("HELMFILE_ENV", "")
+	withEnvFlag(t, "prod", true)
+	envFile := filepath.Join(stack, "environments", "prod.yaml")
+
+	require.NoError(t, os.WriteFile(envFile, []byte("highAvailability: [unclosed\n"), 0o644))
+	_, ok := stackValuesForRun(controlPlaneStackTarget())
+	assert.False(t, ok, "a malformed environment file is not read")
+
+	require.NoError(t, os.WriteFile(envFile, []byte("highAvailability:\n  mode: enforced\n"), 0o644))
+	_, ok = stackValuesForRun(controlPlaneStackTarget())
+	assert.True(t, ok, "a readable environment file is read")
+}
+
 // A plane --pre checks before its install is read with --env's default: up
 // installs with it. A plane checked as installed still needs it named.
 func TestStackValuesForRun_BeforeInstallReadsUpsDefaultEnvironment(t *testing.T) {

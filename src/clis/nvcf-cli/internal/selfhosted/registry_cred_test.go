@@ -513,6 +513,25 @@ func TestLoadStackValues_StorageClass(t *testing.T) {
 	assert.Equal(t, "fast-ssd", LoadStackValues([]string{base, env}).StorageClass)
 }
 
+// ValuesFileReadable holds an environment file to the test loadValuesFiles
+// applies: a file that fails to read or to parse as a values map would be
+// skipped, so it does not count as readable.
+func TestValuesFileReadable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prod.yaml")
+
+	require.NoError(t, writeFile(path, []byte("highAvailability:\n  mode: enforced\n")))
+	assert.True(t, ValuesFileReadable(path), "a values map is readable")
+
+	require.NoError(t, writeFile(path, []byte("highAvailability: [unclosed\n")))
+	assert.False(t, ValuesFileReadable(path), "malformed YAML is not readable")
+
+	require.NoError(t, writeFile(path, []byte("highAvailability:\n  mode: enforced\n")))
+	prev := readValuesFile
+	readValuesFile = func(string) ([]byte, error) { return nil, os.ErrPermission }
+	t.Cleanup(func() { readValuesFile = prev })
+	assert.False(t, ValuesFileReadable(path), "a file that fails to read is not readable")
+}
+
 // A registry value carrying a path is valid for the stack, which renders
 // registry + "/" + repository. It must still be probed, and it must still
 // suppress the nvcr.io guess, rather than dropping the whole category.
@@ -1459,4 +1478,171 @@ func TestParseExternalComponents(t *testing.T) {
 	assert.Nil(t, got)
 	_, err = ParseExternalComponents([]string{"nats,redis"})
 	require.ErrorContains(t, err, `unknown component "redis"`)
+}
+
+// fakeQuay answers like quay.io: /v2/ asks for a Bearer token, the token
+// service refuses an anonymous token with no scope and issues one for any
+// repository, and the tag list is served only for public, the one repository
+// anyone may pull. The token is the scope it was issued for.
+type fakeQuay struct {
+	host   string
+	mu     sync.Mutex
+	asked  []string
+	public string
+}
+
+func newFakeQuay(t *testing.T, public string) *fakeQuay {
+	t.Helper()
+	f := &fakeQuay{public: public}
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/auth":
+			scope := r.URL.Query().Get("scope")
+			f.mu.Lock()
+			f.asked = append(f.asked, scope)
+			f.mu.Unlock()
+			if scope == "" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"token":%q}`, scope)
+		case r.URL.Path == "/v2/":
+			w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
+			bearerChallenge(w, srv.URL+"/v2/auth")
+		case r.URL.Path == "/v2/"+f.public+"/tags/list" &&
+			r.Header.Get("Authorization") == "Bearer repository:"+f.public+":pull":
+			_, _ = w.Write([]byte(`{"tags":["v1"]}`))
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	prev := http.DefaultTransport
+	http.DefaultTransport = srv.Client().Transport
+	t.Cleanup(func() { http.DefaultTransport = prev })
+	f.host = strings.TrimPrefix(srv.URL, "https://")
+	return f
+}
+
+// scopes returns the scope of each token request, in order.
+func (f *fakeQuay) scopes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.asked)
+}
+
+// The registries a run lists for a validator image imported into the cluster
+// as localhost/... with no stack values: quay.io is probed for the ACME
+// solver. quay.io refuses an anonymous token with no scope, and issues one
+// with no access for a repository anyone may not pull, so the row asks for
+// the solver's repository and reads its tags. A repository anyone may pull
+// is info, not a missing credential; one anyone may not pull still warns.
+// The stack's scope is a path its images sit under, not a repository, so a
+// refusal for it is no evidence and keeps the anonymous info.
+func TestRegistryCredentialCheck_ACMESolverPullsAnonymously(t *testing.T) {
+	entries := EnumerateRegistries("localhost/nvcf/cluster-validator:ha", StackValues{}, nil)
+	i := slices.IndexFunc(entries, func(e RegistryEntry) bool { return e.Registry == certManagerRegistry })
+	require.GreaterOrEqual(t, i, 0, "%+v", entries)
+	quay := entries[i]
+	const solver = "jetstack/cert-manager-acmesolver"
+
+	dockerHome(t, `{}`)
+	for name, tc := range map[string]struct {
+		public   string
+		prefix   bool
+		passed   bool
+		severity Severity
+		message  string
+	}{
+		"anyone may pull the solver": {public: solver, passed: true, severity: SeverityInfo,
+			message: "anonymous pull allowed for "},
+		"the solver needs a credential": {public: "jetstack/other", severity: SeverityWarning,
+			message: "/" + solver + " refused (401 Unauthorized); no local credentials found"},
+		"a path images sit under": {public: "jetstack/other", prefix: true, passed: true, severity: SeverityInfo,
+			message: "quay.io: reachable anonymously; no local credential checked"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeQuay(t, tc.public)
+			entry := quay
+			entry.Registry = fake.host
+			if tc.prefix {
+				entry = RegistryEntry{Registry: fake.host, RepoHint: solver}
+			}
+			r := registryCredentialCheck(probeRegistryCredential, entry, "quay.io", false, nil).
+				Run(context.Background())
+			assert.Equal(t, tc.passed, r.Passed, r.Message)
+			assert.Equal(t, tc.severity, r.Severity, r.Message)
+			assert.Contains(t, r.Message, tc.message)
+			assert.Equal(t, []string{"repository:" + solver + ":pull"}, fake.scopes())
+		})
+	}
+
+	onQuay := StackValues{Found: true, CertManagerEnabled: true, ACMESolverRepository: "quay.io/myorg/acmesolver"}
+	got := EnumerateRegistries("", onQuay, nil)
+	i = slices.IndexFunc(got, func(e RegistryEntry) bool { return e.Registry == certManagerRegistry })
+	require.GreaterOrEqual(t, i, 0, "%+v", got)
+	assert.Equal(t, "myorg/acmesolver", got[i].RepoHint, "a solver the stack points at another quay.io repository")
+	assert.True(t, got[i].Repository)
+
+	mirror := StackValues{Found: true, ImageRegistry: "harbor.example.com/nvcf", ImageRepository: "org/team"}
+	got = EnumerateRegistries("harbor.example.com/nvcf/cluster-validator:1", mirror, nil)
+	require.Len(t, got, 2)
+	assert.True(t, got[0].Repository, "the validator image is a repository the install pulls")
+	assert.False(t, got[1].Repository, "the stack's scope is a path its images sit under")
+}
+
+// An image on localhost or a loopback address is pulled by each node from its
+// own image store or loopback registry, as a k3d or kind import is, which
+// neither this machine nor the validator's pod can see. With no credential
+// for it on this machine its row is info and nothing dials it, and the
+// in-pod reachability probe leaves it out. A credential for it says a
+// registry runs on this machine, so the row probes it.
+func TestRegistryCredentialCheck_LocalImageIsNotProbed(t *testing.T) {
+	cannotReach := registryProbeOutcome{kind: probeUnverifiable,
+		detail: "could not verify credentials from this machine: cannot reach it: connection refused"}
+	for _, image := range []string{
+		"localhost/nvcf/cluster-validator:ha", "localhost:5001/nvcf/cv:1", "127.0.0.1:5000/nvcf/cv:1",
+		"[::1]:5000/nvcf/cv:1",
+	} {
+		t.Run(image, func(t *testing.T) {
+			entries := EnumerateRegistries(image, StackValues{}, nil)
+			require.NotEmpty(t, entries)
+			local := entries[0]
+			probed := 0
+			checker := func(context.Context, string, string, bool, bool) error {
+				probed++
+				return cannotReach
+			}
+
+			dockerHome(t, `{}`)
+			r := registryCredentialCheck(checker, local, local.Registry, false, nil).Run(context.Background())
+			assert.True(t, r.Passed, r.Message)
+			assert.Equal(t, SeverityInfo, r.Severity, r.Message)
+			assert.Contains(t, r.Message, local.Registry+": local image, not probed")
+			assert.Zero(t, probed, "nothing dials a local image's registry")
+
+			cfg := buildControlPlaneValidatorConfig(entries)
+			assert.NotContains(t, cfg, fmt.Sprintf("name: %q", local.Registry))
+			assert.Contains(t, cfg, `host: "quay.io"`)
+
+			dockerHome(t, inlineDockerConfig(t, local.Registry, "u", "p", ""))
+			r = registryCredentialCheck(checker, local, local.Registry, false, nil).Run(context.Background())
+			assert.Equal(t, 1, probed, "a credential for it says a registry runs on this machine")
+			assert.Equal(t, SeverityWarning, r.Severity, r.Message)
+		})
+	}
+
+	for _, image := range []string{"localhost.example.com/nvcf/cv:1", "registry.local:5000/nvcf/cv:1"} {
+		entries := EnumerateRegistries(image, StackValues{}, nil)
+		require.NotEmpty(t, entries)
+		probed := 0
+		dockerHome(t, `{}`)
+		registryCredentialCheck(func(context.Context, string, string, bool, bool) error {
+			probed++
+			return cannotReach
+		}, entries[0], entries[0].Registry, false, nil).Run(context.Background())
+		assert.Equal(t, 1, probed, "%s is not on the loopback", image)
+		assert.Contains(t, buildControlPlaneValidatorConfig(entries), fmt.Sprintf("name: %q", entries[0].Registry))
+	}
 }

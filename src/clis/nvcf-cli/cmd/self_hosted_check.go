@@ -666,8 +666,11 @@ func stackValuesForRun(t stackTarget) ([]string, bool) {
 	if dir == "" {
 		return nil, false
 	}
+	// The environment file must also be read: LoadStackValues skips a file it
+	// cannot read or parse, which would leave base.yaml alone describing the
+	// install.
 	envFile := filepath.Join(dir, "environments", env+".yaml")
-	if !isRegularFile(envFile) {
+	if !isRegularFile(envFile) || !selfhosted.ValuesFileReadable(envFile) {
 		return nil, false
 	}
 	var files []string
