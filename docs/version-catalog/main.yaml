@@ -23,7 +23,7 @@ publications:
     registry: public-images
   - name: icms-service-oss
     type: image
-    version: 0.7.6
+    version: 0.7.7
     registry: public-images
   - name: llm-api-gateway
     type: image
@@ -43,7 +43,7 @@ publications:
     registry: public-images
   - name: nvcf-api-keys-service
     type: image
-    version: 1.9.3
+    version: 1.9.4
     registry: public-images
   - name: nvcf-cassandra-migrations
     type: image
@@ -51,7 +51,7 @@ publications:
     registry: public-images
   - name: nvcf-ess
     type: image
-    version: 0.5.4
+    version: 0.5.7
     registry: public-images
   - name: nvcf-function-autoscaler
     type: image
@@ -75,11 +75,11 @@ publications:
     registry: public-images
   - name: nvcf-notary
     type: image
-    version: 1.14.5
+    version: 1.14.8
     registry: public-images
   - name: nvcf-openbao-migrations
     type: image
-    version: 0.19.9
+    version: 0.19.10
     registry: public-images
   - name: nvcf-ratelimiter
     type: image
@@ -87,7 +87,7 @@ publications:
     registry: public-images
   - name: nvcf-service-oss
     type: image
-    version: 1.18.1
+    version: 1.18.2
     registry: public-images
   - name: nvcf-worker-init-oss
     type: image
@@ -107,7 +107,7 @@ publications:
     registry: public-images
   - name: nvct-service-oss
     type: image
-    version: 1.66.1
+    version: 1.66.2
     registry: public-images
   - name: pylon
     type: image
@@ -120,6 +120,10 @@ publications:
   - name: stargate
     type: image
     version: 0.18.3
+    registry: public-images
+  - name: samba
+    type: image
+    version: 1.0.9
     registry: public-images
   - name: byoo-otel-collector
     type: image
@@ -190,7 +194,7 @@ publications:
     registry: public-images
   - name: nvcf-openbao
     type: image
-    version: 2.6.2-nv-1.3.4
+    version: 2.6.3-nv-1.3.7
     registry: public-images
   - name: nvcf-ui
     type: image
@@ -220,12 +224,12 @@ publications:
     chart_format: http
   - name: helm-nvcf-api-keys
     type: chart
-    version: 1.8.1
+    version: 1.8.2
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-api
     type: chart
-    version: 1.27.4
+    version: 1.27.5
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-cassandra
@@ -240,7 +244,7 @@ publications:
     chart_format: http
   - name: helm-nvcf-ess-api
     type: chart
-    version: 1.8.2
+    version: 1.8.3
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-function-autoscaler
@@ -265,7 +269,7 @@ publications:
     chart_format: http
   - name: helm-nvcf-llm-request-router
     type: chart
-    version: 1.14.2
+    version: 1.14.3
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-nats-auth-callout-service
@@ -280,17 +284,17 @@ publications:
     chart_format: http
   - name: helm-nvcf-notary-service
     type: chart
-    version: 1.6.0
+    version: 1.6.1
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-nvct-api
     type: chart
-    version: 1.6.0
+    version: 1.6.1
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-openbao-server
     type: chart
-    version: 0.32.7
+    version: 0.32.8
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-pki
@@ -305,7 +309,7 @@ publications:
     chart_format: http
   - name: helm-nvcf-sis
     type: chart
-    version: 2.4.1
+    version: 2.4.2
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-state-metrics
@@ -315,7 +319,7 @@ publications:
     chart_format: http
   - name: helm-nvcf-ui
     type: chart
-    version: 1.1.3
+    version: 1.1.4
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-vanity-gateway
@@ -341,7 +345,6 @@ version_overrides:
 publication_pending:
   - nvcf-compute-plane-stack
   - nvcf-self-managed-stack
-  - samba
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
@@ -982,9 +985,9 @@ manifest:
 release_set:
   stacks:
     control-plane:
-      version: 1.0.7
-      source_tag: deploy/stacks/self-managed/v1.0.7
-      source_commit: c4ee95284f48694649b28707d0100ac1471a7a42
+      version: 1.0.8
+      source_tag: deploy/stacks/self-managed/v1.0.8
+      source_commit: 58771029fe4e2610bb2cba64da4cd2400f9e5f5b
       inventory_asset: nvcf-self-managed-stack-inventory.json
       documentation_version: dev
       status: development
@@ -1004,29 +1007,59 @@ release_set:
       status: qualified
 compatibility:
   - stack: control-plane
-    version: 1.0.7
+    version: 1.0.8
     compatible_with:
       compute-plane: 1.0.4
       observability: 1.0.0
   - stack: compute-plane
     version: 1.0.4
     compatible_with:
-      control-plane: 1.0.7
+      control-plane: 1.0.7+
       observability: 1.0.0
   - stack: observability
     version: 1.0.0
     compatible_with:
+      compute-plane: 1.0.0+
+      control-plane: 1.0.0+
+  - stack: control-plane
+    version: 1.1.0
+    compatible_with:
+      compute-plane: 1.0.0+
+      observability: 1.0.0+
+  - stack: control-plane
+    version: 1.0.1
+    compatible_with:
+      compute-plane: 1.0.0+
+      observability: 1.0.0+
+  - stack: control-plane
+    version: 1.0.0
+    compatible_with:
+      compute-plane: 1.0.0+
+      observability: 1.0.0+
+  - stack: compute-plane
+    version: 1.1.0
+    compatible_with:
+      control-plane: 1.1.0+
+      observability: 1.0.0+
+  - stack: compute-plane
+    version: 1.0.0
+    compatible_with:
+      control-plane: 1.0.0+
+      observability: 1.0.0+
+  - stack: control-plane
+    version: 1.0.7
+    compatible_with:
       compute-plane: 1.0.4
-      control-plane: 1.0.7
+      observability: 1.0.0
 stack:
   name: nvcf-self-managed-stack
-  version: 1.0.7
+  version: 1.0.8
   registry: public-resources
-  source_tag: deploy/stacks/self-managed/v1.0.7
-  source_commit: c4ee95284f48694649b28707d0100ac1471a7a42
+  source_tag: deploy/stacks/self-managed/v1.0.8
+  source_commit: 58771029fe4e2610bb2cba64da4cd2400f9e5f5b
   pin_sources:
     - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
-  pin_source_digest: sha256:5211337d3494440f73dfe17f07539505182600bed3a6041d5e6d3e0b264ea07f
+  pin_source_digest: sha256:28855f1f3508e561a46369ce97f162c148ff463dc6e0be03fe78993695ab6e81
 denylist:
   - name: strap
     reason: Legacy name replaced by nvcf-service-oss
@@ -1220,7 +1253,7 @@ artifacts:
   - name: icms-service-oss
     type: image
     registry: public-images
-    version: 0.7.6
+    version: 0.7.7
     stacks:
       - self-managed
     requirement: required
@@ -1262,7 +1295,7 @@ artifacts:
   - name: nvcf-api-keys-service
     type: image
     registry: public-images
-    version: 1.9.3
+    version: 1.9.4
     stacks:
       - self-managed
     requirement: required
@@ -1276,7 +1309,7 @@ artifacts:
   - name: nvcf-ess
     type: image
     registry: public-images
-    version: 0.5.4
+    version: 0.5.7
     stacks:
       - self-managed
     requirement: required
@@ -1318,21 +1351,21 @@ artifacts:
   - name: nvcf-notary
     type: image
     registry: public-images
-    version: 1.14.5
+    version: 1.14.8
     stacks:
       - self-managed
     requirement: required
   - name: nvcf-openbao-migrations
     type: image
     registry: public-images
-    version: 0.19.9
+    version: 0.19.10
     stacks:
       - self-managed
     requirement: required
   - name: nvcf-openbao
     type: image
     registry: public-images
-    version: 2.6.2-nv-1.3.4
+    version: 2.6.3-nv-1.3.7
     stacks:
       - self-managed
     requirement: required
@@ -1354,7 +1387,7 @@ artifacts:
   - name: nvcf-service-oss
     type: image
     registry: public-images
-    version: 1.18.1
+    version: 1.18.2
     stacks:
       - self-managed
     requirement: required
@@ -1410,7 +1443,7 @@ artifacts:
   - name: nvct-service-oss
     type: image
     registry: public-images
-    version: 1.66.1
+    version: 1.66.2
     stacks:
       - self-managed
     requirement: required
@@ -1465,6 +1498,14 @@ artifacts:
     stacks:
       - observability
     requirement: required
+  - name: nvcf-upgrade-receipt
+    type: chart
+    registry: public-helm
+    upstream_repository: https://github.com/NVIDIA/nvcf/tree/58771029fe4e2610bb2cba64da4cd2400f9e5f5b/deploy/stacks/self-managed/charts
+    version: 0.1.0
+    stacks:
+      - self-managed
+    requirement: required
   - name: nvcf-cluster-topology
     type: chart
     registry: public-helm
@@ -1489,14 +1530,6 @@ artifacts:
     version: 0.2.0
     stacks:
       - observability
-    requirement: required
-  - name: nvcf-upgrade-receipt
-    type: chart
-    registry: public-helm
-    upstream_repository: https://github.com/NVIDIA/nvcf/tree/c4ee95284f48694649b28707d0100ac1471a7a42/deploy/stacks/self-managed/charts
-    version: 0.1.0
-    stacks:
-      - self-managed
     requirement: required
   - name: dynamo-platform
     type: chart
@@ -1523,14 +1556,14 @@ artifacts:
   - name: helm-nvcf-api-keys
     type: chart
     registry: public-helm
-    version: 1.8.1
+    version: 1.8.2
     stacks:
       - self-managed
     requirement: required
   - name: helm-nvcf-api
     type: chart
     registry: public-helm
-    version: 1.27.4
+    version: 1.27.5
     stacks:
       - self-managed
     requirement: required
@@ -1551,7 +1584,7 @@ artifacts:
   - name: helm-nvcf-ess-api
     type: chart
     registry: public-helm
-    version: 1.8.2
+    version: 1.8.3
     stacks:
       - self-managed
     requirement: required
@@ -1586,7 +1619,7 @@ artifacts:
   - name: helm-nvcf-llm-request-router
     type: chart
     registry: public-helm
-    version: 1.14.2
+    version: 1.14.3
     stacks:
       - self-managed
     requirement: optional
@@ -1607,21 +1640,21 @@ artifacts:
   - name: helm-nvcf-notary-service
     type: chart
     registry: public-helm
-    version: 1.6.0
+    version: 1.6.1
     stacks:
       - self-managed
     requirement: required
   - name: helm-nvcf-nvct-api
     type: chart
     registry: public-helm
-    version: 1.6.0
+    version: 1.6.1
     stacks:
       - self-managed
     requirement: required
   - name: helm-nvcf-openbao-server
     type: chart
     registry: public-helm
-    version: 0.32.7
+    version: 0.32.8
     stacks:
       - self-managed
     requirement: required
@@ -1642,7 +1675,7 @@ artifacts:
   - name: helm-nvcf-sis
     type: chart
     registry: public-helm
-    version: 2.4.1
+    version: 2.4.2
     stacks:
       - self-managed
     requirement: required
@@ -1656,7 +1689,7 @@ artifacts:
   - name: helm-nvcf-ui
     type: chart
     registry: public-helm
-    version: 1.1.3
+    version: 1.1.4
     stacks:
       - self-managed
     requirement: optional

@@ -465,67 +465,42 @@ For local development, a lower preset may be acceptable when the environment als
 
 #### `helm` and `image` Configuration
 
-The `helm` and `image` sections tell NVCF which registries to pull Helm charts and container images from.
+Merge the [customer artifact access settings](../overview/umbrella-releases.md#configure-customer-artifact-access)
+into the environment's `global` section. That guide owns the chart source,
+image source and credential settings for direct NGC access or a private mirror.
+The EKS example above uses a private mirror; replace its source fields when
+using the customer catalog directly. Keep one `global` mapping.
 
-- `helm.sources`: The OCI registry where NVCF Helm charts are stored. Helmfile pulls charts from here at deploy time (requires local authentication. See [Access Requirements](#access-requirements)).
-- `image`: The container registry where NVCF service images are stored. Kubernetes pulls images from here at runtime.
+Before upgrading a mirrored deployment, copy every selected chart and image
+that changed. Use the [artifact manifest](../overview/manifest.md) as the
+version list and [Image Mirroring](../overview/image-mirroring.md) for copy
+commands. Registry locations do not supply Kubernetes pull credentials; follow
+[Configure image pull secrets](#step-4-configure-image-pull-secrets-conditional)
+for each namespace that pulls from a private registry.
+
+#### Migration clients on Kubernetes 1.35
+
+The selected OpenBao migration image includes kubectl 1.37.2 by default and
+1.36.6 for Kubernetes 1.35 clusters. In the control-plane environment, select
+the compatible client before rendering or applying:
 
 ```yaml
-# Helm Chart Sources Configuration
-helm:
-  sources:
-    registry: "nvcr.io"
-    repository: "YOUR_ORG/YOUR_TEAM"
-    # NGC Example:
-    # registry: nvcr.io
-    # repository: 123456789102/YOUR_TEAM
-    # ECR Example:
-    # registry: <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
-    # repository: <your-ecr-repository-name>
-
-# Container Image Registry Configuration
-image:
-  registry: nvcr.io
-  repository: YOUR_ORG/YOUR_TEAM
-  # NGC Example:
-  # registry: nvcr.io
-  # repository: 123456789102/YOUR_TEAM
-  # ECR Example:
-  # registry: <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
-  # repository: <your-ecr-repository-name>
+openbao:
+  migrations:
+    kubectlMinor: "1.36"
 ```
 
-<Warning>
-If you have mirrored NVCF artifacts to your own registry (e.g., ECR), update both `helm.sources` and `image` to point to your mirror. See [self-hosted-image-mirroring](../overview/image-mirroring.md) for details on mirroring artifacts.
+This setting is inherited by OpenBao migrations and enabled SIS HMAC rotation,
+LLM PKI and UI migration hooks. Explicit per-hook `kubectlMinor` settings take
+precedence; remove stale overrides when all hooks should use the shared choice.
+Review rendered Jobs for `NVCF_KUBECTL_MINOR: "1.36"` in their environment.
 
-When upgrading to a new `nvcf-self-managed-stack` version, re-mirror all artifacts before running `helmfile sync`. Each stack release may introduce new or updated container images and Helm charts. If these are not present in your private registry, pods will fail with `ImagePullBackOff`. For split installs, mirror both core stack resources listed in the [self-hosted-artifact-manifest](../overview/manifest.md). If you deploy shared observability as a standalone stack, mirror the observability stack resource as well.
-
-</Warning>
-
-<Note>
-Pulling directly from NGC is the recommended approach and avoids the need to
-manually mirror artifacts on every upgrade. If your environment permits it,
-configure `helm.sources` and `image` to point to the NGC registry (`nvcr.io`)
-and use your NGC API key for authentication. This ensures you always have access
-to the latest artifacts without additional mirroring steps.
-
-</Note>
-
-<Note>
-These settings control *where* images are pulled from, not *how* Kubernetes authenticates to pull them. If your `image` registry is private, you may also need to configure image pull secrets -- see [Step 4](./helmfile-installation.md).
-
-</Note>
-
-<Tip>
-Quick start summary: If you are using the example EKS environment YAML directly
-and followed [Gateway quickstart](./gateway-routing.md#gateway-quickstart), you
-only need to change:
-
-1. `domain`: Replace `GATEWAY_ADDR` with the Gateway load balancer address
-2. `helm.sources.registry` and `helm.sources.repository`: Point to your Helm chart registry
-3. `image.registry` and `image.repository`: Point to your container image registry
-
-</Tip>
+The selector does not detect the server version automatically. kubectl must
+stay within one minor of the API server; follow the
+[Kubernetes version-skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+The independent upstream account-bootstrap and upgrade-receipt helpers do not
+use this selector. Configure their image versions separately as described in
+[upstream helper images](../overview/manifest.md#supporting-images-that-ship-from-docker-hub).
 
 #### Overriding Helm Chart Values
 
@@ -1264,8 +1239,9 @@ Use `deploy/stacks/nvcf-compute-plane` from the selected bundle for each GPU
 cluster. The compute-plane Helmfile installs `helm-nvca-operator` and wires it
 to the control plane values returned by cluster registration.
 
-Create an environment file in the compute-plane directory. Use the same Helm
-chart and image registry mirror as the control plane. Set the service URLs to
+Create an environment file in the compute-plane directory and merge the
+[customer artifact access settings](../overview/umbrella-releases.md#configure-customer-artifact-access)
+into its `global` mapping. Set the service URLs to
 addresses reachable from the GPU cluster. If the GPU cluster reaches the
 control plane through one load balancer with hostname-based Gateway routing,
 keep the URL pointed at the load balancer and set the host-header overrides to
@@ -1278,18 +1254,6 @@ touch deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml
 
 ```yaml title="deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml"
 global:
-  helm:
-    sources:
-      registry: <your-chart-registry>
-      repository: <your-chart-repository>
-
-  image:
-    registry: <your-image-registry>
-    repository: <your-image-repository>
-
-  imagePullSecrets:
-    - name: nvcr-pull-secret
-
   nvcaOperator:
     selfManaged:
       icmsServiceURL: "http://<GATEWAY_ADDR>"

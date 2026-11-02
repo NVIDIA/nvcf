@@ -31,34 +31,16 @@ checks. See [Helmfile Installation](./helmfile-installation.md),
 [Self-Managed Clusters](../compute-plane/cluster-management/self-managed.md), and
 [Gateway Routing](./gateway-routing.md).
 
-## Overview
+## Installation order
 
-For a fresh installation, follow this high-level sequence. Existing installations
-must follow the [upgrade prerequisites and order](../overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
+Follow the [selected stack deployment order](../overview/umbrella-releases.md#deploy-the-selected-stacks)
+for a fresh installation. It covers the control plane, enabled Observability
+profile, GPU-cluster registration and compute-plane installation. Existing
+installations use the [upgrade procedure](../overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
 
-1. Download and verify the [selected umbrella bundle](../overview/umbrella-releases.md),
-   keeping its three stack directories together. Run bundle-relative commands
-   from the extracted root. A checkout of current main is for source development
-   and can select different artifact versions.
-
-2. Make NVCF artifacts available to your Kubernetes clusters. Pull them
-   directly from NGC with the required [chart authentication and image
-   namespace settings](../overview/umbrella-releases.md#configure-customer-artifact-access), or follow the
-   [image mirroring instructions](../overview/image-mirroring.md) to copy them to a
-   registry that the clusters can access.
-
-3. Create or select Kubernetes cluster targets. You need a cluster for the control plane and a GPU cluster for function workloads. These can be the same cluster or separate clusters.
-
-4. Configure optional Observability and install the control plane from the
-   selected bundle. Follow its [deployment order](../overview/umbrella-releases.md#deploy-the-selected-stacks)
-   and [Helmfile Installation](./helmfile-installation.md). The local-development
-   [Quickstart](../overview/quickstart.md) uses a source checkout.
-
-5. Register a GPU cluster and install the NVIDIA Cluster Agent. The local quickstart performs this step for the local k3d cluster. For manual installation paths, see [Self-Managed Clusters](../compute-plane/cluster-management/self-managed.md).
-
-6. Install Low Latency Streaming if needed for streaming workloads. See [LLS Installation](./lls-installation.md).
-
-7. Install optional enhancements, such as caches, low latency streaming, or Vanity Gateway routing, NVCF UI when your stack package includes that addon. See [Simulation Caches](../compute-plane/caches.md), [LLS Installation](./lls-installation.md), [Gateway Routing](./gateway-routing.md), and [NVCF UI](./nvcf-ui.md).
+After the core deployment works, configure the optional features your workload
+needs: [caches](../compute-plane/caches.md), [low latency streaming](./lls-installation.md),
+[Vanity Gateway](./gateway-routing.md) or [NVCF UI](./nvcf-ui.md).
 
 ## Kubernetes Cluster Requirements
 

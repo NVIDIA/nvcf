@@ -88,8 +88,8 @@ download command in this catalog.
 {/*docs-version-sync:BEGIN stack-package-downloads*/}
 
 ```bash
-# Self-Managed 1.0.7
-# Publication pending: nvcf-self-managed-stack 1.0.7 is not yet available for download.
+# Self-Managed 1.0.8
+# Publication pending: nvcf-self-managed-stack 1.0.8 is not yet available for download.
 
 # Compute Plane 1.0.4
 # Publication pending: nvcf-compute-plane-stack 1.0.4 is not yet available for download.
@@ -142,7 +142,7 @@ global:
     registry: nvcr.io
     repository: nvidia/nvcf
   imagePullSecrets:
-    - name: nvcf-registry
+    - name: nvcr-pull-secret
 ```
 
 Replace the password placeholder in local configuration with a customer
@@ -176,8 +176,8 @@ and [image mirroring](image-mirroring.md).
 
 ## Deploy the selected stacks
 
-Use the Helm and Helmfile versions recorded in the release's manifest. NVCF
-1.0.4 uses Helm 3.21.4 and Helmfile 1.1.9. Select each cluster context explicitly. Read the extracted README
+Use the Helm and Helmfile versions recorded in the release's manifest.
+Select each cluster context explicitly. Read the extracted README
 and render with the packaged Helmfiles before applying.
 
 For a fresh installation:

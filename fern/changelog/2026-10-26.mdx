@@ -5,13 +5,17 @@ tags: [self-managed, compute-plane, security]
 
 ## NVCF 1.0.4
 
-NVCF 1.0.4 selects Self-Managed 1.0.7, Compute Plane 1.0.4
-and Observability 1.0.0. The comparison baseline is docs edition 1.0.2:
-Self-Managed 1.0.1, Compute Plane 1.0.0 and Observability 1.0.0.
+NVCF 1.0.4 combines security patches and runtime fixes across the three stacks.
+The [selected stack versions](../../docs/overview/compatibility-matrix.md#selected-stack-releases)
+and [artifact manifest](../../docs/overview/manifest.md) record the complete
+selection. Changes below are relative to docs edition 1.0.2.
 
 - Updates selected service, worker and telemetry dependencies for security
   maintenance, including NICLLS 2.118.2, Samba 1.0.9 and both compute-plane
   collectors at 0.160.0-nv-0.2.9.
+- Patches the Java service runtime images and updates OpenBao server and agent
+  to 2.6.3 with the existing JWT plugin. The migration image includes patched
+  Kubernetes clients and a compatible-client setting for Kubernetes 1.35.
 - Corrects Samba share ownership setup so non-root Helm tasks can create
   their results directory. Samba retains its existing root runtime.
 - Returns a prompt not-found response when an LLM function is sent to the
@@ -28,9 +32,7 @@ Use the [umbrella consumption guide](../../docs/overview/umbrella-releases.md)
 for bundle download, verification and customer registry configuration.
 Read the [upgrade procedure](../../docs/overview/release-notes/1.0.2-to-1.0.4-upgrade.md)
 for the hostname-policy prerequisite, NVCA-first ordering, queue draining,
-storage checks and rollback limits. The
-[artifact manifest](../../docs/overview/manifest.md) records the exact selection.
+OpenBao member replacement, storage checks and rollback limits.
 
-Cassandra and OpenBao runtime versions remain unchanged; their migration-image
-fixes are included. State-metrics changes and a Samba non-root redesign are
-outside this release.
+Cassandra runtime is unchanged; its migration-image fixes are included.
+State-metrics changes and a Samba non-root redesign are outside this release.

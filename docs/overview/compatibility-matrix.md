@@ -10,7 +10,7 @@ stacks. Stack, chart and image versions do not need matching version numbers.
 
 | Stack | Selected version | Source tag |
 | --- | --- | --- |
-| [Self-managed (control plane)](../self-managed/installation.md) | `1.0.7` | `deploy/stacks/self-managed/v1.0.7` |
+| [Self-managed (control plane)](../self-managed/installation.md) | `1.0.8` | `deploy/stacks/self-managed/v1.0.8` |
 | [Compute plane](../compute-plane/cluster-management/index.md) | `1.0.4` | `deploy/stacks/nvcf-compute-plane/v1.0.4` |
 | [Observability](../observability/observability.md) | `1.0.0` | `deploy/stacks/observability/v1.0.0` |
 
@@ -35,8 +35,7 @@ umbrella archive. That selection does not replace the stack compatibility
 policy with an "only these versions are supported" restriction. A compatible
 range does not change the contents of an existing archive.
 
-Docs edition 1.0.2 selected Self-Managed 1.0.1, Compute Plane 1.0.0 and
-Observability 1.0.0. Docs edition 1.0.3 changed documentation only and retained
-that combination. Follow the [1.0.4 upgrade notes](release-notes/1.0.2-to-1.0.4-upgrade.md)
-for the required ordering and [umbrella consumption guide](umbrella-releases.md)
-for bundle acquisition and customer configuration.
+Follow the [1.0.4 upgrade notes](release-notes/1.0.2-to-1.0.4-upgrade.md)
+for the docs edition 1.0.2 baseline and required upgrade order. Use
+[Consume an NVCF release](umbrella-releases.md) for package downloads and
+customer registry configuration.

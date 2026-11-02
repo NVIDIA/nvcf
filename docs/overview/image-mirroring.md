@@ -109,19 +109,36 @@ charts. They are not public OCI artifacts. Pull them from
 
 </Warning>
 
-Public NVCF Helm Charts
+The example below uses the selected NVCA Operator chart. For another chart,
+set its name, version and pull reference from the [artifact manifest](manifest.md).
+The commands save one archive for the registry-specific push steps below.
+Repeat for each chart that you need to mirror.
 
 ```bash
-# Add and update the public NVCF Helm repository
-helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
-helm repo update
-
-# Pull the chart
-helm pull nvcf/helm-nvca-operator --version 1.28.0
-
-# Prerelease charts require --devel when searching
-helm search repo nvcf/helm-nvcf-vanity-gateway --versions --devel
+CHART_NAME="helm-nvca-operator"
+CHART_VERSION="1.28.0"
+CHART_REFERENCE="nvcf/helm-nvca-operator"
+CHART_ARCHIVE="${CHART_NAME}-${CHART_VERSION}.tgz"
+(
+set +x
+set -euo pipefail
+umask 077
+HELM_MIRROR_TMP="$(mktemp -d)"
+trap 'rm -rf -- "${HELM_MIRROR_TMP}"' EXIT
+export HELM_REPOSITORY_CONFIG="${HELM_MIRROR_TMP}/repositories.yaml"
+export HELM_REPOSITORY_CACHE="${HELM_MIRROR_TMP}/cache"
+: "${NGC_API_KEY:?Set a scoped NGC_API_KEY}"
+printf '%s\n' "${NGC_API_KEY}" |
+  helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf \
+    --username '$oauthtoken' --password-stdin
+helm repo update nvcf
+helm pull "${CHART_REFERENCE}" --version "${CHART_VERSION}"
+)
 ```
+
+The temporary Helm configuration keeps these credentials separate from your
+existing repository configuration. The downloaded archive remains in the
+current directory.
 
 Other Repository-based Helm Charts (Non-OCI)
 
@@ -354,24 +371,18 @@ docker push <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nats
 
 Push a Helm Chart to ECR
 
+Use the archive and `CHART_NAME` from [Pulling Helm Charts](#pulling-helm-charts).
+
 ```bash
-# 1. Add and update the public NVCF Helm repository
-helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
-helm repo update
-
-# 2. Pull the Helm chart from NGC
-helm pull nvcf/helm-nvca-operator --version 1.28.0
-# This creates: helm-nvca-operator-1.28.0.tgz
-
-# 3. Login to AWS ECR with Helm
+# Login to AWS ECR with Helm
 aws ecr get-login-password --region us-east-1 | \
   helm registry login --username AWS --password-stdin <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com
 
-# 4. Create ECR repository with prefix (must match your environment config)
-aws ecr create-repository --repository-name ${REPO_PREFIX}/helm-nvca-operator --region us-east-1
+# Create the repository if it does not already exist
+aws ecr create-repository --repository-name "${REPO_PREFIX}/${CHART_NAME}" --region us-east-1
 
-# 5. Push to ECR as OCI artifact (include repository prefix)
-helm push helm-nvca-operator-1.28.0.tgz oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
+# Push the downloaded archive as an OCI artifact
+helm push "${CHART_ARCHIVE}" oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
 ```
 
 <Note>
@@ -437,6 +448,8 @@ docker push ${CR_ENDPOINT}/${NAMESPACE}/nats-box:0.19.7-nonroot
 
 Push a Helm Chart to Volcano Engine CR
 
+Use the archive from [Pulling Helm Charts](#pulling-helm-charts).
+
 ```bash
 # Set your registry endpoint and namespace
 CR_ENDPOINT="cr-example-cn-beijing.cr.volces.com"
@@ -444,21 +457,13 @@ NAMESPACE="nvcf-self-hosted"
 CR_USERNAME="your-username"
 CR_PASSWORD="your-password"
 
-# 1. Add and update the public NVCF Helm repository
-helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
-helm repo update
+# Login to Volcano Engine CR with Helm
+printf '%s\n' "${CR_PASSWORD}" |
+  helm registry login "${CR_ENDPOINT}" \
+    --username "${CR_USERNAME}" --password-stdin
 
-# 2. Pull the Helm chart from NGC
-helm pull nvcf/helm-nvca-operator --version 1.28.0
-# This creates: helm-nvca-operator-1.28.0.tgz
-
-# 3. Login to Volcano Engine CR with Helm
-helm registry login ${CR_ENDPOINT} \
-  --username "${CR_USERNAME}" \
-  --password "${CR_PASSWORD}"
-
-# 4. Push to Volcano Engine CR as OCI artifact
-helm push helm-nvca-operator-1.28.0.tgz oci://${CR_ENDPOINT}/${NAMESPACE}
+# Push the downloaded archive as an OCI artifact
+helm push "${CHART_ARCHIVE}" "oci://${CR_ENDPOINT}/${NAMESPACE}"
 ```
 
 ## Troubleshooting

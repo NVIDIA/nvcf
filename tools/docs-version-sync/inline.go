@@ -18,6 +18,7 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 func SyncInlineVersions(path, content string, catalog *Catalog) (string, bool, error) {
@@ -56,6 +57,15 @@ func syncImageMirroring(content string, catalog *Catalog) (string, bool, error) 
 	if chartName == "" {
 		chartName = chart.Name
 	}
+	variables := regexp.MustCompile(fmt.Sprintf(`(?m)^CHART_NAME="(?:helm-nvca-operator|%s)"\nCHART_VERSION="[^"\n]+"\nCHART_REFERENCE=[^\n]+`, regexp.QuoteMeta(chartName)))
+	total += len(variables.FindAllStringIndex(updated, -1))
+	referenceAssignment := pullReference
+	if !strings.HasPrefix(referenceAssignment, `"`) {
+		referenceAssignment = fmt.Sprintf("%q", referenceAssignment)
+	}
+	updated = variables.ReplaceAllStringFunc(updated, func(string) string {
+		return fmt.Sprintf("CHART_NAME=%q\nCHART_VERSION=%q\nCHART_REFERENCE=%s", chartName, chart.Version, referenceAssignment)
+	})
 	updated, count = replaceNVCAOperatorChartPull(updated, pullReference, chartName, chart.Version)
 	total += count
 	updated, count = replaceNVCAOperatorChartArchiveComments(updated, chart.Version)
