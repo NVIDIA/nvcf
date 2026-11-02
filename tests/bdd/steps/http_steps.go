@@ -57,6 +57,7 @@ func registerHTTPSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the HTTP response JSON field "([^"]*)" should equal "([^"]*)"$`, sc.theHTTPJSONFieldShouldEqual)
 	ctx.Step(`^the HTTP response JSON field "([^"]*)" should be at least (\d+)$`, sc.theHTTPJSONFieldShouldBeAtLeast)
 	ctx.Step(`^the HTTP response JSON field "([^"]*)" should be absent$`, sc.theHTTPJSONFieldShouldBeAbsent)
+	ctx.Step(`^the HTTP response JSON field "([^"]*)" should be less than (\d+)$`, sc.theHTTPJSONFieldShouldBeLessThan)
 	ctx.Step(`^I export the HTTP response JSON field "([^"]*)" to environment variable "([^"]*)"$`, sc.iExportHTTPJSONField)
 }
 
@@ -260,6 +261,14 @@ func (sc *ScenarioContext) theHTTPJSONFieldShouldBeAtLeast(path string, min int)
 		return err
 	}
 	return dsl.JSONFieldAtLeast(resp.Body, path, float64(min))
+}
+
+func (sc *ScenarioContext) theHTTPJSONFieldShouldBeLessThan(path string, max int) error {
+	resp, err := sc.requireHTTP()
+	if err != nil {
+		return err
+	}
+	return dsl.JSONFieldLessThan(resp.Body, path, float64(max))
 }
 
 // iExportHTTPJSONField stores a response field in an env var through the

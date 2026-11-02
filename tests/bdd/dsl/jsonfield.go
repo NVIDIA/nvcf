@@ -114,6 +114,23 @@ func JSONFieldAtLeast(raw, path string, min float64) error {
 	return nil
 }
 
+// JSONFieldLessThan reports whether the numeric value at the dotted path is
+// below max.
+func JSONFieldLessThan(raw, path string, max float64) error {
+	text, err := JSONField(raw, path)
+	if err != nil {
+		return err
+	}
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return fmt.Errorf("json path %q is not a number: %q", path, text)
+	}
+	if value >= max {
+		return fmt.Errorf("json path %q = %v, want less than %v", path, value, max)
+	}
+	return nil
+}
+
 func childNode(node any, part string) (any, error) {
 	switch typed := node.(type) {
 	case map[string]any:
