@@ -45,7 +45,7 @@ record showed only the first member's abort: its reason was cut at 1024 bytes.
 
 ### 2.1 One CRIU attempt per configuration and agent version
 
-A configuration's CRIU capture is attempted once per agent bundle version (the `bundle.<n>` the record already
+A configuration's CRIU capture is attempted once per agent bundle version (the `agentBundle` field the record
 keeps). A failure is recorded as `state=failed` with every member's first error (§2.3). It is retried only when
 something that could change the outcome changes: the agent bundle version (a fix shipped), or the configuration
 itself (a new image or arguments, which is a new configuration key anyway). A stall the code already classifies as
