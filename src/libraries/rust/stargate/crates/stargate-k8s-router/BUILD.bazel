@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_go//go:def.bzl", "go_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
@@ -54,6 +55,7 @@ rust_oci_image(
     binary_path = "/usr/local/bin/stargate-k8s-router",
     tags = ["stargate-k8s-router"],
     visibility = ["//visibility:public"],
+    user = "1000:1000",
 )
 
 # Entrypoint exec-bit guard. Required by NVCF MR feedback memory
@@ -66,4 +68,14 @@ sh_test(
         "/usr/local/bin/stargate-k8s-router",
     ],
     data = [":stargate-k8s-router-image_layer"],
+)
+
+go_test(
+    name = "stargate-k8s-router-image_numeric_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :stargate-k8s-router-image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":stargate-k8s-router-image_index"],
 )
