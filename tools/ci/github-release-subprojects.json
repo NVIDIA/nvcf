@@ -419,6 +419,17 @@
       "legacy_tag_prefix": "nvcf-worker-task-v"
     },
     {
+      "id": "nvsnap",
+      "path": "src/compute-plane-services/nvsnap",
+      "service_name": "nvsnap"
+    },
+    {
+      "id": "nvstor",
+      "path": "src/compute-plane-services/nvstor",
+      "service_name": "nvstor",
+      "initial_version": "0.2.0"
+    },
+    {
       "id": "cloud-tasks",
       "path": "src/control-plane-services/cloud-tasks",
       "service_name": "nvcf-cloud-tasks"
