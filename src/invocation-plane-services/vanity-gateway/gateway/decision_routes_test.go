@@ -499,3 +499,24 @@ func TestDecisionRoutesRelayBackend429BodiesUnchangedWithCustomMessage(t *testin
 		}
 	}
 }
+
+// With usePexec the director rewrites the URL path, so Messages errors must
+// take their shape from the route the client called.
+func TestMessagesProxyFailureKeepsAnthropicShapeAfterPexecPathRewrite(t *testing.T) {
+	down := httptest.NewServer(http.NotFoundHandler())
+	downURL := down.URL
+	down.Close()
+
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = openAIHost
+	mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{
+		"m": {ModelName: decisionModel, FunctionID: decisionFunctionID, UsePexec: true},
+	}
+	mux := openAIMux(t, mappings, downURL, "http://llm.invalid")
+
+	rec := postDecision(t, mux, messagesPath, `{"model":"`+decisionModel+`","max_tokens":8,"messages":[]}`, nil)
+
+	require.Equal(t, http.StatusBadGateway, rec.Code, rec.Body.String())
+	require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	assert.JSONEq(t, `{"type":"error","error":{"type":"api_error","message":"upstream request failed"}}`, rec.Body.String())
+}
