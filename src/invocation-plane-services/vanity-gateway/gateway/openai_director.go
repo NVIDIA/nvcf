@@ -778,6 +778,14 @@ func (d *ModelDirector) proxyModelMappedRequest(writer http.ResponseWriter, requ
 func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, request *http.Request, modelToNVCFUrl map[string]FunctionInfo) (resolvedOpenAIRequest, bool) {
 	extract := extractOpenAIRequestBody
 	if isDecisionRoute(request) {
+		if !isDecisionContentType(request.Header.Get(contentTypeHeader)) {
+			if request.Body != nil {
+				_ = request.Body.Close()
+			}
+			markGatewayRejected(writer, request)
+			writeNativeError(writer, request, http.StatusUnsupportedMediaType, "", "Content-Type must be application/json")
+			return resolvedOpenAIRequest{}, true
+		}
 		extract = extractDecisionRequestBody
 	}
 	body, err := extract(request)
@@ -1169,6 +1177,17 @@ func readMultipartModelField(r io.Reader, boundary string) (string, error) {
 		}
 		return string(value), nil
 	}
+}
+
+// isDecisionContentType reports whether a decision route accepts the
+// Content-Type header. A missing header is read as JSON, as on the chat
+// completions route.
+func isDecisionContentType(header string) bool {
+	if header == "" {
+		return true
+	}
+	mediaType, _, err := mime.ParseMediaType(header)
+	return err == nil && mediaType == contentTypeApplicationJSON
 }
 
 // errInvalidRequestBody signals a body that is valid JSON but not an object

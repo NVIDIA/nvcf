@@ -19,6 +19,7 @@ package gateway
 
 import (
 	config "ai-api-gateway-service/gateway_config"
+	"ai-api-gateway-service/middleware"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -653,4 +654,91 @@ func TestDecisionRoutesForwardNonBooleanStream(t *testing.T) {
 			})
 		}
 	}
+}
+
+// Decision routes take JSON only. Other media types are a client mistake, so
+// they are rejected locally instead of failing later as an upstream error.
+func TestDecisionRoutesRejectNonJSONContentTypes(t *testing.T) {
+	multipartBody := "--x\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n" + decisionModel + "\r\n--x--\r\n"
+	for _, llm := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, contentType, body string
+		}{
+			{"multipart without boundary", "multipart/form-data", multipartBody},
+			{"multipart with boundary", "multipart/form-data; boundary=x", multipartBody},
+			{"text plain", "text/plain", `{"model":"` + decisionModel + `"}`},
+			{"unparseable", "application/json; =", `{"model":"` + decisionModel + `"}`},
+		} {
+			for _, path := range []string{decisionsPath, systemOnePath} {
+				name := path + " " + tc.name
+				if llm {
+					name += " llm"
+				}
+				t.Run(name, func(t *testing.T) {
+					requests := make(chan capturedRequest, 1)
+					backend := captureServer(t, requests, nil)
+					var mutate func(*config.ModelFunctionDetails)
+					if llm {
+						mutate = llmDecision
+					}
+					director, err := NewModelDirector(decisionMappings(true, true, mutate), regexp.MustCompile("^$"),
+						mustVanityDirector(t, backend.URL), mustLLMGatewayDirector(t, backend.URL), nil)
+					require.NoError(t, err)
+					handler := director.ServeDecisions
+					if path == systemOnePath {
+						handler = director.ServeSystemOne
+					}
+					req := openAIRequest(t, path, tc.body)
+					req.Header.Set("Content-Type", tc.contentType)
+
+					rec, reader, spans := serveThroughTelemetry(t, handler, req)
+
+					requireOrigin(t, rec, reader, spans, http.StatusUnsupportedMediaType, middleware.GatewayProxyOutcomeRejected)
+					if path == decisionsPath {
+						assert.Equal(t, "unsupported_media_type", requireOpenAIErrorBody(t, rec, http.StatusUnsupportedMediaType).Error.Code)
+					} else {
+						var payload systemOneErrorBody
+						require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload), rec.Body.String())
+						assert.Equal(t, "unsupported_media_type", payload.Error.Code)
+					}
+					assert.Empty(t, requests, "a rejected request must not reach the backend")
+				})
+			}
+		}
+	}
+}
+
+// A missing Content-Type is read as JSON, as on the chat completions route.
+func TestDecisionRoutesAcceptJSONOrMissingContentType(t *testing.T) {
+	for _, contentType := range []string{"", "application/json", "application/json; charset=utf-8"} {
+		for _, path := range []string{decisionsPath, systemOnePath} {
+			t.Run(path+" "+contentType, func(t *testing.T) {
+				requests := make(chan capturedRequest, 1)
+				backend := captureServer(t, requests, nil)
+				mux := openAIMux(t, decisionMappings(true, true, nil), backend.URL, "http://llm.invalid")
+				req := openAIRequest(t, path, `{"model":"`+decisionModel+`"}`)
+				if contentType != "" {
+					req.Header.Set("Content-Type", contentType)
+				}
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				awaitRequest(t, requests)
+			})
+		}
+	}
+}
+
+func mustVanityDirector(t *testing.T, endpoint string) *VanityDirector {
+	t.Helper()
+	director, err := NewVanityDirector(endpoint, http.DefaultTransport)
+	require.NoError(t, err)
+	return director
+}
+
+func mustLLMGatewayDirector(t *testing.T, endpoint string) *LLMGatewayDirector {
+	t.Helper()
+	director, err := NewLLMGatewayDirector(endpoint, http.DefaultTransport)
+	require.NoError(t, err)
+	return director
 }
