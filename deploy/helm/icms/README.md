@@ -111,6 +111,16 @@ If you had overridden the token volume inline, drop it, since it is fully chart-
 - mount path `/var/run/secrets/kubernetes.io/serviceaccount` becomes `/var/run/secrets/openbao/serviceaccount`
 - a custom `audience` now goes in `sis.vault.audience`
 
+### LLS migration kubectl client
+
+When `sis.lls.enabled` is true, `sis.lls.hmacRotation.kubectlMinor` controls the
+LLS migration Job and HMAC rotation CronJob. Leave it empty to use the image
+default, or set `"1.36"` for Kubernetes 1.35 servers. The migrations 0.19.10 image
+provides kubectl 1.37.2 by default and the patched 1.36.6 client through
+`NVCF_KUBECTL_MINOR="1.36"`. An explicit `"1.37"` is also supported; other
+selections fail rendering. Override `sis.lls.hmacRotation.image.*` when using
+a mirrored image, and retain an image that implements this selector.
+
 ## Notes
 
 - If you publish or mirror the required images into another registry, set the image registry, repository, tag, and pull secret values explicitly in your override file.
