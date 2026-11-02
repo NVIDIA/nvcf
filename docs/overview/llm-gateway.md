@@ -208,7 +208,7 @@ The gateway requires the routed model to declare `/v1/responses` in `llmConfig.u
 
 For upstream compatibility, the gateway sends native Responses requests to the router as streaming requests. If the client requested streaming, the gateway relays SSE. If the client requested a non-streaming response, the gateway consumes the upstream SSE stream and returns the terminal Responses JSON object.
 
-If the upstream stream ends without a `response.completed`, `response.failed`, or `response.incomplete` event, a non-streaming client receives HTTP 502. A streaming client has already received HTTP 200, so the gateway ends the stream with a `response.failed` event whose `error.code` is `server_error`. The gateway records both cases as 502 in its logs and metrics.
+If the upstream stream closes without a `response.completed`, `response.failed`, or `response.incomplete` event, a non-streaming client receives HTTP 502. A streaming client has already received HTTP 200, so the gateway ends the stream with a `response.failed` event whose `error.code` is `server_error`. This also applies when the upstream connection fails during a streaming response. The gateway records these cases as 502 in its logs and metrics.
 
 ### Embeddings
 
