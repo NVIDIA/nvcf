@@ -354,15 +354,19 @@ Benchmark controls do not apply. Only `X-Load-Tester-Echo` and the
 `x_load_tester_echo` body field are read, and they add the request body as
 `request_body`.
 
-Every response has an `echo` object with the request headers
+Every successful response has an `echo` object with the request headers
 `typesafe-danger-zone-images`, `x-model`, `x-input-tokens`, `x-request-id`
-and `x-vendor-test` when present, plus `body_length`. When
-`TypeSafe-Danger-Zone-Images` is sent, the response also sets
-`x-mock-echo-typesafe-danger-zone-images`.
+and `x-vendor-test` when present, plus `body_length` and
+`credentials_received`. `credentials_received` is `true` when the request
+carried `Authorization`, `X-Api-Key`, `Proxy-Authorization` or `Cookie`. The
+values are never echoed. When `TypeSafe-Danger-Zone-Images` is sent, a
+successful response also sets `x-mock-echo-typesafe-danger-zone-images`.
+When `X-Input-Tokens` is a non-negative integer, `usage.input_tokens` mirrors
+it. Otherwise the sample estimates one token per four body bytes.
 
 These two routes accept bodies up to 16 MiB. The other routes keep 10 MiB.
 Bodies must be one JSON object, otherwise the response is 400 with a JSON
-error. Add `?mock_error=429` for a 429 with `Retry-After: 7`, or
+error. A `null` body is a 400, and so is a `model` that is not a string. Add `?mock_error=429` for a 429 with `Retry-After: 7`, or
 `?mock_error=400` for a 400. The 400 body is FastAPI style
 (`{"detail":[...]}`) on System One and OpenAI style on Decisions.
 
@@ -381,5 +385,5 @@ routes required by the workload, such as:
 /v1/systemone
 ```
 
-See the [LLM Gateway guide](../../../docs/user/llm-gateway.md) for function
+See the [LLM Gateway guide](../../../docs/overview/llm-gateway.md) for function
 model configuration and invocation flow.

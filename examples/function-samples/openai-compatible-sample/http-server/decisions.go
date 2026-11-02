@@ -49,6 +49,15 @@ var decisionEchoHeaders = []string{
 	"x-vendor-test",
 }
 
+// decisionCredentialHeaders are the caller credentials a gateway must not
+// forward. The echo reports only whether any arrived, never a value.
+var decisionCredentialHeaders = []string{
+	"Authorization",
+	"X-Api-Key",
+	"Proxy-Authorization",
+	"Cookie",
+}
+
 type decisionRequest struct {
 	Model     string          `json:"model"`
 	Questions json.RawMessage `json:"questions"`
@@ -141,7 +150,7 @@ func handleDecisionRoute(w http.ResponseWriter, r *http.Request, systemOne bool)
 		return
 	}
 
-	echo := decisionEcho{"body_length": len(raw)}
+	echo := decisionEcho{"body_length": len(raw), "credentials_received": hasCredentials(r.Header)}
 	for _, name := range decisionEchoHeaders {
 		if value := r.Header.Get(name); value != "" {
 			echo[name] = value
@@ -198,6 +207,15 @@ func parseDecisionRequest(raw []byte) (decisionRequest, error) {
 		return request, errors.New("request body must be a JSON object")
 	}
 	return request, nil
+}
+
+func hasCredentials(header http.Header) bool {
+	for _, name := range decisionCredentialHeaders {
+		if header.Get(name) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // estimateDecisionInputTokens prefers the gateway estimate when the caller

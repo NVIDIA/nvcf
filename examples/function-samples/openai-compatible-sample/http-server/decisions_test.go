@@ -270,6 +270,42 @@ func TestDecisionRoutesExplainWhichPartOfTheBodyIsInvalid(t *testing.T) {
 	}
 }
 
+func TestDecisionRoutesReportWhetherCredentialsReachedTheBackend(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		for name, headers := range map[string]map[string]string{
+			"none":                nil,
+			"authorization":       {"Authorization": "Bearer secret-value"},
+			"x-api-key":           {"X-Api-Key": "secret-value"},
+			"proxy-authorization": {"Proxy-Authorization": "Basic secret-value"},
+			"cookie":              {"Cookie": "session=secret-value"},
+		} {
+			t.Run(path+" "+name, func(t *testing.T) {
+				body := decisionsBody
+				if path == "/v1/systemone" {
+					body = systemOneBody
+				}
+				recorder := postJSONWithHeaders(t, path, body, headers)
+				if recorder.Code != http.StatusOK {
+					t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+				}
+				if strings.Contains(recorder.Body.String(), "secret-value") {
+					t.Fatalf("response leaks a credential value: %s", recorder.Body.String())
+				}
+				var response struct {
+					Echo map[string]any `json:"echo"`
+				}
+				if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+					t.Fatal(err)
+				}
+				want := headers != nil
+				if response.Echo["credentials_received"] != want {
+					t.Fatalf("echo.credentials_received = %v, want %v (echo %v)", response.Echo["credentials_received"], want, response.Echo)
+				}
+			})
+		}
+	}
+}
+
 func TestDecisionRoutesMockErrorTriggers(t *testing.T) {
 	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
 		t.Run(path+" 429", func(t *testing.T) {
