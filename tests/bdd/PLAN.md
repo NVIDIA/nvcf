@@ -204,6 +204,7 @@ These steps use the in-process HTTP client (`harness.HTTPClient`), not the comma
 | `Then the HTTP response JSON field {string} should equal {string}` | Dotted path (object keys, array indexes) compared as text. A path continues into a string that holds a JSON object or array, such as a request an echo sample returns as its reply. |
 | `Then the HTTP response JSON field {string} should be absent` | Passes only when the last key is missing from an object that exists at the parent path, so a misspelled parent fails. |
 | `Then the HTTP response JSON field {string} should be at least {int}` | Dotted path parsed as a number and compared to a minimum. |
+| `Then the HTTP response JSON field {string} should be less than {int}` | Dotted path parsed as a number that must be below the bound. Used to show a text-only request meters fewer tokens than one image. |
 | `When I export the HTTP response JSON field {string} to environment variable {string}` | Exports the field under the named env var. Fails when the field is missing or empty. Snapshotted by the env Ledger; restored at suite teardown. The value is never echoed. |
 
 ### Scenario teardown (Given / When)
