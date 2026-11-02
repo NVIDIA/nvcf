@@ -14,6 +14,9 @@
 # limitations under the License.
 
 {{- $cfg := .Values.llmApiGateway.config }}
+{{- if lt ($cfg.decisionImageTokens | int64) 0 }}
+{{- fail "llmApiGateway.config.decisionImageTokens must be 0 or more" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

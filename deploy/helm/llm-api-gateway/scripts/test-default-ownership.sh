@@ -74,4 +74,24 @@ fi
 grep -Fq 'llmApiGateway.metrics.enabled must be true' "$invalid_error" ||
   fail "invalid ServiceMonitor configuration returned the wrong error"
 
+if helm template llm-api-gateway "$chart_dir" \
+  --namespace nvcf \
+  --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
+  --set llmApiGateway.config.decisionImageTokens=-5 \
+  >/dev/null 2>"$invalid_error"; then
+  fail "a negative decisionImageTokens should fail to render"
+fi
+grep -Fq 'llmApiGateway.config.decisionImageTokens must be 0 or more' "$invalid_error" ||
+  fail "negative decisionImageTokens returned the wrong error"
+
+if ! helm template llm-api-gateway "$chart_dir" \
+  --namespace nvcf \
+  --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
+  --set llmApiGateway.config.decisionImageTokens=0 \
+  >"$override_manifest"; then
+  fail "decisionImageTokens=0 must render"
+fi
+test "$(read_config "$override_manifest" NVCF_DECISION_IMAGE_TOKENS)" = 0 ||
+  fail "decisionImageTokens=0 must render as NVCF_DECISION_IMAGE_TOKENS 0"
+
 echo "llm-api-gateway-default-ownership: all checks passed"
