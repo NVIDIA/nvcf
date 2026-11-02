@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -170,7 +171,7 @@ func (f *decisionRoutesFake) Do(ctx context.Context, method, rawURL string, head
 		return f.inner.Do(ctx, method, rawURL, headers, body)
 	}
 	if headers["Authorization"] != "Bearer wiring-function-api-key" {
-		return harness.HTTPResponse{Status: 401}, nil
+		return f.gatewayError(u, http.StatusUnauthorized, "invalid_api_key", "authentication_error", "authentication failed", "401-not-native"), nil
 	}
 	known := f.routesByModel(u.Host)
 	if strings.HasPrefix(u.Path, "/v1/models") {
@@ -189,12 +190,62 @@ func (f *decisionRoutesFake) Do(ctx context.Context, method, rawURL string, head
 	if !f.serves(u, payload.Model, known) {
 		return f.notFound(u, payload.Model), nil
 	}
+	if u.Host == decisionLLMHost && f.rateLimited(modelKey(u.Host, payload.Model)) && !f.mark("rate-limit-not-enforced") {
+		return f.gatewayError(u, http.StatusTooManyRequests, "rate_limit_exceeded", "rate_limit_error", "token rate limit exceeded", "429-not-native"), nil
+	}
 	if strings.Contains(body, "data:image/") && f.mark("image-body-rejected") {
 		return harness.HTTPResponse{Status: 413, Body: mustJSON(map[string]any{
 			"error": map[string]any{"message": "request too large", "type": "invalid_request_error", "code": "request_too_large"},
 		})}, nil
 	}
-	return f.backend(u, headers, payload.Questions), nil
+	return f.backend(u, headers, payload.Questions, body), nil
+}
+
+// gatewayError is an error the gateway generates, in the native shape of the
+// route. The broken mode replaces it with a body in neither shape.
+func (f *decisionRoutesFake) gatewayError(u *url.URL, status int, code, errorType, message, broken string) harness.HTTPResponse {
+	if f.mark(broken) {
+		return harness.HTTPResponse{Status: status, Body: mustJSON(map[string]any{"message": message})}
+	}
+	if u.Path == systemOneRoute {
+		return harness.HTTPResponse{Status: status, Body: mustJSON(map[string]any{
+			"error":      map[string]any{"code": code, "message": message, "request_id": "req-gw"},
+			"request_id": "req-gw",
+		})}
+	}
+	return harness.HTTPResponse{Status: status, Body: mustJSON(map[string]any{
+		"error": map[string]any{"message": message, "type": errorType, "param": nil, "code": code},
+	})}
+}
+
+var tokenRateLimitOption = regexp.MustCompile(`--llm-model '?name=([^,' ]+),[^' ]*tokenRateLimit=([^,' ]+)`)
+
+// rateLimited reports whether a created function declares a token rate limit
+// for the LLM gateway model. The scenario's limit is below any request.
+func (f *decisionRoutesFake) rateLimited(model string) bool {
+	if f.runner == nil {
+		return false
+	}
+	for _, command := range f.runner.runs {
+		for _, match := range tokenRateLimitOption.FindAllStringSubmatch(command, -1) {
+			if match[1] == model && strings.Contains(command, " function create ") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// inputTokenEstimate mirrors the gateway estimate closely enough for the
+// scenarios: about four bytes per text token, and a flat 1024 per inline
+// image whose base64 data is not counted.
+func (f *decisionRoutesFake) inputTokenEstimate(body string) int {
+	images := strings.Count(body, `"type":"input_image"`)
+	if images > 0 && f.mark("image-metered-as-one") {
+		return 1
+	}
+	text := regexp.MustCompile(`data:image/[^;]+;base64,[A-Za-z0-9+/=]*`).ReplaceAllString(body, "")
+	return max(1, len(text)/4+images*1024)
 }
 
 // serves reports whether the model is enabled for the called route. The
@@ -234,7 +285,7 @@ func (f *decisionRoutesFake) notFound(u *url.URL, model string) harness.HTTPResp
 
 // backend answers the way the sample does: canned answers, a header echo and
 // the mock_error controls. The gateway under test passes all of it through.
-func (f *decisionRoutesFake) backend(u *url.URL, headers map[string]string, questions json.RawMessage) harness.HTTPResponse {
+func (f *decisionRoutesFake) backend(u *url.URL, headers map[string]string, questions json.RawMessage, body string) harness.HTTPResponse {
 	systemOne := u.Path == systemOneRoute
 	var response harness.HTTPResponse
 	switch u.Query().Get("mock_error") {
@@ -243,7 +294,7 @@ func (f *decisionRoutesFake) backend(u *url.URL, headers map[string]string, ques
 	case "400":
 		response = f.mockError(systemOne, http.StatusBadRequest, "mock validation error", "invalid_request_error")
 	default:
-		return f.success(u, headers, questions)
+		return f.success(u, headers, questions, body)
 	}
 	if u.Host == decisionVanityHost && response.Status == http.StatusTooManyRequests && f.mark("vanity-retry-after-lost") {
 		response.Header.Del("Retry-After")
@@ -254,12 +305,12 @@ func (f *decisionRoutesFake) backend(u *url.URL, headers map[string]string, ques
 	return response
 }
 
-func (f *decisionRoutesFake) success(u *url.URL, headers map[string]string, questions json.RawMessage) harness.HTTPResponse {
+func (f *decisionRoutesFake) success(u *url.URL, headers map[string]string, questions json.RawMessage, body string) harness.HTTPResponse {
 	systemOne := u.Path == systemOneRoute
 	// The gateway strips caller credentials and sets X-Input-Tokens.
 	echo := map[string]any{"credentials_received": f.mark("credentials-forwarded")}
 	if !f.mark("input-tokens-dropped") {
-		echo["x-input-tokens"] = "12"
+		echo["x-input-tokens"] = strconv.Itoa(f.inputTokenEstimate(body))
 	}
 	for _, name := range []string{"typesafe-danger-zone-images", "x-vendor-test"} {
 		for header, value := range headers {
@@ -435,6 +486,7 @@ func TestDecisionRouteScenariosRejectBrokenGateways(t *testing.T) {
 		"error-body-rewritten", "vanity-section-leak", "models-without-endpoints",
 		"input-tokens-dropped", "credentials-forwarded", "image-body-rejected",
 		"vanity-retry-after-lost", "vanity-error-rewritten",
+		"401-not-native", "429-not-native", "rate-limit-not-enforced", "image-metered-as-one",
 	}
 	for _, broken := range brokenModes {
 		t.Run(broken, func(t *testing.T) {
