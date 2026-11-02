@@ -183,7 +183,7 @@ functionAutoscaler:
 # global.sidecars (or global.image) at the selected request-router image version.
 api:
   image:
-    tag: "1.18.1"
+    tag: "1.18.2"
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
   # global.workerEndpoints.essServiceURL. In split-plane deployments that value
@@ -206,7 +206,7 @@ api:
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
 nvctApi:
   image:
-    tag: "1.66.1"
+    tag: "1.66.2"
   essBaseURL: ""
   remoteConfig:
     configData:
@@ -385,8 +385,11 @@ certManager:
 openbao:
   enabled: true
   migrations:
+    # Empty uses the image's client. Select "1.36" for Kubernetes 1.35.
+    # LLS, LLM PKI and UI hooks inherit this unless individually overridden.
+    kubectlMinor: ""
     image:
-      tag: "0.19.9"
+      tag: "0.19.10"
     issuerDiscovery:
       enabled: false
   injector:
@@ -430,7 +433,7 @@ addons:
     enabled: false
     hmacRotation:
       image:
-        tag: "0.19.9"
+        tag: "0.19.10"
 
   # LLM addon: gateway + request router (stargate) for LLM function invocation
   llm:
@@ -555,8 +558,8 @@ addons:
       # certPath: /etc/stargate/tls/tls.crt
       # keyPath: /etc/stargate/tls/tls.key
       # Image defaults to ${global.image.registry}/${global.image.repository}/nvcf-openbao-migrations.
-      # tag falls back to openbao.migrations.image.tag and then 0.19.5 if
-      # neither location is set.
+      # tag falls back to openbao.migrations.image.tag and then the compatible
+      # stack default if neither location is set.
       # image:
       #   registry: ""
       #   repository: ""
@@ -609,7 +612,7 @@ addons:
     enabled: false
     openbaoMigrations:
       image:
-        tag: "0.19.9"
+        tag: "0.19.10"
 
 stateMetrics:
   enabled: true
@@ -635,14 +638,14 @@ icms:
 
 sis:
   image:
-    tag: "0.7.6"
+    tag: "0.7.7"
 
 # PDB knobs for control-plane services. Disabled by default.
 # Set enabled: true for any service running more than one replica.
 
 apikeys:
   image:
-    tag: "1.9.3"
+    tag: "1.9.4"
   # Operator-set api-keys service env, deep-merged over the chart defaults
   # (AWS_REGION / SPRING_PROFILES_ACTIVE). Set NVCF_NCA_ID to the NCA the
   # api-keys service authorizes keys against. Leave unset to keep the chart
@@ -656,14 +659,14 @@ apikeys:
 
 ess:
   image:
-    tag: "0.5.4"
+    tag: "0.5.7"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
 
 notary:
   image:
-    tag: "1.14.5"
+    tag: "1.14.8"
 
 invocation:
   image:

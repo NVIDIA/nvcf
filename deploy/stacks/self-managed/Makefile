@@ -17,6 +17,7 @@ test:
 	@tests/nats-image-overrides.sh
 	@tests/cert-manager-image-overrides.sh
 	@tests/llm-pki-openbao-migration.sh
+	@tests/migration-client-wiring.sh
 	@tests/openbao-injector-image-overrides.sh
 	@tests/api-keys-startup-probe.sh
 	@tests/upgrade-receipt-wiring.sh

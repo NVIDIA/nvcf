@@ -966,6 +966,7 @@ sis:
   lls:
     enabled: {{ dig "addons" "lls" "enabled" false .Values }}
     hmacRotation:
+      kubectlMinor: {{ dig "addons" "lls" "hmacRotation" "kubectlMinor" "" .Values | toString | default (dig "openbao" "migrations" "kubectlMinor" "" .Values) | quote }}
       image:
         registry: {{ .Values.global.image.registry }}
         repository: {{ .Values.global.image.repository }}/nvcf-openbao-migrations
@@ -1432,9 +1433,10 @@ llmRequestRouter:
   {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
        PKI tag, then the OpenBao migrations tag, and finally the compatible
        stack default so a normal environment need not duplicate chart values. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.5" }}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.10" }}
   pki:
     enabled: true
+    kubectlMinor: {{ dig "addons" "llm" "pki" "kubectlMinor" "" .Values | toString | default (dig "openbao" "migrations" "kubectlMinor" "" .Values) | quote }}
     namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
     allowedDomains: {{ $allowedDomains | quote }}
     image:
@@ -1552,8 +1554,8 @@ vanityGateway:
 {{- $apiKeysBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "apiKeys" "backend" dict .Values)) (dict "name" "api-keys" "namespace" "api-keys" "port" 8080) }}
 {{/* openbao-migrations image tag: 0.19.5 is the floor. An operator may pin a
      newer tag via addons.nvcfUi.openbaoMigrations.image.tag, but anything older
-     than the floor is ignored (the migrations job needs >= 0.19.5). */}}
-{{- $nvcfUiOpenbaoMigrationsTag := "0.19.5" }}
+     than the floor falls back to the stack default. */}}
+{{- $nvcfUiOpenbaoMigrationsTag := "0.19.10" }}
 {{- $nvcfUiMigrationsTagOverride := dig "addons" "nvcfUi" "openbaoMigrations" "image" "tag" "" .Values }}
 {{- if and $nvcfUiMigrationsTagOverride (not (regexMatch "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" $nvcfUiMigrationsTagOverride)) }}
 {{- fail "addons.nvcfUi.openbaoMigrations.image.tag must be a valid OCI image tag" }}
@@ -1574,6 +1576,7 @@ nvcfUi:
     nvctUrl: {{ printf "%s.%s.svc.cluster.local:%v" $nvctApiBackend.name $nvctApiBackend.namespace $nvctApiBackend.port | quote }}
     sisUrl: {{ printf "%s.%s.svc.cluster.local:%v" $sisBackend.name $sisBackend.namespace $sisBackend.port | quote }}
   openbaoMigrations:
+    kubectlMinor: {{ dig "addons" "nvcfUi" "openbaoMigrations" "kubectlMinor" "" .Values | toString | default (dig "openbao" "migrations" "kubectlMinor" "" .Values) | quote }}
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao-migrations
