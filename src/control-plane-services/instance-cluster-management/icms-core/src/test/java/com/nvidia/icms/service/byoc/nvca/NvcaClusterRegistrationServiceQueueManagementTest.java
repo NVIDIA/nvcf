@@ -155,7 +155,7 @@ class NvcaClusterRegistrationServiceQueueManagementTest {
         doNothing().when(queueManager).deleteQueue(eq(expectedH100Url));
         
         // Mock repository update
-        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any());
+        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any(), any());
         
         NvcaRegistrationRequest request = NvcaRegistrationRequest.builder()
             .status(ClusterStatusEnum.READY)
@@ -206,7 +206,7 @@ class NvcaClusterRegistrationServiceQueueManagementTest {
                 .build();
         
         // Mock repository update
-        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any());
+        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any(), any());
         
         // Act
         service.nvcaClusterRegistration(request, DUMMY_CLUSTER_ID, new HashMap<>());
@@ -263,7 +263,7 @@ class NvcaClusterRegistrationServiceQueueManagementTest {
             .thenReturn(taskH100Url);
         
         // Mock repository update
-        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any());
+        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any(), any());
         
         NvcaRegistrationRequest request = NvcaRegistrationRequest.builder()
             .status(ClusterStatusEnum.READY)
@@ -290,7 +290,7 @@ class NvcaClusterRegistrationServiceQueueManagementTest {
         
         // 3. A100 reference should be removed from cluster1's maps
         ArgumentCaptor<ClusterEntity> captor = ArgumentCaptor.forClass(ClusterEntity.class);
-        verify(nvcaClusterRepository).updateClusterRegistration(captor.capture());
+        verify(nvcaClusterRepository).updateClusterRegistration(captor.capture(), any());
         
         ClusterEntity updatedCluster = captor.getValue();
         assertFalse(updatedCluster.getCreationQueues().containsKey("A100"));
@@ -348,7 +348,7 @@ class NvcaClusterRegistrationServiceQueueManagementTest {
         verify(queueManager, times(1)).deleteQueue(eq(expectedH100Url));
         verify(queueManager, never()).deleteQueue(eq(expectedA100Url));
         // DB should not be updated due to exception
-        verify(nvcaClusterRepository, never()).updateClusterRegistration(any());
+        verify(nvcaClusterRepository, never()).updateClusterRegistration(any(), any());
     }
 
 
@@ -377,7 +377,7 @@ class NvcaClusterRegistrationServiceQueueManagementTest {
             .thenReturn(List.of()); // Empty list since no other clusters in group
         
         // Mock repository update
-        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any());
+        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any(), any());
         
         NvcaRegistrationRequest request = NvcaRegistrationRequest.builder()
             .status(ClusterStatusEnum.READY)
@@ -424,7 +424,7 @@ class NvcaClusterRegistrationServiceQueueManagementTest {
             .thenReturn(List.of(clusterByGroupId));
         
         // Mock repository update
-        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any());
+        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any(), any());
         
         NvcaRegistrationRequest request = NvcaRegistrationRequest.builder()
             .status(ClusterStatusEnum.READY)

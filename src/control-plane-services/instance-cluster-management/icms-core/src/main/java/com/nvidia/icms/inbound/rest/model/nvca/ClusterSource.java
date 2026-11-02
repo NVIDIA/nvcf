@@ -17,6 +17,7 @@
 package com.nvidia.icms.inbound.rest.model.nvca;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.apache.commons.lang3.StringUtils;
 
 /**
  * This will list all the supported cluster source
@@ -35,6 +36,11 @@ public enum ClusterSource {
 
     ClusterSource(String clusterSource) {
         this.clusterSourceName = clusterSource;
+    }
+
+    public static boolean isNgcManaged(String clusterSource) {
+        return StringUtils.isBlank(clusterSource)
+                || NGC_MANAGED.toString().equalsIgnoreCase(clusterSource);
     }
 
     @Override

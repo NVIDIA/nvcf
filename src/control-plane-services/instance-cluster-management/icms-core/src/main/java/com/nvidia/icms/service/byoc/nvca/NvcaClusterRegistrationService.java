@@ -313,8 +313,10 @@ public class NvcaClusterRegistrationService {
         clusterInfo.setClusterStatus(nvcaRegistrationRequest.getStatus());
         clusterInfo.setK8sVersion(nvcaRegistrationRequest.getK8sVersion());
         clusterInfo.setNvcaLastConnected(instanceServiceHelper.getCurrentTimestamp());
-        // If NVCA version is provided then update it in clusterInfo
-        if (StringUtils.isNotBlank(nvcaRegistrationRequest.getNvcaVersion())) {
+        // NGC-managed versions are deployment targets; other sources report their version.
+        if (StringUtils.isNotBlank(nvcaRegistrationRequest.getNvcaVersion())
+                && (!ClusterSource.isNgcManaged(clusterInfo.getClusterSource())
+                    || StringUtils.isBlank(clusterInfo.getNvcaVersion()))) {
             clusterInfo.setNvcaVersion(nvcaRegistrationRequest.getNvcaVersion());
         }
         // If clusterSource is not set then set it to ngc-managed in registration
@@ -913,10 +915,10 @@ public class NvcaClusterRegistrationService {
 
     private void updateEntityInDb(
             @NotNull ClusterEntity clusterInfo,
-            @Nullable ClusterEntity entityBefore,
+            @NotNull ClusterEntity entityBefore,
             @NotNull Map<String, Object> auditProps) {
         // Updating response in DB
-        nvcaClusterRepository.updateClusterRegistration(clusterInfo);
+        nvcaClusterRepository.updateClusterRegistration(clusterInfo, entityBefore.getNvcaVersion());
 
         // Sending telemetry event
         sendTelemetryEvent(clusterInfo);
