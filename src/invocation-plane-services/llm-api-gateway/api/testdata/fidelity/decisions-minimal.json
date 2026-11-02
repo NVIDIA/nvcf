@@ -2,7 +2,7 @@
   "description": "Minimal decisions request only rewrites model; question members, unknown members and response extensions survive, and the input token estimate counts every string leaf.",
   "path": "/v1/decisions",
   "request": {
-    "model": "fn-alpha/company/model",
+    "model": "fn-alpha/company/decision-model",
     "input": "Is the sky blue?",
     "questions": [
       {
@@ -17,7 +17,7 @@
     ]
   },
   "upstream_request": {
-    "model": "company/model",
+    "model": "company/decision-model",
     "input": "Is the sky blue?",
     "questions": [
       {
@@ -31,7 +31,7 @@
       }
     ]
   },
-  "upstream_input_tokens": "43",
+  "upstream_input_tokens": "45",
   "upstream_affinity_key": "",
   "upstream_response": {
     "json": {
@@ -43,7 +43,7 @@
           "vendor_result": null
         }
       ],
-      "model": "company/model",
+      "model": "company/decision-model",
       "usage": {
         "input_tokens": 43,
         "vendor_usage": {
@@ -62,7 +62,7 @@
           "vendor_result": null
         }
       ],
-      "model": "company/model",
+      "model": "company/decision-model",
       "usage": {
         "input_tokens": 43,
         "vendor_usage": {

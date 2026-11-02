@@ -2,7 +2,7 @@
   "description": "Minimal System One request only rewrites model; state, questions and response extensions survive, and the response may omit usage.",
   "path": "/v1/systemone",
   "request": {
-    "model": "fn-alpha/company/model",
+    "model": "fn-alpha/company/decision-model",
     "state": "The user opened the settings page.",
     "questions": {
       "q1": {
@@ -12,7 +12,7 @@
     }
   },
   "upstream_request": {
-    "model": "company/model",
+    "model": "company/decision-model",
     "state": "The user opened the settings page.",
     "questions": {
       "q1": {
@@ -21,7 +21,7 @@
       }
     }
   },
-  "upstream_input_tokens": "40",
+  "upstream_input_tokens": "42",
   "upstream_affinity_key": "",
   "upstream_response": {
     "json": {

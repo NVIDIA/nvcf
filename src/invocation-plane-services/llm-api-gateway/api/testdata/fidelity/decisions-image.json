@@ -2,7 +2,7 @@
   "description": "A decisions request with an input_image data URL forwards the image unchanged; the estimate counts the image as the flat default of 1024 tokens whatever the base64 length, and the input_image type string as text.",
   "path": "/v1/decisions",
   "request": {
-    "model": "fn-alpha/company/model",
+    "model": "fn-alpha/company/decision-model",
     "input": [
       {
         "type": "input_text",
@@ -25,7 +25,7 @@
     ]
   },
   "upstream_request": {
-    "model": "company/model",
+    "model": "company/decision-model",
     "input": [
       {
         "type": "input_text",
@@ -47,7 +47,7 @@
       }
     ]
   },
-  "upstream_input_tokens": "1085",
+  "upstream_input_tokens": "1087",
   "upstream_affinity_key": "",
   "upstream_response": {
     "json": {
@@ -61,7 +61,7 @@
           }
         }
       ],
-      "model": "company/model"
+      "model": "company/decision-model"
     }
   },
   "response": {
@@ -76,7 +76,7 @@
           }
         }
       ],
-      "model": "company/model"
+      "model": "company/decision-model"
     }
   }
 }

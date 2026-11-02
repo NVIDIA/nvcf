@@ -2,7 +2,7 @@
   "description": "A System One request with images and assets in both forms and an unknown member forwards them unchanged; the estimate counts each image slot as the flat default of 1024 tokens and never counts the base64.",
   "path": "/v1/systemone",
   "request": {
-    "model": "fn-alpha/company/model",
+    "model": "fn-alpha/company/decision-model",
     "state": "Compare the images.",
     "images": [
       "iVBORw0KGgo=",
@@ -30,7 +30,7 @@
     }
   },
   "upstream_request": {
-    "model": "company/model",
+    "model": "company/decision-model",
     "state": "Compare the images.",
     "images": [
       "iVBORw0KGgo=",
@@ -57,7 +57,7 @@
       "revision": 9007199254740993
     }
   },
-  "upstream_input_tokens": "4138",
+  "upstream_input_tokens": "4140",
   "upstream_affinity_key": "",
   "upstream_response": {
     "json": {
