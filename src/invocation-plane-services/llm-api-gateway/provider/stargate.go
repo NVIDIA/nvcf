@@ -406,6 +406,15 @@ func (p *StargateProvider) Proxy(
 	if request.Header != nil {
 		outbound.Header = request.Header.Clone()
 	}
+	decisionRoute := isDecisionPath(request.Path)
+	if decisionRoute {
+		// Decision routes clone every client header. Stargate control headers
+		// are gateway-owned there: a client value would override the estimate
+		// or make Stargate answer with a bare 400.
+		for _, name := range stargateControlHeaders {
+			outbound.Header.Del(name)
+		}
+	}
 	// Send a fixed-length body, not chunked, so Stargate can reject a body over
 	// its size limit before it reads the body.
 	if request.ContentLength > 0 {
@@ -456,11 +465,17 @@ func (p *StargateProvider) Proxy(
 		}
 	}
 
-	if request.InputTokens > 0 {
-		outbound.Header.Set(headerInputTokens, strconv.Itoa(request.InputTokens))
-	}
-	if request.TokenEstimate > 0 {
-		outbound.Header.Set(headerTokenEstimate, strconv.Itoa(request.TokenEstimate))
+	if decisionRoute {
+		// Stargate requires X-Input-Tokens, so send at least 1.
+		outbound.Header.Set(headerInputTokens, strconv.Itoa(max(1, request.InputTokens)))
+		outbound.Header.Set(headerTokenEstimate, strconv.Itoa(max(1, request.TokenEstimate)))
+	} else {
+		if request.InputTokens > 0 {
+			outbound.Header.Set(headerInputTokens, strconv.Itoa(request.InputTokens))
+		}
+		if request.TokenEstimate > 0 {
+			outbound.Header.Set(headerTokenEstimate, strconv.Itoa(request.TokenEstimate))
+		}
 	}
 
 	start := time.Now()
@@ -483,15 +498,22 @@ func (p *StargateProvider) Proxy(
 // callerCredentialHeaders carry the caller's NVCF credentials or session.
 var callerCredentialHeaders = []string{headerAuthorization, "X-Api-Key", "Proxy-Authorization", "Cookie"}
 
+// stargateControlHeaders are request headers Stargate reads to admit and
+// route a request.
+var stargateControlHeaders = []string{
+	"X-Max-Wait-Ms", "X-Request-Slo-Ms", headerCacheAffinityKey, headerInputTokens, headerTokenEstimate,
+}
+
+// isDecisionPath reports whether path is a decision route, which forwards
+// every client header and body member.
+func isDecisionPath(path string) bool {
+	return path == "/v1/decisions" || path == "/v1/systemone"
+}
+
 // stripsCallerCredentials reports whether path is a route whose model server
 // must never see the caller's credentials.
 func stripsCallerCredentials(path string) bool {
-	switch path {
-	case "/v1/messages", "/v1/decisions", "/v1/systemone":
-		return true
-	default:
-		return false
-	}
+	return path == "/v1/messages" || isDecisionPath(path)
 }
 
 type proxyResponseBody struct {

@@ -129,6 +129,12 @@ func TestDecisionRoutesForwardBodyAndHeaders(t *testing.T) {
 			req.Header.Set("X-Api-Key", "caller-key")
 			req.Header.Set("Proxy-Authorization", "Basic caller")
 			req.Header.Set("Cookie", "session=caller")
+			// Stargate control headers are gateway-owned on these routes.
+			req.Header.Set("X-Input-Tokens", "999999")
+			req.Header.Set("X-Token-Estimate", "999999")
+			req.Header.Set("X-Max-Wait-Ms", "abc")
+			req.Header.Set("X-Request-Slo-Ms", "abc")
+			req.Header.Set("X-Cache-Affinity-Key", "client-key")
 			rec := httptest.NewRecorder()
 			e.ServeHTTP(rec, req)
 
@@ -155,6 +161,9 @@ func TestDecisionRoutesForwardBodyAndHeaders(t *testing.T) {
 			require.GreaterOrEqual(t, wantTokens, 2000, "two images must count")
 			require.Equal(t, strconv.Itoa(wantTokens), upstreamRequest.InputTokens)
 			require.Equal(t, upstreamRequest.InputTokens, upstreamRequest.TokenEstimate)
+			for _, name := range []string{"X-Max-Wait-Ms", "X-Request-Slo-Ms", "X-Cache-Affinity-Key"} {
+				require.Empty(t, upstreamRequest.Header.Values(name), name)
+			}
 		})
 	}
 }
