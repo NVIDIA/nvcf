@@ -98,9 +98,12 @@ jobs:
       - name: Fetch arm64 rdma-core
         run: src/compute-plane-services/nvstor/scripts/fetch-rdma-core.sh arm64 "$RUNNER_TEMP/rdma-core-arm64"
 
-      - name: bazel build (linux_arm64)
+      # --config=release (-c opt): the repository default, fastbuild, compiles
+      # Rust without optimisation, and this is the binary that is shipped.
+      - name: bazel build (linux_arm64, release)
         run: |
           bazel build \
+            --config=release \
             --platforms=//platforms:linux_arm64 \
             --action_env=RDMA_CORE_PREFIX="$RUNNER_TEMP/rdma-core-arm64/usr" \
             //src/compute-plane-services/nvstor/crates/nvstor-peer:nvstor-peer

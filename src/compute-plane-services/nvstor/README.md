@@ -216,10 +216,16 @@ the build script. An arm64 binary cross-builds on an x86_64 host this way:
 
 ```bash
 src/compute-plane-services/nvstor/scripts/fetch-rdma-core.sh arm64 /tmp/rdma-arm64
-bazel build --platforms=//platforms:linux_arm64 \
+bazel build --config=release --platforms=//platforms:linux_arm64 \
   --action_env=RDMA_CORE_PREFIX=/tmp/rdma-arm64/usr \
   //src/compute-plane-services/nvstor/crates/nvstor-peer:nvstor-peer
 ```
+
+Build any binary that will be run or measured with `--config=release`.
+nvcf's default compilation mode, `fastbuild`, compiles Rust without
+optimisation; such a binary is correct but many times slower. The
+`bazel build` and `bazel test` above use the default, which is fine for
+checking that the code builds and its tests pass.
 
 `nvstor-peer --version` reports the nvcf commit the binary was built from.
 

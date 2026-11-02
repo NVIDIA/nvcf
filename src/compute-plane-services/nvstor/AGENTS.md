@@ -76,5 +76,7 @@ crate_universe (`nvstor_crates` in the root `MODULE.bazel`) resolves the
 whole Cargo workspace and records a hash of every member's `Cargo.toml` and
 of `Cargo.lock` in the root `MODULE.bazel.lock`: a change to any of them,
 in any crate, needs the lock updated (a `bazel build` rewrites it) and
-committed with the change. CI runs both builds: the `nvstor` row of
+committed with the change. A binary that will be run or measured is built
+with `--config=release`: the default, `fastbuild`, compiles Rust without
+optimisation. CI runs both builds: the `nvstor` row of
 `.github/workflows/bazel.yml` and `.github/workflows/nvstor.yml`.
