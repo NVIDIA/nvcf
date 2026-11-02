@@ -822,3 +822,59 @@ func TestNativeRoutesSetUpstreamKindSpanAttribute(t *testing.T) {
 		}
 	}
 }
+
+// A shadow copy of a decision request keeps every byte of the body except the
+// model value, on both the direct and the LLM Gateway path.
+func TestDecisionRouteShadowsReplaceOnlyTheModelValue(t *testing.T) {
+	const shadowModel = "acme/decision-shadow"
+	const shadowFunctionID = "decision-shadow-func"
+	body := "{ \"input\" : \"a<b && c>d\",\n \"z\":1,\"model\":\t\"" + decisionModel + "\" , \"input\":\"second\" }"
+	for _, llm := range []bool{false, true} {
+		for _, path := range []string{decisionsPath, systemOnePath} {
+			name := path
+			wantModel := `"` + shadowModel + `"`
+			if llm {
+				name += " llm"
+				wantModel = `"` + shadowFunctionID + "/" + shadowModel + `"`
+			}
+			t.Run(name, func(t *testing.T) {
+				requests := make(chan capturedRequest, 2)
+				backend := captureServer(t, requests, nil)
+				percentage := 100
+				primary := config.ModelFunctionDetails{
+					ModelName:  decisionModel,
+					FunctionID: decisionFunctionID,
+					Shadows:    []config.ShadowConfig{{ModelName: shadowModel, Percentage: &percentage}},
+				}
+				shadow := config.ModelFunctionDetails{ModelName: shadowModel, FunctionID: shadowFunctionID}
+				if llm {
+					llmDecision(&primary)
+					llmDecision(&shadow)
+				}
+				section := map[string]config.ModelFunctionDetails{"p": primary, "s": shadow}
+				mappings := &config.GatewayConfig{}
+				mappings.OpenAI.Host = openAIHost
+				if path == decisionsPath {
+					mappings.OpenAI.Decisions = section
+				} else {
+					mappings.TypeSafeSystemOne = section
+				}
+				mux := openAIMux(t, mappings, backend.URL, backend.URL)
+
+				rec := postDecision(t, mux, path, body, nil)
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+				want := strings.Replace(body, `"`+decisionModel+`"`, wantModel, 1)
+				var shadowBody string
+				for range 2 {
+					received := awaitRequest(t, requests)
+					if received.headers.Get(shadowHeader) != "" {
+						shadowBody = received.body
+					}
+				}
+				require.NotEmpty(t, shadowBody, "the shadow request must reach the backend")
+				assert.Equal(t, want, shadowBody)
+			})
+		}
+	}
+}
