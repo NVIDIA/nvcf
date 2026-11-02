@@ -981,15 +981,23 @@ async fn send_upstream_request(
             upstream_headers.append(name, value.clone());
         }
     }
-    if path_and_query.split('?').next() == Some("/v1/messages") {
-        let private_headers: Vec<_> = upstream_headers
-            .keys()
-            .filter(|name| !is_messages_backend_header(name))
-            .cloned()
-            .collect();
-        for name in private_headers {
-            upstream_headers.remove(name);
+    match path_and_query.split('?').next() {
+        Some("/v1/messages") => {
+            let private_headers: Vec<_> = upstream_headers
+                .keys()
+                .filter(|name| !is_messages_backend_header(name))
+                .cloned()
+                .collect();
+            for name in private_headers {
+                upstream_headers.remove(name);
+            }
         }
+        Some("/v1/decisions" | "/v1/systemone") => {
+            for name in CALLER_CREDENTIAL_HEADERS {
+                upstream_headers.remove(name);
+            }
+        }
+        _ => {}
     }
     if !health_request {
         if let Some(priority) = priority {
@@ -1046,6 +1054,15 @@ pub(super) enum UpstreamRequestError {
     #[error("upstream http request failed: {0}")]
     Send(#[source] ReqwestError),
 }
+
+// The decision routes forward vendor headers, so they drop only the caller's
+// credentials instead of using an allowlist like Messages.
+const CALLER_CREDENTIAL_HEADERS: [HeaderName; 4] = [
+    reqwest::header::AUTHORIZATION,
+    HeaderName::from_static("x-api-key"),
+    reqwest::header::PROXY_AUTHORIZATION,
+    reqwest::header::COOKIE,
+];
 
 // Routing metadata stays on the tunnel for admission, then stops at the
 // model API boundary. Messages forwards only protocol and trace headers.
@@ -1560,6 +1577,79 @@ mod tests {
                 .unwrap();
         assert_eq!(forwarded.len(), 1);
         assert_eq!(forwarded["x-end-to-end"], "preserved");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn decision_routes_strip_caller_credentials_before_the_backend() {
+        const CREDENTIALS: [&str; 4] = [
+            "authorization",
+            "x-api-key",
+            "proxy-authorization",
+            "cookie",
+        ];
+        let (captured_tx, captured_rx) = flume::unbounded();
+        let capture = move |headers: HeaderMap| {
+            let captured_tx = captured_tx.clone();
+            async move {
+                captured_tx.send(headers).unwrap();
+                "ok"
+            }
+        };
+        let server = TestHttpServer::spawn(
+            Router::new()
+                .route("/v1/decisions", post(capture.clone()))
+                .route("/v1/systemone", post(capture.clone()))
+                .route("/v1/chat/completions", post(capture)),
+        )
+        .await;
+        let app = TunnelServerApp::new(
+            "credential-test".to_string(),
+            server.as_str().to_string(),
+            TunnelForwardingConfig::default(),
+        );
+        let mut headers = HeaderMap::new();
+        for name in CREDENTIALS {
+            headers.insert(name, HeaderValue::from_static("caller-secret"));
+        }
+        headers.insert(
+            "typesafe-danger-zone-images",
+            HeaderValue::from_static("true"),
+        );
+        headers.insert("x-vendor-test", HeaderValue::from_static("v"));
+        for path in [
+            "/v1/decisions",
+            "/v1/systemone",
+            "/v1/decisions?mock_error=429",
+            "/v1/chat/completions",
+        ] {
+            let response = send_upstream_request(
+                &app,
+                None,
+                UpstreamRequestParts {
+                    method: Method::POST,
+                    path_and_query: path,
+                    headers: &headers,
+                    body: Vec::new(),
+                    health_request: false,
+                    priority: None,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.text().await.unwrap(), "ok", "{path}");
+            let forwarded = captured_rx.recv_async().await.unwrap();
+            let decision_route = !path.starts_with("/v1/chat/");
+            for name in CREDENTIALS {
+                assert_eq!(
+                    forwarded.contains_key(name),
+                    !decision_route,
+                    "{path}: {name} forwarding"
+                );
+            }
+            assert_eq!(forwarded["typesafe-danger-zone-images"], "true", "{path}");
+            assert_eq!(forwarded["x-vendor-test"], "v", "{path}");
+        }
         server.shutdown().await;
     }
 
