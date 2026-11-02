@@ -79,4 +79,18 @@ render_case empty-overrides \
   --state-values-set-string addons.nvcfUi.openbaoMigrations.kubectlMinor=
 assert_all_clients empty-overrides 1.36
 
+# Preserve unsupported falsy values so the chart can reject them. Only the
+# empty string inherits the shared selector.
+for invalid in false 0; do
+  render_case "invalid-$invalid" \
+    --state-values-set-string openbao.migrations.kubectlMinor=1.36 \
+    --state-values-set "addons.lls.hmacRotation.kubectlMinor=$invalid" \
+    --state-values-set "addons.llm.pki.kubectlMinor=$invalid" \
+    --state-values-set "addons.nvcfUi.openbaoMigrations.kubectlMinor=$invalid"
+  assert_client "invalid-$invalid" openbao-server .openbao.migrations.kubectlMinor 1.36
+  assert_client "invalid-$invalid" sis .sis.lls.hmacRotation.kubectlMinor "$invalid"
+  assert_client "invalid-$invalid" llm-request-router .llmRequestRouter.pki.kubectlMinor "$invalid"
+  assert_client "invalid-$invalid" nvcf-ui .nvcfUi.openbaoMigrations.kubectlMinor "$invalid"
+done
+
 echo 'migration-client-wiring: all checks passed'
