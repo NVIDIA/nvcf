@@ -503,6 +503,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "nvsnap.agent.labels" . | nindent 4 }}
+    # The Service the agents' ServiceMonitor scrapes through, one target
+    # per agent (agent-servicemonitor.yaml).
+    nvsnap.io/metrics: agent
 spec:
   selector:
     {{- include "nvsnap.agent.selectorLabels" . | nindent 4 }}

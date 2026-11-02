@@ -170,6 +170,7 @@ func RegisterAgent() {
 			GPUProcessesDiscovered,
 			AgentAuthTotal,
 		)
+		prometheus.MustRegister(lifecycleCollectors...)
 		// The agent serves an HTTP API too, so it needs the same RED metrics
 		// the server has. See InstrumentRoute.
 		registerAPIMetrics()

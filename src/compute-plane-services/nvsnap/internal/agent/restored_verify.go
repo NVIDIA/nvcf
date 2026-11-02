@@ -103,7 +103,9 @@ func (c *criuAutoRestorer) considerVerify(ctx context.Context, pod *corev1.Pod, 
 			return
 		}
 		log.WithField("servedFor", restoredServedFor.String()).Info("CRIU restore: the restored pods served; their capture is verified")
+		c.observeVerify(ctx, key, pod, cm.Data, true, "", log)
 	case why != "":
+		c.observeVerify(ctx, key, pod, cm.Data, false, why, log)
 		c.failRestored(ctx, pod, ref, fmt.Errorf("the restored engine never served: %s", why))
 	}
 }

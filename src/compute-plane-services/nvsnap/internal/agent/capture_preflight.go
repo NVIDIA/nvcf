@@ -85,6 +85,26 @@ func blocking(fs []PreflightFinding) []PreflightFinding {
 	return out
 }
 
+// configurationRefusal is why the blocking findings fs refuse every
+// capture of the configuration, not only of this instance; "" when they
+// may not. A socket a checkpoint cannot save (MPTCP) is opened by the
+// program itself, so every pod of the configuration holds one. The other
+// blocks can clear: a pod restarted after an agent upgrade (bundle, a
+// read-only ghost file), RDMA devices released, an operator opting a
+// companion in (liveness).
+func configurationRefusal(fs []PreflightFinding) string {
+	var why []string
+	for _, f := range fs {
+		if f.Severity == preflightBlock && f.Check == "socket" {
+			why = append(why, f.Pod+": "+f.Detail)
+		}
+	}
+	if len(why) == 0 {
+		return ""
+	}
+	return "preflight: " + strings.Join(why, "; ")
+}
+
 // podPreflight is the spec checks of member pod, whose container is
 // dumped; rank marks a GPU rank.
 func (a *Agent) podPreflight(pod *corev1.Pod, container string, rank bool) []PreflightFinding {

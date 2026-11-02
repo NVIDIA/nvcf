@@ -38,6 +38,35 @@ RENDER=$(helm template "$RELEASE" "$CHART" --namespace "$NS") \
   || fail "helm template failed"
 pass "helm template renders"
 
+# The agents' ServiceMonitor selects exactly one Service, the headless
+# nvsnap-agent: a selector matching none scrapes nothing, one matching the
+# node-local Service too scrapes every agent twice.
+SM_RENDER=$(helm template "$RELEASE" "$CHART" --namespace "$NS" \
+  --set agent.metrics.serviceMonitor.enabled=true --set agent.hostNetwork=false) \
+  || fail "helm template with the ServiceMonitor failed"
+echo "$SM_RENDER" | python3 -c '
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+sm = [d for d in docs if d["kind"] == "ServiceMonitor" and d["metadata"]["name"] == "nvsnap-agent"]
+if len(sm) != 1:
+    sys.exit("want one nvsnap-agent ServiceMonitor, got %d" % len(sm))
+sel = sm[0]["spec"]["selector"]["matchLabels"]
+port = sm[0]["spec"]["endpoints"][0]["port"]
+hit = [d["metadata"]["name"] for d in docs if d["kind"] == "Service"
+       and all((d["metadata"].get("labels") or {}).get(k) == v for k, v in sel.items())]
+if hit != ["nvsnap-agent"]:
+    sys.exit("ServiceMonitor selects Services %s, want [nvsnap-agent]" % hit)
+svc = [d for d in docs if d["kind"] == "Service" and d["metadata"]["name"] == "nvsnap-agent"][0]
+if port not in [p.get("name") for p in svc["spec"]["ports"]]:
+    sys.exit("ServiceMonitor port %s is not a port of nvsnap-agent" % port)
+cr = [d for d in docs if d["kind"] == "ClusterRole" and d["metadata"]["name"] == "nvsnap-agent"]
+if not any("events" in r.get("resources", []) and "create" in r.get("verbs", []) for r in cr[0]["rules"]):
+    sys.exit("the nvsnap-agent ClusterRole cannot create events")
+' || fail "agent ServiceMonitor or its events rule is wrong"
+RENDER_DEFAULT_SM=$(grep -c 'kind: ServiceMonitor' <<<"$RENDER" || true)
+[[ "$RENDER_DEFAULT_SM" == 0 ]] || fail "a ServiceMonitor renders by default"
+pass "agent ServiceMonitor selects the nvsnap-agent Service only, off by default; the agent may create events"
+
 # 2. ClusterRole 'nvsnap-server' has the nvsnap.io rule block (nvsnap#54)
 # Split the rendered output on '---\n' (YAML doc separators), then
 # pick the document that's both a ClusterRole AND named nvsnap-server.

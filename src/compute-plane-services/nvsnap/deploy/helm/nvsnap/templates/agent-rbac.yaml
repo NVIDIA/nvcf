@@ -62,6 +62,11 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # events (create, patch): what a pod's restore or start did, on the pod
+  # (internal/agent/lifecycle_metrics.go).
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list"]

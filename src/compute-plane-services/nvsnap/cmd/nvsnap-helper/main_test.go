@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestCommand_FirstOnPath(t *testing.T) {
@@ -156,4 +157,61 @@ func TestPrewarm(t *testing.T) {
 
 func TestSkip(t *testing.T) {
 	skipCmd([]string{"--reason", "nothing to do"}) // must return, not exit
+}
+
+// With --marker the seed waits for the source to be brought to the node:
+// it copies once the marker is there, and past --deadline copies nothing
+// and still leaves a writable cache.
+func TestSeed_Marker(t *testing.T) {
+	src := t.TempDir()
+	_ = os.WriteFile(filepath.Join(src, "k.bin"), []byte("kernel"), 0o600)
+	marker := filepath.Join(t.TempDir(), "ready")
+
+	late := filepath.Join(t.TempDir(), "late")
+	seedCmd([]string{"--from", src, "--to", late, "--marker", marker, "--deadline", "0"})
+	if _, err := os.Stat(filepath.Join(late, "k.bin")); err == nil {
+		t.Error("copied a source that was not ready")
+	}
+	if fi, err := os.Stat(late); err != nil || !fi.IsDir() {
+		t.Error("no cache directory past the deadline")
+	}
+
+	_ = os.WriteFile(marker, nil, 0o644)
+	ready := filepath.Join(t.TempDir(), "ready")
+	seedCmd([]string{"--from", src, "--to", ready, "--marker", marker, "--deadline", "0"})
+	if b, err := os.ReadFile(filepath.Join(ready, "k.bin")); err != nil || string(b) != "kernel" {
+		t.Errorf("ready source not copied: %q %v", b, err)
+	}
+}
+
+func TestAwaitMarker(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ready")
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_ = os.WriteFile(marker, nil, 0o644)
+	}()
+	if !awaitMarker(marker, 5*time.Second, 5*time.Millisecond) {
+		t.Error("the marker written while waiting was missed")
+	}
+	if awaitMarker(filepath.Join(t.TempDir(), "never"), 0, time.Millisecond) {
+		t.Error("a missing marker reported")
+	}
+}
+
+// --links makes the links a capture recorded, under --to only.
+func TestSeed_Links(t *testing.T) {
+	src, dir := t.TempDir(), t.TempDir()
+	_ = os.MkdirAll(filepath.Join(src, "model", "blobs"), 0o755)
+	_ = os.WriteFile(filepath.Join(src, "model", "blobs", "b1"), []byte("weights"), 0o644)
+	man := filepath.Join(dir, "nvsnap-cachedir.json")
+	_ = os.WriteFile(man, []byte(`{"links":{"model/snapshots/w":"../blobs/b1"}}`), 0o644)
+	to := filepath.Join(t.TempDir(), "c")
+	seedCmd([]string{"--from", src, "--to", to, "--links", man})
+	if b, err := os.ReadFile(filepath.Join(to, "model", "snapshots", "w")); err != nil || string(b) != "weights" {
+		t.Errorf("link: %q %v", b, err)
+	}
+	_ = os.WriteFile(man, []byte(`{"links":{"../../out":"/etc"}}`), 0o644)
+	if err := makeLinks(man, to); err == nil {
+		t.Error("a link outside the cachedir was made")
+	}
 }

@@ -700,10 +700,28 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	// Timing: the dump takes them from criu's post-dump hook, the tree
 	// stopped, so they match the dumped memory (dump_snapshot.go). Per-mount
 	// failures are logged and skipped (warn-and-continue, Q6 in design).
+	//
+	// The same hook archives the container's overlay upperdir, its
+	// writable diff layer: everything the source wrote at runtime
+	// (init-injected libraries, runtime caches, IPC dirs, log files,
+	// framework JIT artefacts). CRIU records file-backed VMAs and open
+	// regular fds by path; at restore those paths must exist in the
+	// placeholder pod with matching sizes, but the placeholder is a clean
+	// container that hasn't run the workload. Replaying the diff onto the
+	// placeholder is the generic, workload-agnostic way to satisfy CRIU's
+	// path-based checks; lower-layer files come from the shared image.
+	// Archived with the tree stopped, the diff matches the dumped state,
+	// and the upperdir still belongs to a live container: once CRIU kills
+	// the tree, the runtime replaces the container and may remove its
+	// upperdir mid-archive (a restart of the replacement, the pod's
+	// deletion). A checkpoint without its diff cannot restore, so a failed
+	// archive fails the dump, which CRIU then rolls back.
 	var replayMounts []ReplayMount
+	times := &rankTimes{}
+	takeSnapshot := a.dumpSnapshot(ctx, containerInfo, checkpointDir, sourceUpperdir, sourceMountPoints, &replayMounts, log)
 	snapshot := func(criuSaves map[string]bool) error {
-		replayMounts = a.captureReplayMounts(ctx, containerInfo, checkpointDir, criuSaves, log)
-		return nil
+		defer func(t0 time.Time) { times.add("snapshot", time.Since(t0)) }(time.Now())
+		return takeSnapshot(criuSaves)
 	}
 
 	// Step 4.9: drop external TCP_ESTABLISHED sockets before CRIU dump.
@@ -774,7 +792,9 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		}
 		dopts.PostDumpDir = a.postDumpDir(session, req.Namespace, req.PodName)
 	}
+	dumpStart := time.Now()
 	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, dopts, log)
+	times.add("dump", time.Since(dumpStart))
 	if err != nil {
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")
@@ -801,25 +821,6 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 			log.WithField("held", by.monotonic.Round(time.Millisecond).String()).Info("held container: its dumped clocks continue from when the hold froze it")
 		}
 	}
-
-	// Snapshot the source container's overlay upperdir into the checkpoint
-	// directory. The upperdir is the container's writable diff layer —
-	// everything the source wrote at runtime (init-injected libraries,
-	// runtime caches, IPC dirs, log files, framework JIT artefacts).
-	// CRIU records file-backed VMAs and open regular fds by path; at
-	// restore those paths must exist in the placeholder pod with matching
-	// sizes, but the placeholder is a clean container that hasn't run the
-	// workload. Mirroring the upperdir into the checkpoint and replaying
-	// it onto the placeholder's upperdir at restore time is the generic,
-	// workload-agnostic way to satisfy CRIU's path-based stat checks.
-	// Lower-layer files come from the shared container image and exist on
-	// the placeholder by construction.
-	//
-	// Use the upperdir we resolved BEFORE the dump — by this point the
-	// source PID is gone and /proc/<pid>/mountinfo no longer exists, but
-	// the directory itself persists on the host until the runtime cleans
-	// up the container. The on-disk path is what we need.
-	a.mirrorRootfsDiff(ctx, checkpointDir, sourceUpperdir, sourceMountPoints, log)
 
 	// Step 6: Unlock GPU (if leave-running, restore first)
 	// Step 7: Parse dump.log to extract skipped resources.
@@ -958,6 +959,11 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 
 	duration := time.Since(startTime).Seconds()
 	log.WithField("duration", fmt.Sprintf("%.2fs", duration)).Info("Checkpoint completed")
+	if !req.Companion {
+		// A rank's capture, for history; a companion is not a GPU workload.
+		times.add("rank", time.Since(startTime))
+		observeRankCapture(catalog.GPUType, max(req.GPUShareGroupSize, 1), times, checkpointDir, checkpointSize)
+	}
 
 	result := &CheckpointResult{
 		CheckpointID:   checkpointID,
@@ -1435,23 +1441,37 @@ func (a *Agent) captureReplayMounts(ctx context.Context, containerInfo *containe
 	return replayMounts
 }
 
-// mirrorRootfsDiff archives the source container's overlay upperdir into
-// checkpointDir/rootfs-diff.tar (see rootfsDiffArchive).
-func (a *Agent) mirrorRootfsDiff(ctx context.Context, checkpointDir, sourceUpperdir string, sourceMountPoints []string, log *logrus.Entry) {
-	if sourceUpperdir != "" {
-		_, mirrorSpan := tracing.Tracer().Start(ctx, "checkpoint.mirror_rootfs_diff")
-		diffDst := filepath.Join(checkpointDir, rootfsDiffArchive)
-		// nvsnap's own staging in the container (the criu bundle, the
-		// images directory) is not the workload's state: leave it out, or
-		// a restore replays it over what the agent stages for itself.
-		diffExcludes := append(append([]string{}, sourceMountPoints...), v2BinDirInContainer, v2ImagesDirInContainer)
-		if mErr := archiveOverlayDir(sourceUpperdir, diffDst, diffExcludes, rootfsDiffExcludeGlobs(), log); mErr != nil {
-			mirrorSpan.RecordError(mErr)
-			log.WithError(mErr).Warn("Failed to archive overlay upperdir; restore may fail on missing files")
-		}
-		if fi, _ := os.Stat(diffDst); fi != nil {
-			mirrorSpan.SetAttributes(attribute.Int64("nvsnap.rootfs_diff_bytes", fi.Size()))
-		}
-		mirrorSpan.End()
+// dumpSnapshot returns the snapshot a dump takes from criu's post-dump
+// hook (dump_snapshot.go): the replay mounts, into *replayMounts, then the
+// archive of the upperdir, whose failure fails the snapshot.
+func (a *Agent) dumpSnapshot(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string,
+	sourceMountPoints []string, replayMounts *[]ReplayMount, log *logrus.Entry) func(criuSaves map[string]bool) error {
+	return func(criuSaves map[string]bool) error {
+		*replayMounts = a.captureReplayMounts(ctx, containerInfo, checkpointDir, criuSaves, log)
+		return a.mirrorRootfsDiff(ctx, checkpointDir, sourceUpperdir, sourceMountPoints, log)
 	}
+}
+
+// mirrorRootfsDiff archives the source container's overlay upperdir
+// (resolved before the dump) into checkpointDir/rootfs-diff.tar (see
+// rootfsDiffArchive). A container without one has nothing to archive.
+func (a *Agent) mirrorRootfsDiff(ctx context.Context, checkpointDir, sourceUpperdir string, sourceMountPoints []string, log *logrus.Entry) error {
+	if sourceUpperdir == "" {
+		return nil
+	}
+	_, mirrorSpan := tracing.Tracer().Start(ctx, "checkpoint.mirror_rootfs_diff")
+	defer mirrorSpan.End()
+	diffDst := filepath.Join(checkpointDir, rootfsDiffArchive)
+	// nvsnap's own staging in the container (the criu bundle, the
+	// images directory) is not the workload's state: leave it out, or
+	// a restore replays it over what the agent stages for itself.
+	diffExcludes := append(append([]string{}, sourceMountPoints...), v2BinDirInContainer, v2ImagesDirInContainer)
+	if err := archiveOverlayDir(sourceUpperdir, diffDst, diffExcludes, rootfsDiffExcludeGlobs(), log); err != nil {
+		mirrorSpan.RecordError(err)
+		return fmt.Errorf("archive the container's overlay upperdir: %w", err)
+	}
+	if fi, _ := os.Stat(diffDst); fi != nil {
+		mirrorSpan.SetAttributes(attribute.Int64("nvsnap.rootfs_diff_bytes", fi.Size()))
+	}
+	return nil
 }

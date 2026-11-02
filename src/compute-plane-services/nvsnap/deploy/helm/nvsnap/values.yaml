@@ -485,6 +485,23 @@ agent:
       pollInterval: 30s   # auto-pull poller cadence; 0 disables the poller
       serviceAccount: ""  # GCP Workload-Identity SA email (gcs provider)
 
+  # The capture and restore history (docs/operate/METRICS.md): the agents'
+  # /metrics, scraped by the cluster's Prometheus so it outlives the agents.
+  metrics:
+    # A Prometheus Operator ServiceMonitor for the agents. Off by default;
+    # set labels to what the cluster's Prometheus selects monitors by, and
+    # namespace to one whose monitors it reads ("" is the release's).
+    serviceMonitor:
+      enabled: false
+      namespace: ""
+      labels: {}
+      interval: 30s
+    # A Grafana dashboard of the history, as a ConfigMap labelled for the
+    # Grafana dashboard sidecar (grafana_dashboard: "1").
+    dashboard:
+      enabled: false
+      labels: {}
+
   # Rails tier of the restore fetch: a node that lacks a checkpoint copies
   # it from nodes that hold it over their RDMA NICs with bedrock-peer,
   # before the shared-filesystem, L2 and HTTP peer tiers. Each node taking

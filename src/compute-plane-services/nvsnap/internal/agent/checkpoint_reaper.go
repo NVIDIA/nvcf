@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -102,8 +103,86 @@ func (a *Agent) retirableCheckpoints(ctx context.Context, pods []corev1.Pod, now
 	return out, nil
 }
 
+// retirableCachedirCaptures returns the cachedir captures under the
+// agent's checkpoint directory to retire (criu_fallback.go): those no
+// cachedir record names, older than checkpointRetireAge and seeding no pod
+// on this node. A record whose configuration CRIU serves again, or whose
+// group record is gone, is deleted first: its captures are never seeded
+// from.
+func (a *Agent) retirableCachedirCaptures(ctx context.Context, pods []corev1.Pod, now time.Time) ([]string, error) {
+	cms := a.kubeClient.CoreV1().ConfigMaps(a.criuFailedNamespace())
+	records, err := cms.List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/managed-by=nvsnap"})
+	if err != nil {
+		return nil, err
+	}
+	groups := map[string]map[string]string{}
+	for i := range records.Items {
+		if r := &records.Items[i]; strings.HasPrefix(r.Name, criuGroupConfigMapPrefix) {
+			groups[strings.TrimPrefix(r.Name, criuGroupConfigMapPrefix)] = r.Data
+		}
+	}
+	named := map[string]bool{}
+	for i := range records.Items {
+		r := &records.Items[i]
+		if !strings.HasPrefix(r.Name, cachedirRecordPrefix) {
+			continue
+		}
+		key := strings.TrimPrefix(r.Name, cachedirRecordPrefix)
+		g, ok := groups[key]
+		if ok && g["state"] == criuGroupStateAlias {
+			g, ok = groups[g["alias"]]
+		}
+		if !ok || recordUsable(g) {
+			if err := cms.Delete(ctx, r.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				a.log.WithError(err).WithField("record", r.Name).Warn("checkpoint reaper: cannot delete a cachedir record no configuration falls back to")
+			}
+			continue
+		}
+		for k, v := range r.Data {
+			if !strings.HasPrefix(k, "rank.") || v == "" {
+				continue
+			}
+			if n, err := strconv.Atoi(strings.TrimPrefix(k, "rank.")); err == nil {
+				named[webhook.FallbackCaptureID(key, n)] = true
+			}
+		}
+	}
+	for i := range pods {
+		if id := pods[i].Annotations[webhook.FallbackCaptureAnnotation]; id != "" && pods[i].DeletionTimestamp == nil {
+			named[id] = true
+		}
+	}
+	ents, err := os.ReadDir(a.config.CheckpointDir)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range ents {
+		id := e.Name()
+		if !e.IsDir() || !strings.HasPrefix(id, webhook.FallbackCapturePrefix) || named[id] {
+			continue
+		}
+		if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) > checkpointRetireAge {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
 // reapCheckpoints retires this node's dead checkpoints and their L2 copies.
 func (a *Agent) reapCheckpoints(ctx context.Context, pods []corev1.Pod, now time.Time) {
+	if ids, err := a.retirableCachedirCaptures(ctx, pods, now); err != nil {
+		a.log.WithError(err).Warn("checkpoint reaper: cannot tell the dead cachedir captures; keeping all")
+	} else {
+		for _, id := range ids {
+			if err := os.RemoveAll(filepath.Join(a.config.CheckpointDir, id)); err != nil {
+				a.log.WithError(err).WithField("capture", id).Warn("checkpoint reaper: cannot remove the cachedir capture")
+				continue
+			}
+			_ = os.RemoveAll(a.cachedirReadyDir(id))
+			a.log.WithField("capture", id).Info("checkpoint reaper: retired a cachedir capture that is never seeded from again")
+		}
+	}
 	dead, err := a.retirableCheckpoints(ctx, pods, now)
 	if err != nil {
 		a.log.WithError(err).Warn("checkpoint reaper: cannot tell the dead checkpoints; keeping all")
