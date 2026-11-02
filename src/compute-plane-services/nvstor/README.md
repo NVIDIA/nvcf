@@ -223,9 +223,10 @@ bazel build --config=release --platforms=//platforms:linux_arm64 \
 
 Build any binary that will be run or measured with `--config=release`.
 nvcf's default compilation mode, `fastbuild`, compiles Rust without
-optimisation; such a binary is correct but many times slower. The
-`bazel build` and `bazel test` above use the default, which is fine for
-checking that the code builds and its tests pass.
+optimisation; such a binary is correct but not suitable for running or
+for performance evaluation. The `bazel build` and `bazel test` above use
+the default, which is fine for checking that the code builds and its tests
+pass.
 
 `nvstor-peer --version` reports the nvcf commit the binary was built from.
 
