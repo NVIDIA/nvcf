@@ -134,6 +134,22 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   go test -run '^TestMultiClusterHelmfileLLMLastClusterAffinity$' -timeout 120m -v
 ```
 
+### NVCA upgrade target regression
+
+`TestNVCAUpgrade` runs the focused registration/heartbeat regression against
+production ICMS and Cassandra with a real operator and a CPU-only probe agent.
+It covers upgrade and downgrade convergence plus Helm-managed reporting. Use
+the [dedicated lab setup](fixtures/nvca-upgrade/README.md) and run the complete
+feature against a fresh lab:
+
+```sh
+go test -run '^TestNVCAUpgrade$' -count=1 -timeout=20m -v
+```
+
+The lab identity provider and NGC route adapter are test fixtures. Cluster
+state is persisted by real ICMS. GPU workloads and a complete NGC deployment
+are outside this test's coverage.
+
 ### BYOO features
 
 `byoo-render.feature` renders the compute-plane stack for each observability

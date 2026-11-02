@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+fullnameOverride: nvca-upgrade-operator
+gracefulShutdown:
+  terminationGracePeriodSeconds: 5
+image:
+  tag: lab
+  pullPolicy: IfNotPresent
+nvcaImage:
+  pullPolicy: IfNotPresent
+ncaID: bdd-account
+clusterName: bdd-upgrade
+ngcConfig:
+  apiURL: http://fixture.nvca-upgrade-bdd:8080
+  serviceKey: lab-only
+  clusterSource: ngc-managed
+generateImagePullSecret: false
+enableGXCache: false
+clusterValidator:
+  enabled: false
+otelCollector:
+  enabled: false
+networkPolicy:
+  enabled: false
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {cpu: "2", memory: 1Gi}
+agent:
+  resources:
+    requests: {cpu: 100m, memory: 64Mi}
+    limits: {cpu: "1", memory: 256Mi}

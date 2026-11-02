@@ -1,0 +1,150 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cassandra
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: cassandra}
+  template:
+    metadata:
+      labels: {app: cassandra}
+    spec:
+      containers:
+        - name: cassandra
+          image: cassandra:5
+          env:
+            - {name: MAX_HEAP_SIZE, value: 1G}
+            - {name: HEAP_NEWSIZE, value: 256M}
+          ports:
+            - {containerPort: 9042}
+          readinessProbe:
+            tcpSocket: {port: 9042}
+            initialDelaySeconds: 10
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 500m, memory: 2Gi}
+            limits: {cpu: "4", memory: 3Gi}
+          volumeMounts:
+            - {name: schema, mountPath: /schema}
+      volumes:
+        - name: schema
+          configMap: {name: cassandra-schema}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: cassandra}
+spec:
+  selector: {app: cassandra}
+  ports:
+    - {port: 9042, targetPort: 9042}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: nats}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: nats}
+  template:
+    metadata:
+      labels: {app: nats}
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.11
+          args: ["-js", "-m", "8222"]
+          ports:
+            - {containerPort: 4222}
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {cpu: "1", memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: nats}
+spec:
+  selector: {app: nats}
+  ports:
+    - {port: 4222, targetPort: 4222}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: fixture}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: fixture}
+  template:
+    metadata:
+      labels: {app: fixture}
+    spec:
+      containers:
+        - name: fixture
+          image: __FIXTURE_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [/fixture, gateway]
+          env:
+            - {name: BDD_ISSUER, value: "http://fixture.nvca-upgrade-bdd:8080"}
+            - {name: BDD_ICMS_URL, value: "http://icms:8080"}
+            - {name: BDD_PROBE_REPOSITORY, value: __PROBE_REPOSITORY__}
+            - {name: BDD_PROBE_TAG, value: __PROBE_TAG__}
+          readinessProbe:
+            httpGet: {path: /health, port: 8080}
+          resources:
+            requests: {cpu: 100m, memory: 32Mi}
+            limits: {cpu: "1", memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: fixture}
+spec:
+  selector: {app: fixture}
+  ports:
+    - {port: 8080, targetPort: 8080}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: icms}
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app: icms}
+  template:
+    metadata:
+      labels: {app: icms}
+    spec:
+      containers:
+        - name: icms
+          image: __ICMS_IMAGE__
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/etc/icms/application.yaml"}
+            - {name: SPRING_PROFILES_ACTIVE, value: bdd}
+            - {name: JAVA_TOOL_OPTIONS, value: "-Xmx768m"}
+          startupProbe:
+            httpGet: {path: /v1/health, port: 8080}
+            periodSeconds: 3
+            failureThreshold: 100
+          readinessProbe:
+            httpGet: {path: /v1/health, port: 8080}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "4", memory: 2Gi}
+          volumeMounts:
+            - {name: configuration, mountPath: /etc/icms}
+      volumes:
+        - name: configuration
+          configMap: {name: icms-configuration}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: icms}
+spec:
+  selector: {app: icms}
+  ports:
+    - {port: 8080, targetPort: 8080}
