@@ -20,37 +20,6 @@ CRIU (Checkpoint/Restore In Userspace)
            per-file licensing.
 
 ----
-uvloop
-  Upstream: https://github.com/MagicStack/uvloop
-  NvSnap fork: maintained by the NvSnap project
-  License: Apache-2.0 / MIT (dual license; see upstream LICENSE-APACHE and
-           LICENSE-MIT).
-
-----
-libuv
-  Upstream: https://github.com/libuv/libuv
-  NvSnap fork: maintained by the NvSnap project
-  License: MIT (see upstream LICENSE).
-
-----
-libzmq (ZeroMQ)
-  Upstream: https://github.com/zeromq/libzmq
-  NvSnap fork: maintained by the NvSnap project
-  License: MPL-2.0 (see upstream LICENSE).
-
-----
-pyzmq
-  Upstream: https://github.com/zeromq/pyzmq
-  NvSnap build artifact only (rebuilt from upstream against the nvsnap libzmq fork)
-  License: BSD-3-Clause (see upstream LICENSE.md).
-
-----
-go-criu
-  Upstream: https://github.com/checkpoint-restore/go-criu
-  NvSnap fork: maintained by the NvSnap project
-  License: Apache-2.0 (see upstream LICENSE).
-
-----
 NVIDIA cuda-checkpoint
   Upstream: distributed with NVIDIA CUDA Toolkit
   Used as a binary dependency for GPU state checkpoint/restore.

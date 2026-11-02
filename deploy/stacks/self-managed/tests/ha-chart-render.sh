@@ -87,12 +87,14 @@ check reval "$helm/helm-reval" reval "pdb spread strategy affinity"
 check ess "$helm/encrypted-secret-store/ess-api" ess "pdb spread strategy affinity" \
   --set ess.image.registry=r --set ess.image.repository=repo
 
-# --- Envoy-deferred: single-replica, but the zone-spread hook must still exist
-#     so the value is not a silent no-op once Envoy allows scaling. grpc-proxy
-#     namespaces its scheduling under .deployment. ---
-check invocation-service "$helm/http-invocation/nvcf-invocation-service" invocation "spread affinity" \
+# --- Worker callback services: no strategy hook, and the Kubernetes default
+#     (25% maxUnavailable / maxSurge) rounds to 0 / 1 at 2 replicas. grpc-proxy
+#     namespaces its scheduling under .deployment and its PDB under grpcproxy. ---
+check invocation-service "$helm/http-invocation/nvcf-invocation-service" invocation "pdb spread affinity" \
   --set invocation.image.registry=r --set invocation.image.repository=repo
 check grpc-proxy "$helm/grpc-proxy/grpc-proxy" grpcproxy.deployment "spread affinity" \
+  --set grpcproxy.image.registry=r --set grpcproxy.image.repository=repo
+check grpc-proxy-pdb "$helm/grpc-proxy/grpc-proxy" grpcproxy "pdb" \
   --set grpcproxy.image.registry=r --set grpcproxy.image.repository=repo
 
 echo "ha-chart-render: ok"

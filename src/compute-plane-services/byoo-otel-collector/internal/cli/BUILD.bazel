@@ -28,6 +28,7 @@ go_test(
     embed = [":cli"],
     deps = [
         "//src/compute-plane-services/byoo-otel-collector/internal/logger",
+        "@com_github_stretchr_testify//assert",
         "@org_uber_go_zap//:zap",
         "@org_uber_go_zap//zapcore",
         "@org_uber_go_zap//zaptest/observer",

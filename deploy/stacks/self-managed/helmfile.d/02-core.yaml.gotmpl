@@ -80,7 +80,7 @@ releases:
       release-group: services
 
   - name: api
-    version: 1.32.3
+    version: 1.33.0
     namespace: nvcf
     inherit:
       - template: service
@@ -121,7 +121,7 @@ releases:
       - nvcf/api
 
   - name: invocation-service
-    version: 1.8.0
+    version: 1.9.0
     namespace: nvcf
     inherit:
       - template: service
@@ -129,7 +129,7 @@ releases:
       - nvcf/api
 
   - name: grpc-proxy
-    version: 1.12.0
+    version: 1.13.0
     namespace: nvcf
     inherit:
       - template: service
@@ -271,7 +271,7 @@ releases:
       release-group: services
 
   - name: vanity-gateway
-    version: 0.10.0
+    version: 0.11.0
     namespace: nvcf
     condition: addons.vanityGateway.enabled
     inherit:
@@ -293,7 +293,7 @@ releases:
 
   - name: event-ledger
     chart: nvcf/helm-nvcf-event-ledger
-    version: 0.6.0
+    version: 0.9.0
     namespace: nvcf
     condition: addons.eventLedger.enabled
     values:

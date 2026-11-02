@@ -32,7 +32,7 @@ func (d *DB) LogAudit(e *AuditEntry) error {
 	if e.Status == "" {
 		e.Status = "success"
 	}
-	result, err := d.db.Exec(`INSERT INTO audit_log
+	result, err := d.w.Exec(`INSERT INTO audit_log
 		(timestamp, action, resource, resource_id, actor, details, status, message)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		now, e.Action, e.Resource, e.ResourceID, e.Actor, e.Details, e.Status, e.Message,

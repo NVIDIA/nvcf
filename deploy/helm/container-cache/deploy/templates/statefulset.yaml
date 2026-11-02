@@ -65,7 +65,11 @@ spec:
             topologyKey: kubernetes.io/hostname
       initContainers:
         - name: init-chown-data
-          image: nvcr.io/nvidia/cuda:12.3.2-base-ubuntu22.04
+          # Only bash, chown, chmod and find are needed, so the certificates
+          # image (same registry org and pull secret as every other image in
+          # this pod) is the default. A public base image here failed to pull
+          # once the pod carried an org-scoped pull secret.
+          image: {{ $.Values.images.init | default $.Values.images.certificates | quote }}
           command: [ "/bin/bash" ]
           args:
             - -c
@@ -75,7 +79,9 @@ spec:
             # recursive chown/chmod below skips .snapshot: some network
             # filesystems reserve that directory at the mount root, and
             # chown -R into it hangs/fails, crash-looping this init container.
-            - "chmod 755 /proxy_cache /container_cache && chown 1000:1000 /proxy_cache /container_cache && find /proxy_cache /container_cache -mindepth 1 -maxdepth 1 ! -name .snapshot -exec chown -R 1000:1000 {} + -exec chmod -R u+rwX {} +"
+            # PATH puts the distribution coreutils ahead of any busybox
+            # symlinks the image may carry under /usr/local/bin.
+            - "export PATH=/usr/bin:/bin:$PATH && chmod 755 /proxy_cache /container_cache && chown 1000:1000 /proxy_cache /container_cache && find /proxy_cache /container_cache -mindepth 1 -maxdepth 1 ! -name .snapshot -exec chown -R 1000:1000 {} + -exec chmod -R u+rwX {} +"
           resources: {}
           volumeMounts:
             - name: proxy-cache

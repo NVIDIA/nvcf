@@ -52,8 +52,18 @@ const (
 )
 
 // ErrorSourceHeader is added to non-2xx responses so clients and support can
-// tell where the status came from. Its value is a GatewayProxyOutcome.
+// tell where the status came from. On responses the gateway returns, its value
+// is a GatewayProxyOutcome. On upstream responses the gateway reads, the only
+// recognized values are ErrorSourceInvocationService and ErrorSourceWorker;
+// the gateway records them on client metrics and replaces the header before
+// returning the response.
 const ErrorSourceHeader = "NVCF-Error-Source"
+
+// Values an upstream service may send in ErrorSourceHeader.
+const (
+	ErrorSourceInvocationService = "invocation_service"
+	ErrorSourceWorker            = "worker"
+)
 
 var spanNameFormatter = otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
 	return r.URL.Path
@@ -68,7 +78,10 @@ func ServerTelemetryMiddleware(opts ...otelhttp.Option) func(http.Handler) http.
 }
 
 func TracedRoundTripper(rt http.RoundTripper) http.RoundTripper {
-	traced := otelhttp.NewTransport(rt, spanNameFormatter, otelhttp.WithMetricAttributesFn(shadowMetricAttributes))
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	traced := otelhttp.NewTransport(clientMetricsRoundTripper{rt}, spanNameFormatter, otelhttp.WithMetricAttributesFn(shadowMetricAttributes))
 	return dispatchRoundTripper{traced}
 }
 
@@ -82,7 +95,7 @@ func (rt dispatchRoundTripper) RoundTrip(r *http.Request) (*http.Response, error
 		}
 		state.record(r.Context(), outcome)
 	}
-	return rt.RoundTripper.RoundTrip(r)
+	return rt.RoundTripper.RoundTrip(r.WithContext(clientMetricContext(r.Context())))
 }
 
 func defaultHTTPServerOptions() []otelhttp.Option {

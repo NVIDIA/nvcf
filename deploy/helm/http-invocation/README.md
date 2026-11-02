@@ -71,6 +71,7 @@ Important settings to review before deployment:
 - `invocation.env.*` for the NVCF API address, NATS connection settings, and Rate Limiter address
 - `invocation.cors.allowedOrigins` for browser access to legacy exec/pexec routes
 - `invocation.polling.enforceOwnership` for the staged polling ownership rollout
+- `invocation.workerTls.*` for the optional HTTPS listener for worker callbacks
 - `invocation.vault.*` for JWT authentication path, role, and audience values used by the Vault Agent injector
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
@@ -114,6 +115,70 @@ Validate the chart wiring locally with:
 
 ```bash
 bash tests/access_policy_test.sh
+```
+
+### Worker callback TLS
+
+Workers connect back to an individual invocation pod to stream responses. By
+default that callback is plain HTTP on port 8080. Set
+`invocation.workerTls.enabled: true` to also serve HTTPS on a separate port
+(8443 by default) for worker callbacks:
+
+```yaml
+invocation:
+  workerTls:
+    enabled: true
+    tls:
+      certificate:
+        enabled: true
+        issuerRef:
+          name: nvcf-worker-callback
+```
+
+With `tls.certificate.enabled`, the chart creates a cert-manager Certificate
+for the name workers verify when they call back:
+
+- By default, `*.invocation.<namespace>.svc.cluster.local`, which covers the
+  per-pod callback names.
+- If you override `WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS`, a wildcard for
+  its host, because each pod still advertises `<pod-ip>.<host>`.
+- If you set `WORKER_STREAM_PROPERTIES__SELF_ADDRESS`, its exact host. The
+  service advertises that address as-is, without a pod prefix, and it wins
+  over `SERVICE_ADDRESS`.
+
+If you set `tls.certificate.dnsNames` yourself, the chart fails to render
+unless they cover that name. An HTTPS callback address must use a DNS name,
+not an IP address.
+
+To use an existing `kubernetes.io/tls` Secret instead, leave the
+certificate disabled and set `invocation.workerTls.tls.secretName`. The
+service reloads the certificate from the mounted Secret without a restart.
+
+While `invocation.workerTls.advertise` is true (the default), the chart sets
+`WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS` to
+`https://invocation.<namespace>.svc.cluster.local:<port>`, so workers call back
+over TLS. Workers must trust the issuing CA through `NVCF_PROXY_CA_FILE` or
+`NVCF_PROXY_CA_PEM`. An explicit `invocation.env` value for the callback
+address takes precedence. The `WORKER_TLS__*` keys are reserved for this
+setting.
+
+`advertise` applies to the whole invocation service: once it is on, every
+worker of every function gets an HTTPS callback address. Roll it out in this
+order:
+
+1. Deploy a worker image that supports HTTPS callbacks and configure its CA.
+   Older workers reject an HTTPS callback address even when they trust the CA.
+2. Recreate the function pods that are already running so they pick up the
+   new worker and CA. Pods keep the worker they started with.
+3. Upgrade this chart with `enabled: true` and `advertise: false`. The HTTPS
+   listener starts, but workers keep calling back over HTTP.
+4. Check that the Certificate is ready and the listener serves it, then set
+   `advertise: true`. To roll back, set `advertise: false` again.
+
+Validate the chart wiring locally with:
+
+```bash
+bash tests/worker_tls_test.sh
 ```
 
 ## Notes

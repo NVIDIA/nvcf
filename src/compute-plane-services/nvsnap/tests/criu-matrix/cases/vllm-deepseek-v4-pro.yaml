@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# vLLM, DeepSeek V4 Pro NVFP4, expert parallel (as bench-deepseek-pro).
+# TP=8 as two pods of four GPUs (GB300 nodes have four), multi-pod capture opt-in.
+kind: StatefulSet
+launch: exec
+podsPerInstance: 2
+criuCapture: true
+gpusPerPod: 4
+model: nvidia/DeepSeek-V4-Pro-NVFP4
+servedModelName: nvidia/DeepSeek-V4-Pro-NVFP4
+maxModelLen: 8192
+gpuMemoryUtilization: 0.90
+extraArgs: --trust-remote-code --enable-expert-parallel --kv-cache-dtype fp8
+extraEnv:
+  - {name: VLLM_ATTENTION_BACKEND, value: "FLASHINFER"}
+function:
+  inferenceUrl: /v1/chat/completions
+  secrets: [HF_TOKEN]

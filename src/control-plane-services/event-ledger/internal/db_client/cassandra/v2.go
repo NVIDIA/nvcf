@@ -1154,6 +1154,39 @@ func (c *CassandraHandler) UpsertEventV3(traceCtx context.Context, namespace, ev
 	return err
 }
 
+// accountColumns appends the optional nca_id and function_id columns to an
+// insert. Empty values are omitted rather than written as NULL, so a producer
+// that does not send them cannot clear values already stored on the row.
+func accountColumns(ev data_access.EventV3UpsertRecord, columns string, placeholders string, args []any) (string, string, []any) {
+	if ev.NcaID != "" {
+		columns += ", nca_id"
+		placeholders += ", ?"
+		args = append(args, ev.NcaID)
+	}
+	if ev.FunctionID != "" {
+		columns += ", function_id"
+		placeholders += ", ?"
+		args = append(args, ev.FunctionID)
+	}
+	return columns, placeholders, args
+}
+
+func eventsV3InsertStatement(ev data_access.EventV3UpsertRecord, createdAt, updatedAt time.Time) (string, []any) {
+	columns, placeholders, args := accountColumns(ev,
+		"namespace, context, event_name, source, details, timestamp, created_at, updated_at",
+		"?, ?, ?, ?, ?, ?, ?, ?",
+		[]any{ev.Namespace, ev.Context, ev.EventName, ev.Source, ev.Details, ev.Timestamp, createdAt, updatedAt})
+	return "INSERT INTO events_v3 (" + columns + ") VALUES (" + placeholders + ")", args
+}
+
+func statsV3InsertStatement(ev data_access.EventV3UpsertRecord, createdAt, updatedAt time.Time) (string, []any) {
+	columns, placeholders, args := accountColumns(ev,
+		"namespace, context, event_name, timestamp, created_at, updated_at",
+		"?, ?, ?, ?, ?, ?",
+		[]any{ev.Namespace, ev.Context, ev.EventName, ev.Timestamp, createdAt, updatedAt})
+	return "INSERT INTO " + statsV3Table + " (" + columns + ") VALUES (" + placeholders + ")", args
+}
+
 // BulkUpsertEventsV3 inserts or updates multiple events in the events_v3 table.
 // Events are grouped by partition key (namespace, context). Each group is written
 // with one SELECT + one unlogged BATCH, reducing Cassandra round-trips from 2N
@@ -1212,7 +1245,6 @@ func (c *CassandraHandler) upsertPartitionEventsV3(traceCtx context.Context, nam
 			return fmt.Errorf("failed to fetch existing events for partition (%s, %s): %w", namespace, eventContext, err)
 		}
 
-		insertQuery := `INSERT INTO events_v3 (namespace, context, event_name, source, details, timestamp, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 		batch := c.session.NewBatch(gocql.UnloggedBatch).WithContext(traceCtx)
 		now := time.Now()
 		for _, ev := range events {
@@ -1220,7 +1252,8 @@ func (c *CassandraHandler) upsertPartitionEventsV3(traceCtx context.Context, nam
 			if ca, exists := existingCreatedAt[ev.EventName]; exists {
 				createdAt = ca
 			}
-			batch.Query(insertQuery, ev.Namespace, ev.Context, ev.EventName, ev.Source, ev.Details, ev.Timestamp, createdAt, now)
+			insertQuery, args := eventsV3InsertStatement(ev, createdAt, now)
+			batch.Query(insertQuery, args...)
 		}
 
 		if err := c.session.ExecuteBatch(batch); err != nil {
@@ -1304,7 +1337,6 @@ func (c *CassandraHandler) upsertPartitionStatsV3(traceCtx context.Context, name
 			return fmt.Errorf("failed to fetch existing stats for namespace %s: %w", namespace, err)
 		}
 
-		insertQuery := `INSERT INTO stats_v3 (namespace, context, event_name, timestamp, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
 		batch := c.session.NewBatch(gocql.UnloggedBatch).WithContext(traceCtx)
 		now := time.Now()
 		skipped := 0
@@ -1330,7 +1362,8 @@ func (c *CassandraHandler) upsertPartitionStatsV3(traceCtx context.Context, name
 			if ca, exists := existingCreatedAt[ev.Context]; exists {
 				createdAt = ca
 			}
-			batch.Query(insertQuery, ev.Namespace, ev.Context, ev.EventName, ev.Timestamp, createdAt, now)
+			insertQuery, args := statsV3InsertStatement(ev, createdAt, now)
+			batch.Query(insertQuery, args...)
 		}
 
 		if batch.Size() == 0 {
@@ -1358,33 +1391,32 @@ func (c *CassandraHandler) upsertPartitionStatsV3(traceCtx context.Context, name
 // UpsertStatsV3 inserts or updates latest event stats in the stats_v3 table
 // Replaces the previous event for this (namespace, context) regardless of event_name
 func (c *CassandraHandler) UpsertStatsV3(traceCtx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error {
-	return c.upsertStatsRow(traceCtx, statsV3Table, namespace, eventContext, eventName, timestamp)
+	return c.upsertStatsRow(traceCtx, statsV3Table, namespace, eventContext, eventName, timestamp, "", "")
 }
 
 // UpsertFilteredStatsV3 inserts or updates latest event stats in the filtered stats table.
 // Callers must apply the filtered event-name allowlist before invoking this method.
-func (c *CassandraHandler) UpsertFilteredStatsV3(traceCtx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error {
-	return c.upsertStatsRow(traceCtx, filteredStatsV3Table, namespace, eventContext, eventName, timestamp)
+// ncaID and functionID are optional; empty values are not written.
+func (c *CassandraHandler) UpsertFilteredStatsV3(traceCtx context.Context, namespace, eventContext, eventName string, timestamp time.Time, ncaID, functionID string) error {
+	return c.upsertStatsRow(traceCtx, filteredStatsV3Table, namespace, eventContext, eventName, timestamp, ncaID, functionID)
 }
 
 // upsertStatsRow is the shared latest-wins LWT upsert for stats_v3-shaped tables.
 // table must be a trusted, code-controlled identifier (not user input).
-func (c *CassandraHandler) upsertStatsRow(traceCtx context.Context, table, namespace, eventContext, eventName string, timestamp time.Time) error {
+// Empty ncaID and functionID are not written, so they cannot clear stored values.
+func (c *CassandraHandler) upsertStatsRow(traceCtx context.Context, table, namespace, eventContext, eventName string, timestamp time.Time, ncaID, functionID string) error {
 	logger := logging.GetLogger(traceCtx)
 
 	err := c.executeWithSessionRecreation(traceCtx, func() error {
-		insertQuery := fmt.Sprintf(`INSERT INTO %s (namespace, context, event_name, timestamp, created_at, updated_at)
-						VALUES (?, ?, ?, ?, ?, ?) IF NOT EXISTS`, table)
+		columns, placeholders, insertArgs := accountColumns(
+			data_access.EventV3UpsertRecord{NcaID: ncaID, FunctionID: functionID},
+			"namespace, context, event_name, timestamp, created_at, updated_at",
+			"?, ?, ?, ?, ?, ?",
+			[]any{namespace, eventContext, eventName, timestamp, timestamp /* created_at */, timestamp /* updated_at */})
+		insertQuery := fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s) IF NOT EXISTS`, table, columns, placeholders)
 
 		previous := make(map[string]any)
-		applied, err := c.session.Query(insertQuery,
-			namespace,
-			eventContext,
-			eventName,
-			timestamp,
-			timestamp, // created_at
-			timestamp, // updated_at
-		).WithContext(traceCtx).MapScanCAS(previous)
+		applied, err := c.session.Query(insertQuery, insertArgs...).WithContext(traceCtx).MapScanCAS(previous)
 		if err != nil {
 			logger.ErrorContext(traceCtx, "Failed to insert stats",
 				zap.Error(err),
@@ -1399,20 +1431,24 @@ func (c *CassandraHandler) upsertStatsRow(traceCtx context.Context, table, names
 			return nil
 		}
 
+		setClause := "event_name = ?, timestamp = ?, updated_at = ?"
+		updateArgs := []any{eventName, timestamp, time.Now()}
+		if ncaID != "" {
+			setClause += ", nca_id = ?"
+			updateArgs = append(updateArgs, ncaID)
+		}
+		if functionID != "" {
+			setClause += ", function_id = ?"
+			updateArgs = append(updateArgs, functionID)
+		}
+		updateArgs = append(updateArgs, namespace, eventContext, timestamp)
 		updateQuery := fmt.Sprintf(`UPDATE %s
-						SET event_name = ?, timestamp = ?, updated_at = ?
+						SET %s
 						WHERE namespace = ? AND context = ?
-						IF timestamp < ?`, table)
+						IF timestamp < ?`, table, setClause)
 
 		previous = make(map[string]any)
-		applied, err = c.session.Query(updateQuery,
-			eventName,
-			timestamp,
-			time.Now(),
-			namespace,
-			eventContext,
-			timestamp,
-		).WithContext(traceCtx).MapScanCAS(previous)
+		applied, err = c.session.Query(updateQuery, updateArgs...).WithContext(traceCtx).MapScanCAS(previous)
 		if err != nil {
 			logger.ErrorContext(traceCtx, "Failed to conditionally update stats",
 				zap.Error(err),

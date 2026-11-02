@@ -149,12 +149,19 @@ jobs:
           make -C deploy/helm/nvca-operator test-default-ownership
           make -C deploy/helm/nvca-operator test-collector-image-tag
           make -C deploy/helm/nvca-operator test-resource-quantity-schema
+          make -C deploy/helm/nvca-operator test-sibling-image-repositories
           make -C deploy/helm/nvca-operator test-worker-timeouts-schema
           make -C deploy/helm/nvca-operator test-cluster-validator
           make -C deploy/helm/nvca-operator test-byoo-fluent-bit-image
           make -C deploy/helm/nvca-operator test-self-managed-nvca-image-reference
           make -C deploy/helm/nvca-operator test-render-values
-          make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership test-collector-images
+          make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership test-collector-images test-nvca-callback-ca
+
+      - name: Test invocation-service chart rendering
+        run: |
+          for test in deploy/helm/http-invocation/tests/*_test.sh; do
+            bash "${test}"
+          done
 
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
@@ -194,6 +201,9 @@ jobs:
 
       - name: Test NVCT API sidecar release artifacts
         run: bash deploy/helm/cloud-tasks/tests/sidecar_release_artifacts_test.sh
+
+      - name: Test vanity-gateway chart probes
+        run: bash deploy/helm/vanity-gateway/tests/chart-render/verify-probes.sh
 
       - name: Check for uncommitted helm dependency artifacts
         run: |
@@ -283,11 +293,18 @@ jobs:
       - name: Check migrations against the proposed version bump
         env:
           BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           STACK: ${{ matrix.stack }}
         run: |
-          bump="$(tools/ci/release-bump-type for-branch "origin/${BASE_REF}")"
+          bump="$(tools/ci/release-bump-type for-branch "${BASE_SHA}")"
           echo "proposed bump: ${bump}"
-          tools/ci/check-stack-upgrade-policy --stack "${STACK}" --bump "${bump}"
+          args=()
+          # Maintenance PRs change an existing train, which may have synthetic
+          # history. Compare their target branch, not a newer sibling release.
+          if [[ "${BASE_REF}" == release-* ]]; then
+            args+=(--base-ref "${BASE_SHA}")
+          fi
+          tools/ci/check-stack-upgrade-policy --stack "${STACK}" --bump "${bump}" "${args[@]}"
 
   github-release-helper:
     name: GitHub release helper

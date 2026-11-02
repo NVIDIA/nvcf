@@ -9,12 +9,12 @@ CONTAINER_TOOL ?= docker
 GO_FLAGS ?= -ldflags="-s -w -X main.version=$(VERSION)"
 BUILD_DIR ?= bin
 
-.PHONY: all build agent restore-entrypoint nvsnap-server nvsnap-blobstore clean test test-coverage test-checkpoint test-server deploy install-crds placeholder generate
+.PHONY: all build agent nvsnap-server clean test test-coverage test-checkpoint test-server deploy install-crds generate check-gpushare check-docs
 
 all: build
 
 # Build all binaries
-build: agent restore-entrypoint nvsnap-server nvsnap-blobstore
+build: agent nvsnap-server
 
 # Build the agent binary
 agent:
@@ -28,41 +28,17 @@ nvsnap-server:
 	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 GOOS=linux go build $(GO_FLAGS) -o $(BUILD_DIR)/nvsnap-server ./cmd/nvsnap-server
 
-# Build the nvsnap-blobstore binary (Phase 5d.2 durable backstop)
-nvsnap-blobstore:
-	@echo "Building nvsnap-blobstore..."
-	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 GOOS=linux go build $(GO_FLAGS) -o $(BUILD_DIR)/nvsnap-blobstore ./cmd/nvsnap-blobstore
 
-# Build the restore-entrypoint binary (for self-restoring placeholders)
-restore-entrypoint:
-	@echo "Building restore-entrypoint..."
-	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 GOOS=linux go build $(GO_FLAGS) -o $(BUILD_DIR)/restore-entrypoint ./cmd/restore-entrypoint
+# Build the agent image the way it ships: Dockerfile.app on the CRIU base
+# (scripts/build-agent.sh; registry and version from scripts/versions.sh or
+# NVSNAP_REGISTRY / NVSNAP_APP_VERSION).
+docker-build:
+	./scripts/build-agent.sh app
 
-# Build container image for agent
-docker-build: agent
-	@echo "Building container image $(FULL_IMAGE)..."
-	$(CONTAINER_TOOL) build -t $(FULL_IMAGE) -f docker/agent/Dockerfile .
-
-# Build placeholder image (requires BASE_IMAGE arg)
-# Example: make placeholder BASE_IMAGE=nvcr.io/nvidia/pytorch:24.10-py3
-placeholder:
-	@if [ -z "$(BASE_IMAGE)" ]; then echo "Set BASE_IMAGE (e.g., make placeholder BASE_IMAGE=nvcr.io/nvidia/pytorch:24.10-py3)"; exit 1; fi
-	@echo "Building placeholder image for $(BASE_IMAGE)..."
-	$(CONTAINER_TOOL) build -t nvsnap-placeholder:latest \
-		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
-		-f placeholder/Dockerfile .
-
-# Build vLLM-specific placeholder
-placeholder-vllm:
-	@echo "Building vLLM placeholder image..."
-	$(CONTAINER_TOOL) build -t nvsnap-placeholder-vllm:latest -f placeholder/Dockerfile.vllm .
 
 # Push container image
 docker-push: docker-build
-	@echo "Pushing $(FULL_IMAGE)..."
-	$(CONTAINER_TOOL) push $(FULL_IMAGE)
+	./scripts/build-agent.sh push-app
 
 # Install CRDs
 install-crds:
@@ -94,6 +70,20 @@ test:
 
 # Run all unit tests with coverage profile (used by CI).
 # Coverage output lands in coverage/coverage.out for Codecov upload.
+# Compile the gpushare C code for amd64 and arm64 (Docker, no GPU); same check as CI.
+check-gpushare:
+	./scripts/check-gpushare-build.sh
+
+# Check doc links, anchors and doc paths, that every maintained doc's table
+# of contents matches its headings, that docs/REFERENCE.md matches the code,
+# and that the figures match their script; same check as CI.
+check-docs:
+	cd scripts/docs && python3 -m unittest -q test_docs_checks
+	python3 scripts/docs/check-doc-links.py
+	python3 scripts/docs/docs-toc.py --check
+	python3 scripts/docs/reference.py --check
+	python3 docs/figures/scripts/check.py
+
 test-coverage:
 	mkdir -p coverage
 	go test -v -race -coverprofile=coverage/coverage.out -covermode=atomic $(GO_TEST_PKGS)
@@ -128,13 +118,10 @@ help:
 	@echo "NVSNAP Makefile"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build             - Build all binaries (agent, restore-entrypoint)"
+	@echo "  build             - Build all binaries (agent, server)"
 	@echo "  agent             - Build agent binary"
-	@echo "  restore-entrypoint- Build restore-entrypoint binary"
 	@echo "  docker-build      - Build agent container image"
 	@echo "  docker-push       - Push agent container image"
-	@echo "  placeholder       - Build placeholder image (requires BASE_IMAGE)"
-	@echo "  placeholder-vllm  - Build vLLM-specific placeholder image"
 	@echo "  install-crds      - Install CRDs to cluster"
 	@echo "  deploy            - Deploy agent DaemonSet"
 	@echo "  undeploy          - Remove deployment"

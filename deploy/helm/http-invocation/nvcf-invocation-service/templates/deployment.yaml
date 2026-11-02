@@ -32,8 +32,8 @@ spec:
         {{- with .Values.invocation.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-        {{- if or .Values.invocation.env .Values.invocation.metrics.enabled .Values.invocation.cors.allowedOrigins .Values.invocation.polling.enforceOwnership }}
-        checksum/config-env: {{ dict "env" .Values.invocation.env "metrics" .Values.invocation.metrics "tracing" .Values.invocation.tracing "cors" .Values.invocation.cors "polling" .Values.invocation.polling | toYaml | sha256sum }}
+        {{- if include "nvcf-invocation-service.hasEnvConfig" . }}
+        checksum/config-env: {{ include "nvcf-invocation-service.configEnvChecksum" . }}
         {{- end }}
       labels:
         {{- include "nvcf-invocation-service.selectorLabels" . | nindent 8 }}
@@ -63,6 +63,11 @@ spec:
             items:
               - key: secrets.json.tmpl
                 path: secrets.json.tmpl
+        {{- if .Values.invocation.workerTls.enabled }}
+        - name: worker-tls
+          secret:
+            secretName: {{ include "nvcf-invocation-service.workerTlsSecretName" . | quote }}
+        {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -81,12 +86,17 @@ spec:
             - name: vault-config-templates
               mountPath: /vault/config/templates
               readOnly: true
+            {{- if .Values.invocation.workerTls.enabled }}
+            - name: worker-tls
+              mountPath: /etc/invocation-service/worker-tls
+              readOnly: true
+            {{- end }}
           env:
             - name: POD_IP
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-          {{- if or .Values.invocation.env .Values.invocation.metrics.enabled .Values.invocation.cors.allowedOrigins .Values.invocation.polling.enforceOwnership }}
+          {{- if include "nvcf-invocation-service.hasEnvConfig" . }}
           envFrom:
             - configMapRef:
                 name: {{ include "nvcf-invocation-service.fullname" . }}-env
@@ -100,6 +110,11 @@ spec:
             {{- if .Values.invocation.metrics.enabled }}
             - name: metrics
               containerPort: {{ .Values.invocation.metrics.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.invocation.workerTls.enabled }}
+            - name: worker-tls
+              containerPort: {{ .Values.invocation.workerTls.port }}
               protocol: TCP
             {{- end }}
           {{- with .Values.invocation.startupProbe }}

@@ -20,7 +20,8 @@ meaningful target, value, context, and timeout visible while hiding only
 command or output-format mechanics. Keep `When I run command` plus an
 assertion as the escape hatch for uncommon or command-specific behavior.
 
-Function and task lifecycle steps are a narrow command-adapter exception. They
+Function and task lifecycle steps, plus API key generation for their backing
+services and Event Ledger, are a narrow command-adapter exception. They
 store only the selected `nvcf-cli` config, pass visible arguments to one CLI
 command, and preserve the real command result. They do not store function or
 task identity, apply defaults, parse or normalize product values, or enforce

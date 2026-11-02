@@ -61,6 +61,11 @@ type HashInput struct {
 	// same arch — H100 SXM vs PCIe, both sm_90 — still share a capture.
 	// Empty when the node lookup failed (degrades to the old behavior).
 	GPUComputeCapability string `json:"gpu_compute_capability,omitempty"`
+	// Tenant is the tenant whose pod produced the capture (internal/tenant:
+	// the namespace's tenant label, else the namespace). A capture holds the
+	// tenant's model and data, filled with its credentials: two tenants
+	// running the same image and arguments never share one.
+	Tenant string `json:"tenant,omitempty"`
 
 	CaptureFormatVersion int `json:"capture_format_version"`
 }
@@ -98,6 +103,20 @@ func ComputeHash(in HashInput) string {
 // at ~16M items, real risk in long-lived production fleets. 32 hex pushes
 // that horizon out past anything we'd plausibly accumulate.
 const ShortHashLen = 32
+
+// IsHash reports whether h has the form ComputeHash gives: 64 lowercase
+// hex digits.
+func IsHash(h string) bool {
+	if len(h) != 64 {
+		return false
+	}
+	for _, c := range h {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
 
 // ShortHash returns the first ShortHashLen hex characters of a hash,
 // suitable for K8s resource names, label values, and human display.

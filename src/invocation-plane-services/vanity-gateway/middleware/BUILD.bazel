@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "middleware",
     srcs = [
+        "client_metrics.go",
         "host.go",
         "logging.go",
         "metrics.go",
@@ -37,6 +38,7 @@ alias(
 go_test(
     name = "middleware_test",
     srcs = [
+        "client_metrics_test.go",
         "logging_test.go",
         "metrics_test.go",
         "processing_test.go",

@@ -61,6 +61,7 @@ alias(
 go_test(
     name = "gateway_test",
     srcs = [
+        "client_metrics_test.go",
         "error_origin_test.go",
         "gateway_test.go",
         "h2_test.go",

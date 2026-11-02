@@ -16,6 +16,7 @@
  */
 package com.nvidia.icms.service.account;
 
+import com.nvidia.icms.configuration.bean.CapacityGatingProperties;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.inbound.rest.model.CloudHealthStatus;
 import com.nvidia.icms.inbound.rest.model.InstanceTypeDetails;
@@ -112,7 +113,7 @@ class ClusterGpuInfoHelperTest {
 
     @BeforeEach
     void setUp() {
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(null, null, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(null, null, null, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
         gpuUsage = new HashMap<>();
         cloudHealth = new CloudHealthEntity();
         cloudHealth.setStatus(CloudHealthStatus.HEALTHY);
@@ -786,11 +787,11 @@ class ClusterGpuInfoHelperTest {
         when(mockClusterTargetingHelper.getReadyClusterEntitiesForNcaId(ncaId))
             .thenReturn(Set.of(ncaSpecificCluster));
 
-        IcmsConfigurationProperties mockNonByocConfig = mock(IcmsConfigurationProperties.class);
+        CapacityGatingProperties mockGatingConfig = mock(CapacityGatingProperties.class);
         // Default (unrestricted) GPU-to-NCA behavior so the new compute-platform filter is a no-op here.
-        when(mockNonByocConfig.isNcaAllowedForGpu(anyString(), anyString())).thenReturn(true);
+        when(mockGatingConfig.isNcaAllowedForGpu(anyString(), anyString())).thenReturn(true);
 
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(mockNonByocConfig, mockClusterTargetingHelper, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(null, mockGatingConfig, mockClusterTargetingHelper, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         // When
         Set<ReadyClusterInfo> result = clusterGpuInfoHelper.getReadyClusterInfo(ncaId);
@@ -840,11 +841,11 @@ class ClusterGpuInfoHelperTest {
         when(mockClusterTargetingHelper.getWildCardAllowedClusterCachedInfo())
             .thenReturn(Set.of(wildcardCluster));
 
-        IcmsConfigurationProperties mockNonByocConfig = mock(IcmsConfigurationProperties.class);
+        CapacityGatingProperties mockGatingConfig = mock(CapacityGatingProperties.class);
         // Default (unrestricted) GPU-to-NCA behavior so the new compute-platform filter is a no-op here.
-        when(mockNonByocConfig.isNcaAllowedForGpu(anyString(), anyString())).thenReturn(true);
+        when(mockGatingConfig.isNcaAllowedForGpu(anyString(), anyString())).thenReturn(true);
 
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(mockNonByocConfig, mockClusterTargetingHelper, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(null, mockGatingConfig, mockClusterTargetingHelper, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         // When
         Set<ReadyClusterInfo> result = clusterGpuInfoHelper.getReadyClusterInfo(ClusterRepository.WILDCARD);
@@ -873,10 +874,10 @@ class ClusterGpuInfoHelperTest {
         when(mockClusterTargetingHelper.getReadyClusterEntitiesForNcaId(ncaId))
                 .thenReturn(Set.of(platformCluster));
 
-        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
+        CapacityGatingProperties props = new CapacityGatingProperties();
         props.setGpuAllowedNcaIds(Map.of(TEST_GPU_NAME, List.of("allowed-nca")));
 
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(props, mockClusterTargetingHelper, null, null,
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(null, props, mockClusterTargetingHelper, null, null,
                 COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         Set<ReadyClusterInfo> result = clusterGpuInfoHelper.getReadyClusterInfo(ncaId);
@@ -898,10 +899,10 @@ class ClusterGpuInfoHelperTest {
         when(mockClusterTargetingHelper.getReadyClusterEntitiesForNcaId(ncaId))
                 .thenReturn(Set.of(platformCluster));
 
-        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
+        CapacityGatingProperties props = new CapacityGatingProperties();
         props.setGpuAllowedNcaIds(Map.of(TEST_GPU_NAME, List.of("allowed-nca")));
 
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(props, mockClusterTargetingHelper, null, null,
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(null, props, mockClusterTargetingHelper, null, null,
                 COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         Set<ReadyClusterInfo> result = clusterGpuInfoHelper.getReadyClusterInfo(ncaId);
@@ -924,10 +925,10 @@ class ClusterGpuInfoHelperTest {
         when(mockClusterTargetingHelper.getReadyClusterEntitiesForNcaId(ncaId))
                 .thenReturn(Set.of(byocCluster));
 
-        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
+        CapacityGatingProperties props = new CapacityGatingProperties();
         props.setGpuAllowedNcaIds(Map.of(TEST_GPU_NAME, List.of("allowed-nca")));
 
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(props, mockClusterTargetingHelper, null, null,
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(null, props, mockClusterTargetingHelper, null, null,
                 COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         Set<ReadyClusterInfo> result = clusterGpuInfoHelper.getReadyClusterInfo(ncaId);
@@ -993,7 +994,7 @@ class ClusterGpuInfoHelperTest {
         List<ReservationEntity> expected = new ArrayList<>(List.of(activeReservation));
         when(mockProcessor.getActiveReservationsForNcaId(ncaId)).thenReturn(expected);
 
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(null, null, mockProcessor, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(null, null, null, mockProcessor, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         // When
         List<ReservationEntity> result = clusterGpuInfoHelper.getActiveReservationsPerNcaId(ncaId);
@@ -1120,7 +1121,7 @@ class ClusterGpuInfoHelperTest {
         ReservationProcessor reservationProcessor = mock(ReservationProcessor.class);
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation))
             .thenReturn((double) TEST_RESERVED_CAPACITY);
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(null, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         // When
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
@@ -1155,7 +1156,7 @@ class ClusterGpuInfoHelperTest {
         // Mock configuration - no need to check flag since there's no reservation
         IcmsConfigurationProperties nonByocConfigurationProperties = mock(IcmsConfigurationProperties.class);
 
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         // When
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
@@ -1231,7 +1232,7 @@ class ClusterGpuInfoHelperTest {
         ReservationProcessor reservationProcessor = mock(ReservationProcessor.class);
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation))
             .thenReturn(0.0);
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         // When
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
@@ -1278,7 +1279,7 @@ class ClusterGpuInfoHelperTest {
             .thenReturn((double) TEST_CAPACITY_1);
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation2))
             .thenReturn((double) TEST_CAPACITY_2);
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         // When
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
@@ -1322,7 +1323,7 @@ class ClusterGpuInfoHelperTest {
         when(instanceLifecycleHelper.useSpotCapacityPostReservedExhausted(TEST_NCA_ID)).thenReturn(true);
 
         // When
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
 
         // Then
@@ -1360,7 +1361,7 @@ class ClusterGpuInfoHelperTest {
         when(instanceLifecycleHelper.useSpotCapacityPostReservedExhausted(TEST_NCA_ID)).thenReturn(false);
 
         // When
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, null, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
 
         // Then
@@ -1379,7 +1380,7 @@ class ClusterGpuInfoHelperTest {
         IcmsConfigurationProperties mockProperties = mock(IcmsConfigurationProperties.class);
         when(mockProperties.isIncludeCustomPublicClustersInAccountInfoApis()).thenReturn(true);
 
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(mockProperties, null, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(mockProperties, null, null, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         InstanceTypeAvailabilityResponse.Cluster cluster = new InstanceTypeAvailabilityResponse.Cluster();
         cluster.setClusterGroup("test-group");
@@ -1403,7 +1404,7 @@ class ClusterGpuInfoHelperTest {
         IcmsConfigurationProperties mockProperties = mock(IcmsConfigurationProperties.class);
         when(mockProperties.isIncludeCustomPublicClustersInAccountInfoApis()).thenReturn(false);
 
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(mockProperties, null, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(mockProperties, null, null, null, null, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
 
         InstanceTypeAvailabilityResponse.Cluster cluster = new InstanceTypeAvailabilityResponse.Cluster();
         cluster.setClusterGroup("test-group");
@@ -1576,7 +1577,7 @@ class ClusterGpuInfoHelperTest {
         ReservationProcessor reservationProcessor = mock(ReservationProcessor.class);
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation)).thenReturn(5.0);
         
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
         
         // Act
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
@@ -1623,7 +1624,7 @@ class ClusterGpuInfoHelperTest {
         ReservationProcessor reservationProcessor = mock(ReservationProcessor.class);
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation)).thenReturn(5.0);
         
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
         
         // Act
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
@@ -1670,7 +1671,7 @@ class ClusterGpuInfoHelperTest {
         ReservationProcessor reservationProcessor = mock(ReservationProcessor.class);
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation)).thenReturn(0.0);
         
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
         
         // Act
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
@@ -1717,7 +1718,7 @@ class ClusterGpuInfoHelperTest {
         ReservationProcessor reservationProcessor = mock(ReservationProcessor.class);
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation)).thenReturn(0.0);
         
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
         
         // Act
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
@@ -1762,7 +1763,7 @@ class ClusterGpuInfoHelperTest {
         // because calculateAvailableCapacityForHealthyZone is never called for unhealthy clusters
         ReservationProcessor reservationProcessor = mock(ReservationProcessor.class);
         
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
         
         // Act
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
@@ -1809,7 +1810,7 @@ class ClusterGpuInfoHelperTest {
         ReservationProcessor reservationProcessor = mock(ReservationProcessor.class);
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation)).thenReturn(0.0);
         
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
         
         // Act
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
@@ -1859,7 +1860,7 @@ class ClusterGpuInfoHelperTest {
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation1)).thenReturn(3.0);
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation2)).thenReturn(2.0);
         
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
         
         // Act
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);
@@ -1909,7 +1910,7 @@ class ClusterGpuInfoHelperTest {
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation1)).thenReturn(0.0);
         when(reservationProcessor.calculateAvailableCapacityForHealthyZone(reservation2)).thenReturn(0.0);
         
-        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
+        clusterGpuInfoHelper = new ClusterGpuInfoHelper(nonByocConfigurationProperties, null, null, reservationProcessor, instanceLifecycleHelper, COMPUTE_PLATFORM_SERVICE_NON_BYOC, NON_BYOC_AUTHZ_NOOP);
         
         // Act
         int result = clusterGpuInfoHelper.getAvailableCapacity(TEST_NCA_ID, readyClusterInfo, reservationByGpuByClusterId, cloudHealthByClusterId);

@@ -29,6 +29,7 @@ test:
 	@tests/pdb-value-wiring.sh
 	@tests/invocation-env-wiring.sh
 	@tests/invocation-tracing-baggage.sh
+	@tests/java-tracing-env-wiring.sh
 	@tests/image-override-wiring.sh
 	@tests/sidecar-registry-wiring.sh
 	@tests/api-env-wiring.sh

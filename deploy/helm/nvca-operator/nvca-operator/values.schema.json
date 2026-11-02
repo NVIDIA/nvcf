@@ -61,7 +61,7 @@
                 },
                 "imageRepository": {
                     "type": "string",
-                    "description": "(OPTIONAL) Image repository of OpenTelemetry Collector sidecar. If not specified, it will be calculated based on image.repository (stg vs prod).",
+                    "description": "(OPTIONAL) Image repository of OpenTelemetry Collector sidecar. If not specified, it is nvcf-otel-collector under the registry path of image.repository (nvcr.io/nvidia/nvcf-byoc when image.repository has none).",
                     "default": ""
                 },
                 "imageTag": {
@@ -223,7 +223,7 @@
         },
         "clusterGroupID": {
             "type": "string",
-            "description": "Group ID of the Cluster for this NVCA instance to manage (REQUIRED when ngcConfig.clusterSource is \"self-managed\"; for \"helm-managed\" prefer helmManaged.clusterGroupID — this top-level value is used as a fallback if helmManaged.clusterGroupID is unset)",
+            "description": "Group ID of the Cluster for this NVCA instance to manage (REQUIRED when ngcConfig.clusterSource is \"self-managed\"; for \"helm-managed\" prefer helmManaged.clusterGroupID; this top-level value is used as a fallback if helmManaged.clusterGroupID is unset)",
             "default": ""
         },
         "clusterName": {
@@ -1086,7 +1086,7 @@
                     "properties": {
                         "imageRepository": {
                             "type": "string",
-                            "description": "(OPTIONAL) Image repository of \"nvcf-image-credential-helper\". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.",
+                            "description": "(OPTIONAL) Image repository of \"nvcf-image-credential-helper\". Only override this if you know what you are doing. If not specified, it is nvcf-image-credential-helper under the registry path of image.repository (nvcr.io/nvidia/nvcf-byoc when image.repository has none).",
                             "default": ""
                         },
                         "imageTag": {
@@ -1106,7 +1106,7 @@
                         },
                         "imageRepository": {
                             "type": "string",
-                            "description": "(OPTIONAL) Image repository of \"otel-collector\". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.",
+                            "description": "(OPTIONAL) Image repository of \"otel-collector\". Only override this if you know what you are doing. If not specified, it is nvcf-otel-collector under the registry path of image.repository (nvcr.io/nvidia/nvcf-byoc when image.repository has none).",
                             "default": ""
                         },
                         "imageTag": {
@@ -1156,7 +1156,7 @@
                     "properties": {
                         "imageRepository": {
                             "type": "string",
-                            "description": "(OPTIONAL) Image repository of \"nvcf-image-credential-helper\". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.",
+                            "description": "(OPTIONAL) Image repository of \"nvcf-image-credential-helper\". Only override this if you know what you are doing. If not specified, it is nvcf-image-credential-helper under the registry path of image.repository (nvcr.io/nvidia/nvcf-byoc when image.repository has none).",
                             "default": ""
                         },
                         "imageTag": {
@@ -1176,7 +1176,7 @@
                         },
                         "imageRepository": {
                             "type": "string",
-                            "description": "(OPTIONAL) Image repository of \"otel-collector\". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.",
+                            "description": "(OPTIONAL) Image repository of \"otel-collector\". Only override this if you know what you are doing. If not specified, it is nvcf-otel-collector under the registry path of image.repository (nvcr.io/nvidia/nvcf-byoc when image.repository has none).",
                             "default": ""
                         },
                         "imageTag": {

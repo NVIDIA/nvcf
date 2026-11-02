@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# SGLang, DeepSeek V4 Flash (as the container function bench-deepseek-v4-flash).
+# TP=8 as two pods of four GPUs (GB300 nodes have four), multi-pod capture opt-in.
+kind: StatefulSet
+launch: exec
+podsPerInstance: 2
+gpusPerPod: 4
+criuCapture: true
+engine: sglang
+image: docker.io/lmsysorg/sglang:v0.5.12.post1
+model: deepseek-ai/DeepSeek-V4-Flash
+servedModelName: deepseek-ai/DeepSeek-V4-Flash
+maxModelLen: 131072
+gpuMemoryUtilization: 0.85
+extraArgs: --trust-remote-code --moe-runner-backend marlin
+function:
+  inferenceUrl: /v1/chat/completions
+  secrets: [HF_TOKEN]

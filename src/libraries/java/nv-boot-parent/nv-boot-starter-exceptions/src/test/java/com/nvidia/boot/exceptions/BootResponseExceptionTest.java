@@ -19,7 +19,9 @@ package com.nvidia.boot.exceptions;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 
 class BootResponseExceptionTest {
@@ -34,6 +36,34 @@ class BootResponseExceptionTest {
         assertThat(body.getDetail()).isEqualTo(MESSAGE);
         assertThat(body.getType()).hasToString("urn:nv-boot:problem-details:bad-request");
         assertThat(body.getTitle()).isEqualTo(HttpStatus.BAD_REQUEST.getReasonPhrase());
+    }
+
+    @Test
+    void serviceUnavailableExceptionSetsStatusUrnAndRetryAfter() {
+        var cause = new RuntimeException("root");
+        var ex = new ServiceUnavailableException(MESSAGE, cause);
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(ex.getCause()).isSameAs(cause);
+        assertThat(ex.getBody().getDetail()).isEqualTo(MESSAGE);
+        assertThat(ex.getBody().getType())
+                .hasToString("urn:nv-boot:problem-details:service-unavailable");
+        assertThat(ex.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("10");
+    }
+
+    @Test
+    void serviceUnavailableExceptionRoundsRetryAfterUpToOneSecond() {
+        var ex = new ServiceUnavailableException(MESSAGE, null, Duration.ofMillis(200));
+        assertThat(ex.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
+    }
+
+    @Test
+    void serviceUnavailableExceptionWithoutRetryAfterOmitsHeader() {
+        var cause = new RuntimeException("root");
+        var ex = ServiceUnavailableException.withoutRetryAfter(MESSAGE, cause);
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(ex.getCause()).isSameAs(cause);
+        assertThat(ex.getBody().getDetail()).isEqualTo(MESSAGE);
+        assertThat(ex.getHeaders().containsHeader(HttpHeaders.RETRY_AFTER)).isFalse();
     }
 
     @Test

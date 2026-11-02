@@ -637,11 +637,14 @@ curl -v localhost:10083/metrics
 `llm api gateway` check probes `/healthz` on `LLM_GATEWAY_ENDPOINT`, since the
 LLM Gateway does not serve `/health`.
 
+The chart wires this `/health` to the readiness probe only. The liveness probe
+uses `/health` on the admin port (`10083`), which checks only the process, so an
+`nvcf api` outage takes pods out of the Service but does not restart them.
+
 The two checks differ in what a failure does. A failing `nvcf api` check returns
 `503`, because that upstream serves every route. A failing `llm api gateway`
-check is reported in the response body but still returns `200`: deployments wire
-`/health` to both the readiness and liveness probes, so failing it would restart
-every pod and drop invocation-service routing when only the LLM Gateway is down.
+check is reported in the response body but still returns `200`, so an LLM
+Gateway outage does not drop invocation-service routing.
 Requests for an LLM-routed model return `502` for as long as that upstream is
 unreachable, and everything else keeps serving.
 
@@ -692,6 +695,34 @@ never set this error-origin label. Their telemetry context and metric labeler
 are isolated from the primary request. Status codes and bodies are unchanged.
 Because the metric label set depends on the response status, the label values
 cannot be pre-initialized on the first scrape.
+
+### Outbound call classification
+
+The client histogram, `http_client_request_duration_seconds`, adds bounded
+labels to distinguish calls and failures:
+
+- `gateway_call_kind` is `inference` for proxied requests (including shadows),
+  `poll` for status polls on `/v1/status/{requestId}`, which can long-poll for
+  minutes, and `health` for upstream readiness checks.
+- `error_source` is present on non-2xx responses. It accepts
+  `invocation_service` or `worker` from the upstream `NVCF-Error-Source`
+  response header. Missing or unrecognized values become `unknown`.
+- `error_type` (`error.type` in OpenTelemetry) classifies calls that return
+  a transport error without a usable HTTP response: `canceled`, `timeout`,
+  or `transport_error`.
+
+Until an upstream emits `NVCF-Error-Source`, its non-2xx responses use
+`unknown`. The header is not authenticated today: the invocation service
+relays worker response headers unchanged, so a function can set it. Treat
+`error_source` as authoritative only once the service sets the header and
+drops any value supplied by a worker.
+
+These labels apply only to client metrics. The server
+`gateway_proxy_outcome` and response-header behavior described above remain
+unchanged. Existing queries that aggregate client metrics by all labels will
+see separate call-kind and error-source series. The same labels are also
+recorded on `http_client_request_body_size_bytes`, so queries that aggregate
+that metric by all labels will see extra series too.
 
 ### Request duration boundaries
 

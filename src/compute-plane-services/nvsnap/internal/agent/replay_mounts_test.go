@@ -1,0 +1,287 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package agent
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/sirupsen/logrus"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
+)
+
+func TestClassifyMount(t *testing.T) {
+	allowlist := []string{"/dev/shm"}
+
+	tests := []struct {
+		name   string
+		mp     string
+		fsType string
+		opts   string
+		want   MountClass
+	}{
+		// rootfs
+		{"overlay root", "/", "overlay", "rw,relatime", MountClassRootfs},
+
+		// replay (on allowlist, RW, non-virtual)
+		{"dev/shm tmpfs rw", "/dev/shm", "tmpfs", "rw,nosuid,nodev", MountClassReplay},
+
+		// skip: not on allowlist
+		{"tmp tmpfs not allowlisted", "/tmp", "tmpfs", "rw,relatime", MountClassSkip},
+		{"custom volume not allowlisted", "/data", "ext4", "rw,relatime", MountClassSkip},
+		{"nvsnap-lib not allowlisted", "/nvsnap-lib", "ext4", "rw,relatime", MountClassSkip},
+
+		// skip: read-only even though allowlisted
+		{"dev/shm RO", "/dev/shm", "tmpfs", "ro,nosuid", MountClassSkip},
+
+		// skip: virtual fs even on allowlist (defensive)
+		{"misconfig: proc on allowlist", "/dev/shm", "proc", "rw", MountClassSkip},
+
+		// skip: virtual fs not on allowlist
+		{"proc", "/proc", "proc", "rw", MountClassSkip},
+		{"sysfs", "/sys", "sysfs", "rw", MountClassSkip},
+		{"cgroup2", "/sys/fs/cgroup", "cgroup2", "rw", MountClassSkip},
+		{"devpts", "/dev/pts", "devpts", "rw", MountClassSkip},
+
+		// skip: K8s identity files (not on allowlist)
+		{"hostname bind", "/etc/hostname", "ext4", "rw,relatime", MountClassSkip},
+		{"hosts bind", "/etc/hosts", "ext4", "rw,relatime", MountClassSkip},
+
+		// skip: nvidia/CDI (not on allowlist)
+		{"nvidia0", "/dev/nvidia0", "devtmpfs", "rw", MountClassSkip},
+
+		// skip: empty allowlist → everything non-rootfs is skip
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyMount("/", tc.mp, tc.fsType, tc.opts, allowlist)
+			if got != tc.want {
+				t.Errorf("classifyMount(%q, %q, %q, %v) = %v; want %v",
+					tc.mp, tc.fsType, tc.opts, allowlist, got, tc.want)
+			}
+		})
+	}
+}
+
+// A writable emptyDir is the pod's own state and is replayed wherever it is
+// mounted; a read-only one, or another kubelet volume, is not.
+func TestClassifyMount_EmptyDir(t *testing.T) {
+	const pod = "/kubelet/pods/e6b76896-8981-4f2f-b7a4-810bfc065439"
+	tests := []struct {
+		name, root, opts string
+		want             MountClass
+	}{
+		{"emptyDir rw", pod + "/volumes/kubernetes.io~empty-dir/data", "rw,noatime", MountClassReplay},
+		{"emptyDir ro", pod + "/volumes/kubernetes.io~empty-dir/data", "ro,noatime", MountClassSkip},
+		{"configMap", pod + "/volumes/kubernetes.io~configmap/cfg", "rw,noatime", MountClassSkip},
+		{"hosts file", pod + "/etc-hosts", "rw,noatime", MountClassSkip},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyMount(tc.root, "/var/lib/etcd", "xfs", tc.opts, nil); got != tc.want {
+				t.Errorf("classifyMount(%q) = %v; want %v", tc.root, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTreeBytesOver(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/member/snap", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"member/snap/db", "member/wal"} {
+		if err := os.WriteFile(dir+"/"+f, make([]byte, 600), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if over, n, err := treeBytesOver(os.DirFS(dir), 2000); err != nil || over || n != 1200 {
+		t.Errorf("treeBytesOver(2000) = %v, %d, %v; want false, 1200", over, n, err)
+	}
+	if over, _, err := treeBytesOver(os.DirFS(dir), 1000); err != nil || !over {
+		t.Errorf("treeBytesOver(1000) = %v, %v; want over", over, err)
+	}
+}
+
+func TestReplayEmptyDirMaxBytes(t *testing.T) {
+	t.Setenv("NVSNAP_REPLAY_EMPTYDIR_MAX_BYTES", "")
+	if got := ReplayEmptyDirMaxBytes(); got != defaultReplayEmptyDirMaxBytes {
+		t.Errorf("default = %d", got)
+	}
+	t.Setenv("NVSNAP_REPLAY_EMPTYDIR_MAX_BYTES", "0")
+	if got := ReplayEmptyDirMaxBytes(); got != 0 {
+		t.Errorf("0 = %d", got)
+	}
+}
+
+func TestClassifyMount_EmptyAllowlist(t *testing.T) {
+	// Empty allowlist disables the replay class entirely; only rootfs survives.
+	if got := classifyMount("/", "/", "overlay", "rw", nil); got != MountClassRootfs {
+		t.Errorf("/ with empty allowlist: got %v, want rootfs", got)
+	}
+	if got := classifyMount("/", "/dev/shm", "tmpfs", "rw", nil); got != MountClassSkip {
+		t.Errorf("/dev/shm with empty allowlist: got %v, want skip", got)
+	}
+}
+
+func TestClassifyMount_AllowlistMatchIsExact(t *testing.T) {
+	// Substring matching would let "/dev/shm" allowlist "/dev/shm-foo".
+	// We require exact path equality to keep the allowlist predictable.
+	allowlist := []string{"/dev/shm"}
+	if got := classifyMount("/", "/dev/shm-foo", "tmpfs", "rw", allowlist); got != MountClassSkip {
+		t.Errorf("/dev/shm-foo (substring of /dev/shm): got %v, want skip (exact match required)", got)
+	}
+	if got := classifyMount("/", "/dev/shm/sub", "tmpfs", "rw", allowlist); got != MountClassSkip {
+		t.Errorf("/dev/shm/sub (child of /dev/shm): got %v, want skip (exact match required)", got)
+	}
+}
+
+func TestReplayMountAllowlist(t *testing.T) {
+	// Save and restore env to avoid polluting other tests.
+	prev, hadPrev := os.LookupEnv("NVSNAP_REPLAY_MOUNTS")
+	t.Cleanup(func() {
+		if hadPrev {
+			_ = os.Setenv("NVSNAP_REPLAY_MOUNTS", prev)
+		} else {
+			_ = os.Unsetenv("NVSNAP_REPLAY_MOUNTS")
+		}
+	})
+
+	t.Run("default", func(t *testing.T) {
+		_ = os.Unsetenv("NVSNAP_REPLAY_MOUNTS")
+		got := ReplayMountAllowlist()
+		want := []string{"/dev/shm", "/opt/nvsnap"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("default: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("env override single", func(t *testing.T) {
+		_ = os.Setenv("NVSNAP_REPLAY_MOUNTS", "/tmp")
+		got := ReplayMountAllowlist()
+		want := []string{"/tmp"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("override: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("env override multiple with spaces", func(t *testing.T) {
+		_ = os.Setenv("NVSNAP_REPLAY_MOUNTS", "/dev/shm, /tmp ,/var/run")
+		got := ReplayMountAllowlist()
+		want := []string{"/dev/shm", "/tmp", "/var/run"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("override: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("env empty falls back to default", func(t *testing.T) {
+		_ = os.Setenv("NVSNAP_REPLAY_MOUNTS", "")
+		got := ReplayMountAllowlist()
+		want := []string{"/dev/shm", "/opt/nvsnap"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("empty env: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("env whitespace-only falls back to default", func(t *testing.T) {
+		_ = os.Setenv("NVSNAP_REPLAY_MOUNTS", "   ")
+		got := ReplayMountAllowlist()
+		want := []string{"/dev/shm", "/opt/nvsnap"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("whitespace env: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("env with empty entries are dropped", func(t *testing.T) {
+		_ = os.Setenv("NVSNAP_REPLAY_MOUNTS", ",/dev/shm,,/tmp,")
+		got := ReplayMountAllowlist()
+		want := []string{"/dev/shm", "/tmp"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("empty entries: got %v, want %v", got, want)
+		}
+	})
+}
+
+func TestMountIsRW(t *testing.T) {
+	cases := []struct {
+		opts string
+		want bool
+	}{
+		{"rw,nosuid,nodev,relatime", true},
+		{"ro,nosuid", false},
+		{"rw", true},
+		{"ro", false},
+		{"nosuid,nodev", false}, // neither rw nor ro present
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := mountIsRW(tc.opts); got != tc.want {
+			t.Errorf("mountIsRW(%q) = %v; want %v", tc.opts, got, tc.want)
+		}
+	}
+}
+
+// The default allowlist carries the nvsnap cachedir alongside /dev/shm:
+// engines keep JIT artefacts open there and a placeholder has no copy.
+func TestDefaultReplayAllowlistCoversTheCachedir(t *testing.T) {
+	t.Setenv("NVSNAP_REPLAY_MOUNTS", "")
+	al := ReplayMountAllowlist()
+	if got := classifyMount("/", "/opt/nvsnap", "tmpfs", "rw", al); got != MountClassReplay {
+		t.Errorf("writable cachedir mount must be replayed, got %v", got)
+	}
+	if got := classifyMount("/", "/opt/nvsnap", "tmpfs", "ro", al); got != MountClassSkip {
+		t.Errorf("a read-only cachedir mount is left alone, got %v", got)
+	}
+	if got := classifyMount("/", "/dev/shm", "tmpfs", "rw", al); got != MountClassReplay {
+		t.Errorf("/dev/shm stays on the default allowlist, got %v", got)
+	}
+}
+
+// The allowlist is replayed whatever its size; the size limit is for the
+// other emptyDirs only.
+func TestOnAllowlist(t *testing.T) {
+	al := []string{"/dev/shm", "/opt/nvsnap"}
+	if !onAllowlist("/opt/nvsnap", al) || onAllowlist("/opt/nvsnap/cache", al) || onAllowlist("/var/lib/etcd", al) {
+		t.Error("onAllowlist must match allowlisted mountpoints exactly")
+	}
+}
+
+// A replay mount the dump saves itself is not copied beside it: its
+// restore recreates it, and the restored process never sees a copy.
+func TestCaptureReplayMountsSkipsWhatTheDumpSaves(t *testing.T) {
+	mi, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil || !strings.Contains(string(mi), " /dev/shm rw") {
+		t.Skip("no writable /dev/shm mount here")
+	}
+	t.Setenv("NVSNAP_REPLAY_MOUNTS", "/dev/shm")
+	dir := t.TempDir()
+	a := &Agent{}
+	ci := &containerd.ContainerInfo{PID: uint32(os.Getpid())} //nolint:gosec // a pid fits in 32 bits
+	got := a.captureReplayMounts(context.Background(), ci, dir, map[string]bool{"/dev/shm": true}, logrus.NewEntry(logrus.New()))
+	if len(got) != 0 {
+		t.Errorf("replay mounts: %+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mounts", "dev_shm.tar")); err == nil {
+		t.Error("/dev/shm copied although the dump saves it")
+	}
+}

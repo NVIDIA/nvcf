@@ -175,21 +175,21 @@ Field requirements:
 | `metadata` | No | Arbitrary key-value pairs surfaced in task details |
 | `lastUpdatedAt` | Yes | RFC3339Nano timestamp; must be refreshed at least every 3 minutes |
 
-**Heartbeat:** If `lastUpdatedAt` falls more than 5 minutes behind the current
+Heartbeat: If `lastUpdatedAt` falls more than 5 minutes behind the current
 time and `percentComplete` is not 100, the task moves to `ERRORED`.
 
-**Completion:** Set `percentComplete` to `100` when the workload finishes. That
+Completion: Set `percentComplete` to `100` when the workload finishes. That
 write transitions the task to `COMPLETED`. A container that exits without
 writing `100` will not reach `COMPLETED`.
 
-**Intermediate results:** For checkpoints or partial outputs, write
+Intermediate results: For checkpoints or partial outputs, write
 `percentComplete` between 1 and 99 with a `name` for each checkpoint. When
 using `UPLOAD`, each checkpoint name must be unique and you must not write to
 a result directory after updating `name` to a new value, since the system reads
 `resultsDir` to upload files by name. With `NONE`, there is no write-ordering
 constraint on the results directory.
 
-**Atomic writes:** Write to a temporary file and rename it over
+Atomic writes: Write to a temporary file and rename it over
 `NVCT_PROGRESS_FILE_PATH` to avoid the task system reading a partial file.
 In Python: `os.rename(tmp_path, progress_path)`.
 
@@ -220,6 +220,9 @@ nvcf-cli task get
 # Stream lifecycle events
 nvcf-cli task events
 ```
+
+`task events` reads task lifecycle events from the task API. To read function
+deployment events, see [Event Ledger](./event-ledger.md).
 
 A `task get` response includes `percentComplete` and `healthInfo` (the GPU type,
 instance type, and any error message from the platform) in addition to the

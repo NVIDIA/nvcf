@@ -63,6 +63,9 @@ bash tests/chart-render/verify-shadow-schema.sh
 bash tests/chart-render/verify-servicemonitor-label.sh
 ```
 
+CI runs `tests/chart-render/verify-probes.sh`, which checks that liveness uses
+the admin port and readiness uses the http port.
+
 This chart pairs with the service image source at
 `src/invocation-plane-services/vanity-gateway`, whose service name is
 `nvcf-ai-api-gateway-service`. Route configuration for the gateway in front of

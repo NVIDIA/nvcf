@@ -376,6 +376,9 @@ const (
 	ConnectTokenUnknown      = "rejected_token_unknown"      // 403, token was never issued by this pod
 	ConnectRequestIDMismatch = "rejected_requestid_mismatch" // 403, token valid but bound to another request
 	ConnectHijackFailed      = "rejected_hijack_failed"      // 500
+	// The tunnel was hijacked but could not be attached, for example during
+	// shutdown or when another worker already took the request.
+	ConnectRegisterFailed = "rejected_register_failed"
 )
 
 var ConnectResults = []string{
@@ -388,6 +391,7 @@ var ConnectResults = []string{
 	ConnectTokenUnknown,
 	ConnectRequestIDMismatch,
 	ConnectHijackFailed,
+	ConnectRegisterFailed,
 }
 
 var (

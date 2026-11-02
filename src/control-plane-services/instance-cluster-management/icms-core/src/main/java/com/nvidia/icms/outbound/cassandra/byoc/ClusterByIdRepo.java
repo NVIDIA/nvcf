@@ -30,20 +30,16 @@ public interface ClusterByIdRepo extends
 
     /**
      * Backed by the {@code idx_cluster_by_nca_id} storage-attached index.
-     * Used only when {@code icms.cluster-by-id-reads-enabled} is on.
      */
     List<ClusterEntity> findAllByNcaId(@Param("ncaId") String ncaId);
 
     /**
      * Backed by the {@code idx_cluster_by_cluster_group_id} storage-attached index.
-     * Used only when {@code icms.cluster-by-id-reads-enabled} is on.
      */
     List<ClusterEntity> findAllByClusterGroupId(@Param("clusterGroupId") String clusterGroupId);
 
     /**
      * Backed by the {@code idx_cluster_by_authorized_nca_ids} storage-attached index.
-     * Used only when {@code icms.cluster-by-id-reads-enabled} is on.
      */
     List<ClusterEntity> findAllByAuthorizedNcaIdsContains(@Param("ncaId") String ncaId);
 }
-

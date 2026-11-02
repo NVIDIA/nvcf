@@ -20,7 +20,10 @@ package com.nvidia.boot.cassandra.configuration;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.datastax.oss.driver.api.core.config.DriverConfigLoader;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.env.StandardEnvironment;
+import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.mock.env.MockEnvironment;
 
 class CassandraAdvancedConfigurationTest {
@@ -79,5 +82,23 @@ class CassandraAdvancedConfigurationTest {
         var builder = DriverConfigLoader.programmaticBuilder();
         customizer.customize(builder);
         assertThat(builder.build()).isNotNull();
+    }
+
+    @Test
+    void retryPolicyClassCanBeSelectedFromEnvironmentVariable() {
+        var env = new StandardEnvironment();
+        env.getPropertySources()
+                .addFirst(new SystemEnvironmentPropertySource(
+                        "test-env",
+                        Map.of(
+                                "SPRING_CASSANDRA_ADVANCED_RETRY_POLICY_CLASS",
+                                "com.nvidia.boot.cassandra.retry.RangeReadRetryPolicy")));
+
+        var builder = DriverConfigLoader.programmaticBuilder();
+        config.advancedProperties(env).customize(builder);
+        var profile = builder.build().getInitialConfig().getDefaultProfile();
+
+        assertThat(profile.getString(com.datastax.oss.driver.api.core.config.DefaultDriverOption.RETRY_POLICY_CLASS))
+                .isEqualTo("com.nvidia.boot.cassandra.retry.RangeReadRetryPolicy");
     }
 }

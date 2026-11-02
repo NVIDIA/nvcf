@@ -19,6 +19,8 @@ case "$docs_mode" in
   umbrella|legacy) ;;
   *) echo "Unknown docs mode: $docs_mode" >&2; exit 1 ;;
 esac
+python3 -m unittest discover -s docs/overview/samples/scripts -p 'test_*_upgrade_check.py'
+
 if [[ "$docs_mode" == umbrella ]]; then
   staged="$(mktemp -d)"
   trap 'rm -rf "$staged"' EXIT

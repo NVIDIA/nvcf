@@ -18,6 +18,11 @@ spring:
     contact-points: ${CASSANDRA_CONTACT_POINTS:cassandra.cassandra-system.svc.cluster.local}
     keyspace-name: api_keys_api
     local-datacenter: ${CASSANDRA_DATACENTER:ncp}
+    advanced:
+      retry-policy:
+        # Also retry range-read (index lookup) timeouts on the next host. Override with
+        # SPRING_CASSANDRA_ADVANCED_RETRY_POLICY_CLASS to go back to NextHostRetryPolicy.
+        class: com.nvidia.boot.cassandra.retry.RangeReadRetryPolicy
     ssl:
       enabled: false
       bundle: ""

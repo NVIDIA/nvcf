@@ -18,9 +18,14 @@ limitations under the License.
 package agent
 
 import (
+	"bytes"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
@@ -31,7 +36,10 @@ import (
 // tcpStateEstablished is the kernel TCP_ESTABLISHED state constant.
 // Vendored here to avoid pulling in a transitive header. Stable since
 // Linux's earliest userspace ABI for /proc/net/tcp and SOCK_DIAG.
-const tcpStateEstablished = 1
+const (
+	tcpStateEstablished = 1
+	tcpStateListen      = 10
+)
 
 // isExternalPeer returns true when ip is OUTSIDE any range typically
 // used for K8s pod/service networking. CRIU's TCP restore re-binds
@@ -100,42 +108,43 @@ func mustCIDR(s string) *net.IPNet {
 	return n
 }
 
-// closeExternalTCPInNS enters the network namespace of pidInNS, lists
-// all TCP_ESTABLISHED sockets, and destroys those whose peer satisfies
-// isExternalPeer. Returns the number of sockets destroyed and an error
-// only when the netns enumeration itself fails — per-socket destroy
-// errors are logged and skipped (we want best-effort: closing 9 of 10
-// is still progress, and SOCK_DESTROY can return ENOENT if the kernel
-// already closed the socket between enumerate and destroy).
-//
-// MUST be called from a goroutine where runtime.LockOSThread is held;
-// the caller is responsible for that + restoring the original netns.
-// We do the lock/restore inside this function for safety.
+// closeExternalTCPInNS destroys the TCP_ESTABLISHED sockets of the
+// network namespace of pidInNS whose peer satisfies isExternalPeer.
+// Returns the number destroyed and an error only when the namespace
+// cannot be listed; per-socket destroy errors are logged and skipped
+// (SOCK_DESTROY returns ENOENT for a socket the kernel closed meanwhile).
 func closeExternalTCPInNS(pidInNS int, log *logrus.Entry) (int, error) {
+	return destroyTCPInNS(pidInNS, func(remote net.IP) bool { return !isExternalPeer(remote) },
+		"Destroyed external TCP socket pre-checkpoint (nvsnap#187)", log)
+}
+
+// inNetNS runs f on a thread in the network namespace of pid.
+func inNetNS(pid int, f func() error) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-
 	origNs, err := netns.Get()
 	if err != nil {
-		return 0, fmt.Errorf("get current netns: %w", err)
+		return fmt.Errorf("get current netns: %w", err)
 	}
 	defer func() { _ = origNs.Close() }()
-	targetNs, err := netns.GetFromPid(pidInNS)
+	targetNs, err := netns.GetFromPid(pid)
 	if err != nil {
-		return 0, fmt.Errorf("get netns for pid %d: %w", pidInNS, err)
+		return fmt.Errorf("get netns for pid %d: %w", pid, err)
 	}
 	defer func() { _ = targetNs.Close() }()
 	if err := netns.Set(targetNs); err != nil {
-		return 0, fmt.Errorf("setns to target: %w", err)
+		return fmt.Errorf("setns to target: %w", err)
 	}
-	// Always restore the original netns — even on early return.
-	defer func() {
-		if err := netns.Set(origNs); err != nil {
-			log.WithError(err).Error("Failed to restore original netns; OS thread will exit on goroutine end")
-		}
-	}()
+	// Restore the original netns even on early return: a thread left in
+	// another namespace is unusable, and it exits with the goroutine.
+	defer func() { _ = netns.Set(origNs) }()
+	return f()
+}
 
-	destroyed := 0
+// establishedTCP lists the TCP_ESTABLISHED sockets of the current
+// network namespace.
+func establishedTCP(log *logrus.Entry) []*netlink.Socket {
+	var out []*netlink.Socket
 	for _, family := range []uint8{syscall.AF_INET, syscall.AF_INET6} {
 		sockets, err := netlink.SocketDiagTCP(family)
 		if err != nil {
@@ -143,28 +152,160 @@ func closeExternalTCPInNS(pidInNS int, log *logrus.Entry) (int, error) {
 			continue
 		}
 		for _, s := range sockets {
-			if s.State != tcpStateEstablished {
-				continue
+			if s.State == tcpStateEstablished {
+				out = append(out, s)
 			}
-			if !isExternalPeer(s.ID.Destination) {
+		}
+	}
+	return out
+}
+
+// destroyTCPInNS destroys the TCP_ESTABLISHED sockets of the network
+// namespace of pidInNS whose peer keep rejects, logging each with msg.
+func destroyTCPInNS(pidInNS int, keep func(remote net.IP) bool, msg string, log *logrus.Entry) (int, error) {
+	destroyed := 0
+	err := inNetNS(pidInNS, func() error {
+		for _, s := range establishedTCP(log) {
+			if keep(s.ID.Destination) {
 				continue
 			}
 			local := &net.TCPAddr{IP: s.ID.Source, Port: int(s.ID.SourcePort)}
 			remote := &net.TCPAddr{IP: s.ID.Destination, Port: int(s.ID.DestinationPort)}
 			if err := netlink.SocketDestroy(local, remote); err != nil {
-				log.WithError(err).WithFields(logrus.Fields{
-					"local":  local.String(),
-					"remote": remote.String(),
-				}).Warn("SocketDestroy failed; continuing")
+				log.WithError(err).WithFields(logrus.Fields{"local": local.String(), "remote": remote.String()}).
+					Warn("SocketDestroy failed; continuing")
 				continue
 			}
 			destroyed++
-			log.WithFields(logrus.Fields{
-				"local":  local.String(),
-				"remote": remote.String(),
-				"family": family,
-			}).Info("Destroyed external TCP socket pre-checkpoint (nvsnap#187)")
+			log.WithFields(logrus.Fields{"local": local.String(), "remote": remote.String()}).Info(msg)
+		}
+		return nil
+	})
+	return destroyed, err
+}
+
+// tcpPeersOfContainer returns the remote addresses of the TCP connections
+// the processes of the container of host pid pid opened (outboundPeers), or
+// of all its connections with both: the processes in its cgroup, whether or
+// not the pod shares one pid namespace between its containers. The
+// containers of a pod share a network namespace, so the namespace alone
+// cannot tell a sidecar's connections from the engine's.
+func tcpPeersOfContainer(pid int, both bool, log *logrus.Entry) ([]net.IP, error) {
+	inodes, err := containerSocketInodes(hostProcBase(), pid)
+	if err != nil {
+		return nil, err
+	}
+	var peers []net.IP
+	err = inNetNS(pid, func() error {
+		peers = tcpPeers(allTCP(log), both, func(s *netlink.Socket) bool { return inodes[s.INode] })
+		return nil
+	})
+	return peers, err
+}
+
+// tcpPeers returns the remote addresses of the established connections of
+// sockets that own selects: the ones the namespace opened
+// (outboundPeers), or all of them with both, loopback excluded, each once.
+func tcpPeers(sockets []*netlink.Socket, both bool, own func(*netlink.Socket) bool) []net.IP {
+	if !both {
+		return outboundPeers(sockets, own)
+	}
+	seen := map[string]bool{}
+	var peers []net.IP
+	for _, s := range sockets {
+		ip := s.ID.Destination
+		if s.State != tcpStateEstablished || !own(s) || ip.IsLoopback() || seen[ip.String()] {
+			continue
+		}
+		seen[ip.String()] = true
+		peers = append(peers, ip)
+	}
+	return peers
+}
+
+// outboundPeers returns the remote addresses of the established
+// connections of sockets that the namespace opened, loopback excluded,
+// each once. A connection on a port the namespace listens on was opened
+// by its peer, a client (a request proxy, say): the peer depends on the
+// workload, not the workload on it. own selects the sockets to consider.
+func outboundPeers(sockets []*netlink.Socket, own func(*netlink.Socket) bool) []net.IP {
+	listening := map[uint16]bool{}
+	for _, s := range sockets {
+		if s.State == tcpStateListen {
+			listening[s.ID.SourcePort] = true
 		}
 	}
-	return destroyed, nil
+	seen := map[string]bool{}
+	var peers []net.IP
+	for _, s := range sockets {
+		ip := s.ID.Destination
+		if s.State != tcpStateEstablished || listening[s.ID.SourcePort] || !own(s) || ip.IsLoopback() || seen[ip.String()] {
+			continue
+		}
+		seen[ip.String()] = true
+		peers = append(peers, ip)
+	}
+	return peers
+}
+
+// allTCP returns the TCP sockets of the current network namespace.
+func allTCP(log *logrus.Entry) []*netlink.Socket {
+	var out []*netlink.Socket
+	for _, family := range []uint8{syscall.AF_INET, syscall.AF_INET6} {
+		sockets, err := netlink.SocketDiagTCP(family)
+		if err != nil {
+			log.WithError(err).WithField("family", family).Warn("SocketDiagTCP failed; continuing")
+			continue
+		}
+		out = append(out, sockets...)
+	}
+	return out
+}
+
+// containerSocketInodes returns the inodes of the sockets open in the
+// processes that share host pid pid's cgroup.
+func containerSocketInodes(procBase string, pid int) (map[uint32]bool, error) {
+	cg, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(pid), "cgroup"))
+	if err != nil {
+		return nil, fmt.Errorf("cgroup of pid %d: %w", pid, err)
+	}
+	ents, err := os.ReadDir(procBase)
+	if err != nil {
+		return nil, err
+	}
+	inodes := map[uint32]bool{}
+	for _, e := range ents {
+		if _, err := strconv.Atoi(e.Name()); err != nil {
+			continue
+		}
+		if c, err := os.ReadFile(filepath.Join(procBase, e.Name(), "cgroup")); err != nil || !bytes.Equal(c, cg) {
+			continue
+		}
+		fds, err := os.ReadDir(filepath.Join(procBase, e.Name(), "fd"))
+		if err != nil {
+			continue
+		}
+		for _, fd := range fds {
+			l, err := os.Readlink(filepath.Join(procBase, e.Name(), "fd", fd.Name()))
+			if err != nil || !strings.HasPrefix(l, "socket:[") {
+				continue
+			}
+			if n, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(l, "socket:["), "]"), 10, 32); err == nil {
+				inodes[uint32(n)] = true
+			}
+		}
+	}
+	return inodes, nil
+}
+
+// tcpPeersInNS returns the remote addresses of the TCP connections the
+// network namespace of pidInNS opened (outboundPeers), or of all its
+// connections with both.
+func tcpPeersInNS(pidInNS int, both bool, log *logrus.Entry) ([]net.IP, error) {
+	var peers []net.IP
+	err := inNetNS(pidInNS, func() error {
+		peers = tcpPeers(allTCP(log), both, func(*netlink.Socket) bool { return true })
+		return nil
+	})
+	return peers, err
 }
