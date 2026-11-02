@@ -4142,6 +4142,11 @@ async fn decision_routes_enforce_required_headers_without_upstream_call() {
                 StatusCode::BAD_REQUEST,
                 "{path} without {missing}"
             );
+            assert_eq!(
+                response_header(&response, "x-stargate-error-code"),
+                Some("invalid_request"),
+                "{path} without {missing}"
+            );
         }
         assert_eq!(
             backend.hits.load(Ordering::SeqCst),
@@ -4190,8 +4195,76 @@ async fn decision_routes_reject_content_length_over_replay_limit_with_413() {
         .unwrap();
         let text = String::from_utf8_lossy(&buf[..read]);
         assert!(text.starts_with("HTTP/1.1 413"), "{path}: got {text}");
+        assert!(
+            text.to_ascii_lowercase()
+                .contains("x-stargate-error-code: request_too_large"),
+            "{path}: got {text}"
+        );
         assert_eq!(backend.hits.load(Ordering::SeqCst), 0, "{path}");
         backend.task.abort();
+    }
+    fixture.shutdown().await;
+}
+
+/// A backend that answers every request with a closing 200 until the returned
+/// task is aborted. Closing each connection keeps Pylon from reusing a pooled
+/// connection once the backend is gone.
+async fn start_health_only_backend() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await;
+                let _ = tokio::io::AsyncWriteExt::write_all(
+                    &mut stream,
+                    b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-length: 2\r\n\r\nok",
+                )
+                .await;
+            });
+        }
+    });
+    (addr, task)
+}
+
+#[tokio::test]
+async fn decision_routes_mark_pylon_errors_when_the_backend_is_down() {
+    let mut fixture = ProxyFixture::start("test-sg-decision-backend-down").await;
+    for (path, model) in DECISION_ROUTES {
+        let (addr, backend) = start_health_only_backend().await;
+        register_http_backend(
+            &mut fixture,
+            &format!("decision-down-{}", &path[4..]),
+            model,
+            addr,
+            TunnelTransportProtocol::RawQuic,
+            false,
+        )
+        .await;
+        // The backend goes down after registration, so Pylon's local connect fails.
+        backend.abort();
+        let _ = backend.await;
+        let response = proxy_request(
+            &reqwest::Client::new(),
+            fixture.http_addr,
+            path,
+            model,
+            "req-decision-down",
+        )
+        .body(format!(r#"{{"model":"{model}","questions":[]}}"#))
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        assert_eq!(
+            response_header(&response, "x-stargate-error-code"),
+            Some("local_connect_failure"),
+            "{path}"
+        );
+        for internal in ["x-stargate-retryable", "x-stargate-retry-reason"] {
+            assert_eq!(response_header(&response, internal), None, "{path}");
+        }
     }
     fixture.shutdown().await;
 }
