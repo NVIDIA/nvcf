@@ -1046,6 +1046,16 @@ func (d *ModelDirector) proxyResolvedRequest(writer http.ResponseWriter, resolve
 		span.SetAttributes(traceAttrSessionTimeoutSeconds.Int(int(resolved.functionInfo.sessionTimeout)))
 	}
 
+	// endpoint.type names the native route, so upstream.kind records whether
+	// it went through the LLM Gateway.
+	if requestProtocol(resolved.request) != nativeProtocolNone {
+		kind := traceAttrValueUpstreamDirect
+		if resolved.functionInfo.targetsLLMGateway() {
+			kind = traceAttrValueUpstreamLLMGateway
+		}
+		trace.SpanFromContext(resolved.request.Context()).SetAttributes(traceAttrUpstreamKind.String(kind))
+	}
+
 	if resolved.functionInfo.targetsLLMGateway() {
 		return d.proxyToLLMGateway(writer, resolved)
 	}
