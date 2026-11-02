@@ -21,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -71,6 +72,11 @@ import org.springframework.test.web.servlet.MockMvc;
  * the expiry of the stale certificate (one year after generation) and the fresh one (100 years), so
  * the stale certificate is expired and the fresh one is valid whenever the test runs.
  * <p>
+ * Registering the rotated bundle makes the registry invoke the update handler that
+ * {@code RefreshingCqlSession} registers, which rebuilds the session a second time. Each build
+ * therefore returns a distinct session, and the test asserts that the session installed last is
+ * never closed.
+ * <p>
  * The two tests share one application context ({@code PER_CLASS} lifecycle) and run in order: the
  * second applies the rotation to the context the first observed in its pre-rotation state.
  */
@@ -105,7 +111,7 @@ class CassandraSslHealthEndpointTest {
     private ConfigurableApplicationContext applicationContext;
 
     @Autowired
-    private InitialSession initialSession;
+    private Sessions sessions;
 
     @Test
     @Order(1)
@@ -131,7 +137,9 @@ class CassandraSslHealthEndpointTest {
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(body).contains("rotated-cassandra-client").doesNotContain("stale-cassandra-client");
-        verify(initialSession.session()).close();
+        verify(sessions.initial()).close();
+        verify(sessions.rebuilt()).close();
+        verify(sessions.afterBundleUpdate(), never()).close();
     }
 
     private void rotateCertificateAndRefresh() {
@@ -144,7 +152,7 @@ class CassandraSslHealthEndpointTest {
         applicationContext.publishEvent(new RefreshScopeRefreshedEvent());
     }
 
-    record InitialSession(CqlSession session) {
+    record Sessions(CqlSession initial, CqlSession rebuilt, CqlSession afterBundleUpdate) {
     }
 
     @Configuration(proxyBeanMethods = false)
@@ -162,25 +170,29 @@ class CassandraSslHealthEndpointTest {
     static class TestApplication {
 
         @Bean
-        InitialSession initialSession() {
-            return new InitialSession(mock(CqlSession.class));
+        Sessions sessions() {
+            return new Sessions(mock(CqlSession.class), validSession(), validSession());
         }
 
         @Bean
-        CqlSessionBuilder cqlSessionBuilder(InitialSession initialSession) {
-            var rebuiltSession = mock(CqlSession.class);
-            var resultSet = mock(ResultSet.class);
-            when(resultSet.one()).thenReturn(mock(Row.class));
-            when(rebuiltSession.execute(anyString())).thenReturn(resultSet);
-            when(rebuiltSession.execute(any(Statement.class))).thenReturn(resultSet);
-            var driverContext = mock(DriverContext.class);
-            when(driverContext.getSessionName()).thenReturn("test-session");
-            when(rebuiltSession.getContext()).thenReturn(driverContext);
-
+        CqlSessionBuilder cqlSessionBuilder(Sessions sessions) {
             var builder = mock(CqlSessionBuilder.class);
             when(builder.withSslContext(any())).thenReturn(builder);
-            when(builder.build()).thenReturn(initialSession.session(), rebuiltSession);
+            when(builder.build()).thenReturn(
+                    sessions.initial(), sessions.rebuilt(), sessions.afterBundleUpdate());
             return builder;
+        }
+
+        private static CqlSession validSession() {
+            var session = mock(CqlSession.class);
+            var resultSet = mock(ResultSet.class);
+            when(resultSet.one()).thenReturn(mock(Row.class));
+            when(session.execute(anyString())).thenReturn(resultSet);
+            when(session.execute(any(Statement.class))).thenReturn(resultSet);
+            var driverContext = mock(DriverContext.class);
+            when(driverContext.getSessionName()).thenReturn("test-session");
+            when(session.getContext()).thenReturn(driverContext);
+            return session;
         }
 
         @Bean

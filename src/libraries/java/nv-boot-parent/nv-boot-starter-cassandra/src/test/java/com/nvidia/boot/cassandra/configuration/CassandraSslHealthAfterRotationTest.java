@@ -21,6 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.datastax.oss.driver.api.core.CqlSession;
@@ -75,18 +77,17 @@ class CassandraSslHealthAfterRotationTest {
     private SslProperties sslProperties;
     private CqlSession delegateSession;
     private CqlSession rebuiltSession;
+    private CqlSession afterBundleUpdateSession;
     private CassandraSslBundleConfiguration.RefreshingCqlSession session;
 
     @BeforeEach
     void setUp() {
-        rebuiltSession = mock(CqlSession.class);
-        var resultSet = mock(ResultSet.class);
-        when(resultSet.one()).thenReturn(mock(Row.class));
-        when(rebuiltSession.execute(anyString())).thenReturn(resultSet);
+        rebuiltSession = validSession();
+        afterBundleUpdateSession = validSession();
 
         var builder = mock(CqlSessionBuilder.class);
         when(builder.withSslContext(any())).thenReturn(builder);
-        when(builder.build()).thenReturn(rebuiltSession);
+        when(builder.build()).thenReturn(rebuiltSession, afterBundleUpdateSession);
 
         applicationContext = new GenericApplicationContext();
         applicationContext.registerBean(CqlSessionBuilder.class, () -> builder);
@@ -142,7 +143,25 @@ class CassandraSslHealthAfterRotationTest {
         assertThat(health.getDetails().toString())
                 .contains("validChains")
                 .doesNotContain("stale-cassandra-client");
-        assertThat(session.getDelegate()).isNotSameAs(delegateSession);
+        assertThat(session.getDelegate()).isSameAs(afterBundleUpdateSession);
+        verify(delegateSession).close();
+        verify(rebuiltSession).close();
+        verify(afterBundleUpdateSession, never()).close();
+    }
+
+    @Test
+    @DisplayName("Without a SslBundleRegistry bean, rotation still rebuilds the session and the registry is left untouched")
+    void rotationWithoutRegistryStillRebuildsSession() {
+        var sessionWithoutRegistry = new CassandraSslBundleConfiguration.RefreshingCqlSession(
+                applicationContext, registry, null, environment, sslProperties, BUNDLE_NAME,
+                delegateSession, null);
+        rotateCertificate();
+
+        sessionWithoutRegistry.handleRefreshComplete(new RefreshScopeRefreshedEvent());
+
+        assertThat(sessionWithoutRegistry.getDelegate()).isSameAs(rebuiltSession);
+        verify(delegateSession).close();
+        assertThat(healthIndicator.health().getStatus()).isEqualTo(Status.OUT_OF_SERVICE);
     }
 
     @Test
@@ -170,6 +189,14 @@ class CassandraSslHealthAfterRotationTest {
         assertThat(registry.getBundle(BUNDLE_NAME).getStores().getKeyStore())
                 .isSameAs(bundleBefore.getStores().getKeyStore());
         assertThat(healthIndicator.health().getStatus()).isEqualTo(Status.OUT_OF_SERVICE);
+    }
+
+    private static CqlSession validSession() {
+        var validSession = mock(CqlSession.class);
+        var resultSet = mock(ResultSet.class);
+        when(resultSet.one()).thenReturn(mock(Row.class));
+        when(validSession.execute(anyString())).thenReturn(resultSet);
+        return validSession;
     }
 
     private void rotateCertificate() {

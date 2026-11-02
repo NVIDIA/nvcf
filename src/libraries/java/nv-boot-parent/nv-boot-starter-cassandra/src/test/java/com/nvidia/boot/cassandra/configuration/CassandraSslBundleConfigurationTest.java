@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.aop.TargetSource;
 import org.springframework.boot.ssl.DefaultSslBundleRegistry;
 import org.springframework.boot.ssl.SslBundle;
+import org.springframework.boot.ssl.SslBundles;
 import org.springframework.boot.ssl.SslStoreBundle;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -47,6 +48,17 @@ class CassandraSslBundleConfigurationTest {
             .withPropertyValues("spring.cassandra.ssl.enabled=false")
             .withBean(DefaultSslBundleRegistry.class)
             .withBean(CqlSessionBuilder.class, this::createMockBuilder);
+
+    @Test
+    @DisplayName("Loads cassandraSession when the application's SslBundles bean is not a SslBundleRegistry")
+    void loadsWhenSslBundlesIsNotARegistry() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(CassandraSslBundleConfiguration.class)
+                .withPropertyValues("spring.cassandra.ssl.enabled=false")
+                .withBean(SslBundles.class, () -> mock(SslBundles.class))
+                .withBean(CqlSessionBuilder.class, this::createMockBuilder)
+                .run(context -> assertThat(context).hasBean("cassandraSession"));
+    }
 
     private DefaultSslBundleRegistry createRegistryWithBundle() {
         var registry = new DefaultSslBundleRegistry();

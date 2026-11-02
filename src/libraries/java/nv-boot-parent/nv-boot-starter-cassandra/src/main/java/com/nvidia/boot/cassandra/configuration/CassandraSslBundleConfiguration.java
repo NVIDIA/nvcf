@@ -133,7 +133,7 @@ public class CassandraSslBundleConfiguration {
     public RefreshingCqlSession refreshableCqlSession(
             ApplicationContext applicationContext,
             SslBundles sslBundles,
-            SslBundleRegistry sslBundleRegistry,
+            @Autowired(required = false) SslBundleRegistry sslBundleRegistry,
             Environment environment,
             @Autowired(required = false) SslProperties sslProperties,
             CqlSessionBuilder cqlSessionBuilder,
@@ -267,7 +267,7 @@ public class CassandraSslBundleConfiguration {
                         lastKnownSslMaterial = SslMaterialSnapshot.from(environment, sslBundleName);
                         oldSession.close();
                         if (freshBundle != null) {
-                            sslBundleRegistry.updateBundle(sslBundleName, freshBundle);
+                            publishRotatedBundle(freshBundle);
                         }
                     } else {
                         log.error("New session validation failed - keeping old session");
@@ -280,6 +280,16 @@ public class CassandraSslBundleConfiguration {
             } finally {
                 sessionLock.unlock();
             }
+        }
+
+        private void publishRotatedBundle(SslBundle freshBundle) {
+            if (sslBundleRegistry == null) {
+                log.warn("No SslBundleRegistry bean available; SSL bundle '{}' in SslBundles "
+                                 + "(and /actuator/health/ssl) will keep reporting the "
+                                 + "certificates loaded at startup", sslBundleName);
+                return;
+            }
+            sslBundleRegistry.updateBundle(sslBundleName, freshBundle);
         }
 
         private CqlSession wrapWithObservability(CqlSession session) {
