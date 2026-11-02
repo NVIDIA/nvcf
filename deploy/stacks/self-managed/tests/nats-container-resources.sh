@@ -51,9 +51,9 @@ EOF
 
 write_values
 
-merge="$(yq -r '.nats.container.merge' "$values_file")"
+merge="$(yq -r '.nats.container.merge.resources' "$values_file")"
 [[ "$merge" == "null" ]] ||
-  fail "expected no container merge block, got ${merge:-<none>}"
+  fail "expected no resources override, got ${merge:-<none>}"
 
 image_tag="$(yq -r '.nats.container.image.tag // ""' "$values_file")"
 [[ -n "$image_tag" ]] ||
@@ -84,9 +84,9 @@ limits_memory="$(yq -r '.nats.container.merge.resources.limits.memory' "$values_
 [[ "$limits_memory" == "null" ]] ||
   fail "expected no memory limit, got ${limits_memory:-<none>}"
 
-security_context="$(yq -r '.nats.container.merge.securityContext' "$values_file")"
-[[ "$security_context" == "null" ]] ||
-  fail "expected no security context, got ${security_context:-<none>}"
+security_context="$(yq -o=json -I=0 '.nats.container.merge.securityContext | sort_keys(.)' "$values_file")"
+expected_security_context="$(yq -o=json -I=0 '.nats.container.merge.securityContext | sort_keys(.)' "$stack_dir/environments/base.yaml")"
+[[ "$security_context" == "$expected_security_context" ]] || fail "resource overrides lost the non-root defaults"
 
 cat >"$environment_file" <<'EOF'
 global:

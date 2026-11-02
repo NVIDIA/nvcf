@@ -621,6 +621,8 @@ addons:
   nvcfUi:
     enabled: false
     openbaoMigrations:
+      # Select "1.36" for Kubernetes 1.35; empty uses the image default.
+      kubectlMinor: ""
       image:
         tag: "0.19.10"
 

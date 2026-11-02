@@ -68,7 +68,12 @@ assert_tag "$work_dir/newer-values.yaml" "0.19.6"
 
 write_env "0.19.4"
 render_values "$work_dir/older-values.yaml" >/dev/null
-assert_tag "$work_dir/older-values.yaml" "0.19.5"
+expected_default="$(sed -n 's/.*\$nvcfUiOpenbaoMigrationsTag := "\([^"]*\)".*/\1/p' "$stack_dir/global.yaml.gotmpl")"
+assert_tag "$work_dir/older-values.yaml" "$expected_default"
+# A compatible client selection must reach the chart alongside the image.
+yq -i '.addons.nvcfUi.openbaoMigrations.kubectlMinor = "1.36"' "$environment_file"
+render_values "$work_dir/client-values.yaml" >/dev/null
+yq -e '.nvcfUi.openbaoMigrations.kubectlMinor == "1.36"' "$work_dir/client-values.yaml" >/dev/null || fail "UI client selection was lost"
 
 write_env "0.19.5+build.1"
 if render_values "$work_dir/invalid-values.yaml" >"$work_dir/invalid.log" 2>&1; then

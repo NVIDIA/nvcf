@@ -86,7 +86,7 @@ assert_remote_config_key() {
 otel_image='${nvct.sidecars.hostname}/${nvct.sidecars.repository}/otel-collector:9.9.9'
 
 # ---------------------------------------------------------------------------
-# 1. No override: the stack emits nothing, leaving the chart defaults in place.
+# 1. No override: forward the stack selection and retain other chart defaults.
 # ---------------------------------------------------------------------------
 write_environment <<'EOF'
 global:
@@ -97,8 +97,9 @@ EOF
 
 default_values="$work_dir/default-values.yaml"
 render_values_or_fail "$default_values" api
-assert_value "$default_values" '.nvctApi.remoteConfig' null \
-  "default: no nvctApi remote config is forwarded"
+assert_value "$default_values" '.nvctApi.remoteConfig.configData.nvct.sidecars.ess-agent-container' \
+  "$(yq -r '.nvctApi.remoteConfig.configData.nvct.sidecars.ess-agent-container' "$stack_dir/environments/base.yaml")" \
+  "default: task ESS sidecar selection is forwarded"
 
 # ---------------------------------------------------------------------------
 # 2. Override reaches the chart verbatim, ${...} placeholders included.
@@ -121,8 +122,8 @@ render_values_or_fail "$override_values" api
 assert_value "$override_values" \
   '.nvctApi.remoteConfig.configData.nvct.sidecars.otel-container' "$otel_image" \
   "override: otel-container is forwarded to the chart"
-assert_value "$override_values" '.api.remoteConfig' null \
-  "override: nvctApi remote config does not leak into the API chart"
+assert_value "$override_values" '.api.remoteConfig.configData.nvct' null \
+  "override: NVCT settings do not leak into the API profile"
 
 # ---------------------------------------------------------------------------
 # 3. Helm merges per key, so sibling chart defaults must survive the override.
@@ -151,12 +152,13 @@ helm template nvct-api "$chart_dir" \
   fail "helm template could not render the nvct-api chart defaults"
 
 for sidecar_key in init-container utils-container ess-agent-container; do
+  stack_selection="$(yq -r ".nvctApi.remoteConfig.configData.nvct.sidecars.\"$sidecar_key\" // \"\"" "$stack_dir/environments/base.yaml")"
   chart_default="$(read_remote_config_key "$chart_default_manifest" \
     ".nvct.sidecars.\"$sidecar_key\"")"
   [[ -n "$chart_default" && "$chart_default" != "null" ]] ||
     fail "merge: the chart no longer defaults $sidecar_key, update this test"
   assert_remote_config_key "$manifest" ".nvct.sidecars.\"$sidecar_key\"" \
-    "$chart_default" "merge: the chart default for $sidecar_key survives"
+    "${stack_selection:-$chart_default}" "merge: $sidecar_key keeps its stack selection or chart default"
 done
 
 # ---------------------------------------------------------------------------
