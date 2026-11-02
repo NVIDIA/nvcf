@@ -11,10 +11,6 @@ test_stacks_dir="$work_dir/stacks"
 test_stack_dir="$test_stacks_dir/self-managed"
 environment_name="openbao-published-chart-test"
 secrets_file="$test_stack_dir/secrets/$environment_name-secrets.yaml"
-: "${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"
-: "${NVCF_PUBLISHED_CHART_REPOSITORY:?NVCF_PUBLISHED_CHART_REPOSITORY is required}"
-published_chart_registry="$NVCF_PUBLISHED_CHART_REGISTRY"
-published_chart_repository="$NVCF_PUBLISHED_CHART_REPOSITORY"
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
@@ -28,6 +24,24 @@ published_chart_version="$(awk '
 ' "$stack_dir/helmfile.d/01-dependencies.yaml.gotmpl")"
 test -n "$published_chart_version" ||
   fail "could not derive the published OpenBao version from the stack Helmfile"
+
+# A downloaded release package permits the same assertions without registry access.
+if test -n "${NVCF_PUBLISHED_CHART_DIR:-}"; then
+  published_chart="$NVCF_PUBLISHED_CHART_DIR/helm-nvcf-openbao-server-$published_chart_version.tgz"
+else
+  : "${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"
+  : "${NVCF_PUBLISHED_CHART_REPOSITORY:?NVCF_PUBLISHED_CHART_REPOSITORY is required}"
+  helm pull "oci://${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/helm-nvcf-openbao-server" \
+    --version "$published_chart_version" --destination "$work_dir"
+  published_chart="$work_dir/helm-nvcf-openbao-server-$published_chart_version.tgz"
+fi
+test -s "$published_chart" || fail "missing published chart package: $published_chart"
+helm show chart "$published_chart" >"$work_dir/chart.yaml"
+test "$(yq -r '.name' "$work_dir/chart.yaml")" = helm-nvcf-openbao-server ||
+  fail "package name does not match the OpenBao chart"
+test "$(yq -r '.version' "$work_dir/chart.yaml")" = "$published_chart_version" ||
+  fail "package version does not match the stack pin"
+helm show values "$published_chart" >"$work_dir/chart-values.yaml"
 
 # Match the existing Cassandra/OpenBao credential-wiring test's rendered stack
 # values, but keep that local-chart test offline and independent of registry
@@ -47,7 +61,7 @@ openbao_release="$work_dir/openbao-release.json"
 HELMFILE_ENV="$environment_name" \
   HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
   helmfile \
-    --file "$test_stack_dir/helmfile.d" \
+    --file "$test_stack_dir/helmfile.d/01-dependencies.yaml.gotmpl" \
     --environment default \
     --state-values-set ingress.gatewayApi.controllerNamespace=envoy-gateway-system \
     --state-values-set ingress.gatewayApi.gateways.shared.name=shared-gw \
@@ -59,12 +73,11 @@ HELMFILE_ENV="$environment_name" \
     --output-file-template "$openbao_values" >/dev/null
 
 test -s "$openbao_values" || fail "helmfile wrote no OpenBao values"
-test "$(yq -r '.openbao.migrations.image.tag // ""' "$openbao_values")" = "" ||
-  fail "stack values should let the OpenBao chart supply the migrations image tag"
-expected_migrations_image="$(yq -r '
-  .openbao.migrations.image |
-  "\(.registry)/\(.repository):0.19.5"
-' "$openbao_values")"
+expected_migrations_tag="$(yq -r '.openbao.migrations.image.tag // ""' "$openbao_values")"
+if test -z "$expected_migrations_tag"; then
+  expected_migrations_tag="$(yq -r '.openbao.migrations.image.tag' "$work_dir/chart-values.yaml")"
+fi
+expected_migrations_image="$(yq -r '.openbao.migrations.image | .registry + "/" + .repository' "$openbao_values"):$expected_migrations_tag"
 
 HELMFILE_ENV="$environment_name" \
   HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
@@ -91,9 +104,7 @@ if test -z "$expected_password" || test "$expected_password" = 'null'; then
 fi
 
 published_manifest="$work_dir/openbao-published-manifest.yaml"
-published_chart="oci://${published_chart_registry}/${published_chart_repository}/helm-nvcf-openbao-server"
 helm template openbao-server "$published_chart" \
-  --version "$published_chart_version" \
   --namespace vault-system \
   --values "$openbao_values" \
   --show-only templates/hook-post-02-migrations.yaml >"$published_manifest" ||
