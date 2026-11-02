@@ -5,17 +5,17 @@ before customer publication. [manifest.json](manifest.json) selects three
 independently released stacks. The candidate remains unqualified until this
 complete combination passes QA.
 
-| Stack | Selected version | Source tag |
-| --- | --- | --- |
-| Self-Managed | 1.0.7 | `deploy/stacks/self-managed/v1.0.7` |
-| Compute Plane | 1.0.4 | `deploy/stacks/nvcf-compute-plane/v1.0.4` |
-| Observability | 1.0.0 | `deploy/stacks/observability/v1.0.0` |
-
 ```sh
 git clone --branch release-nvcf/1.0.4 --single-branch https://github.com/NVIDIA/nvcf.git nvcf-1.0.4-qa
 cd nvcf-1.0.4-qa
 git rev-parse HEAD
+jq -r '.stacks | to_entries[] | [.key, .value.version, .value.source_tag] | @tsv' \
+  deploy/releases/1.0.4/manifest.json
 ```
+
+The manifest is the source of truth for the selected versions and source tags.
+The command above prints them from the recorded checkout; the assembly summary
+lists the same selection.
 
 Open the successful `Assemble Umbrella Candidate` workflow run for the recorded
 commit. Download its `umbrella-candidate-<commit>-<run-id>-<attempt>` artifact,
