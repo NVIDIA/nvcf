@@ -74,7 +74,8 @@ assert_tag "$work_dir/newer-values.yaml" "0.19.6"
 
 write_env "0.19.4"
 render_values "$work_dir/older-values.yaml" >/dev/null
-assert_tag "$work_dir/older-values.yaml" "0.19.5"
+assert_tag "$work_dir/older-values.yaml" \
+  "$(yq -r '.openbao.migrations.image.tag' "$stack_dir/environments/base.yaml")"
 
 write_env "0.19.5+build.1"
 if render_values "$work_dir/invalid-values.yaml" >"$work_dir/invalid.log" 2>&1; then
