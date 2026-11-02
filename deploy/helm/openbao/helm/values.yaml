@@ -53,10 +53,13 @@ openbao:
           memory: 256Mi
 
   migrations:
+    # Empty uses the image default. Set "1.36" for Kubernetes 1.35 servers.
+    # Requires an image with NVCF_KUBECTL_MINOR support ("1.36" or "1.37").
+    kubectlMinor: ""
     image:
       registry: ""
       repository: ""
-      tag: 0.19.5
+      tag: 0.19.10
       pullPolicy: IfNotPresent
     issuerDiscovery:
       enabled: false
@@ -84,7 +87,7 @@ openbao:
     image:
       registry: ""
       repository: ""
-      tag: 2.6.2-nv-1.3.4
+      tag: 2.6.3-nv-1.3.7
       pullPolicy: IfNotPresent
 
     podManagementPolicy: Parallel
@@ -263,5 +266,5 @@ openbao:
     agentImage:
       registry: ""
       repository: ""
-      tag: 2.6.2-nv-1.3.4
+      tag: 2.6.3-nv-1.3.7
       pullPolicy: IfNotPresent
