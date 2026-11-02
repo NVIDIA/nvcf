@@ -501,9 +501,15 @@ func consumeNativeResponsesSSE(
 		return stream, err
 	}
 
-	if eventBlock.Len() > 0 {
+	// A client drops an event that the stream ends before its blank line, so
+	// a terminal event cut off at EOF is completed and anything else is dropped.
+	if eventBlock.Len() > 0 && stream.terminal == nil {
 		stream.observe(eventBlock.Bytes())
 		if stream.terminal != nil {
+			if !bytes.HasSuffix(eventBlock.Bytes(), []byte("\n")) {
+				eventBlock.WriteByte('\n')
+			}
+			eventBlock.WriteByte('\n')
 			return stream, stream.relay(writer, eventBlock.Bytes())
 		}
 	}

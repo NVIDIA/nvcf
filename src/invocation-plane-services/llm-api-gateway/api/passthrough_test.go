@@ -626,17 +626,35 @@ func TestConsumeNativeResponsesSSEKeepsUsageForUnknownOutputItems(t *testing.T) 
 	require.Equal(t, uint32(9), usage.TotalTokens)
 }
 
-func TestConsumeNativeResponsesSSERelaysTerminalEventWithoutTrailingBlankLine(t *testing.T) {
+func TestConsumeNativeResponsesSSECompletesTerminalEventCutOffAtEOF(t *testing.T) {
 	t.Parallel()
 
-	sse := "event: response.completed\n" +
-		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[]}}` + "\n"
+	completed := "event: response.completed\n" +
+		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[]}}`
 
-	var relayed strings.Builder
-	stream, err := consumeNativeResponsesSSE(strings.NewReader(sse), &relayed)
-	require.NoError(t, err)
-	require.NotNil(t, stream.terminal)
-	require.Equal(t, sse, relayed.String())
+	// SSE clients drop an event that the stream ends before its blank line.
+	tests := []struct {
+		name        string
+		upstream    string
+		wantRelayed string
+	}{
+		{name: "ends after a newline", upstream: completed + "\n", wantRelayed: completed + "\n\n"},
+		{name: "ends mid line", upstream: completed, wantRelayed: completed + "\n\n"},
+		{name: "ends with crlf", upstream: completed + "\r\n", wantRelayed: completed + "\r\n\n"},
+		{name: "partial event after terminal", upstream: completed + "\n\nevent: x\ndata: {", wantRelayed: completed + "\n\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var relayed strings.Builder
+			stream, err := consumeNativeResponsesSSE(strings.NewReader(tt.upstream), &relayed)
+			require.NoError(t, err)
+			require.NotNil(t, stream.terminal)
+			require.Equal(t, tt.wantRelayed, relayed.String())
+		})
+	}
 }
 
 func TestNativeResponsesStreamObserveFindsOnlyTerminalResponses(t *testing.T) {
