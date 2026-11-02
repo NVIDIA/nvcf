@@ -776,7 +776,11 @@ func (d *ModelDirector) proxyModelMappedRequest(writer http.ResponseWriter, requ
 }
 
 func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, request *http.Request, modelToNVCFUrl map[string]FunctionInfo) (resolvedOpenAIRequest, bool) {
-	body, err := extractOpenAIRequestBody(request)
+	extract := extractOpenAIRequestBody
+	if isDecisionRoute(request) {
+		extract = extractDecisionRequestBody
+	}
+	body, err := extract(request)
 	if err != nil {
 		markGatewayRejected(writer, request)
 		if protocol := requestProtocol(request); protocol != nativeProtocolNone {
@@ -852,10 +856,9 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 		request = request.WithContext(ctx)
 	}
 
-	// setPollingHeaderIfNotPresent checks the Accept header, so we have to override it first
-	// Decision routes are non-streaming: stream is ignored and the body is
-	// forwarded as sent.
-	if body.Stream && !isDecisionRoute(request) {
+	// setPollingHeaderIfNotPresent checks the Accept header, so we have to override it first.
+	// Decision routes never read stream, so body.Stream is false there.
+	if body.Stream {
 		request.Header.Set("Accept", "text/event-stream")
 	}
 
@@ -1168,6 +1171,41 @@ func readMultipartModelField(r io.Reader, boundary string) (string, error) {
 	}
 }
 
+// errInvalidRequestBody signals a body that is valid JSON but not an object
+// with a string model. Callers render this as HTTP 400 invalid_request.
+var errInvalidRequestBody = errors.New("invalid request body")
+
+// extractDecisionRequestBody reads only model from a decision route body. The
+// rest of the body is the backend's to validate, so a field the gateway does
+// not use, such as a non-boolean stream, never fails the request here. Only a
+// JSON syntax error is errInvalidJSONBody.
+func extractDecisionRequestBody(request *http.Request) (openAIRequestBody, error) {
+	bodyBytes, err := readOpenAIRequestBody(request, "json body")
+	if err != nil {
+		return openAIRequestBody{}, err
+	}
+	if !stdjson.Valid(bodyBytes.peek()) {
+		_ = bodyBytes.Close()
+		return openAIRequestBody{}, errInvalidJSONBody
+	}
+	if bytes.Equal(bytes.TrimSpace(bodyBytes.peek()), []byte("null")) {
+		_ = bodyBytes.Close()
+		return openAIRequestBody{}, fmt.Errorf("%w: body is null", errInvalidRequestBody)
+	}
+	var decoded struct {
+		Model string `json:"model"`
+	}
+	if err := json.UnmarshalWithOption(bodyBytes.peek(), &decoded, json.DecodeFieldPriorityFirstWin()); err != nil {
+		_ = bodyBytes.Close()
+		return openAIRequestBody{}, fmt.Errorf("%w: %w", errInvalidRequestBody, err)
+	}
+	if decoded.Model == "" {
+		_ = bodyBytes.Close()
+		return openAIRequestBody{}, errModelFieldMissing
+	}
+	return openAIRequestBody{Model: strings.Clone(decoded.Model), raw: bodyBytes.peek()}, nil
+}
+
 // extractOpenAIJSONBody reads the full request body into a pooled ReadCloser and
 // replaces request.Body with it.
 func extractOpenAIJSONBody(request *http.Request) (openAIRequestBody, error) {
@@ -1283,6 +1321,9 @@ func requestReadFailure(protocol nativeProtocol, err error) (int, string, string
 		if protocol == nativeProtocolMessages {
 			message = "invalid Messages request JSON"
 		}
+	}
+	if errors.Is(err, errInvalidRequestBody) {
+		status, kind, message = http.StatusBadRequest, errKindInvalidRequest, "request body must be a JSON object with a string model"
 	}
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
