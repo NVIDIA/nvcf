@@ -156,7 +156,7 @@ func writeProxyError(writer http.ResponseWriter, request *http.Request, err erro
 			zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeClientCanceled)),
 			zap.Error(err),
 		)
-		if writeNativeError(writer, request, statusClientClosedRequest, errKindInternal, "client closed the request") {
+		if writeProtocolError(writer, proxyErrorProtocol(request), statusClientClosedRequest, errKindInternal, "client closed the request") {
 			return
 		}
 		writer.Header().Set("Content-Type", "application/problem+json")
@@ -179,7 +179,7 @@ func writeBadGatewayProblem(writer http.ResponseWriter, request *http.Request, e
 		zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeProxyError)),
 		zap.Error(err),
 	)
-	if writeNativeError(writer, request, http.StatusBadGateway, errKindProviderUnavailable, "upstream request failed") {
+	if writeProtocolError(writer, proxyErrorProtocol(request), http.StatusBadGateway, errKindProviderUnavailable, "upstream request failed") {
 		return
 	}
 	writer.Header().Set("Content-Type", "application/problem+json")
