@@ -223,7 +223,7 @@ func (s *socketScan) scan(procBase string, pid int) {
 		if err != nil {
 			continue
 		}
-		if t, err := os.Readlink(filepath.Join(dir, e.Name())); err != nil || !strings.HasPrefix(t, "socket:[") {
+		if t, lerr := os.Readlink(filepath.Join(dir, e.Name())); lerr != nil || !strings.HasPrefix(t, "socket:[") {
 			continue
 		}
 		proto, err := socketProtocolOf(pid, fd)

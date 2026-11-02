@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +17,9 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // fakeBedrockPeer is a stand-in for bedrock-peer: "serve" runs until killed,
@@ -92,16 +95,10 @@ func TestRailsPodScript(t *testing.T) {
 	if _, err := a.waitRailsJob(t.Context(), "rails", hang, 500*time.Millisecond); err == nil {
 		t.Fatal("a fetch that never ends reported a result")
 	}
-	// The loop stops it: its exit code lands, and the server runs on.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(hang.path(".exit")); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the cancelled fetch was not stopped")
-		}
-		time.Sleep(20 * time.Millisecond)
+	// The wait returns only once the loop has stopped it: its exit code
+	// is there, so the directory can be reused, and the server runs on.
+	if _, err := os.Stat(hang.path(".exit")); err != nil {
+		t.Fatal("the wait returned before the cancelled fetch stopped")
 	}
 	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Errorf("the rails pod's script ended with the cancelled fetch: %v", err)
@@ -117,5 +114,76 @@ func TestSubmitRailsJobRefusesBadArguments(t *testing.T) {
 		if _, err := a.submitRailsJob("ck", bad); err == nil {
 			t.Errorf("arguments %q accepted", bad)
 		}
+	}
+}
+
+// A job the pod has not taken is withdrawn; one that does not stop is
+// ended with its pod; when neither can be confirmed the fetch is reported
+// as possibly running and its files are kept.
+func TestStopRailsJob(t *testing.T) {
+	defer func(p, s, g time.Duration) { railsJobPoll, railsStopWait, railsPodGoneWait = p, s, g }(railsJobPoll, railsStopWait, railsPodGoneWait)
+	railsJobPoll, railsStopWait, railsPodGoneWait = 5*time.Millisecond, 50*time.Millisecond, 100*time.Millisecond
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "rails", Namespace: "nvsnap-system"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+	newAgent := func(kc *fake.Clientset) *Agent {
+		a := &Agent{log: logrus.New(), kubeClient: kc}
+		a.config.CheckpointDir = t.TempDir()
+		a.config.Rails.Namespace = "nvsnap-system"
+		return a
+	}
+
+	a := newAgent(fake.NewClientset(pod.DeepCopy()))
+	j, err := a.submitRailsJob("ck", []string{"fetch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.stopRailsJob("rails", j); err != nil {
+		t.Fatalf("a job not taken yet: %v", err)
+	}
+	if _, err := os.Stat(j.path(".args")); err == nil {
+		t.Error("the job was not withdrawn")
+	}
+
+	// Taken and stuck: the pod is deleted, which ends it.
+	kc := fake.NewClientset(pod.DeepCopy())
+	a = newAgent(kc)
+	j, _ = a.submitRailsJob("ck", []string{"fetch"})
+	if err := os.Rename(j.path(".args"), j.path(".run")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.stopRailsJob("rails", j); err != nil {
+		t.Fatalf("stuck job: %v", err)
+	}
+	if _, err := kc.CoreV1().Pods("nvsnap-system").Get(t.Context(), "rails", metav1.GetOptions{}); err == nil {
+		t.Error("the rails pod of a stuck fetch was kept")
+	}
+
+	// The pod cannot be deleted: the fetch may still run.
+	kc = fake.NewClientset(pod.DeepCopy())
+	kc.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("forbidden")
+	})
+	a = newAgent(kc)
+	j, _ = a.submitRailsJob("ck", []string{"fetch"})
+	_ = os.Rename(j.path(".args"), j.path(".run"))
+	if err := a.stopRailsJob("rails", j); !errors.Is(err, errRailsFetchRunning) {
+		t.Fatalf("got %v, want the fetch reported as possibly running", err)
+	}
+	if _, err := os.Stat(j.path(".cancel")); err != nil {
+		t.Error("the cancel request of a fetch that may run was dropped")
+	}
+	// EnsureLocal neither fetches again nor touches the directory while it
+	// may run; once it has ended, its files go.
+	a.railsRunning.Store("ck", railsRunningJob{pod: "rails", job: j})
+	if err := a.EnsureLocal(t.Context(), "ck"); !errors.Is(err, errRailsFetchRunning) {
+		t.Fatalf("EnsureLocal: %v", err)
+	}
+	if err := os.WriteFile(j.path(".exit"), []byte("143\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if a.railsFetchStillRunning(t.Context(), "ck") {
+		t.Fatal("an ended fetch still counts as running")
+	}
+	if _, err := os.Stat(j.path(".cancel")); err == nil {
+		t.Error("the ended fetch's files were kept")
 	}
 }

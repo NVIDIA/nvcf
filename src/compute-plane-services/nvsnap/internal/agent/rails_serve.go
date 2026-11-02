@@ -45,6 +45,10 @@ const (
 	// railsAnnoSources lists, on a fetch pod, the nodes it reads from
 	// (railsLabelValue of each, comma-separated).
 	railsAnnoSources = "nvsnap.io/rails-sources"
+	// railsAnnoFetching marks a serve pod running fetches of its own node:
+	// the node is ranked as a source after idle ones (railsSources). The
+	// fetches run in the serve pod; there is no fetch pod to tell them by.
+	railsAnnoFetching = "nvsnap.io/rails-fetching"
 
 	// railsServeClaimSlack is how long past its Ready wait a fetcher's
 	// claim on a serve pod lasts: time to create its fetch pod.
@@ -284,14 +288,56 @@ func (a *Agent) railsNodeStates(ctx context.Context) (fetching, serving map[stri
 		}
 		switch p.Labels[railsLabelComponent] {
 		case "rails-fetch":
+			// A fetch pod of an agent from before fetches ran in the
+			// serve pod.
 			fetching[p.Labels[railsLabelFor]] = true
 		case "rails-serve":
 			if podReady(p) {
 				serving[p.Labels[railsLabelServes]] = true
 			}
+			if p.Annotations[railsAnnoFetching] == "true" {
+				fetching[p.Labels[railsLabelServes]] = true
+			}
 		}
 	}
 	return fetching, serving, nil
+}
+
+// railsFetchStarted counts a fetch this node's serve pod runs, marking
+// the pod while any runs; the returned func ends it. The mark is best
+// effort: it only orders sources.
+func (a *Agent) railsFetchStarted(ctx context.Context, pod string) func() {
+	a.railsFetchMu.Lock()
+	a.railsFetches++
+	first := a.railsFetches == 1
+	a.railsFetchMu.Unlock()
+	if first {
+		a.markRailsFetching(ctx, pod, true)
+	}
+	return func() {
+		a.railsFetchMu.Lock()
+		a.railsFetches--
+		last := a.railsFetches == 0
+		a.railsFetchMu.Unlock()
+		if last {
+			a.markRailsFetching(context.WithoutCancel(ctx), pod, false)
+		}
+	}
+}
+
+func (a *Agent) markRailsFetching(ctx context.Context, pod string, on bool) {
+	var v interface{}
+	if on {
+		v = "true"
+	}
+	patch, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{
+		"annotations": map[string]interface{}{railsAnnoFetching: v},
+	}})
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := a.kubeClient.CoreV1().Pods(a.config.Rails.Namespace).Patch(ctx, pod, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		a.log.WithError(err).WithField("pod", pod).Debug("rails: cannot mark the serve pod's fetches; sources are ranked without it")
+	}
 }
 
 func podReady(p *corev1.Pod) bool {

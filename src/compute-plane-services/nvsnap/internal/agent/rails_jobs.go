@@ -166,9 +166,77 @@ func (a *Agent) waitRailsJob(ctx context.Context, pod string, j railsJob, timeou
 		}
 		select {
 		case <-ctx.Done():
-			_ = os.WriteFile(j.path(".cancel"), nil, 0o600)
+			if err := a.stopRailsJob(pod, j); err != nil {
+				return nil, fmt.Errorf("rails fetch %s: %w: %w", j.id, ctx.Err(), err)
+			}
 			return nil, fmt.Errorf("rails fetch %s: %w", j.id, ctx.Err())
 		case <-poll.C:
+		}
+	}
+}
+
+// errRailsFetchRunning marks a fetch that was cancelled and may still be
+// writing into its checkpoint directory: neither its files nor the
+// directory may be touched until it ends (EnsureLocal does not fall
+// through to another tier).
+var errRailsFetchRunning = errors.New("the cancelled rails fetch may still be running")
+
+// railsStopWait bounds the wait for a cancelled fetch to end; past it the
+// rails pod is deleted, which ends the fetch with it. Variables for tests.
+var (
+	railsStopWait    = time.Minute
+	railsPodGoneWait = 2 * time.Minute
+)
+
+// stopRailsJob ends job j on rails pod pod and returns once nothing of it
+// runs: a job the pod has not taken yet is withdrawn; a running one is
+// asked to stop and waited for, its files kept until it has, as the pod
+// stops a job by the pid it recorded. A fetch that does not stop in
+// railsStopWait is ended with its pod. It returns errRailsFetchRunning
+// when that cannot be confirmed.
+func (a *Agent) stopRailsJob(pod string, j railsJob) error {
+	if os.Remove(j.path(".args")) == nil {
+		return nil // the pod never took it
+	}
+	if err := os.WriteFile(j.path(".cancel"), nil, 0o600); err != nil {
+		return fmt.Errorf("%w: ask it to stop: %w", errRailsFetchRunning, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), railsStopWait)
+	defer cancel()
+	if a.waitRailsJobGone(ctx, pod, j) {
+		return nil
+	}
+	a.log.WithFields(map[string]interface{}{"pod": pod, "job": j.id}).Warn("rails: a cancelled fetch did not stop; deleting its rails pod")
+	dctx, dcancel := context.WithTimeout(context.Background(), railsPodGoneWait)
+	defer dcancel()
+	zero := int64(0)
+	if err := a.kubeClient.CoreV1().Pods(a.config.Rails.Namespace).Delete(dctx, pod, metav1.DeleteOptions{GracePeriodSeconds: &zero}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("%w: delete its rails pod %s: %w", errRailsFetchRunning, pod, err)
+	}
+	if a.waitRailsJobGone(dctx, pod, j) {
+		return nil
+	}
+	return fmt.Errorf("%w: rails pod %s is still there", errRailsFetchRunning, pod)
+}
+
+// waitRailsJobGone waits until job j has exited or its rails pod is gone,
+// and reports which happened before ctx ended. A pod being deleted may
+// still run the fetch: only a pod that is gone or ended counts.
+func (a *Agent) waitRailsJobGone(ctx context.Context, pod string, j railsJob) bool {
+	t := time.NewTicker(railsJobPoll)
+	defer t.Stop()
+	for {
+		if _, err := os.Stat(j.path(".exit")); err == nil {
+			return true
+		}
+		p, err := a.kubeClient.CoreV1().Pods(a.config.Rails.Namespace).Get(ctx, pod, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) || (err == nil && podEnded(p)) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
 		}
 	}
 }

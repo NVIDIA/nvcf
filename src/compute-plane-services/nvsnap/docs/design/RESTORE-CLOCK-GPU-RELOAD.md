@@ -114,6 +114,7 @@ leaves the overrun counted, as CRIU's budget does today. The recorded span makes
   at most 10 s to reply.
 
 **To watch in the first run:**
+
 - The driver's restore thread and gpushare's control thread run during load and remap while the
   clock is behind the dumped value. The control thread uses CLOCK_REALTIME only, which is not
   namespaced. Whether the driver's restore thread has a CLOCK_MONOTONIC timeout that a clock behind the
@@ -196,4 +197,3 @@ like the verify restore jumps 17 s.
 - Estimate: the 15 s GPU allowance on a checkpoint of known CRIU image and GPU store sizes.
 - On the cluster: three restores of one Kimi-K3 checkpoint, each logging budget, work and wait or overrun,
   no `No available shared memory broadcast block` after the resume, and every jump under `J`.
-

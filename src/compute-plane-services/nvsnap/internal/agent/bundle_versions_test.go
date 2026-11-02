@@ -181,6 +181,55 @@ func TestReadBundleTarConfinesSymlinks(t *testing.T) {
 	}
 }
 
+// A link the stream makes inside the bundle is not followed by a later
+// entry: "x -> ." and then a directory "x" would otherwise change the mode
+// of the extraction root itself. A link no later entry goes through is
+// kept.
+func TestReadBundleTarRefusesEntriesThroughLinks(t *testing.T) {
+	for name, entries := range map[string][]tar.Header{
+		"directory through a link": {{Name: "x", Typeflag: tar.TypeSymlink, Linkname: "."}, {Name: "x", Mode: 0o777, Typeflag: tar.TypeDir}},
+		"file under a link":        {{Name: "d", Mode: 0o755, Typeflag: tar.TypeDir}, {Name: "x", Typeflag: tar.TypeSymlink, Linkname: "d"}, {Name: "x/f", Mode: 0o644, Typeflag: tar.TypeReg}},
+	} {
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		for i := range entries {
+			if err := tw.WriteHeader(&entries[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		dst := t.TempDir()
+		if err := os.Chmod(dst, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := readBundleTar(&buf, dst); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+			t.Errorf("%s: %v, want it refused", name, err)
+		}
+		if st, _ := os.Stat(dst); st.Mode().Perm() != 0o700 {
+			t.Errorf("%s: the extraction root became %v", name, st.Mode().Perm())
+		}
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, h := range []tar.Header{{Name: "lib", Mode: 0o755, Typeflag: tar.TypeDir}, {Name: "lib/link", Typeflag: tar.TypeSymlink, Linkname: "../x.so"}} {
+		if err := tw.WriteHeader(&h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := readBundleTar(&buf, dst); err != nil {
+		t.Fatalf("a plain link was refused: %v", err)
+	}
+	if l, err := os.Readlink(filepath.Join(dst, "lib", "link")); err != nil || l != "../x.so" {
+		t.Errorf("link %q %v", l, err)
+	}
+}
+
 func TestReadBundleTarRejectsEscapes(t *testing.T) {
 	for _, name := range []string{"../../escape.so", "/etc/escape.so", ".."} {
 		var buf bytes.Buffer

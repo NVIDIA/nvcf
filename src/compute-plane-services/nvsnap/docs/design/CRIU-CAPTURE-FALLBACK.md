@@ -48,8 +48,8 @@ record showed only the first member's abort: its reason was cut at 1024 bytes.
 
 ### 2.1 One CRIU attempt per configuration and agent version
 
-A configuration's CRIU capture is attempted once per agent bundle version (the `bundle.<n>` the record already
-keeps). A failure is recorded as `state=criu-failed` with every member's first error (§2.3). It is retried only when
+A configuration's CRIU capture is attempted once per agent bundle version (the `agentBundle` field the record
+keeps). A failure is recorded as `state=failed` with every member's first error (§2.3). It is retried only when
 something that could change the outcome changes: the agent bundle version (a fix shipped), or the configuration
 itself (a new image or arguments, which is a new configuration key anyway). A stall the code already classifies as
 transient (the instance not ready, agents settling) is not a failure and does not count.
@@ -163,11 +163,11 @@ Not done: 2.4 (why the worker's resume failed after the others' abort).
   plus etcd and NATS, opted in by function id; capture it, find the post-dump action's failure, and check the
   workload resumes.
 - Conformance gate: a scenario whose CRIU capture is made to fail (a post-dump action that exits 1): the workload
-  keeps serving without being replaced, the record says `criu-failed` with every member's error, and the next pod is
+  keeps serving without being replaced, the record says `failed` with every member's error, and the next pod is
   admitted with the cachedir capture.
 
 - Unit: the webhook's fallback lookup for each record state and bundle; a fallback pod gets the cachedir mutations
-  and, for `gpushare=failed`, no library; the agent marks a configuration after two failed starts of a pod that was
+  and, for `gpushare-failed`, no library; the agent marks a configuration after two failed starts of a pod that was
   never Ready, and not for a pod that was Ready; the rails fetch of a prefix, its sources from the manifest and its
   completeness check.
 - Conformance gate, two scenarios: a workload that exits at start when the library is loaded (marked, readmitted

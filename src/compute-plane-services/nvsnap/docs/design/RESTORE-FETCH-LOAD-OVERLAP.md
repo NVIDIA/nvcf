@@ -55,6 +55,7 @@ node, load at about 18 GiB/s.
 The restore starts as soon as what each step needs has arrived, not when the whole checkpoint has.
 
 **Fetch order.** The fetch sends the checkpoint in the order the restore uses it:
+
 1. Everything but the chunks: CRIU's images, the metadata, the per-GPU chunk lists (`gpu-<pid>.chunks`), the
    recorded clock spans.
 2. The chunks, in the order the load reads them: the per-GPU lists interleaved, so that every GPU's load
