@@ -79,6 +79,20 @@ assert_sidecars() {
   assert_env "$values_file" NVCF_SIDECARS_REPOSITORY "$repo" "$label"
   assert_env "$values_file" NVCT_SIDECARS_HOSTNAME "$host" "$label"
   assert_env "$values_file" NVCT_SIDECARS_REPOSITORY "$repo" "$label"
+  local api_key api_reference base_reference
+  for api_key in ess-agent-container llm-credential-manager-image; do
+    api_reference="$(yq -r ".api.remoteConfig.configData.nvcf.sidecars.\"$api_key\"" "$values_file")"
+    base_reference="$(yq -r ".api.remoteConfig.configData.nvcf.sidecars.\"$api_key\"" "$stack_dir/environments/base.yaml")"
+    [[ "$api_reference" == "$base_reference" ]] || fail "$label: API $api_key selection was lost"
+  done
+  local key reference expected annotation
+  for key in ess-agent-container; do
+    reference="$(yq -r ".nvctApi.remoteConfig.configData.nvct.sidecars.\"$key\"" "$values_file")"
+    expected="${reference//\$\{nvct.sidecars.hostname\}/$host}"
+    expected="${expected//\$\{nvct.sidecars.repository\}/$repo}"
+    annotation="$(yq -r ".nvctApi.podAnnotations.\"release-artifact-$key-image\"" "$values_file")"
+    [[ "$annotation" == "$expected" ]] || fail "$label: $key inventory differs from runtime config"
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -140,5 +154,20 @@ EOF
 
 render_values "$work_dir/empty-values.yaml"
 assert_sidecars "$work_dir/empty-values.yaml" nvcr.io test/nvcf "explicit empty"
+
+# An explicit task-worker image and unrelated pod metadata survive together.
+write_env <<'EOF'
+nvctApi:
+  podAnnotations:
+    example.test/owner: operator
+  remoteConfig:
+    configData:
+      nvct:
+        sidecars:
+          utils-container: registry.example.test/tasks/worker:9.8.7
+EOF
+render_values "$work_dir/task-override-values.yaml"
+[[ "$(yq -r '.nvctApi.podAnnotations."release-artifact-utils-container-image"' "$work_dir/task-override-values.yaml")" == registry.example.test/tasks/worker:9.8.7 ]] || fail "task override missing from inventory"
+[[ "$(yq -r '.nvctApi.podAnnotations."example.test/owner"' "$work_dir/task-override-values.yaml")" == operator ]] || fail "operator pod annotation lost"
 
 echo "sidecar-registry-wiring: OK"

@@ -162,17 +162,27 @@ global:
 EOF
 
 render_values "$work_dir/default-values.yaml"
-assert_yaml_path_absent "$work_dir/default-values.yaml" .nats.container.merge.securityContext "nats security-context chart default"
+for component in rateLimiter ess notary reval; do
+  test "$(yq -r ".$component.image.tag" "$work_dir/default-values.yaml")" = \
+    "$(yq -r ".$component.image.tag" "$stack_dir/environments/base.yaml")" || fail "$component image selection was lost"
+done
+for component in container reloader; do
+  test "$(yq -r ".nats.$component.merge.securityContext.runAsNonRoot" "$work_dir/default-values.yaml")" = true || fail "NATS $component must run without root"
+  test "$(yq -r ".nats.$component.merge.securityContext.runAsUser" "$work_dir/default-values.yaml")" = \
+    "$(yq -r '.nats.podTemplate.merge.spec.securityContext.runAsUser' "$stack_dir/environments/base.yaml")" || fail "NATS server and reloader identities must match"
+done
+test "$(yq -o=json -I=0 '.nats.container.merge.securityContext | sort_keys(.)' "$work_dir/default-values.yaml")" = \
+  "$(yq -o=json -I=0 '.nats.container.merge.securityContext | sort_keys(.)' "$stack_dir/environments/base.yaml")" || fail "NATS non-root defaults were lost"
 # An empty map preserves chart defaults; a null spec would remove them during
 # Helm values merging when no placement overrides are configured.
 test "$(yq -r '.nats.podTemplate.merge.spec.securityContext | tag' "$work_dir/default-values.yaml")" = '!!map' ||
   fail "nats pod security-context defaults must be a map"
-test "$(yq -r '.nats.podTemplate.merge.spec.securityContext | length' "$work_dir/default-values.yaml")" = 0 ||
-  fail "nats pod security-context defaults must remain chart-owned"
+test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroup' "$work_dir/default-values.yaml")" = \
+  "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroup' "$stack_dir/environments/base.yaml")" || fail "NATS storage group was lost"
 assert_absent "$work_dir/default-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader chart default"
 assert_yaml_path_absent "$work_dir/default-values.yaml" \
-  .nats.reloader "nats.reloader chart default"
+  .nats.reloader.image "nats.reloader chart default"
 assert_absent "$work_dir/default-values.yaml" \
   alpine/k8s "api.accountBootstrap chart default"
 assert_yaml_path_absent "$work_dir/default-values.yaml" \
@@ -358,7 +368,7 @@ grep -q 'registry: ""' "$work_dir/empty-values.yaml" &&
 assert_absent "$work_dir/empty-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader explicit empty"
 assert_yaml_path_absent "$work_dir/empty-values.yaml" \
-  .nats.reloader "nats.reloader explicit empty"
+  .nats.reloader.image "nats.reloader explicit empty"
 assert_absent "$work_dir/empty-values.yaml" \
   alpine/k8s "api.accountBootstrap explicit empty"
 assert_yaml_path_absent "$work_dir/empty-values.yaml" \
@@ -383,7 +393,7 @@ render_values "$work_dir/public-catalog-values.yaml"
 assert_absent "$work_dir/public-catalog-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader public catalog"
 assert_yaml_path_absent "$work_dir/public-catalog-values.yaml" \
-  .nats.reloader "nats.reloader public catalog"
+  .nats.reloader.image "nats.reloader public catalog"
 assert_absent "$work_dir/public-catalog-values.yaml" \
   alpine/k8s "api.accountBootstrap public catalog"
 assert_yaml_path_absent "$work_dir/public-catalog-values.yaml" \
@@ -438,8 +448,8 @@ assert_absent "$work_dir/mirror-values.yaml" \
 assert_absent "$work_dir/mirror-values.yaml" \
   alpine/k8s "api.accountBootstrap mirror install"
 
-# Security contexts are chart-owned defaults. Forward environment overrides
-# without requiring image overrides or replacing unrelated chart defaults.
+# Forward environment security overrides while retaining the stack defaults.
+# Image overrides are not required.
 write_env <<'EOF'
 nats:
   container:
@@ -469,8 +479,8 @@ for path in .nats.container.merge.securityContext .nats.reloader.merge.securityC
     test "$(yq -r "$path.$field" "$work_dir/security-context-values.yaml")" = 2000 ||
       fail "nats security-context override must preserve $path.$field"
   done
-  test "$(yq -r "$path | has(\"runAsNonRoot\")" "$work_dir/security-context-values.yaml")" = false ||
-    fail "nats chart-owned non-root default must not be overridden at $path"
+  test "$(yq -r "$path.runAsNonRoot" "$work_dir/security-context-values.yaml")" = true ||
+    fail "NATS non-root default must survive a UID override at $path"
 done
 test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroup' "$work_dir/security-context-values.yaml")" = 2000 ||
   fail "nats pod filesystem-group override must be preserved"

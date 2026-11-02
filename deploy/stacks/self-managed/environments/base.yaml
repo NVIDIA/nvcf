@@ -182,7 +182,7 @@ functionAutoscaler:
 # API environment entries are merged over the stack defaults. Remote config is
 # passed to the API chart and overrides its packaged application profile. When
 # the LLM addon is enabled, the stack defaults the Pylon image from
-# global.sidecars (or global.image) at version 0.25.0.
+# global.sidecars (or global.image) at the selected request-router image version.
 api:
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
@@ -193,7 +193,11 @@ api:
   # (NVCF_ESS_WORKER_BASE_URL) stays on essServiceURL.
   essBaseURL: ""
   remoteConfig:
-    configData: {}
+    configData:
+      nvcf:
+        sidecars:
+          ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.4
+          llm-credential-manager-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-llm-credentials-oss:1.1.5
 
 # NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
@@ -202,7 +206,10 @@ api:
 nvctApi:
   essBaseURL: ""
   remoteConfig:
-    configData: {}
+    configData:
+      nvct:
+        sidecars:
+          ess-agent-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.4.4
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog. The API chart defaults to
@@ -234,6 +241,36 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  container:
+    image:
+      registry: docker.io
+      repository: synadia/nats-server
+      tag: "2.14.6-alpine3.22"
+    merge:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+  reloader:
+    merge:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+  podTemplate:
+    merge:
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
   # How workers authenticate to NATS.
   #   nkey: the NVCF API gives every worker the control plane's shared NATS
   #     NKey as NKEY_SEED. The default.
@@ -330,7 +367,7 @@ cassandra:
   resourcesPreset: "xlarge"
   migrations:
     image:
-      tag: 0.17.6
+      tag: 0.17.7
   # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
   # The default image name is `cassandra` under global.image.repository.
   # Override here when pulling from a registry that uses a different path or tag.
@@ -417,6 +454,8 @@ addons:
   llm:
     enabled: false
     requestRouter:
+      image:
+        tag: "0.26.1"
       # replicaCount defaults to the request-router chart value. Set it here
       # only when the stack needs a different topology.
       # replicaCount: 3
@@ -581,6 +620,9 @@ addons:
   # Disabled by default
   nvcfUi:
     enabled: false
+    openbaoMigrations:
+      image:
+        tag: "0.19.10"
 
 stateMetrics:
   enabled: true
@@ -589,6 +631,8 @@ stateMetrics:
     enabled: false
 
 rateLimiter:
+  image:
+    tag: "1.17.5"
   enabled: true
   replicaCount: 1
   # PDB: enable when replicaCount > 1.
@@ -618,9 +662,15 @@ apikeys:
     maxUnavailable: 1
 
 ess:
+  image:
+    tag: "0.5.7"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
+
+notary:
+  image:
+    tag: "1.14.8"
 
 invocation:
   env:
@@ -661,6 +711,8 @@ functionautoscaler:
     maxUnavailable: 1
 
 reval:
+  image:
+    tag: "0.20.3"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
