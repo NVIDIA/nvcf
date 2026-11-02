@@ -77,7 +77,7 @@ func TestDecisionRoutesHTTPRequestSeriesStartAtZero(t *testing.T) {
 	active := firstScrapeSeries(t, "llm_api_gateway_http_active_requests")
 
 	for _, route := range []string{"/v1/decisions", "/v1/systemone"} {
-		for _, status := range []string{"200", "400", "401", "404", "429", "500", "502", "504"} {
+		for _, status := range []string{"200", "400", "401", "404", "413", "429", "500", "502", "503", "504"} {
 			value, ok := requests[labels("method", "POST", "route", route, "function_id", "none", "status", status)]
 			require.True(t, ok, "missing zero request series %s %s", route, status)
 			require.Zero(t, value)

@@ -583,7 +583,7 @@ func DecisionRoutes() []string { return append([]string(nil), decisionRoutes...)
 
 // decisionSeedStatuses bounds the status label of the seeded request series
 // to the statuses the decision routes commonly return.
-var decisionSeedStatuses = []string{"200", "400", "401", "404", "429", "500", "502", "504"}
+var decisionSeedStatuses = []string{"200", "400", "401", "404", "413", "429", "500", "502", "503", "504"}
 
 // preInitDecisionMetrics emits zero samples for the decision routes on the
 // usage counter and the HTTP request instruments, using the missing function

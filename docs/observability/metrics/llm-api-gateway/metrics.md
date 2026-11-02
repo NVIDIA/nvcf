@@ -20,8 +20,8 @@ request, token, provider time, stream and usage metrics.
 
 | Metric name | Type | Source endpoint | Labels | Notes |
 | --- | --- | --- | --- | --- |
-| `llm_api_gateway_http_requests_total` | Counter | `llm-api-gateway:9464/metrics` | `method`, `route`, `status`, `function_id` | Total inbound HTTP requests. `route` is the templated route, not the raw URL path. For `/v1/decisions` and `/v1/systemone`, zero series with `function_id="none"` exist before traffic (request statuses 200, 400, 401, 404, 429, 500, 502, 504). |
-| `llm_api_gateway_http_request_duration_seconds` | Histogram | `llm-api-gateway:9464/metrics` | `method`, `route`, `status` | Inbound HTTP request duration in seconds. |
+| `llm_api_gateway_http_requests_total` | Counter | `llm-api-gateway:9464/metrics` | `method`, `route`, `status`, `function_id` | Total inbound HTTP requests. `route` is the templated route, not the raw URL path. For `/v1/decisions` and `/v1/systemone`, zero series with `function_id="none"` exist before traffic (request statuses 200, 400, 401, 404, 413, 429, 500, 502, 503, 504). |
+| `llm_api_gateway_http_request_duration_seconds` | Histogram | `llm-api-gateway:9464/metrics` | `method`, `route`, `status`, `function_id` | Inbound HTTP request duration in seconds. |
 | `llm_api_gateway_http_active_requests` | Gauge | `llm-api-gateway:9464/metrics` | `method`, `route`, `function_id` | Current in-flight inbound HTTP requests. For `/v1/decisions` and `/v1/systemone`, zero series with `function_id="none"` exist before traffic. |
 | `llm_api_gateway_upstream_requests_total` | Counter | `llm-api-gateway:9464/metrics` | `upstream`, `result`, `status`, `function_id` | Total outbound upstream requests. `upstream` is a bounded service name such as `llm-request-router`. |
 | `llm_api_gateway_upstream_request_duration_seconds` | Histogram | `llm-api-gateway:9464/metrics` | `upstream`, `result`, `status`, `function_id` | Outbound upstream request duration in seconds. |
