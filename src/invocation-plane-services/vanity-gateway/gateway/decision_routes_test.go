@@ -520,3 +520,59 @@ func TestMessagesProxyFailureKeepsAnthropicShapeAfterPexecPathRewrite(t *testing
 	require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 	assert.JSONEq(t, `{"type":"error","error":{"type":"api_error","message":"upstream request failed"}}`, rec.Body.String())
 }
+
+// A generic vanity path entry is not a decision or Messages route even when
+// its path matches one, so it keeps the problem+json shape and the dated end
+// of life message it had before those routes existed.
+func TestVanityPathEntriesAtNativeRoutePathsKeepProblemShape(t *testing.T) {
+	const vanityHost = "vanity.test"
+	eol := time.Now().Add(-24 * time.Hour).UTC().Truncate(time.Second)
+	down := httptest.NewServer(http.NotFoundHandler())
+	downURL := down.URL
+	down.Close()
+
+	serve := func(t *testing.T, path string, entry config.PathFunctionDetails) *httptest.ResponseRecorder {
+		t.Helper()
+		entry.Path = path
+		entry.FunctionID = "vanity-func"
+		mappings := decisionMappings(true, true, nil)
+		mappings.Vanity = map[string]config.VanityEntry{"v": {Host: vanityHost, Paths: map[string]config.PathFunctionDetails{"p": entry}}}
+		mux := openAIMux(t, mappings, downURL, "http://llm.invalid")
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"`+decisionModel+`"}`))
+		req.Host = vanityHost
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for _, path := range []string{decisionsPath, systemOnePath, messagesPath} {
+		t.Run(path+" offline", func(t *testing.T) {
+			rec := serve(t, path, config.PathFunctionDetails{OfflineMessage: "down for maintenance"})
+			require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+			assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+			assert.Contains(t, rec.Body.String(), "down for maintenance")
+		})
+		t.Run(path+" end of life", func(t *testing.T) {
+			rec := serve(t, path, config.PathFunctionDetails{EOL: eol})
+			require.Equal(t, http.StatusGone, rec.Code, rec.Body.String())
+			assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+			assert.Contains(t, rec.Body.String(), eol.Format(time.RFC3339))
+		})
+	}
+	for _, path := range []string{decisionsPath, systemOnePath} {
+		t.Run(path+" proxy failure", func(t *testing.T) {
+			rec := serve(t, path, config.PathFunctionDetails{})
+			require.Equal(t, http.StatusBadGateway, rec.Code, rec.Body.String())
+			assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+		})
+	}
+	// Messages-path proxy failures on vanity hosts used the Anthropic shape
+	// before the decision routes existed; that stays.
+	t.Run(messagesPath+" proxy failure", func(t *testing.T) {
+		rec := serve(t, messagesPath, config.PathFunctionDetails{})
+		require.Equal(t, http.StatusBadGateway, rec.Code, rec.Body.String())
+		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+		assert.Contains(t, rec.Body.String(), `"type":"error"`)
+	})
+}
