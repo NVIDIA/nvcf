@@ -1507,6 +1507,8 @@ func TestStargateDecisionRouteControlHeaders(t *testing.T) {
 				for _, name := range []string{"X-Max-Wait-Ms", "X-Request-Slo-Ms", headerCacheAffinityKey} {
 					require.Empty(t, got.Values(name), name)
 				}
+				// Identity keeps the response readable for the usage observer.
+				require.Equal(t, []string{"identity"}, got.Values("Accept-Encoding"))
 				require.Equal(t, "kept", got.Get("X-Vendor"))
 			})
 		}

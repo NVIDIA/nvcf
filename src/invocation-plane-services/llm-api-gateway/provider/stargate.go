@@ -414,6 +414,9 @@ func (p *StargateProvider) Proxy(
 		for _, name := range stargateControlHeaders {
 			outbound.Header.Del(name)
 		}
+		// Ask for an uncompressed response so the gateway can read the
+		// reported usage, as Messages does.
+		outbound.Header.Set("Accept-Encoding", "identity")
 	}
 	// Send a fixed-length body, not chunked, so Stargate can reject a body over
 	// its size limit before it reads the body.

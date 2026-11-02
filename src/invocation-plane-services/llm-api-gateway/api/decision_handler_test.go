@@ -135,6 +135,7 @@ func TestDecisionRoutesForwardBodyAndHeaders(t *testing.T) {
 			req.Header.Set("X-Max-Wait-Ms", "abc")
 			req.Header.Set("X-Request-Slo-Ms", "abc")
 			req.Header.Set("X-Cache-Affinity-Key", "client-key")
+			req.Header.Set("Accept-Encoding", "gzip")
 			rec := httptest.NewRecorder()
 			e.ServeHTTP(rec, req)
 
@@ -152,6 +153,7 @@ func TestDecisionRoutesForwardBodyAndHeaders(t *testing.T) {
 			for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie"} {
 				require.Empty(t, upstreamRequest.Header.Values(name), name)
 			}
+			require.Equal(t, []string{"identity"}, upstreamRequest.Header.Values("Accept-Encoding"))
 			outbound := jsonObject(t, upstreamRequest.Body)
 			require.JSONEq(t, `"`+decisionTestModel+`"`, string(outbound["model"]))
 			require.JSONEq(t, `["QUJD","QUJD"]`, string(outbound["images"]))
