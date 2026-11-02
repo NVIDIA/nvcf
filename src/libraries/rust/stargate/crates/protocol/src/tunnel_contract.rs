@@ -27,6 +27,13 @@ pub const HEADER_STARGATE_RETRY_AFTER_MS: &str = "x-stargate-retry-after-ms";
 /// Gateway hint naming the cluster that served the session's last request.
 pub const HEADER_STARGATE_LAST_CLUSTER_ID: &str = "x-stargate-last-cluster-id";
 
+/// Set on every error response that Stargate or Pylon generates, so callers
+/// can tell it from a model server error. Pylon strips it from backend
+/// responses; Stargate restores Pylon's value after its own header filter.
+pub const HEADER_STARGATE_ERROR_CODE: &str = "x-stargate-error-code";
+
+pub const RETRY_REASON_LOCAL_CONNECT_FAILURE: &str = "local_connect_failure";
+pub const RETRY_REASON_MODEL_GENERATION_UNAVAILABLE: &str = "model_generation_unavailable";
 pub const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
 pub const RETRY_REASON_UPSTREAM_ADMISSION_REJECTED: &str = "upstream_admission_rejected";
 pub const RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED: &str = "chat_usage_rewrite_saturated";

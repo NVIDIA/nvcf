@@ -227,8 +227,9 @@ mod tests {
     #[test]
     fn raw_quic_error_headers_use_problem_json_with_raw_quic_status() {
         let status = reqwest::StatusCode::BAD_REQUEST;
-        let headers = raw_quic_response_headers(status, problem_response_headers())
-            .expect("raw QUIC error headers should build");
+        let headers =
+            raw_quic_response_headers(status, problem_response_headers("invalid_request"))
+                .expect("raw QUIC error headers should build");
 
         assert_eq!(header_value(&headers, "x-status"), "400");
         assert_eq!(
