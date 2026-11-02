@@ -1,0 +1,192 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.nvidia.boot.cassandra.configuration;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.CqlSessionBuilder;
+import com.datastax.oss.driver.api.core.cql.ResultSet;
+import com.datastax.oss.driver.api.core.context.DriverContext;
+import com.datastax.oss.driver.api.core.cql.Row;
+import com.datastax.oss.driver.api.core.cql.Statement;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Map;
+import java.util.Set;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.TestMethodOrder;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+import org.springframework.boot.info.SslInfo;
+import org.springframework.boot.ssl.SslBundles;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.cloud.context.environment.EnvironmentChangeEvent;
+import org.springframework.cloud.context.scope.refresh.RefreshScopeRefreshedEvent;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+
+/**
+ * Exercises {@code GET /actuator/health/ssl} against the real Spring Boot wiring: the
+ * {@code SslBundleRegistry} created by {@code SslAutoConfiguration}, the {@code SslHealthIndicator}
+ * from {@code SslHealthContributorAutoConfiguration}, and the production
+ * {@link CassandraSslBundleConfiguration}. Only the Cassandra driver is mocked.
+ * <p>
+ * The startup bundle holds the "stale" certificate. Rotation is simulated the way Spring Cloud does
+ * it: the PEM properties change, configuration properties are rebound, and
+ * {@link RefreshScopeRefreshedEvent} is published. The clock behind {@link SslInfo} is fixed between
+ * the expiry of the stale certificate (one year after generation) and the fresh one (100 years), so
+ * the stale certificate is expired and the fresh one is valid whenever the test runs.
+ * <p>
+ * The two tests share one application context ({@code PER_CLASS} lifecycle) and run in order: the
+ * second applies the rotation to the context the first observed in its pre-rotation state.
+ */
+@SpringBootTest(
+        classes = CassandraSslHealthEndpointTest.TestApplication.class,
+        properties = {
+                "spring.cassandra.ssl.bundle=" + CassandraSslHealthEndpointTest.BUNDLE_NAME,
+                "spring.cassandra.username=u",
+                "spring.cassandra.password=p",
+                "management.endpoints.web.exposure.include=health",
+                "management.endpoint.health.show-details=always",
+                CassandraSslHealthEndpointTest.CERT_PROPERTY + "=classpath:ssl/stale-cert.pem",
+                CassandraSslHealthEndpointTest.KEY_PROPERTY + "=classpath:ssl/stale-key.pem"
+        })
+@AutoConfigureMockMvc
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+class CassandraSslHealthEndpointTest {
+
+    static final String BUNDLE_NAME = "cassandra-ssl";
+    static final String CERT_PROPERTY =
+            "spring.ssl.bundle.pem." + BUNDLE_NAME + ".keystore.certificate";
+    static final String KEY_PROPERTY =
+            "spring.ssl.bundle.pem." + BUNDLE_NAME + ".keystore.private-key";
+
+    private static final String SSL_HEALTH_URL = "/actuator/health/ssl";
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private ConfigurableApplicationContext applicationContext;
+
+    @Autowired
+    private InitialSession initialSession;
+
+    @Test
+    @Order(1)
+    @DisplayName("Before rotation, /actuator/health/ssl returns 503 and reports the expired startup certificate")
+    void sslHealthIsDownBeforeRotation() throws Exception {
+        var body = mockMvc.perform(get(SSL_HEALTH_URL))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.status").value("OUT_OF_SERVICE"))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body).contains("stale-cassandra-client");
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("After PEM rotation and a session refresh, /actuator/health/ssl returns 200 and reports the rotated certificate")
+    void sslHealthIsUpAndReportsRotatedCertificateAfterRotation() throws Exception {
+        rotateCertificateAndRefresh();
+
+        var body = mockMvc.perform(get(SSL_HEALTH_URL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body).contains("rotated-cassandra-client").doesNotContain("stale-cassandra-client");
+        verify(initialSession.session()).close();
+    }
+
+    private void rotateCertificateAndRefresh() {
+        applicationContext.getEnvironment().getPropertySources().addFirst(new MapPropertySource(
+                "rotated-ssl",
+                Map.of(CERT_PROPERTY, "classpath:ssl/fresh-cert.pem",
+                       KEY_PROPERTY, "classpath:ssl/fresh-key.pem")));
+        applicationContext.publishEvent(
+                new EnvironmentChangeEvent(applicationContext, Set.of(CERT_PROPERTY, KEY_PROPERTY)));
+        applicationContext.publishEvent(new RefreshScopeRefreshedEvent());
+    }
+
+    record InitialSession(CqlSession session) {
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration(excludeName = {
+            "com.nvidia.boot.cassandra.CassandraAutoConfiguration",
+            "org.springframework.boot.cassandra.autoconfigure.CassandraAutoConfiguration",
+            "org.springframework.boot.cassandra.autoconfigure.health.CassandraHealthContributorAutoConfiguration",
+            "org.springframework.boot.cassandra.autoconfigure.health.CassandraReactiveHealthContributorAutoConfiguration",
+            "org.springframework.boot.data.cassandra.autoconfigure.DataCassandraAutoConfiguration",
+            "org.springframework.boot.data.cassandra.autoconfigure.DataCassandraReactiveAutoConfiguration",
+            "org.springframework.boot.data.cassandra.autoconfigure.DataCassandraRepositoriesAutoConfiguration",
+            "org.springframework.boot.data.cassandra.autoconfigure.DataCassandraReactiveRepositoriesAutoConfiguration"
+    })
+    @Import(CassandraSslBundleConfiguration.class)
+    static class TestApplication {
+
+        @Bean
+        InitialSession initialSession() {
+            return new InitialSession(mock(CqlSession.class));
+        }
+
+        @Bean
+        CqlSessionBuilder cqlSessionBuilder(InitialSession initialSession) {
+            var rebuiltSession = mock(CqlSession.class);
+            var resultSet = mock(ResultSet.class);
+            when(resultSet.one()).thenReturn(mock(Row.class));
+            when(rebuiltSession.execute(anyString())).thenReturn(resultSet);
+            when(rebuiltSession.execute(any(Statement.class))).thenReturn(resultSet);
+            var driverContext = mock(DriverContext.class);
+            when(driverContext.getSessionName()).thenReturn("test-session");
+            when(rebuiltSession.getContext()).thenReturn(driverContext);
+
+            var builder = mock(CqlSessionBuilder.class);
+            when(builder.withSslContext(any())).thenReturn(builder);
+            when(builder.build()).thenReturn(initialSession.session(), rebuiltSession);
+            return builder;
+        }
+
+        @Bean
+        SslInfo sslInfo(SslBundles sslBundles) {
+            return new SslInfo(sslBundles,
+                    Clock.fixed(Instant.parse("2035-01-01T00:00:00Z"), ZoneOffset.UTC));
+        }
+    }
+}
