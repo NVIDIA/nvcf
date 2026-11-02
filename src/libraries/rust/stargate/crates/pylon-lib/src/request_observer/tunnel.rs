@@ -37,7 +37,7 @@ impl TunnelRequestObserver {
     }
 
     pub(crate) fn is_streaming(&self) -> bool {
-        self.observer.endpoint != RequestObservationEndpoint::Embeddings
+        self.observer.endpoint.is_streaming()
     }
 
     pub(crate) fn generation_mut(&mut self) -> Option<&mut RequestObserver> {
@@ -45,7 +45,7 @@ impl TunnelRequestObserver {
     }
 
     pub(crate) fn observe_request_body(&mut self, body_bytes: &[u8]) {
-        if !self.is_streaming() {
+        if self.observer.endpoint == RequestObservationEndpoint::Embeddings {
             self.observer
                 .update_embedding_items(embedding_items_from_request_body(body_bytes));
         }
