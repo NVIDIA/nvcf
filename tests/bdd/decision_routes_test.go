@@ -24,10 +24,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/cucumber/godog"
+	"gopkg.in/yaml.v3"
 
 	"nvcf-bdd/harness"
 	"nvcf-bdd/steps"
@@ -42,30 +45,108 @@ const (
 
 // decisionRoutesFake stands in for the LLM gateway, the Vanity Gateway and
 // the sample backend on the decision routes. A model serves a route only when
-// the scenario's configuration lists it there. Each broken mode reproduces one
+// the configuration the scenario wrote lists it there: the --llm-model options
+// of the function it created for the LLM gateway, and the Vanity Gateway
+// mapping it set in the Helmfile environment. Each broken mode reproduces one
 // gateway failure the scenarios must reject.
 type decisionRoutesFake struct {
-	broken string
-	seen   map[string]bool
-	inner  harness.HTTPClient
+	broken   string
+	seen     map[string]bool
+	inner    harness.HTTPClient
+	runner   *fakeRunner
+	repoRoot string
 }
 
 func newDecisionRoutesFake(broken string, inner harness.HTTPClient) *decisionRoutesFake {
 	return &decisionRoutesFake{broken: broken, seen: map[string]bool{}, inner: inner}
 }
 
-// decisionRoutesByModel lists the routes each model name serves, by host.
-var decisionRoutesByModel = map[string]map[string][]string{
-	decisionLLMHost: {
-		"function-1/bdd-decision-both": {decisionsRoute, systemOneRoute},
-		"function-1/bdd-decision-only": {decisionsRoute},
-	},
-	decisionVanityHost: {
-		"bdd-decision-direct":         {decisionsRoute, systemOneRoute},
-		"bdd-decision-llm":            {decisionsRoute, systemOneRoute},
-		"bdd-decision-decisions-only": {decisionsRoute},
-		"bdd-decision-systemone-only": {systemOneRoute},
-	},
+// decisionVanityEnvironment is the Helmfile environment the Vanity scenario
+// writes its mapping into, relative to the repository root.
+var decisionVanityEnvironment = filepath.Join("deploy", "stacks", "self-managed", "environments", "local-bdd.yaml")
+
+var llmModelOption = regexp.MustCompile(`--llm-model '?name=([^,' ]+),uris=([^,' ]+)`)
+
+// routesByModel lists the routes each model name serves on the host. LLM
+// gateway models are keyed by name without the function ID prefix.
+func (f *decisionRoutesFake) routesByModel(host string) map[string][]string {
+	switch host {
+	case decisionLLMHost:
+		return f.llmRoutes()
+	case decisionVanityHost:
+		return f.vanityRoutes()
+	}
+	return nil
+}
+
+func (f *decisionRoutesFake) llmRoutes() map[string][]string {
+	routes := map[string][]string{}
+	if f.runner == nil {
+		return routes
+	}
+	for _, command := range f.runner.runs {
+		if !strings.Contains(command, " function create ") {
+			continue
+		}
+		for _, match := range llmModelOption.FindAllStringSubmatch(command, -1) {
+			for _, uri := range strings.Split(match[2], "|") {
+				if uri == decisionsRoute || uri == systemOneRoute {
+					routes[match[1]] = append(routes[match[1]], uri)
+				}
+			}
+		}
+	}
+	return routes
+}
+
+func (f *decisionRoutesFake) vanityRoutes() map[string][]string {
+	routes := map[string][]string{}
+	data, err := os.ReadFile(filepath.Join(f.repoRoot, decisionVanityEnvironment))
+	if err != nil {
+		return routes
+	}
+	var environment struct {
+		Addons struct {
+			VanityGateway struct {
+				MappingConfig struct {
+					V2Config struct {
+						OpenAI struct {
+							Decisions map[string]struct {
+								ModelName string `yaml:"modelName"`
+							} `yaml:"decisions"`
+						} `yaml:"openai"`
+						TypesafeSystemOne map[string]struct {
+							ModelName string `yaml:"modelName"`
+						} `yaml:"typesafeSystemOne"`
+					} `yaml:"v2config"`
+				} `yaml:"mappingConfig"`
+			} `yaml:"vanityGateway"`
+		} `yaml:"addons"`
+	}
+	if yaml.Unmarshal(data, &environment) != nil {
+		return routes
+	}
+	v2 := environment.Addons.VanityGateway.MappingConfig.V2Config
+	for _, entry := range v2.OpenAI.Decisions {
+		routes[entry.ModelName] = append(routes[entry.ModelName], decisionsRoute)
+	}
+	for _, entry := range v2.TypesafeSystemOne {
+		routes[entry.ModelName] = append(routes[entry.ModelName], systemOneRoute)
+	}
+	return routes
+}
+
+// modelKey strips the function ID prefix the LLM gateway requires. A model
+// without it is unknown there.
+func modelKey(host, model string) string {
+	if host != decisionLLMHost {
+		return model
+	}
+	_, name, found := strings.Cut(model, "/")
+	if !found {
+		return ""
+	}
+	return name
 }
 
 func isDecisionRoutePath(path string) bool {
@@ -85,13 +166,13 @@ func (f *decisionRoutesFake) Do(ctx context.Context, method, rawURL string, head
 	if err != nil {
 		return harness.HTTPResponse{}, err
 	}
-	known := decisionRoutesByModel[u.Host]
-	if known == nil || !isDecisionRoutePath(u.Path) {
+	if (u.Host != decisionLLMHost && u.Host != decisionVanityHost) || !isDecisionRoutePath(u.Path) {
 		return f.inner.Do(ctx, method, rawURL, headers, body)
 	}
 	if headers["Authorization"] != "Bearer wiring-function-api-key" {
 		return harness.HTTPResponse{Status: 401}, nil
 	}
+	known := f.routesByModel(u.Host)
 	if strings.HasPrefix(u.Path, "/v1/models") {
 		return f.models(u, method, known)
 	}
@@ -115,7 +196,7 @@ func (f *decisionRoutesFake) Do(ctx context.Context, method, rawURL string, head
 // systemone-not-isolated and vanity-section-leak modes enable a model that the
 // configuration lists only on the other route.
 func (f *decisionRoutesFake) serves(u *url.URL, model string, known map[string][]string) bool {
-	for _, route := range known[model] {
+	for _, route := range known[modelKey(u.Host, model)] {
 		if route == u.Path {
 			return true
 		}
@@ -207,8 +288,13 @@ func (f *decisionRoutesFake) models(u *url.URL, method string, known map[string]
 		return harness.HTTPResponse{Status: 405}, nil
 	}
 	if u.Path == "/v1/models" {
+		ids := make([]string, 0, len(known))
+		for id := range known {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
 		data := []any{}
-		for _, id := range []string{"bdd-decision-direct", "bdd-decision-llm", "bdd-decision-decisions-only", "bdd-decision-systemone-only"} {
+		for _, id := range ids {
 			data = append(data, map[string]any{"id": id, "object": "model"})
 		}
 		return harness.HTTPResponse{Status: 200, Body: mustJSON(map[string]any{"object": "list", "data": data})}, nil
@@ -226,8 +312,11 @@ func (f *decisionRoutesFake) models(u *url.URL, method string, known map[string]
 }
 
 // attach answers the scenarios' warm-up invocations on the runner. They go
-// through the NVCF CLI, which prints the function's reply.
-func (f *decisionRoutesFake) attach(runner *fakeRunner) {
+// through the NVCF CLI, which prints the function's reply. The fake reads the
+// created functions from the runner and the Vanity mapping under repoRoot.
+func (f *decisionRoutesFake) attach(runner *fakeRunner, repoRoot string) {
+	f.runner = runner
+	f.repoRoot = repoRoot
 	previous := runner.onRun
 	runner.onRun = func(command string) error {
 		if strings.Contains(command, " function invoke ") && strings.Contains(command, "-ready") &&
@@ -324,44 +413,10 @@ func TestDecisionRouteScenariosRejectBrokenGateways(t *testing.T) {
 	}
 	for _, broken := range brokenModes {
 		t.Run(broken, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("REPO_ROOT", "/repo-root-placeholder")
-			t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
-			t.Setenv("SAMPLE_LLM_DECISIONS_IMAGE", "nvcr.io/test-org/test-team/openai-compatible-decisions:test")
-			seedFunctionAPIKey(t, home)
-			runner := newFakeRunner(map[string]harness.Result{})
-			runner.onRun = func(command string) error {
-				if strings.Contains(command, " status --json") {
-					runner.results[command] = harness.Result{Stdout: `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`}
-				}
-				return nil
-			}
-			suite := newWiringSuite(t, runner)
-			envFile := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd.yaml")
-			if err := os.MkdirAll(filepath.Dir(envFile), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(envFile, []byte("addons: {}\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			fake := newDecisionRoutesFake(broken, &llmRoutingHTTPFake{seen: map[string]bool{}})
-			newVanityShadowFake("", fake).attach(runner)
-			fake.attach(runner)
-			suite.HTTP = fake
-			sc := steps.NewScenarioContext(suite)
-			var out strings.Builder
-			status := godog.TestSuite{
-				Name:                "decision-routes-feature",
-				ScenarioInitializer: func(ctx *godog.ScenarioContext) { steps.RegisterAll(ctx, sc) },
-				Options: &godog.Options{
-					Format: "pretty", Output: &out, Strict: true,
-					FeatureContents: []godog.Feature{{Name: "decisions", Contents: []byte("Feature: Decision routes\n" + scenarios)}},
-				},
-			}.Run()
+			status, out, fake, runner := runDecisionScenarios(t, broken, scenarios)
 			if broken == "" {
 				if status != 0 {
-					t.Fatalf("feature failed:\n%s", out.String())
+					t.Fatalf("feature failed:\n%s", out)
 				}
 				if !commandRanThatContainsAll(runner.runs, "function create --name bdd-llm-decision-routes",
 					"--image nvcr.io/test-org/test-team/openai-compatible-decisions:test", "--function-type LLM",
@@ -375,7 +430,73 @@ func TestDecisionRouteScenariosRejectBrokenGateways(t *testing.T) {
 				return
 			}
 			if !fake.seen[broken] || status == 0 {
-				t.Fatalf("feature did not reject broken %s gateway (exercised %v):\n%s", broken, fake.seen[broken], out.String())
+				t.Fatalf("feature did not reject broken %s gateway (exercised %v):\n%s", broken, fake.seen[broken], out)
+			}
+		})
+	}
+}
+
+// runDecisionScenarios runs the decision scenarios against the fake with the
+// given broken mode and returns the godog status and output.
+func runDecisionScenarios(t *testing.T, broken, scenarios string) (int, string, *decisionRoutesFake, *fakeRunner) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("SAMPLE_LLM_DECISIONS_IMAGE", "nvcr.io/test-org/test-team/openai-compatible-decisions:test")
+	seedFunctionAPIKey(t, home)
+	runner := newFakeRunner(map[string]harness.Result{})
+	runner.onRun = func(command string) error {
+		if strings.Contains(command, " status --json") {
+			runner.results[command] = harness.Result{Stdout: `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`}
+		}
+		return nil
+	}
+	suite := newWiringSuite(t, runner)
+	envFile := filepath.Join(suite.Config.RepoRoot, decisionVanityEnvironment)
+	if err := os.MkdirAll(filepath.Dir(envFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(envFile, []byte("addons: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := newDecisionRoutesFake(broken, &llmRoutingHTTPFake{seen: map[string]bool{}})
+	newVanityShadowFake("", fake).attach(runner)
+	fake.attach(runner, suite.Config.RepoRoot)
+	suite.HTTP = fake
+	sc := steps.NewScenarioContext(suite)
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name:                "decision-routes-feature",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) { steps.RegisterAll(ctx, sc) },
+		Options: &godog.Options{
+			Format: "pretty", Output: &out, Strict: true,
+			FeatureContents: []godog.Feature{{Name: "decisions", Contents: []byte("Feature: Decision routes\n" + scenarios)}},
+		},
+	}.Run()
+	return status, out.String(), fake, runner
+}
+
+// TestDecisionRouteScenariosFollowTheirOwnConfiguration breaks the model
+// configuration the scenarios write. The fake serves only what that
+// configuration declares, so each typo must fail the feature offline.
+func TestDecisionRouteScenariosFollowTheirOwnConfiguration(t *testing.T) {
+	scenarios := decisionScenarios(t)
+	for name, edit := range map[string][2]string{
+		"vanity decisions section key": {"\n        decisions:\n", "\n        decision:\n"},
+		"vanity systemone section key": {`key "addons.vanityGateway.mappingConfig.v2config.typesafeSystemOne"`, `key "addons.vanityGateway.mappingConfig.v2config.typesafeSystemone"`},
+		"vanity model name":            {"modelName: bdd-decision-direct\n", "modelName: bdd-decision-direkt\n"},
+		"llm model uris":               {"name=bdd-decision-both,uris=/v1/decisions\\|/v1/systemone", "name=bdd-decision-both,uris=/v1/decisions"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(scenarios, edit[0]) {
+				t.Fatalf("scenario text %q not found", edit[0])
+			}
+			broken := strings.Replace(scenarios, edit[0], edit[1], 1)
+			status, out, _, _ := runDecisionScenarios(t, "", broken)
+			if status == 0 {
+				t.Fatalf("feature passed with a broken configuration (%s):\n%s", name, out)
 			}
 		})
 	}
