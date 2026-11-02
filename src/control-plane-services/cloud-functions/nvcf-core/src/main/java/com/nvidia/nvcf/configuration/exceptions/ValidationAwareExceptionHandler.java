@@ -26,6 +26,7 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
+import org.springframework.validation.ObjectError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
@@ -70,17 +71,18 @@ public class ValidationAwareExceptionHandler extends ExceptionTracingExceptionHa
     }
 
     private static String buildMethodArgumentNotValidDetail(MethodArgumentNotValidException ex) {
-        var errors = ex.getBindingResult().getFieldErrors();
+        // Class-level constraints are global (object) errors, not field errors.
+        var errors = ex.getBindingResult().getAllErrors();
         if (errors.isEmpty()) {
             return "Validation failed";
         }
         StringBuilder sb = new StringBuilder("Validation failed: ");
-        for (FieldError fe : errors) {
-            sb.append("[field=")
-                    .append(fe.getField())
-                    .append(", message=")
-                    .append(fe.getDefaultMessage())
-                    .append("] ");
+        for (ObjectError error : errors) {
+            sb.append('[');
+            if (error instanceof FieldError fe) {
+                sb.append("field=").append(fe.getField()).append(", ");
+            }
+            sb.append("message=").append(error.getDefaultMessage()).append("] ");
         }
         return sb.toString().trim();
     }
