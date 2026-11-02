@@ -77,10 +77,12 @@ It forwards only a SHA-256-derived value in the internal
 
 ### Decision routes
 
-`POST /v1/decisions` and `POST /v1/systemone` forward the request and response
-bodies unchanged to a decision model. The gateway reads only `model`, rewrites
-it to the function's model name, and does not translate between the two
-formats. Responses are not streamed; `stream` is ignored.
+`POST /v1/decisions` and `POST /v1/systemone` forward requests to a decision
+model and do not translate between the two formats. The gateway reads only
+`model` and replaces its value with the function's model name. The request
+body is forwarded unchanged except for the model value: key order, spacing,
+escapes, numbers, and duplicate keys are kept. The response body is relayed
+unchanged. Responses are not streamed; `stream` is ignored.
 
 - A model is enabled for a route only when its function declares the route in
   the model's `uris`, for example `--llm-model name=<model>,uris=/v1/decisions`.
@@ -97,7 +99,17 @@ formats. Responses are not streamed; `stream` is ignored.
   and `base64` fields; its other strings still count as text. The top-level
   object is never counted as an image.
 - Client headers, including `TypeSafe-Danger-Zone-Images`, reach the model
-  server.
+  server, with these exceptions. `Authorization`, `X-Api-Key`,
+  `Proxy-Authorization`, and `Cookie` are removed, because caller credentials
+  authorize NVCF, not the model server. Client copies of the Stargate control
+  headers `x-input-tokens`, `x-token-estimate`, `x-max-wait-ms`,
+  `x-request-slo-ms`, and `x-cache-affinity-key` are removed; the gateway
+  always sends `x-input-tokens` and `x-token-estimate` as the estimate, at
+  least `1`. `Accept-Encoding` is set to `identity` so the gateway can read
+  the reported usage.
+- The gateway holds the whole request body in memory and reads it a few
+  times. Images make these bodies large, so set
+  `NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES` when you enable these routes.
 - `/v1/decisions` returns errors in the OpenAI shape. `/v1/systemone` returns
   `{"error":{"code","message","request_id"},"request_id"}`, where `request_id`
   equals the `X-Request-ID` response header. Codes are `invalid_json`,
