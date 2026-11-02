@@ -54,6 +54,7 @@ spec:
             capabilities:
               drop: [ALL]
           env:
+            {{- include "sis.kubectlEnv" . | nindent 12 }}
             - name: CORE_MIGRATIONS_ENABLED
               value: "false"
             - name: ADDONS_LLS_ENABLED
