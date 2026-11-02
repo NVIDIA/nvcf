@@ -27,10 +27,11 @@ use reqwest::{Client, Error as ReqwestError, Method, Response, StatusCode};
 use sonic_rs::JsonValueTrait;
 use stargate_protocol::common::{connection_header_names, is_hop_by_hop_header};
 use stargate_protocol::tunnel_contract::{
-    HEADER_MODEL, HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
-    HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE, HEADER_STARGATE_UPSTREAM_RETRYABLE,
-    RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED, RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
-    RETRY_REASON_UPSTREAM_ADMISSION_REJECTED, is_internal_control_header,
+    HEADER_MODEL, HEADER_STARGATE_ERROR_CODE, HEADER_STARGATE_EXPECTED_QUEUE_MS,
+    HEADER_STARGATE_RETRY_AFTER_MS, HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
+    HEADER_STARGATE_UPSTREAM_RETRYABLE, RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED,
+    RETRY_REASON_QUEUE_ESTIMATE_MISMATCH, RETRY_REASON_UPSTREAM_ADMISSION_REJECTED,
+    is_internal_control_header,
 };
 use stargate_telemetry::{
     inject_trace_context, parent_context_from_headers, traceparent_from_headers,
@@ -75,8 +76,10 @@ pub const DEFAULT_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(300);
 /// Longest gap between streamed outputs once generation has started.
 pub const DEFAULT_OUTPUT_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES: usize = 64 * 1024;
-pub(super) const RETRY_REASON_LOCAL_CONNECT_FAILURE: &str = "local_connect_failure";
-pub(super) const RETRY_REASON_MODEL_GENERATION_UNAVAILABLE: &str = "model_generation_unavailable";
+const ERROR_CODE_INVALID_REQUEST: &str = "invalid_request";
+pub(super) use stargate_protocol::tunnel_contract::{
+    RETRY_REASON_LOCAL_CONNECT_FAILURE, RETRY_REASON_MODEL_GENERATION_UNAVAILABLE,
+};
 pub(super) const WEBTRANSPORT_STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
@@ -590,6 +593,7 @@ async fn send_complete_response(
     transport.finish_response().await
 }
 
+/// Sends a Pylon-generated 400. Every caller rejects the request itself.
 async fn send_problem_response(
     transport: &mut impl TunnelRequestTransport,
     status: StatusCode,
@@ -598,7 +602,7 @@ async fn send_problem_response(
     send_complete_response(
         transport,
         status,
-        problem_response_headers(),
+        problem_response_headers(ERROR_CODE_INVALID_REQUEST),
         problem_details_body(status, detail),
     )
     .await
@@ -827,7 +831,8 @@ pub(super) async fn forward_tunnel_request(
                     true,
                     RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED,
                 );
-                let mut headers = problem_response_headers();
+                let mut headers =
+                    problem_response_headers(RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED);
                 insert_retry_metadata(
                     &mut headers,
                     true,
@@ -1324,7 +1329,7 @@ pub(super) fn queue_mismatch_response_headers(
         RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
     );
 
-    let mut headers = problem_response_headers();
+    let mut headers = problem_response_headers(RETRY_REASON_QUEUE_ESTIMATE_MISMATCH);
     insert_retry_metadata(&mut headers, true, RETRY_REASON_QUEUE_ESTIMATE_MISMATCH);
     if let QueueAdmissionDecision::Rejected {
         retry_after_ms: Some(retry_after_ms),
@@ -1340,15 +1345,23 @@ pub(super) fn queue_mismatch_response_headers(
     Ok(headers)
 }
 
-pub(super) fn problem_response_headers() -> HeaderMap {
-    HeaderMap::from_iter([(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/problem+json"),
-    )])
+/// Headers for a response Pylon generates itself. The error code tells
+/// Stargate and its callers that the model server did not produce it.
+pub(super) fn problem_response_headers(error_code: &'static str) -> HeaderMap {
+    HeaderMap::from_iter([
+        (
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/problem+json"),
+        ),
+        (
+            HeaderName::from_static(HEADER_STARGATE_ERROR_CODE),
+            HeaderValue::from_static(error_code),
+        ),
+    ])
 }
 
 pub(super) fn local_connect_failure_headers(retryable: bool) -> HeaderMap {
-    let mut headers = problem_response_headers();
+    let mut headers = problem_response_headers(RETRY_REASON_LOCAL_CONNECT_FAILURE);
     insert_retry_metadata(&mut headers, retryable, RETRY_REASON_LOCAL_CONNECT_FAILURE);
     headers
 }
@@ -1362,7 +1375,7 @@ pub(super) fn model_generation_unavailable_headers(app: &TunnelServerApp) -> Hea
         true,
         RETRY_REASON_MODEL_GENERATION_UNAVAILABLE,
     );
-    let mut headers = problem_response_headers();
+    let mut headers = problem_response_headers(RETRY_REASON_MODEL_GENERATION_UNAVAILABLE);
     insert_retry_metadata(
         &mut headers,
         true,
@@ -2544,6 +2557,99 @@ mod tests {
             metadata_observations.last().unwrap().observation().state,
             crate::RequestObservationState::Failed
         );
+    }
+
+    #[tokio::test]
+    async fn pylon_generated_errors_carry_the_router_error_code() {
+        let error_code = |transport: &TestTransport| {
+            transport.response_headers[0]
+                .get(HEADER_STARGATE_ERROR_CODE)
+                .map(|value| value.to_str().unwrap().to_string())
+        };
+        for path in ["/v1/decisions", "/v1/chat/completions"] {
+            let body = if path == "/v1/decisions" {
+                br#"{"questions":[]}"#.as_slice()
+            } else {
+                br#"{"messages":[],"stream":true}"#.as_slice()
+            };
+
+            let (app, _observations) = observed_app("http://127.0.0.1:0");
+            let mut transport = TestTransport {
+                request_body: body.to_vec(),
+                ..TestTransport::default()
+            };
+            forward_tunnel_request(&app, observed_request(path), &mut transport)
+                .await
+                .unwrap();
+            assert_eq!(transport.response_heads, [StatusCode::SERVICE_UNAVAILABLE]);
+            assert_eq!(
+                error_code(&transport).as_deref(),
+                Some(RETRY_REASON_LOCAL_CONNECT_FAILURE),
+                "{path} connect failure"
+            );
+
+            let app = TunnelServerApp::new(
+                "pending-generation".to_string(),
+                "http://127.0.0.1:0".to_string(),
+                TunnelForwardingConfig::default(),
+            );
+            assert!(
+                app.runtime_state
+                    .begin_generation(ModelGeneration::new("model-a", 1))
+            );
+            let mut transport = TestTransport {
+                request_body: body.to_vec(),
+                ..TestTransport::default()
+            };
+            forward_tunnel_request(&app, observed_request(path), &mut transport)
+                .await
+                .unwrap();
+            assert_eq!(transport.response_heads, [StatusCode::SERVICE_UNAVAILABLE]);
+            assert_eq!(
+                error_code(&transport).as_deref(),
+                Some(RETRY_REASON_MODEL_GENERATION_UNAVAILABLE),
+                "{path} pending generation"
+            );
+
+            let (app, _observations) = observed_app("http://127.0.0.1:0");
+            let mut transport = TestTransport {
+                request_body: b"not json".to_vec(),
+                ..TestTransport::default()
+            };
+            forward_tunnel_request(&app, observed_request(path), &mut transport)
+                .await
+                .unwrap();
+            assert_eq!(transport.response_heads, [StatusCode::BAD_REQUEST]);
+            assert_eq!(
+                error_code(&transport).as_deref(),
+                Some("invalid_request"),
+                "{path} malformed body"
+            );
+        }
+
+        // A backend error is relayed unmarked, even when the backend tries
+        // to set the code itself.
+        let upstream = TestHttpServer::spawn(Router::new().route(
+            "/v1/decisions",
+            post(|| async {
+                AxumResponse::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header(HEADER_STARGATE_ERROR_CODE, "spoofed")
+                    .body(Body::from("down"))
+                    .unwrap()
+            }),
+        ))
+        .await;
+        let (app, _observations) = observed_app(upstream.as_str());
+        let mut transport = TestTransport {
+            request_body: br#"{"questions":[]}"#.to_vec(),
+            ..TestTransport::default()
+        };
+        forward_tunnel_request(&app, observed_request("/v1/decisions"), &mut transport)
+            .await
+            .unwrap();
+        assert_eq!(transport.response_heads, [StatusCode::SERVICE_UNAVAILABLE]);
+        assert_eq!(error_code(&transport), None);
     }
 
     #[tokio::test]
