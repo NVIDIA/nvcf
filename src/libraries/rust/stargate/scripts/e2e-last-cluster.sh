@@ -443,6 +443,7 @@ decision_request() {
         "http://127.0.0.1:${gw_http}/v1/${route}${query}" \
         -H 'content-type: application/json' \
         -H "authorization: Bearer ${client_token}" \
+        -H 'Cookie: session=e2e' \
         -H 'TypeSafe-Danger-Zone-Images: true' \
         -H 'X-Vendor-Test: v' \
         --data-binary "@${body_file}"
@@ -478,7 +479,7 @@ expected_decision_error() {
     case "${route}:${status}" in
         decisions:429) echo '{"error":{"message":"Rate limit exceeded","type":"rate_limit_error","param":null,"code":"rate_limit_exceeded"}}' ;;
         decisions:400) echo '{"error":{"message":"Invalid question","type":"invalid_request_error","param":"questions","code":"invalid_question"}}' ;;
-        systemone:429) echo '{"detail":"Rate limit exceeded"}' ;;
+        systemone:429) echo '{"detail":[{"loc":["body"],"msg":"Rate limit exceeded","type":"value_error"}]}' ;;
         systemone:400) echo '{"detail":[{"loc":["body","questions"],"msg":"Invalid question","type":"value_error"}]}' ;;
         *) fail "no expected body for ${route}:${status}" ;;
     esac
@@ -494,6 +495,8 @@ expect_decision_json() {
 # Checks the whole 200 response of the last request, which sent body_file. The
 # gateway-assigned request id and input token estimate vary, so they are
 # checked for shape and consistency and removed before the exact comparison.
+# decision_request sends client Authorization and Cookie headers, so
+# credentials_received=false proves they did not reach the backend.
 expect_decision_success() {
     local route="$1" body_file="$2" answers usage_extra expected_digest body_bytes
     if [[ "${route}" == decisions ]]; then
@@ -520,8 +523,9 @@ expect_decision_success() {
                     "typesafe-danger-zone-images": "true",
                     "x-model": $model,
                     "x-vendor-test": "v",
-                    body_len: $len,
-                    body_sha256: $digest
+                    body_length: $len,
+                    body_sha256: $digest,
+                    credentials_received: false
                 }}') \
         <(jq -S 'del(.echo["x-request-id"], .echo["x-input-tokens"], .usage.input_tokens, .usage.total_tokens)' \
             "${run_dir}/decision-body.txt") >"${run_dir}/diff.txt" ||
