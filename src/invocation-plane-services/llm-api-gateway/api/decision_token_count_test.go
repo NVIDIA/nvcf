@@ -72,6 +72,7 @@ func TestEstimatedTokenCountForDecisionBodyResistsImageBypass(t *testing.T) {
 			{"data prefix with base64 marker later", `{"questions":[{"predicate":"data:` + text + `;base64,x"}]}`, textTokens},
 			{"non-image data url", `{"questions":[{"predicate":"data:text/plain;base64,` + text + `"}]}`, textTokens},
 			{"image media type without base64 marker", `{"questions":[{"predicate":"data:image/png,` + text + `"}]}`, textTokens},
+			{"image data url prefix followed by prose", `{"questions":[{"predicate":"data:image/png;base64,` + text + `"}]}`, textTokens},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
@@ -81,6 +82,44 @@ func TestEstimatedTokenCountForDecisionBodyResistsImageBypass(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestIsBase64ImageDataURL(t *testing.T) {
+	t.Parallel()
+
+	for text, want := range map[string]bool{
+		"data:image/png;base64,iVBORw0KGgo=":    true,
+		"data:image/png;base64,QUJD+/9=":        true,
+		"data:image/webp;base64,QUJD-_9":        true,
+		"data:image/png;base64,":                true,
+		"data:image/png;base64,QUJD QUJD":       false,
+		"data:image/png;base64,QUJD\nQUJD":      false,
+		"data:image/png;base64,Is the sky red?": false,
+		"data:image/;base64,QUJD":               false,
+		"data:;base64,QUJD":                     false,
+		"data:text/plain;base64,QUJD":           false,
+		"data:image/png,QUJD":                   false,
+		"data:image/png;charset=x;base64,QUJD":  false,
+		"prefix data:image/png;base64,QUJD":     false,
+	} {
+		require.Equal(t, want, isBase64ImageDataURL(text), text)
+	}
+}
+
+// One megabyte of prose behind an image data URL prefix counts as text.
+func TestEstimatedTokenCountForDecisionBodyImagePrefixedProseIsText(t *testing.T) {
+	t.Parallel()
+
+	prose := "data:image/png;base64," + strings.Repeat("Is the sky red? ", 1<<16)
+	got, err := estimatedTokenCountForDecisionBody([]byte(`{"predicate":"`+prose+`"}`), 1000)
+	require.NoError(t, err)
+	require.Equal(t, estimatedTokenCountForText(prose), got)
+}
+
+func TestIsBase64ImageDataURLDoesNotAllocate(t *testing.T) {
+	text := "data:image/png;base64," + strings.Repeat("QUJD", 1<<16)
+	allocs := testing.AllocsPerRun(10, func() { _ = isBase64ImageDataURL(text) })
+	require.Zero(t, allocs)
 }
 
 func TestEstimatedTokenCountForDecisionBodyImageTokensIsConfigurable(t *testing.T) {

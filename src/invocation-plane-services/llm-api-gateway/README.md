@@ -94,7 +94,8 @@ unchanged. Responses are not streamed; `stream` is ignored.
   estimate counts every string in the body as text. Each image counts a flat
   `NVCF_DECISION_IMAGE_TOKENS` (default `1024`) and its base64 is never
   counted. An image is an element of `images`, a value of `assets`, or any
-  string that starts with `data:image/<type>;base64,`. A nested object with
+  string that is `data:image/<type>;base64,` followed only by base64
+  characters. Other text behind that prefix counts as text. A nested object with
   `type` set to `input_image` counts one image in place of its `image_url`
   and `base64` fields; its other strings still count as text. The top-level
   object is never counted as an image.

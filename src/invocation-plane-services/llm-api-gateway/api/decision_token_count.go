@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"regexp"
 	"strings"
 )
 
@@ -22,7 +21,8 @@ var errDecisionBodyTooDeep = errors.New("request body is nested more than 64 lev
 // Each image slot counts a flat imageTokens and its payload is never counted,
 // so a large base64 image cannot hide or inflate the estimate. Image slots are
 // each element of an "images" array, each value of an "assets" object, and any
-// string that is a base64 image data URL (data:image/<type>;base64,...).
+// string that is a base64 image data URL (data:image/<type>;base64, followed
+// by base64 characters only).
 //
 // A nested object with type "input_image" counts as one image in place of its
 // image_url and base64 fields; its other strings still count as text. The root
@@ -167,11 +167,34 @@ func skipContainer(dec *json.Decoder, depth int) error {
 	return nil
 }
 
-// base64ImageDataURL matches the start of a base64 image data URL. The media
-// type must be an image so a prefix such as "data:;base64," cannot make text
-// count as one image.
-var base64ImageDataURL = regexp.MustCompile(`^data:image/[^;]+;base64,`)
-
+// isBase64ImageDataURL reports whether text is a base64 image data URL: it
+// matches ^data:image/[^;]+;base64, and the rest is only base64 characters
+// (standard or URL-safe alphabet, with = padding). Prose behind the prefix is
+// text, so the prefix cannot make a prompt count as one image. It reads text
+// once and does not allocate.
 func isBase64ImageDataURL(text string) bool {
-	return strings.HasPrefix(text, "data:image/") && base64ImageDataURL.MatchString(text)
+	const prefix, marker = "data:image/", ";base64,"
+	if !strings.HasPrefix(text, prefix) {
+		return false
+	}
+	rest := text[len(prefix):]
+	semicolon := strings.IndexByte(rest, ';')
+	if semicolon <= 0 || !strings.HasPrefix(rest[semicolon:], marker) {
+		return false
+	}
+	for _, b := range []byte(rest[semicolon+len(marker):]) {
+		if !isBase64Byte(b) {
+			return false
+		}
+	}
+	return true
+}
+
+func isBase64Byte(b byte) bool {
+	switch {
+	case 'A' <= b && b <= 'Z', 'a' <= b && b <= 'z', '0' <= b && b <= '9':
+		return true
+	default:
+		return b == '+' || b == '/' || b == '=' || b == '-' || b == '_'
+	}
 }
