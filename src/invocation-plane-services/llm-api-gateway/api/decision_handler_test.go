@@ -77,8 +77,9 @@ func decisionRequest(route decisionRoute, body string) *http.Request {
 	return req
 }
 
-// requireNativeError checks the error body is in the route's native shape.
-func requireNativeError(t *testing.T, route decisionRoute, rec *httptest.ResponseRecorder, wantStatus int, wantOpenAIType, wantSystemOneCode string) {
+// requireNativeError checks the error body is in the route's native shape
+// with the canonical code for the route.
+func requireNativeError(t *testing.T, route decisionRoute, rec *httptest.ResponseRecorder, wantStatus int, wantOpenAIType, wantDecisionsCode, wantSystemOneCode string) {
 	t.Helper()
 	require.Equal(t, wantStatus, rec.Code, rec.Body.String())
 	var body map[string]any
@@ -93,6 +94,7 @@ func requireNativeError(t *testing.T, route decisionRoute, rec *httptest.Respons
 		return
 	}
 	require.Equal(t, wantOpenAIType, errObject["type"], rec.Body.String())
+	require.Equal(t, wantDecisionsCode, errObject["code"], rec.Body.String())
 	require.Contains(t, body["error"], "message")
 	require.NotContains(t, body, "request_id")
 }
@@ -195,7 +197,7 @@ func TestDecisionRoutesModelNotEnabled(t *testing.T) {
 				rec := httptest.NewRecorder()
 				e.ServeHTTP(rec, decisionRequest(route, route.body))
 
-				requireNativeError(t, route, rec, http.StatusNotFound, "invalid_request_error", "not_found")
+				requireNativeError(t, route, rec, http.StatusNotFound, "invalid_request_error", "model_not_found", "not_found")
 				require.Contains(t, rec.Body.String(), route.path)
 				require.Zero(t, hits.Load(), "a model that is not enabled must not reach the backend")
 			})
@@ -252,7 +254,7 @@ func TestDecisionRoutesRejectBadRequests(t *testing.T) {
 				rec := httptest.NewRecorder()
 				e.ServeHTTP(rec, decisionRequest(route, tc.body))
 
-				requireNativeError(t, route, rec, http.StatusBadRequest, "invalid_request_error", tc.wantSystemOneCode)
+				requireNativeError(t, route, rec, http.StatusBadRequest, "invalid_request_error", tc.wantSystemOneCode, tc.wantSystemOneCode)
 				require.Zero(t, hits.Load())
 			})
 		}
@@ -268,7 +270,7 @@ func TestDecisionRoutesRequireBearerAuthorization(t *testing.T) {
 		req.Header.Del("Authorization")
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
-		requireNativeError(t, route, rec, http.StatusUnauthorized, "authentication_error", "invalid_api_key")
+		requireNativeError(t, route, rec, http.StatusUnauthorized, "authentication_error", "invalid_api_key", "invalid_api_key")
 	}
 }
 
@@ -304,7 +306,7 @@ func TestDecisionRoutesRateLimitRefusal(t *testing.T) {
 				rec := httptest.NewRecorder()
 				e.ServeHTTP(rec, decisionRequest(route, route.body))
 
-				requireNativeError(t, route, rec, http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded")
+				requireNativeError(t, route, rec, http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded", "rate_limit_exceeded")
 				require.NotEmpty(t, rec.Header().Get("Retry-After"))
 				require.Zero(t, hits.Load(), "a refused request must not reach the backend")
 				var sawLimit bool

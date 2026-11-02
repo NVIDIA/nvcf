@@ -71,30 +71,58 @@ func TestErrorShapeFor(t *testing.T) {
 	}
 }
 
+// decisionErrorCodeCases is the canonical status-to-code table the gateway and
+// Vanity share for the decision routes.
+var decisionErrorCodeCases = []struct {
+	status                       int
+	internal                     error
+	openAIType                   string
+	decisionsCode, systemOneCode string
+}{
+	{http.StatusBadRequest, nil, "invalid_request_error", "invalid_request", "invalid_request"},
+	{http.StatusBadRequest, errInvalidJSON, "invalid_request_error", "invalid_json", "invalid_json"},
+	{http.StatusUnauthorized, nil, "authentication_error", "invalid_api_key", "invalid_api_key"},
+	{http.StatusForbidden, nil, "permission_error", "forbidden", "forbidden"},
+	{http.StatusNotFound, nil, "invalid_request_error", "model_not_found", "not_found"},
+	{http.StatusMethodNotAllowed, nil, "invalid_request_error", "invalid_request", "invalid_request"},
+	{http.StatusGone, nil, "invalid_request_error", "model_expired", "not_found"},
+	{http.StatusRequestEntityTooLarge, nil, "invalid_request_error", "request_too_large", "request_too_large"},
+	{http.StatusUnsupportedMediaType, nil, "invalid_request_error", "unsupported_media_type", "unsupported_media_type"},
+	{http.StatusUnprocessableEntity, nil, "invalid_request_error", "invalid_request", "invalid_request"},
+	{http.StatusTooManyRequests, nil, "rate_limit_error", "rate_limit_exceeded", "rate_limit_exceeded"},
+	{499, nil, "invalid_request_error", "request_cancelled", "request_cancelled"},
+	{http.StatusInternalServerError, nil, "server_error", "internal_error", "internal_error"},
+	{http.StatusNotImplemented, nil, "server_error", "internal_error", "internal_error"},
+	{http.StatusBadGateway, nil, "server_error", "provider_unavailable", "provider_unavailable"},
+	{http.StatusServiceUnavailable, nil, "server_error", "provider_unavailable", "provider_unavailable"},
+	{statusOverloaded, nil, "overloaded_error", "provider_unavailable", "provider_unavailable"},
+	{http.StatusGatewayTimeout, nil, "server_error", "provider_timeout", "provider_timeout"},
+}
+
+func TestDecisionsGatewayErrorsUseCanonicalCodes(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range decisionErrorCodeCases {
+		t.Run(fmt.Sprintf("%d/%s", tc.status, tc.decisionsCode), func(t *testing.T) {
+			t.Parallel()
+
+			err := echo.NewHTTPError(tc.status, "something failed")
+			if tc.internal != nil {
+				err = err.SetInternal(tc.internal)
+			}
+			rec := serveDecisionError(t, "/v1/decisions", nil, err)
+
+			require.Equal(t, tc.status, rec.Code, rec.Body.String())
+			require.JSONEq(t, openAIErrorJSON(t, tc.openAIType, "something failed", tc.decisionsCode), rec.Body.String())
+		})
+	}
+}
+
 func TestSystemOneGatewayErrorsUseSystemOneShape(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct {
-		status   int
-		code     string
-		internal error
-	}{
-		{http.StatusBadRequest, "invalid_request", nil},
-		{http.StatusBadRequest, "invalid_json", errInvalidJSON},
-		{http.StatusUnauthorized, "invalid_api_key", nil},
-		{http.StatusForbidden, "invalid_request", nil},
-		{http.StatusNotFound, "not_found", nil},
-		{http.StatusRequestEntityTooLarge, "request_too_large", nil},
-		{http.StatusUnprocessableEntity, "invalid_request", nil},
-		{http.StatusTooManyRequests, "rate_limit_exceeded", nil},
-		{http.StatusInternalServerError, "internal_error", nil},
-		{http.StatusNotImplemented, "internal_error", nil},
-		{http.StatusBadGateway, "provider_unavailable", nil},
-		{http.StatusServiceUnavailable, "provider_unavailable", nil},
-		{statusOverloaded, "provider_unavailable", nil},
-		{http.StatusGatewayTimeout, "provider_timeout", nil},
-	} {
-		t.Run(fmt.Sprintf("%d/%s", tc.status, tc.code), func(t *testing.T) {
+	for _, tc := range decisionErrorCodeCases {
+		t.Run(fmt.Sprintf("%d/%s", tc.status, tc.systemOneCode), func(t *testing.T) {
 			t.Parallel()
 
 			err := echo.NewHTTPError(tc.status, "something failed")
@@ -105,7 +133,7 @@ func TestSystemOneGatewayErrorsUseSystemOneShape(t *testing.T) {
 
 			require.Equal(t, tc.status, rec.Code, rec.Body.String())
 			require.Equal(t, echo.MIMEApplicationJSON, rec.Header().Get(echo.HeaderContentType))
-			require.JSONEq(t, systemOneErrorJSON(t, tc.code, "something failed", "request-a"), rec.Body.String())
+			require.JSONEq(t, systemOneErrorJSON(t, tc.systemOneCode, "something failed", "request-a"), rec.Body.String())
 			require.Equal(t, "request-a", rec.Header().Get(HeaderRequestID))
 			require.Empty(t, rec.Header().Get(headerMessagesRequestID))
 			for name := range rec.Header() {
@@ -132,7 +160,7 @@ func TestDecisionsGatewayErrorsUseOpenAIShape(t *testing.T) {
 	rec := serveDecisionError(t, "/v1/decisions", nil, echo.NewHTTPError(http.StatusNotFound, "no such model"))
 
 	require.Equal(t, http.StatusNotFound, rec.Code)
-	require.JSONEq(t, openAIErrorJSON(t, "invalid_request_error", "no such model", nil), rec.Body.String())
+	require.JSONEq(t, openAIErrorJSON(t, "invalid_request_error", "no such model", "model_not_found"), rec.Body.String())
 	require.Equal(t, "request-a", rec.Header().Get(HeaderRequestID))
 	require.Empty(t, rec.Header().Get(headerMessagesRequestID))
 }

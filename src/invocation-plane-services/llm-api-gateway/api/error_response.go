@@ -29,8 +29,9 @@ import (
 )
 
 const (
-	statusOverloaded  = 529
-	overloadErrorCode = "overloaded_error"
+	statusClientClosedRequest = 499
+	statusOverloaded          = 529
+	overloadErrorCode         = "overloaded_error"
 )
 
 type openAIErrorResponse struct {
@@ -147,7 +148,7 @@ func newHTTPErrorHandler(exposeRouterErrorCodes bool) echo.HTTPErrorHandler {
 		if shape == shapeSystemOne {
 			requestID := errorRequestID(c)
 			_ = c.JSON(status, systemOneErrorResponse{
-				Error:     systemOneError{Code: systemOneErrorCode(status, err), Message: message, RequestID: requestID},
+				Error:     systemOneError{Code: decisionErrorCode(status, err, shapeSystemOne), Message: message, RequestID: requestID},
 				RequestID: requestID,
 			})
 			return
@@ -163,6 +164,9 @@ func newHTTPErrorHandler(exposeRouterErrorCodes bool) echo.HTTPErrorHandler {
 
 		var code *string
 		switch {
+		case c.Request().URL.Path == decisionsEndpointPath:
+			decisionCode := decisionErrorCode(status, err, shapeOpenAI)
+			code = &decisionCode
 		case status == statusOverloaded:
 			overloaded := overloadErrorCode
 			code = &overloaded
@@ -215,20 +219,34 @@ func anthropicErrorType(status int) string {
 	}
 }
 
-// systemOneErrorCode maps an HTTP status to the System One error code. Other
-// 4xx statuses are invalid_request and other 5xx statuses internal_error.
-func systemOneErrorCode(status int, err error) string {
+// decisionErrorCode maps an HTTP status to the error code of a decision
+// route. /v1/decisions (shapeOpenAI) and /v1/systemone (shapeSystemOne) share
+// one table with the Vanity gateway, so a client sees the same code whichever
+// hop failed. They differ only for 404 and 410. Other 4xx statuses are
+// invalid_request and other 5xx statuses internal_error. Router codes are not
+// exposed on these routes.
+func decisionErrorCode(status int, err error, shape errorShape) string {
 	switch {
 	case status == http.StatusBadRequest && errors.Is(err, errInvalidJSON):
 		return "invalid_json"
 	case status == http.StatusUnauthorized:
 		return "invalid_api_key"
-	case status == http.StatusNotFound:
+	case status == http.StatusForbidden:
+		return "forbidden"
+	case status == http.StatusNotFound && shape == shapeOpenAI:
+		return "model_not_found"
+	case status == http.StatusGone && shape == shapeOpenAI:
+		return "model_expired"
+	case status == http.StatusNotFound, status == http.StatusGone:
 		return "not_found"
 	case status == http.StatusRequestEntityTooLarge:
 		return "request_too_large"
+	case status == http.StatusUnsupportedMediaType:
+		return "unsupported_media_type"
 	case status == http.StatusTooManyRequests:
 		return "rate_limit_exceeded"
+	case status == statusClientClosedRequest:
+		return "request_cancelled"
 	case status == http.StatusBadGateway, status == http.StatusServiceUnavailable, status == statusOverloaded:
 		return "provider_unavailable"
 	case status == http.StatusGatewayTimeout:

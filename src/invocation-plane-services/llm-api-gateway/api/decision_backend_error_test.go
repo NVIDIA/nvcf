@@ -96,15 +96,16 @@ func TestDecisionRoutesRouterErrorsUseNativeShape(t *testing.T) {
 			status, wantStatus    int
 			body                  string
 			wantMessage           string
+			wantDecisionsCode     string
 			wantSystemOneCode     string
 			wantOpenAIType        string
 			wantOpenAIOverloadTag bool
 		}{
-			{"no eligible candidates", "no_eligible_candidates", http.StatusNotFound, http.StatusNotFound, `{"error":"no eligible candidates","code":"no_eligible_candidates"}`, "no eligible candidates", "not_found", "invalid_request_error", false},
-			{"overloaded", "overloaded_error", http.StatusServiceUnavailable, 529, `{"error":{"code":"overloaded_error","message":"Inference capacity is temporarily unavailable.","param":"","type":"overloaded_error"}}`, "Inference capacity is temporarily unavailable.", "provider_unavailable", "overloaded_error", true},
-			{"tunnel failure with empty body", "tunnel_failed", http.StatusBadGateway, http.StatusBadGateway, ``, "Bad Gateway", "provider_unavailable", "server_error", false},
-			{"request body over replay limit", "body_too_large", http.StatusRequestEntityTooLarge, http.StatusRequestEntityTooLarge, ``, "Request Entity Too Large", "request_too_large", "invalid_request_error", false},
-			{"router rejection with a backend-shaped body", "unknown_method", http.StatusBadRequest, http.StatusBadRequest, `{"detail":[{"msg":"router says no"}]}`, "router says no", "invalid_request", "invalid_request_error", false},
+			{"no eligible candidates", "no_eligible_candidates", http.StatusNotFound, http.StatusNotFound, `{"error":"no eligible candidates","code":"no_eligible_candidates"}`, "no eligible candidates", "model_not_found", "not_found", "invalid_request_error", false},
+			{"overloaded", "overloaded_error", http.StatusServiceUnavailable, 529, `{"error":{"code":"overloaded_error","message":"Inference capacity is temporarily unavailable.","param":"","type":"overloaded_error"}}`, "Inference capacity is temporarily unavailable.", "provider_unavailable", "provider_unavailable", "overloaded_error", true},
+			{"tunnel failure with empty body", "tunnel_failed", http.StatusBadGateway, http.StatusBadGateway, ``, "Bad Gateway", "provider_unavailable", "provider_unavailable", "server_error", false},
+			{"request body over replay limit", "body_too_large", http.StatusRequestEntityTooLarge, http.StatusRequestEntityTooLarge, ``, "Request Entity Too Large", "request_too_large", "request_too_large", "invalid_request_error", false},
+			{"router rejection with a backend-shaped body", "unknown_method", http.StatusBadRequest, http.StatusBadRequest, `{"detail":[{"msg":"router says no"}]}`, "router says no", "invalid_request", "invalid_request", "invalid_request_error", false},
 		} {
 			t.Run(route.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
@@ -112,7 +113,7 @@ func TestDecisionRoutesRouterErrorsUseNativeShape(t *testing.T) {
 				rec := serveDecisionUpstream(t, route, config.Default(), nil, tc.status,
 					http.Header{"X-Stargate-Error-Code": {tc.routerCode}, "Retry-After": {"2"}, "Content-Type": {"application/json"}}, []byte(tc.body))
 
-				requireNativeError(t, route, rec, tc.wantStatus, tc.wantOpenAIType, tc.wantSystemOneCode)
+				requireNativeError(t, route, rec, tc.wantStatus, tc.wantOpenAIType, tc.wantDecisionsCode, tc.wantSystemOneCode)
 				require.Empty(t, rec.Header().Values("X-Stargate-Error-Code"))
 				require.Equal(t, "2", rec.Header().Get("Retry-After"))
 				require.Contains(t, rec.Body.String(), tc.wantMessage)
@@ -136,7 +137,7 @@ func TestDecisionRoutesRenderBareRouterErrorsNatively(t *testing.T) {
 			systemOneCode string
 		}{
 			{http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large"},
-			{499, "invalid_request_error", "invalid_request"},
+			{499, "invalid_request_error", "request_cancelled"},
 			{http.StatusServiceUnavailable, "server_error", "provider_unavailable"},
 			{http.StatusBadGateway, "server_error", "provider_unavailable"},
 			{http.StatusGatewayTimeout, "server_error", "provider_timeout"},
@@ -145,7 +146,7 @@ func TestDecisionRoutesRenderBareRouterErrorsNatively(t *testing.T) {
 				t.Parallel()
 				rec := serveDecisionUpstream(t, route, config.Default(), nil, tc.status,
 					http.Header{"Retry-After": {"3"}, "X-System-One-Error-Code": {"backend_code"}}, nil)
-				requireNativeError(t, route, rec, tc.status, tc.openAIType, tc.systemOneCode)
+				requireNativeError(t, route, rec, tc.status, tc.openAIType, tc.systemOneCode, tc.systemOneCode)
 				require.Equal(t, "3", rec.Header().Get("Retry-After"))
 				require.Empty(t, rec.Header().Values("X-System-One-Error-Code"), "gateway-written errors carry no X-System-One-* headers")
 			})

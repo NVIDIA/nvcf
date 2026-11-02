@@ -112,10 +112,25 @@ unchanged. Responses are not streamed; `stream` is ignored.
   `NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES` when you enable these routes.
 - `/v1/decisions` returns errors in the OpenAI shape. `/v1/systemone` returns
   `{"error":{"code","message","request_id"},"request_id"}`, where `request_id`
-  equals the `X-Request-ID` response header. Codes are `invalid_json`,
-  `invalid_request`, `invalid_api_key`, `not_found`, `request_too_large`,
-  `rate_limit_exceeded`, `internal_error`, `provider_unavailable`, and
-  `provider_timeout`.
+  equals the `X-Request-ID` response header. Both routes use the same codes,
+  shared with the vanity gateway:
+
+  | Status | `/v1/decisions` | `/v1/systemone` |
+  |---|---|---|
+  | 400, body is not valid JSON | `invalid_json` | `invalid_json` |
+  | 400, other | `invalid_request` | `invalid_request` |
+  | 401 | `invalid_api_key` | `invalid_api_key` |
+  | 403 | `forbidden` | `forbidden` |
+  | 404 | `model_not_found` | `not_found` |
+  | 410 | `model_expired` | `not_found` |
+  | 413 | `request_too_large` | `request_too_large` |
+  | 415 | `unsupported_media_type` | `unsupported_media_type` |
+  | 429 | `rate_limit_exceeded` | `rate_limit_exceeded` |
+  | 499 | `request_cancelled` | `request_cancelled` |
+  | 502, 503, 529 | `provider_unavailable` | `provider_unavailable` |
+  | 504 | `provider_timeout` | `provider_timeout` |
+  | Other 5xx | `internal_error` | `internal_error` |
+  | Other 4xx, including 422 | `invalid_request` | `invalid_request` |
 - An error from the model server is relayed byte for byte, whatever its shape,
   size, or encoding. Only errors the gateway or the request router generates
   use the shapes above. The router marks its own errors with
