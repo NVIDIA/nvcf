@@ -123,3 +123,17 @@ for invalid in 1.35 1.38 false; do
 done
 
 echo "OpenBao migration client and packaged image checks passed"
+
+# Retain legacy migration-only env settings, but reject conflicting controls.
+legacy_env='openbao.migrations.env=[{"name":"NVCF_KUBECTL_MINOR","value":"1.36"}]'
+helm template openbao "${chart_dir}" -f "${values_file}" \
+  --set-json "${legacy_env}" >"${rendered}"
+test "$(yq -r 'select(.kind == "Job" and .metadata.name == "openbao-server-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_KUBECTL_MINOR") | .value' "${rendered}")" = 1.36
+if helm template openbao "${chart_dir}" -f "${values_file}" \
+  --set-json "${legacy_env}" --set-string openbao.migrations.kubectlMinor=1.37 \
+  >"${test_root}/conflict.log" 2>&1; then
+  echo "conflicting kubectl selector controls were accepted" >&2
+  exit 1
+fi
+grep -Fq 'set openbao.migrations.kubectlMinor or NVCF_KUBECTL_MINOR in openbao.migrations.env, not both' "${test_root}/conflict.log"
+echo "OpenBao legacy client env and conflict checks passed"
