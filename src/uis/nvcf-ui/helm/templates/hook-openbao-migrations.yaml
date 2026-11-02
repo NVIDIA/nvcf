@@ -18,7 +18,7 @@
 # pre-upgrade so the auth role and sign policies exist before the server pods
 # come up and the Vault Agent tries to log in.
 {{- $bao := .Values.nvcfUi.openbaoMigrations }}
-{{- $kubectlMinor := $bao.kubectlMinor | toString }}
+{{- $kubectlMinor := get $bao "kubectlMinor" | toString }}
 {{- if not (has $kubectlMinor (list "" "1.36" "1.37")) }}
 {{- fail "nvcfUi.openbaoMigrations.kubectlMinor must be empty, 1.36, or 1.37" }}
 {{- end }}

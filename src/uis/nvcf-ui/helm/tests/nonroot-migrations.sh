@@ -28,8 +28,23 @@ test "$(yq -rN "$container | .image" "$work_dir/ui.yaml")" = "example.com/$image
 test -z "$(yq -rN "$container | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "$work_dir/ui.yaml")"
 
 render_migration_case() {
-  helm template ui "$chart" -n nvcf "$@" > "$work_dir/migration.yaml"
+  helm template ui "${migration_chart:-$chart}" -n nvcf "$@" > "$work_dir/migration.yaml"
 }
+
+# Older saved values can omit the selector; null is also removed by Helm.
+cp -R "$chart" "$work_dir/legacy-chart"
+yq -i 'del(.nvcfUi.openbaoMigrations.kubectlMinor)' "$work_dir/legacy-chart/values.yaml"
+migration_chart="$work_dir/legacy-chart" render_migration_case
+test -z "$(yq -rN "$container | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "$work_dir/migration.yaml")"
+render_migration_case --set nvcfUi.openbaoMigrations.kubectlMinor=null
+test -z "$(yq -rN "$container | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "$work_dir/migration.yaml")"
+for invalid in false 0; do
+  if render_migration_case --set "nvcfUi.openbaoMigrations.kubectlMinor=$invalid" 2> "$work_dir/invalid-client.err"; then
+    echo "FAIL: unsupported falsy migration client selector rendered" >&2
+    exit 1
+  fi
+  grep -Fq 'nvcfUi.openbaoMigrations.kubectlMinor must be empty, 1.36, or 1.37' "$work_dir/invalid-client.err"
+done
 
 for minor in 1.36 1.37; do
   render_migration_case \
