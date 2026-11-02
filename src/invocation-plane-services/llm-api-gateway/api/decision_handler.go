@@ -19,7 +19,7 @@ import (
 )
 
 // decisionRouteRequest binds only what routing needs. The body is otherwise
-// opaque: it is forwarded unchanged apart from the model rewrite.
+// opaque: it is forwarded unchanged except for the model value.
 type decisionRouteRequest struct {
 	Model string `json:"model"`
 }
@@ -47,7 +47,8 @@ func (h *OpenAIProxyHandlers) serveDecisionRoute(ec echo.Context, endpointPath s
 	if err := json.Unmarshal(rawBody, &request); err != nil {
 		return decisionBodyError(err)
 	}
-	if err := rejectAmbiguousMembers(rawBody, decisionRouteRequest{}); err != nil {
+	modelMembers, err := scanDecisionModelMembers(rawBody)
+	if err != nil {
 		return err
 	}
 	reqCtx, err := h.handlers.requireFunctionRequestContext(c)
@@ -77,7 +78,10 @@ func (h *OpenAIProxyHandlers) serveDecisionRoute(ec echo.Context, endpointPath s
 		attribute.Int("gen_ai.usage.input_tokens", inputTokens),
 	)
 
-	return h.forwardJSONRequest(c, reqCtx, rawBody, inputTokens)
+	// Splice the routed model into the client's bytes rather than re-encode
+	// the body, so key order, escaping and number spelling reach the backend
+	// unchanged.
+	return h.forwardBody(c, reqCtx, modelMembers.splice(rawBody, reqCtx.Model), inputTokens)
 }
 
 // decisionBodyError returns a 400 for a body that could not be bound. Syntax

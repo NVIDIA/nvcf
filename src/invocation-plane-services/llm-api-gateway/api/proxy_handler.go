@@ -64,7 +64,16 @@ func (h *OpenAIProxyHandlers) forwardJSONRequest(
 			outboundBody = rewrittenBody
 		}
 	}
+	return h.forwardBody(c, reqCtx, outboundBody, inputTokens)
+}
 
+// forwardBody sends outboundBody as is and writes the response to the client.
+func (h *OpenAIProxyHandlers) forwardBody(
+	c *GatewayContext,
+	reqCtx *requestctx.RequestContext,
+	outboundBody []byte,
+	inputTokens int,
+) error {
 	resp, err := h.dispatchProxyRequest(
 		c,
 		reqCtx,
