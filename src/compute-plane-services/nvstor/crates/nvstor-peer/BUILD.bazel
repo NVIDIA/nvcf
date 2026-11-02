@@ -30,22 +30,33 @@ _NVSTOR = "//src/compute-plane-services/nvstor"
 _RDMA_CORE_LIBDIR = _NVSTOR + "/bazel:rdma_core_runtime_libdir"
 
 # CARGO_PKG_* from Cargo.toml (version.workspace = true resolves against the
-# workspace manifest), so `nvstor-peer --version` reports the crate version.
+# workspace manifest): the crate version, which `nvstor-peer --version`
+# reports when the build is not for a release.
 cargo_toml_env_vars(
     name = "cargo_env",
     src = "Cargo.toml",
     workspace = _NVSTOR + ":Cargo.toml",
 )
 
-# The commit `nvstor-peer --version` and `fetch --json` report. build.rs takes
-# NVSTOR_PEER_COMMIT when it is set (the sandbox has no .git to ask); stamped
-# from the workspace status even under --nostamp, as the stargate binary is.
+# The commit and version `nvstor-peer --version` and `fetch --json` report.
+# build.rs takes NVSTOR_PEER_COMMIT when it is set (the sandbox has no .git to
+# ask), and NVSTOR_PEER_RELEASE when it is a SemVer version: a release build
+# sets NVCF_VERSION to the tag's version, which tools/workspace_status.sh
+# reports as STABLE_VERSION (otherwise mr-<sha>, and the crate version is
+# kept). Stamped from the workspace status even under --nostamp, as the
+# stargate binary is.
 expand_template(
     name = "commit_env",
     out = "commit.env",
     stamp = 1,
-    stamp_substitutions = {"{COMMIT}": "{{STABLE_GIT_COMMIT_FULL}}"},
-    template = ["NVSTOR_PEER_COMMIT={COMMIT}"],
+    stamp_substitutions = {
+        "{COMMIT}": "{{STABLE_GIT_COMMIT_FULL}}",
+        "{VERSION}": "{{STABLE_VERSION}}",
+    },
+    template = [
+        "NVSTOR_PEER_COMMIT={COMMIT}",
+        "NVSTOR_PEER_RELEASE={VERSION}",
+    ],
 )
 
 cargo_build_script(
