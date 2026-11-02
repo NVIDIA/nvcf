@@ -250,6 +250,10 @@ var criuNativeFS = map[string]bool{"proc": true, "sysfs": true, "devpts": true, 
 // mountinfoEntry is one line of /proc/<pid>/mountinfo.
 type mountinfoEntry struct {
 	Dev, Root, MountPoint, FSType string
+	// Shared and Master are the mount's peer group and the peer group it
+	// receives propagation from (mountinfo's shared:N and master:N), 0 for
+	// none.
+	Shared, Master int
 }
 
 func parseMountinfo(data string) []mountinfoEntry {
@@ -268,7 +272,21 @@ func parseMountinfo(data string) []mountinfoEntry {
 		if sep < 5 || sep+1 >= len(f) {
 			continue
 		}
-		out = append(out, mountinfoEntry{Dev: f[2], Root: unescapeMountinfo(f[3]), MountPoint: unescapeMountinfo(f[4]), FSType: f[sep+1]})
+		e := mountinfoEntry{Dev: f[2], Root: unescapeMountinfo(f[3]), MountPoint: unescapeMountinfo(f[4]), FSType: f[sep+1]}
+		for _, opt := range f[6:sep] {
+			k, v, _ := strings.Cut(opt, ":")
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				continue
+			}
+			switch k {
+			case "shared":
+				e.Shared = n
+			case "master":
+				e.Master = n
+			}
+		}
+		out = append(out, e)
 	}
 	return out
 }
@@ -305,6 +323,14 @@ func unescapeMountinfo(s string) string {
 // the CDI driver files) and the cgroup mount are external; restore binds
 // the placeholder's copy of each.
 //
+// A mount that receives propagation from a peer group none of the
+// container's mounts belongs to is external too, whatever its filesystem:
+// CRIU cannot rebuild that sharing ("has unreachable sharing"). CRI-O binds
+// the pod sandbox's /dev/shm tmpfs into each container as such a slave of
+// a host mount, where containerd mounts a private tmpfs. Its files are
+// carried by the dump snapshot, which copies every replay mount CRIU does
+// not save (criuSavedTmpfs), and restore binds the placeholder's.
+//
 // A tmpfs that kubelet writes a volume into (a secret, the service
 // account token, the downward API: podVolume reports them) is external
 // too. Its contents are the pod's identity, which a restored process must
@@ -314,11 +340,16 @@ func unescapeMountinfo(s string) string {
 // The GPU-identity mounts are returned apart, as gpu: the dump skips them.
 func pidNSExternalMounts(entries []mountinfoEntry, podVolume func(mountpoint string) bool) (external, gpu []string) {
 	rootOf := map[string]bool{} // devices mounted at their own root here
+	groups := map[int]bool{}    // peer groups of the container's mounts
 	for _, e := range entries {
 		if e.Root == "/" {
 			rootOf[e.Dev] = true
 		}
+		if e.Shared != 0 {
+			groups[e.Shared] = true
+		}
 	}
+	unreachableMaster := func(e mountinfoEntry) bool { return e.Master != 0 && !groups[e.Master] }
 	// A mount bound out of a skipped one goes with it: the toolkit binds
 	// /proc/driver/nvidia/params out of its per-container hook tmpfs, and
 	// CRIU cannot rebuild it once that tmpfs is left out ("doesn't have a
@@ -349,7 +380,7 @@ func pidNSExternalMounts(entries []mountinfoEntry, podVolume func(mountpoint str
 			gpu = append(gpu, e.MountPoint)
 			continue
 		}
-		if criuNativeFS[e.FSType] && rootOf[e.Dev] && (podVolume == nil || !podVolume(e.MountPoint)) {
+		if criuNativeFS[e.FSType] && rootOf[e.Dev] && !unreachableMaster(e) && (podVolume == nil || !podVolume(e.MountPoint)) {
 			continue
 		}
 		external = append(external, e.MountPoint)
