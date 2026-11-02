@@ -95,6 +95,19 @@ When overriding list values such as `extraContainers`, Helm replaces the
 original list instead of merging it. Override the full list item to preserve
 required fields from the base values file.
 
+### Migration kubectl client
+
+`openbao.migrations.kubectlMinor` controls both the initialization and migration
+Jobs. Leave it empty to use the image default, or set `"1.36"` for Kubernetes
+1.35 servers. The migrations 0.19.10 image provides kubectl 1.37.2 by default
+and the patched 1.36.6 client through `NVCF_KUBECTL_MINOR="1.36"`. An explicit
+`"1.37"` is also supported; other selections fail rendering.
+
+Use an image that implements `NVCF_KUBECTL_MINOR` when setting this value.
+Configure the selector here rather than also setting it in
+`openbao.migrations.env`; specifying both fails rendering. Existing env-only
+configuration still applies to the migration Job when `kubectlMinor` is empty.
+
 ## Uninstallation
 
 ```bash
