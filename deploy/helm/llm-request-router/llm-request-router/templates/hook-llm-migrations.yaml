@@ -22,7 +22,7 @@
 # fail-hard via restartPolicy: OnFailure + backoffLimit.
 {{- if .Values.llmRequestRouter.pki.enabled }}
 {{- $pki := .Values.llmRequestRouter.pki }}
-{{- $kubectlMinor := $pki.kubectlMinor | toString }}
+{{- $kubectlMinor := get $pki "kubectlMinor" | toString }}
 {{- if not (has $kubectlMinor (list "" "1.36" "1.37")) }}
 {{- fail "llmRequestRouter.pki.kubectlMinor must be empty, 1.36, or 1.37" }}
 {{- end }}
