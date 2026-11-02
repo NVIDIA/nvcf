@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,6 +104,40 @@ func TestSetupConfigKeepsLastGoodConfigWhenReloadIsInvalid(t *testing.T) {
 
 	writeTestConfig(t, path, "two")
 	requireConfigValue(t, cfg, "two")
+}
+
+func TestSetupConfigReportsReloadErrorsOnlyForFailedReloads(t *testing.T) {
+	useFastReloadTiming(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeTestConfig(t, path, "one")
+
+	var failures atomic.Int32
+	cfg, err := SetupConfig[testConfig](path,
+		WithValidateFunc(func(c *testConfig) error {
+			if c.Value == "bad" {
+				return fmt.Errorf("bad value")
+			}
+			return nil
+		}),
+		WithReloadErrorFunc[testConfig](func(error) { failures.Add(1) }))
+	require.NoError(t, err)
+	require.Zero(t, failures.Load())
+
+	time.Sleep(20 * time.Millisecond)
+	writeTestConfig(t, path, "two")
+	requireConfigValue(t, cfg, "two")
+	require.Zero(t, failures.Load(), "a successful reload must not report an error")
+
+	time.Sleep(20 * time.Millisecond)
+	writeTestConfig(t, path, "bad")
+	require.Eventually(t, func() bool { return failures.Load() > 0 }, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, "two", cfg.Get().Value)
+
+	time.Sleep(20 * time.Millisecond)
+	require.NoError(t, os.WriteFile(path, nil, 0600))
+	before := failures.Load()
+	require.Eventually(t, func() bool { return failures.Load() > before }, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, "two", cfg.Get().Value)
 }
 
 func TestSetupConfigKeepsLastGoodConfigDuringZeroByteWrite(t *testing.T) {

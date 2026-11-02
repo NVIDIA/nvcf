@@ -60,6 +60,7 @@ type configData[T any] struct {
 	unmarshal     func([]byte, *T) error
 	validators    []func(*T) error
 	postLoadHooks []func(*T) error
+	onReloadError func(error)
 }
 
 func WithPreLoadInitializer[T any](initialize func(*T) error) ConfigOption[T] {
@@ -89,6 +90,14 @@ func WithValidateFunc[T any](validator func(*T) error) ConfigOption[T] {
 func WithPostLoadFunc[T any](postLoadHook func(*T) error) ConfigOption[T] {
 	return func(cd *configData[T]) {
 		cd.postLoadHooks = append(cd.postLoadHooks, postLoadHook)
+	}
+}
+
+// WithReloadErrorFunc registers a callback invoked when a file-watcher
+// triggered reload fails. The previous config stays in place.
+func WithReloadErrorFunc[T any](onReloadError func(error)) ConfigOption[T] {
+	return func(cd *configData[T]) {
+		cd.onReloadError = onReloadError
 	}
 }
 
@@ -216,6 +225,9 @@ func (c *configData[T]) setupFileWatcher(ctx context.Context) error {
 		zap.L().Info("Config file updated, reloading")
 		if err := c.reloadConfig(); err != nil {
 			zap.L().Error("could not reload config", zap.Error(err))
+			if c.onReloadError != nil {
+				c.onReloadError(err)
+			}
 		}
 	}
 
