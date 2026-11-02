@@ -1016,7 +1016,11 @@ func (d *ModelDirector) proxyToLLMGateway(writer http.ResponseWriter, resolved r
 		return nil
 	}
 
-	rewritten, err := rewriteShadowRequestModel(body, resolved.functionInfo.functionId+"/"+resolved.modelName)
+	rewrite := rewriteShadowRequestModel
+	if isDecisionRoute(resolved.request) {
+		rewrite = replaceTopLevelModel
+	}
+	rewritten, err := rewrite(body, resolved.functionInfo.functionId+"/"+resolved.modelName)
 	if err != nil {
 		writeBadGatewayProblem(writer, resolved.request, err)
 		return nil
@@ -1085,6 +1089,50 @@ func rewriteShadowRequestModel(body []byte, modelName string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to encode shadow request body: %w", err)
 	}
 	return rewritten, nil
+}
+
+// replaceTopLevelModel replaces the value of every top-level model member in
+// place and keeps every other byte of body. Go decoders match keys without
+// regard to case and differ on which duplicate wins, so every key that equals
+// model in any case is replaced and the LLM Gateway cannot read a value the
+// gateway did not resolve.
+func replaceTopLevelModel(body []byte, modelName string) ([]byte, error) {
+	modelValue, err := stdjson.Marshal(modelName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode model name: %w", err)
+	}
+	decoder := stdjson.NewDecoder(bytes.NewReader(body))
+	if token, err := decoder.Token(); err != nil || token != stdjson.Delim('{') {
+		return nil, fmt.Errorf("request body is not a JSON object")
+	}
+	type span struct{ start, end int64 }
+	var spans []span
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body key: %w", err)
+		}
+		key, _ := token.(string)
+		var value stdjson.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, fmt.Errorf("failed to read request body value: %w", err)
+		}
+		if strings.EqualFold(key, "model") {
+			end := decoder.InputOffset()
+			spans = append(spans, span{end - int64(len(value)), end})
+		}
+	}
+	if len(spans) == 0 {
+		return nil, fmt.Errorf("request body has no model member")
+	}
+	rewritten := make([]byte, 0, len(body)+len(spans)*len(modelValue))
+	var last int64
+	for _, s := range spans {
+		rewritten = append(rewritten, body[last:s.start]...)
+		rewritten = append(rewritten, modelValue...)
+		last = s.end
+	}
+	return append(rewritten, body[last:]...), nil
 }
 
 // errModelFieldMissing signals that the client sent a valid request body that did
