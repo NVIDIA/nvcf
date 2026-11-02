@@ -133,6 +133,7 @@ unchanged. Responses are not streamed; `stream` is ignored.
   | 504 | `provider_timeout` | `provider_timeout` |
   | Other 5xx | `internal_error` | `internal_error` |
   | Other 4xx, including 422 | `invalid_request` | `invalid_request` |
+
 - An error from the model server is relayed byte for byte, whatever its shape,
   size, or encoding. Only errors the gateway or the request router generates
   use the shapes above. The router marks its own errors with
