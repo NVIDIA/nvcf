@@ -247,7 +247,10 @@ bazel build //src/compute-plane-services/nvstor/crates/nvstor-peer:nvstor-peer-i
 bazel run //src/compute-plane-services/nvstor/crates/nvstor-peer:nvstor-peer-image_load
 ```
 
-nvcf's image push workflow publishes it as `nvstor-peer`.
+For pre-merge testing, the `image-push (manual)` workflow
+(`.github/workflows/image-push-manual.yml`) pushes it to the internal dev
+registry as `nvstor-peer`; release publishing is configured outside this
+repository.
 
 ## Testing
 
