@@ -3282,6 +3282,14 @@ func TestMultiClusterEKSHelmfile(t *testing.T) {
 	runLiveFeature(t, "multi-cluster-eks-helmfile.feature")
 }
 
+// TestNVCAUpgrade checks ICMS deployment targets against a dedicated live lab.
+func TestNVCAUpgrade(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "nvca-upgrade.feature")
+}
+
 // runLiveFeature is the shared live-run path: build CLI, register
 // every step, drive the feature, restore the ledger. Most live entry
 // points differ only in the feature file they name.

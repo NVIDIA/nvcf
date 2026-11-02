@@ -20,6 +20,7 @@ import com.nvidia.icms.outbound.cassandra.IcmsDatabaseRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import java.util.List;
 import org.springframework.data.cassandra.repository.CassandraRepository;
+import org.springframework.data.cassandra.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
@@ -27,6 +28,11 @@ import org.springframework.stereotype.Repository;
 public interface ClusterByIdRepo extends
         CassandraRepository<ClusterEntity, String>,
         IcmsDatabaseRepository<ClusterEntity> {
+
+    /** Initializes a legacy version without replacing a value changed since registration read it. */
+    @Query("UPDATE " + ClusterEntity.TABLE_NAME
+            + " SET nvca_version = ?1 WHERE cluster_id = ?0 IF nvca_version = ?2")
+    boolean initializeNvcaVersion(String clusterId, String nvcaVersion, String previousVersion);
 
     /**
      * Backed by the {@code idx_cluster_by_nca_id} storage-attached index.

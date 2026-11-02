@@ -219,3 +219,39 @@ nvcf_java_coverage_test(
     test = ":tests",
     timeout = "long",
 )
+
+nvcf_java_test(
+    name = "registration_version_tests",
+    srcs = [
+        "src/test/java/com/nvidia/icms/service/heartbeats/HeartbeatBasicServiceTest.java",
+        "src/test/java/com/nvidia/icms/service/heartbeats/NvcaHeartbeatServiceTest.java",
+        "src/test/java/com/nvidia/icms/service/byoc/nvca/NvcaClusterRegistrationServiceQueueManagementTest.java",
+        "src/test/java/com/nvidia/icms/service/byoc/nvca/NvcaClusterRegistrationServiceTest.java",
+        "src/test/java/com/nvidia/icms/service/byoc/nvca/NvcaUpgradeVersionTest.java",
+    ],
+    deps = ICMS_CORE_DEPS + [
+        ":icms_core",
+        ":test_fixtures",
+    ],
+    timeout = "moderate",
+)
+
+nvcf_java_test(
+    name = "registration_version_persistence_tests",
+    srcs = [
+        "src/test/java/com/nvidia/icms/outbound/cassandra/byoc/NvcaRegistrationVersionIntegrationTest.java",
+    ],
+    deps = ICMS_CORE_DEPS + [
+        ":icms_core",
+        ":test_fixtures",
+    ],
+    data = ["//src/control-plane-services/instance-cluster-management:integration_local_env"],
+    runtime_deps = [":integration_local_env_resources"],
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    size = "large",
+    timeout = "long",
+)

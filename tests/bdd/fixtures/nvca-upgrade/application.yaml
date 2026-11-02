@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+spring:
+  application:
+    name: icms-bdd
+    env: bdd
+    version: development
+    host:
+      id: bdd
+      dc: local
+  cloud:
+    kubernetes:
+      enabled: false
+      config:
+        enabled: false
+    vault:
+      enabled: false
+  cassandra:
+    contact-points: cassandra
+    keyspace-name: test
+    username: cassandra
+    password: cassandra
+    ssl:
+      enabled: false
+      bundle: ""
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://fixture.nvca-upgrade-bdd:8080
+          jwk-set-uri: http://fixture.nvca-upgrade-bdd:8080/.well-known/jwks.json
+      client:
+        provider:
+          ngc:
+            token-uri: http://fixture:8080/token
+          fnds:
+            token-uri: http://fixture:8080/token
+          api-keys:
+            token-uri: http://fixture:8080/token
+nv-boot:
+  reloadable-properties:
+    enabled: false
+kv:
+  oauth2:
+    client-id: lab-only
+    client-secret: lab-only
+  lightstep:
+    access_token: unused
+management:
+  server:
+    port: 8080
+  tracing:
+    export:
+      enabled: false
+  prometheus:
+    metrics:
+      export:
+        enabled: false
+logging:
+  level:
+    root: INFO
+    com.nvidia.icms: INFO
+icms:
+  aws:
+    region: us-east-1
+    role-arn: unused
+    token-file: /dev/null
+  ngc:
+    enabled: false
+    service-url: http://fixture:8080
+  api-keys:
+    url: http://fixture:8080
+  telemetry:
+    enabled: false
+  fnds-messages-enabled: false
+  fnds-messages-v1-enabled: false
+  fnds-messages-v2-enabled: false
+  fnds:
+    fnds-base-url: http://fixture:8080
+  nats:
+    enabled: true
+    nats-url: nats://nats:4222
+    max-pool-size: 1
+    create-nats-streams: true
+    replicas: 1
+  nvca:
+    sis-config:
+      public-key-set-endpoint: http://fixture.nvca-upgrade-bdd:8080/.well-known/jwks.json
+      token-url: http://fixture.nvca-upgrade-bdd:8080/token
+      spot-service-url: http://fixture.nvca-upgrade-bdd:8080
+    vault-config:
+      address: http://fixture.nvca-upgrade-bdd:8080

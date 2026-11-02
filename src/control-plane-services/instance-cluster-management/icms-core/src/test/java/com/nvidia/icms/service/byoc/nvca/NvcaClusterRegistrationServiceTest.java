@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -163,7 +164,7 @@ class NvcaClusterRegistrationServiceTest {
         doReturn(Optional.of(existingClusterEntity)).when(clusterRepository)
                 .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
         doReturn(getDummyNvcaAccessCreds(updatedClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(updatedClusterEntity);
 
@@ -197,7 +198,7 @@ class NvcaClusterRegistrationServiceTest {
         assertEquals(getDummyNvcaAccessCreds(updatedClusterEntity), response.getCredentials());
 
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(nvcaClusterRepository).updateClusterRegistration(updatedClusterEntity);
+        verify(nvcaClusterRepository).updateClusterRegistration(eq(updatedClusterEntity), any());
         verify(clusterQueueAccessCredsService).generateCredsForNvcaQueues(updatedClusterEntity);
         verify(nvcaConfigurationProperties).getCreationQueueNameFormat();
         verify(nvcaConfigurationProperties).getTerminationQueueNameFormat();
@@ -222,7 +223,7 @@ class NvcaClusterRegistrationServiceTest {
         doReturn(Optional.of(existingClusterEntity)).when(clusterRepository)
                 .getClusterInfoByClusterId(DUMMY_LONG_CLUSTER_ID, false);
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
         doReturn(getDummyNvcaAccessCreds(updatedClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(updatedClusterEntity);
 
@@ -274,7 +275,7 @@ class NvcaClusterRegistrationServiceTest {
         assertEquals(getDummyNvcaAccessCreds(updatedClusterEntity), response.getCredentials());
 
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_LONG_CLUSTER_ID, false);
-        verify(nvcaClusterRepository).updateClusterRegistration(updatedClusterEntity);
+        verify(nvcaClusterRepository).updateClusterRegistration(eq(updatedClusterEntity), any());
         verify(clusterQueueAccessCredsService).generateCredsForNvcaQueues(updatedClusterEntity);
         verify(nvcaConfigurationProperties, times(2)).getCreationQueueNameFormat();
         verify(nvcaConfigurationProperties).getTerminationQueueNameFormat();
@@ -298,7 +299,7 @@ class NvcaClusterRegistrationServiceTest {
         doReturn(Optional.of(existingClusterEntity)).when(clusterRepository)
                 .getClusterInfoByClusterId(DUMMY_LONG_CLUSTER_ID, false);
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
 
         NvcaAccessCreds nvcaAccessCreds = NvcaAccessCreds.builder()
                 .terminationQueue(new AwsQueueAccessInfo())
@@ -334,7 +335,7 @@ class NvcaClusterRegistrationServiceTest {
         assertEquals(DUMMY_LONG_CLUSTER_ID, response.getClusterId());
         assertEquals(nvcaAccessCreds, response.getCredentials());
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_LONG_CLUSTER_ID, false);
-        verify(nvcaClusterRepository).updateClusterRegistration(updatedClusterEntity);
+        verify(nvcaClusterRepository).updateClusterRegistration(eq(updatedClusterEntity), any());
         verify(clusterQueueAccessCredsService).generateCredsForNvcaQueues(updatedClusterEntity);
         verify(nvcaConfigurationProperties, times(0)).getCreationQueueNameFormat();
         verify(nvcaConfigurationProperties, times(0)).getTerminationQueueNameFormat();
@@ -369,7 +370,7 @@ class NvcaClusterRegistrationServiceTest {
                 .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
 
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
         doReturn(getDummyNvcaAccessCreds(updatedClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(updatedClusterEntity);
         doReturn(List.of(TestUtil.toClusterByGroupIdAndIdEntity(existingClusterEntity))).when(
@@ -413,7 +414,7 @@ class NvcaClusterRegistrationServiceTest {
         assertEquals(getDummyNvcaAccessCreds(updatedClusterEntity), response.getCredentials());
 
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(nvcaClusterRepository).updateClusterRegistration(updatedClusterEntity);
+        verify(nvcaClusterRepository).updateClusterRegistration(eq(updatedClusterEntity), any());
         verify(clusterQueueAccessCredsService).generateCredsForNvcaQueues(updatedClusterEntity);
         verify(clusterRepository).getClustersFromClusterGroup(DUMMY_CLUSTER_GROUP_ID);
         verify(nvcaConfigurationProperties).getCreationQueueNameFormat();
@@ -445,7 +446,7 @@ class NvcaClusterRegistrationServiceTest {
                 .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
 
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
         doReturn(getDummyNvcaAccessCreds(updatedClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(updatedClusterEntity);
         doReturn(List.of(TestUtil.toClusterByGroupIdAndIdEntity(existingClusterEntity))).when(
@@ -488,7 +489,7 @@ class NvcaClusterRegistrationServiceTest {
         assertEquals(getDummyNvcaAccessCreds(updatedClusterEntity), response.getCredentials());
 
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(nvcaClusterRepository).updateClusterRegistration(updatedClusterEntity);
+        verify(nvcaClusterRepository).updateClusterRegistration(eq(updatedClusterEntity), any());
         verify(clusterQueueAccessCredsService).generateCredsForNvcaQueues(updatedClusterEntity);
         verify(clusterRepository).getClustersFromClusterGroup(DUMMY_CLUSTER_GROUP_ID);
         verify(nvcaConfigurationProperties).getCreationQueueNameFormat();
@@ -520,7 +521,7 @@ class NvcaClusterRegistrationServiceTest {
                 .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
 
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
         doReturn(getDummyNvcaAccessCreds(updatedClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(updatedClusterEntity);
         doNothing().when(auditService)
@@ -557,7 +558,7 @@ class NvcaClusterRegistrationServiceTest {
         assertEquals(getDummyNvcaAccessCreds(updatedClusterEntity), response.getCredentials());
 
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(nvcaClusterRepository).updateClusterRegistration(updatedClusterEntity);
+        verify(nvcaClusterRepository).updateClusterRegistration(eq(updatedClusterEntity), any());
         verify(clusterQueueAccessCredsService).generateCredsForNvcaQueues(updatedClusterEntity);
         verify(nvcaConfigurationProperties).getCreationQueueNameFormat();
         verify(nvcaConfigurationProperties).getTerminationQueueNameFormat();
@@ -592,7 +593,7 @@ class NvcaClusterRegistrationServiceTest {
                 .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
 
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
         doReturn(getDummyNvcaAccessCreds(updatedClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(updatedClusterEntity);
         doReturn(List.of(TestUtil.toClusterByGroupIdAndIdEntity(existingClusterEntity))).when(
@@ -637,7 +638,7 @@ class NvcaClusterRegistrationServiceTest {
         assertEquals(getDummyNvcaAccessCreds(updatedClusterEntity), response.getCredentials());
 
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(nvcaClusterRepository).updateClusterRegistration(updatedClusterEntity);
+        verify(nvcaClusterRepository).updateClusterRegistration(eq(updatedClusterEntity), any());
         verify(clusterQueueAccessCredsService).generateCredsForNvcaQueues(updatedClusterEntity);
         verify(clusterRepository).getClustersFromClusterGroup(DUMMY_CLUSTER_GROUP_ID);
         // With self-healing, we only create queues for provided GPUs (A200), not removed ones (A100)
@@ -721,7 +722,7 @@ class NvcaClusterRegistrationServiceTest {
                 .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
 
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
         doReturn(getDummyNvcaAccessCreds(updatedClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(updatedClusterEntity);
         doReturn(List.of(TestUtil.toClusterByGroupIdAndIdEntity(existingClusterEntity))).when(
@@ -771,7 +772,7 @@ class NvcaClusterRegistrationServiceTest {
         assertEquals(getDummyNvcaAccessCreds(updatedClusterEntity), response.getCredentials());
 
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(nvcaClusterRepository).updateClusterRegistration(updatedClusterEntity);
+        verify(nvcaClusterRepository).updateClusterRegistration(eq(updatedClusterEntity), any());
         verify(clusterRepository).getClustersFromClusterGroup(DUMMY_CLUSTER_GROUP_ID);
         verify(clusterQueueAccessCredsService).generateCredsForNvcaQueues(updatedClusterEntity);
         verify(nvcaConfigurationProperties, times(2)).getCreationQueueNameFormat();
@@ -809,7 +810,7 @@ class NvcaClusterRegistrationServiceTest {
                 .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
 
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
         doReturn(getDummyNvcaAccessCreds(updatedClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(updatedClusterEntity);
         doReturn(List.of(TestUtil.toClusterByGroupIdAndIdEntity(existingClusterEntity))).when(
@@ -851,7 +852,7 @@ class NvcaClusterRegistrationServiceTest {
         assertEquals(getDummyNvcaAccessCreds(updatedClusterEntity), response.getCredentials());
 
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(nvcaClusterRepository).updateClusterRegistration(updatedClusterEntity);
+        verify(nvcaClusterRepository).updateClusterRegistration(eq(updatedClusterEntity), any());
         verify(clusterQueueAccessCredsService).generateCredsForNvcaQueues(updatedClusterEntity);
         // Self-healing will create/verify queues
         verify(nvcaConfigurationProperties).getCreationQueueNameFormat();
@@ -1132,9 +1133,9 @@ class NvcaClusterRegistrationServiceTest {
     }
 
     @Test
-    void nvcaClusterRegistration_updatesNvcaVersion_whenPresentInRequest() {
+    void nvcaClusterRegistration_preservesConfiguredVersion_whenPresentInRequest() {
         // Prepare
-        String expectedNvcaVersion = "2.0.0";
+        String expectedNvcaVersion = "1.0.0";
         var existingClusterEntity = getDummyClusterEntity(DUMMY_CLUSTER_ID, Set.of(getDummyA100GpuV5()), false,
                                                           false, false);
         existingClusterEntity.setNvcaVersion("1.0.0"); // Set initial version
@@ -1152,7 +1153,7 @@ class NvcaClusterRegistrationServiceTest {
         doReturn(Optional.of(existingClusterEntity)).when(clusterRepository)
                 .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
         doReturn(getDummyNvcaAccessCreds(updatedClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(updatedClusterEntity);
 
@@ -1174,7 +1175,7 @@ class NvcaClusterRegistrationServiceTest {
         var request = NvcaRegistrationRequest.builder()
                 .status(ClusterStatusEnum.READY)
                 .k8sVersion("1.29.0")
-                .nvcaVersion(expectedNvcaVersion)
+                .nvcaVersion("2.0.0")
                 .build();
 
         // Act
@@ -1188,7 +1189,7 @@ class NvcaClusterRegistrationServiceTest {
         assertEquals(expectedNvcaVersion, updatedClusterEntity.getNvcaVersion());
 
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(nvcaClusterRepository).updateClusterRegistration(updatedClusterEntity);
+        verify(nvcaClusterRepository).updateClusterRegistration(eq(updatedClusterEntity), any());
         verify(clusterQueueAccessCredsService).generateCredsForNvcaQueues(updatedClusterEntity);
         verify(nvcaConfigurationProperties).getCreationQueueNameFormat();
         verify(nvcaConfigurationProperties).getTerminationQueueNameFormat();
@@ -1217,7 +1218,7 @@ class NvcaClusterRegistrationServiceTest {
         doReturn(Optional.of(existingClusterEntity)).when(clusterRepository)
                 .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
         doReturn(getDummyNvcaAccessCreds(updatedClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(updatedClusterEntity);
 
@@ -1251,7 +1252,7 @@ class NvcaClusterRegistrationServiceTest {
         assertEquals(getDummyNvcaAccessCreds(updatedClusterEntity), response.getCredentials());
 
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(nvcaClusterRepository).updateClusterRegistration(updatedClusterEntity);
+        verify(nvcaClusterRepository).updateClusterRegistration(eq(updatedClusterEntity), any());
         verify(clusterQueueAccessCredsService).generateCredsForNvcaQueues(updatedClusterEntity);
         verify(nvcaConfigurationProperties).getCreationQueueNameFormat();
         verify(nvcaConfigurationProperties).getTerminationQueueNameFormat();
@@ -1541,7 +1542,7 @@ class NvcaClusterRegistrationServiceTest {
                 .getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
         doReturn(dummyInstant).when(instanceServiceHelper).getCurrentTimestamp();
         doNothing().when(nvcaClusterRepository)
-                .updateClusterRegistration(updatedClusterEntity);
+                .updateClusterRegistration(eq(updatedClusterEntity), any());
         doReturn(getDummyNvcaAccessCreds(updatedClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(updatedClusterEntity);
 
@@ -1677,7 +1678,7 @@ class NvcaClusterRegistrationServiceTest {
                 .createNvcaTerminationQueue(TERMINATION_QUEUE_URL, DUMMY_CLUSTER_ID, false);
         doReturn(getDummyNvcaAccessCreds(existingClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(any());
-        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any());
+        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any(), any());
         doNothing().when(auditService).sendAuditEventForClusterEntity(any(), any(), any());
         doNothing().when(telemetryEventClient).triggerEvent(any());
 
@@ -1768,7 +1769,7 @@ class NvcaClusterRegistrationServiceTest {
                 .createNvcaTerminationQueue(TERMINATION_QUEUE_URL, DUMMY_CLUSTER_ID, false);
         doReturn(getDummyNvcaAccessCreds(existingClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(any());
-        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any());
+        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any(), any());
         doNothing().when(auditService).sendAuditEventForClusterEntity(any(), any(), any());
         doNothing().when(telemetryEventClient).triggerEvent(any());
 
@@ -1813,7 +1814,7 @@ class NvcaClusterRegistrationServiceTest {
                 .createNvcaTerminationQueue(TERMINATION_QUEUE_URL, DUMMY_CLUSTER_ID, false);
         doReturn(getDummyNvcaAccessCreds(existingClusterEntity)).when(clusterQueueAccessCredsService)
                 .generateCredsForNvcaQueues(any());
-        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any());
+        doNothing().when(nvcaClusterRepository).updateClusterRegistration(any(), any());
         doNothing().when(auditService).sendAuditEventForClusterEntity(any(), any(), any());
         doNothing().when(telemetryEventClient).triggerEvent(any());
 

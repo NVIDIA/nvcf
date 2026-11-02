@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cucumber/godog"
 
@@ -37,11 +38,36 @@ const functionDeploymentNotFound = "Deployment not found"
 // scenario ends, whether it passed or failed. The live runner stops at the
 // first failed step, so cleanup written as a later step would never run.
 func registerTeardownSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+	ctx.Step(`^I run command at scenario teardown with timeout "([^"]*)":$`, sc.iRunCommandAtTeardown)
 	ctx.Step(`^I send an? "([A-Z]+)" request to "([^"]*)" at scenario teardown expecting status (\d+)$`, sc.iSendHTTPRequestAtTeardown)
 	ctx.Step(`^the function selected by NVCF CLI is undeployed at scenario teardown$`, sc.theSelectedFunctionIsUndeployedAtTeardown)
 	ctx.Step(`^the function selected by NVCF CLI is deleted at scenario teardown$`, sc.theSelectedFunctionIsDeletedAtTeardown)
 	ctx.Step(`^function "([^"]*)" version "([^"]*)" is undeployed at scenario teardown$`, sc.theFunctionIsUndeployedAtTeardown)
 	ctx.Step(`^function "([^"]*)" version "([^"]*)" is deleted at scenario teardown$`, sc.theFunctionIsDeletedAtTeardown)
+}
+
+func (sc *ScenarioContext) iRunCommandAtTeardown(timeout string, doc *godog.DocString) error {
+	duration, err := time.ParseDuration(dsl.Interpolate(timeout))
+	if err != nil || duration <= 0 {
+		return fmt.Errorf("teardown command timeout must be a positive duration")
+	}
+	command := strings.TrimSpace(dsl.Interpolate(doc.Content))
+	if command == "" {
+		return fmt.Errorf("teardown command must not be empty")
+	}
+	sc.addTeardown(dsl.RedactSecrets(command), func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), duration)
+		defer cancel()
+		result, err := sc.Suite.Runner.Run(ctx, command)
+		if err != nil {
+			return err
+		}
+		if result.ExitCode != 0 {
+			return fmt.Errorf("teardown command exit code %d", result.ExitCode)
+		}
+		return nil
+	})
+	return nil
 }
 
 // addTeardown queues cleanup for the end of the current scenario.

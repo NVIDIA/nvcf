@@ -22,9 +22,67 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/cucumber/godog"
 
 	"nvcf-bdd/harness"
 )
+
+func TestCommandTeardownRestoresDeploymentAfterCancellation(t *testing.T) {
+	sc, runner := newScenarioContext(t)
+	t.Setenv("BDD_RESTORE_DEPLOYMENT", "operator")
+	if err := sc.iRunCommandAtTeardown("30s", &godog.DocString{
+		Content: "kubectl scale deployment/${BDD_RESTORE_DEPLOYMENT} --replicas=1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.runs) != 0 {
+		t.Fatal("restoration ran before teardown")
+	}
+	t.Setenv("BDD_RESTORE_DEPLOYMENT", "changed")
+	runner.runHook = func(ctx context.Context, _ int) (harness.Result, error) {
+		if ctx.Err() != nil {
+			t.Fatal("cleanup inherited scenario cancellation")
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > 30*time.Second {
+			t.Fatal("cleanup has no bounded timeout")
+		}
+		return harness.Result{ExitCode: 0}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := sc.runTeardown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.runs) != 1 || runner.runs[0].command != "kubectl scale deployment/operator --replicas=1" {
+		t.Fatalf("unexpected restoration command: %v", runner.runs)
+	}
+}
+
+func TestCommandTeardownReportsFailure(t *testing.T) {
+	sc, runner := newScenarioContext(t)
+	runner.result = harness.Result{ExitCode: 7}
+	if err := sc.iRunCommandAtTeardown("1s", &godog.DocString{Content: "restore"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sc.runTeardown(context.Background()); err == nil {
+		t.Fatal("failed restoration was ignored")
+	}
+}
+
+func TestCommandTeardownRejectsInvalidTimeoutAndEmptyCommand(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	for _, timeout := range []string{"", "invalid", "0s", "-1s"} {
+		if err := sc.iRunCommandAtTeardown(timeout, &godog.DocString{Content: "restore"}); err == nil {
+			t.Fatalf("accepted timeout %q", timeout)
+		}
+	}
+	if err := sc.iRunCommandAtTeardown("1s", &godog.DocString{Content: " "}); err == nil {
+		t.Fatal("accepted empty command")
+	}
+}
 
 func TestHTTPTeardownSendsRegisteredRequestWithItsHeaders(t *testing.T) {
 	t.Setenv("BDD_TEARDOWN_KEY_ID", "key-1")

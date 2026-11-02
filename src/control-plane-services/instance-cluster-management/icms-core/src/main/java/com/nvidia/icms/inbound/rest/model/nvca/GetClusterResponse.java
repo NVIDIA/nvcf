@@ -73,7 +73,8 @@ public class GetClusterResponse {
     @Nullable
     Set<GpuResponseSchema> gpus;
 
-    @Schema(description = "Nvca version")
+    @Schema(description = "Configured NVCA version for NGC-managed clusters; "
+            + "reported version for externally managed clusters")
     String nvcaVersion;
 
     @JsonProperty("oAuthClientId")

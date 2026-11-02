@@ -20,6 +20,7 @@ import static com.nvidia.icms.outbound.cassandra.byoc.NvcaConverter.toClustersBy
 
 import com.nvidia.icms.errors.IcmsConflictException;
 import com.nvidia.icms.errors.IcmsInternalServerException;
+import com.nvidia.icms.inbound.rest.model.nvca.ClusterSource;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccountsEntity;
 
@@ -29,6 +30,7 @@ import java.util.stream.Collectors;
 import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Repository;
 
 @Slf4j
@@ -40,9 +42,24 @@ public class NvcaClusterRepository {
     private final ClusterRepository clusterRepository;
 
     public void updateClusterRegistration(ClusterEntity clusterEntity) {
-        try {
+        updateClusterRegistration(clusterEntity, clusterEntity.getNvcaVersion());
+    }
 
-            clusterByIdRepo.update(clusterEntity);
+    public void updateClusterRegistration(ClusterEntity clusterEntity, String previousVersion) {
+        try {
+            if (ClusterSource.isNgcManaged(clusterEntity.getClusterSource())) {
+                // update() omits null columns. Never persist a stale configured version.
+                var registrationEntity = clusterEntity.toBuilder().nvcaVersion(null).build();
+                clusterByIdRepo.update(registrationEntity);
+                if (StringUtils.isBlank(previousVersion)
+                        && StringUtils.isNotBlank(clusterEntity.getNvcaVersion())) {
+                    // Bootstrap must not replace a target configured since registration read it.
+                    clusterByIdRepo.initializeNvcaVersion(clusterEntity.getClusterId(),
+                            clusterEntity.getNvcaVersion(), previousVersion);
+                }
+            } else {
+                clusterByIdRepo.update(clusterEntity);
+            }
         } catch (Exception exception) {
             String errMsg = String.format(
                     "Failed to update cluster registration in DB, cluster-id: %s error: %s",
@@ -73,7 +90,7 @@ public class NvcaClusterRepository {
     public void updateClusterEntity(@NotNull ClusterEntity clusterEntity) {
 
         try {
-            clusterByIdRepo.update(clusterEntity);
+            clusterByIdRepo.update(clusterEntity.toBuilder().nvcaVersion(null).build());
         } catch (Exception exception) {
             String errMsg = String.format(
                     "Failed to update clusterEntity in DB, cluster-id: %s error: %s",
