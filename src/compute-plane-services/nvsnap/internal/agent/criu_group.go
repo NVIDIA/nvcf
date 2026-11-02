@@ -1127,7 +1127,7 @@ func (c *criuAutoRestorer) failGroup(ctx context.Context, leader *corev1.Pod, ke
 	if restoreFailed {
 		outcome = metrics.RestoreFailed
 	}
-	c.observeRestore(key, leader, c.a.podGPU(ctx, leader), podRanks(leader), outcome, cause, 0, log)
+	c.observeRestore(key, leader, c.a.podGPU(ctx, leader), c.instanceRanks(ctx, leader), outcome, cause, 0, log)
 	c.endGroup(ctx, leader, key, restoreFailed, false, cause, log)
 }
 

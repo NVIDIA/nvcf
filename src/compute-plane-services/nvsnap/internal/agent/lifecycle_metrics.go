@@ -131,6 +131,23 @@ func podRanks(pod *corev1.Pod) int {
 	return 1
 }
 
+// instanceRanks is the size of the instance pod is a rank of. A restore's
+// placeholder carries its group's size with its companions, so its ranks
+// come from the group record; 0 when that cannot be read.
+func (c *criuAutoRestorer) instanceRanks(ctx context.Context, pod *corev1.Pod) int {
+	key := pod.Annotations[webhook.CRIUGroupAnnotation]
+	if key == "" {
+		return podRanks(pod)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cm, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{})
+	if err != nil {
+		return 0
+	}
+	return recordRanks(cm.Data)
+}
+
 // observeGroupCapture records the end of an instance capture that was
 // claimed: captured (its restore verifies it) or failed.
 func (c *criuAutoRestorer) observeGroupCapture(ctx context.Context, key string, leader *corev1.Pod, ranks, members int, err error, d time.Duration, log *logrus.Entry) {
@@ -338,15 +355,17 @@ func (a *Agent) placeholderRanks(ctx context.Context, ns, name string) int {
 	if err != nil {
 		return 0
 	}
-	return podRanks(p)
+	return a.criuRestorer().instanceRanks(ctx, p)
 }
 
 // observePodReady records, once, a GPU pod's time from creation to Ready,
-// by how it started. Only a pod the webhook admitted counts, and only once
-// this agent watched it become Ready: after an agent restart, pods Ready
-// before it are not counted again.
+// by how it started. Only a pod the webhook admitted counts (a restore's
+// placeholder carries its restore, not the admitted configuration), and
+// only once this agent watched it become Ready: after an agent restart,
+// pods Ready before it are not counted again.
 func (c *criuAutoRestorer) observePodReady(ctx context.Context, pod *corev1.Pod) {
-	if pod.DeletionTimestamp != nil || pod.Annotations[webhook.AdmittedConfigAnnotation] == "" ||
+	admitted := pod.Annotations[webhook.AdmittedConfigAnnotation] != "" || pod.Annotations[webhook.CRIURestoreAnnotation] != ""
+	if pod.DeletionTimestamp != nil || !admitted ||
 		pod.Annotations[webhook.CRIUGroupCompanionAnnotation] != "" || gpuContainer(pod) == "" {
 		return
 	}
@@ -358,7 +377,7 @@ func (c *criuAutoRestorer) observePodReady(ctx context.Context, pod *corev1.Pod)
 		return
 	}
 	method := podStartMethod(pod)
-	ranks := podRanks(pod)
+	ranks := c.instanceRanks(ctx, pod)
 	gpu := c.a.podGPU(ctx, pod)
 	took := ready.Sub(pod.CreationTimestamp.Time)
 	metrics.ObservePodReady(method, gpu, ranks, took)

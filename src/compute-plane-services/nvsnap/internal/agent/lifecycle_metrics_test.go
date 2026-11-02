@@ -171,13 +171,25 @@ func TestObservePodReady_Cold(t *testing.T) {
 }
 
 // A restored pod's start also records its restore's last phase: restored
-// to Ready.
+// to Ready. A restore's placeholder is admitted as one, without the
+// admitted configuration: its restore annotation is what counts.
 func TestObservePodReady_Restored(t *testing.T) {
 	c, _ := lifecycleAgent(t, "GB300-ready-criu")
 	pod := admittedPod(0, 1, 40*time.Second)
+	delete(pod.Annotations, webhook.AdmittedConfigAnnotation)
+	delete(pod.Annotations, modelvolume.CacheGroupSizeAnnotation)
+	pod.Annotations[webhook.CRIURestoreAnnotation] = "r0__1"
+	pod.Annotations[webhook.CRIUGroupAnnotation] = "k"
+	pod.Annotations[webhook.CRIUGroupSizeAnnotation] = "4" // 2 ranks and 2 companions
 	pod.Annotations[webhook.CRIURestoredAnnotation] = pod.CreationTimestamp.Add(30 * time.Second).UTC().Format(time.RFC3339)
-	phase := map[string]string{"method": metrics.MethodCRIU, "phase": "ready", "gpu": "GB300-ready-criu", "ranks": "1"}
-	started := map[string]string{"method": metrics.MethodCRIU, "gpu": "GB300-ready-criu", "ranks": "1"}
+	// Its ranks come from its group record: 4 members, 2 of them companions.
+	if _, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Create(context.Background(),
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName("k")}, Data: map[string]string{
+			"size": "4", "companion.2": "true", "companion.3": "true"}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	phase := map[string]string{"method": metrics.MethodCRIU, "phase": "ready", "gpu": "GB300-ready-criu", "ranks": "2-4"}
+	started := map[string]string{"method": metrics.MethodCRIU, "gpu": "GB300-ready-criu", "ranks": "2-4"}
 	beforePhase, beforeStart := metricValue(t, metrics.RestorePhaseSeconds, phase), metricValue(t, metrics.PodReadySeconds, started)
 	c.observePodReady(context.Background(), pod)
 	if metricValue(t, metrics.RestorePhaseSeconds, phase)-beforePhase != 1 || metricValue(t, metrics.PodReadySeconds, started)-beforeStart != 1 {
@@ -384,5 +396,36 @@ func TestEnsureLocal_FetchMetrics(t *testing.T) {
 	}
 	if sumOf("unknown", "failed")-failed0 != 1 {
 		t.Fatal("a failed fetch not counted")
+	}
+}
+
+// A placeholder's ranks come from its group record; a pod of no group from
+// its own annotations.
+func TestPlaceholderRanks(t *testing.T) {
+	c, _ := lifecycleAgent(t, "GB300-ranks")
+	a := c.a
+	if _, err := a.kubeClient.CoreV1().ConfigMaps(a.criuFailedNamespace()).Create(context.Background(),
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName("g")}, Data: map[string]string{
+			"size": "10", "companion.8": "true", "companion.9": "true"}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	placeholder := enginePod(3)
+	placeholder.Annotations[webhook.CRIUGroupAnnotation] = "g"
+	placeholder.Annotations[webhook.CRIUGroupSizeAnnotation] = "10"
+	lone := admittedPod(2, 4, time.Second)
+	lone.Name = "lone"
+	for _, p := range []*corev1.Pod{placeholder, lone} {
+		if _, err := a.kubeClient.CoreV1().Pods("fn").Create(context.Background(), p, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := a.placeholderRanks(context.Background(), "fn", placeholder.Name); n != 8 {
+		t.Errorf("placeholder ranks = %d, want 8 (10 members less 2 companions)", n)
+	}
+	if n := a.placeholderRanks(context.Background(), "fn", "lone"); n != 4 {
+		t.Errorf("ranks of a pod of no group = %d, want 4", n)
+	}
+	if n := a.placeholderRanks(context.Background(), "fn", "gone"); n != 0 {
+		t.Errorf("ranks of a missing pod = %d, want 0", n)
 	}
 }
