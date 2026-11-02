@@ -1009,19 +1009,20 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       # The first gateway call proves the route is ready before the raw checks.
       When I successfully invoke model "bdd-decision-both" at "/v1/decisions" with timeout "120" seconds:
         """
-        {"input":"bdd-decision-ready","questions":[{"type":"predicate","text":"Is it ready?"}]}
+        {"input":"bdd-decision-ready","questions":[{"type":"predicate","instructions":"Is it ready?"}]}
         """
       Then the command output should contain "answers"
 
       # Decisions: answers keep the question order, and the vendor headers
-      # reach the backend, which echoes them.
+      # reach the backend, which echoes them. The gateway sets X-Input-Tokens
+      # and does not forward the caller's API key.
       Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
       And the HTTP request header "Content-Type" is "application/json"
       And the HTTP request header "TypeSafe-Danger-Zone-Images" is "true"
       And the HTTP request header "X-Vendor-Test" is "bdd-vendor-value"
       When I send a "POST" request to "http://llm.localhost:8080/v1/decisions" with timeout 120 seconds and body:
         """
-        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":"bdd-decision-input","questions":[{"type":"predicate","name":"red","text":"Is it red?"},{"type":"choice","name":"animal","text":"Which animal?","choices":["cat","dog"]},{"type":"score","name":"quality","text":"How good is it?"}]}
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":"bdd-decision-input","questions":[{"type":"predicate","name":"red","instructions":"Is it red?"},{"type":"choice","name":"animal","instructions":"Which animal?","choices":["cat","dog"]},{"type":"score","name":"quality","instructions":"How good is it?"}]}
         """
       Then the HTTP status should be 200
       And the HTTP response JSON field "answers.0.type" should equal "predicate"
@@ -1032,6 +1033,8 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
       And the HTTP response JSON field "echo.x-vendor-test" should equal "bdd-vendor-value"
       And the HTTP response header "x-mock-echo-typesafe-danger-zone-images" should equal "true"
+      And the HTTP response JSON field "echo.x-input-tokens" should be at least 1
+      And the HTTP response JSON field "echo.credentials_received" should equal "false"
 
       # System One: answers are keyed by question name.
       Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
@@ -1050,7 +1053,23 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
       And the HTTP response JSON field "echo.x-vendor-test" should equal "bdd-vendor-value"
       And the HTTP response header "x-mock-echo-typesafe-danger-zone-images" should equal "true"
+      And the HTTP response JSON field "echo.x-input-tokens" should be at least 1
+      And the HTTP response JSON field "echo.credentials_received" should equal "false"
 
+      # A request with a small inline image reaches the backend. Image data is
+      # not counted as text, so the request still meters at least one token.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "TypeSafe-Danger-Zone-Images" is "true"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/decisions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":[{"role":"user","content":[{"type":"input_text","text":"bdd-image"},{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="}]}],"questions":[{"type":"predicate","name":"red","instructions":"Is it red?"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "answers.0.type" should equal "predicate"
+      And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
+      And the HTTP response JSON field "echo.x-input-tokens" should be at least 1
+      And the HTTP response JSON field "echo.credentials_received" should equal "false"
       # Route isolation: bdd-decision-only declares /v1/decisions alone, so
       # the declared route works and /v1/systemone is a 404 in the System One
       # error shape (error.code, error.message, error.request_id and a
@@ -1059,7 +1078,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP request header "Content-Type" is "application/json"
       When I send a "POST" request to "http://llm.localhost:8080/v1/decisions" with timeout 120 seconds and body:
         """
-        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-only","input":"bdd-decision-only","questions":[{"type":"predicate","text":"Is it declared?"}]}
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-only","input":"bdd-decision-only","questions":[{"type":"predicate","instructions":"Is it declared?"}]}
         """
       Then the HTTP status should be 200
       And the HTTP response JSON field "answers.0.type" should equal "predicate"
@@ -1082,7 +1101,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP request header "Content-Type" is "application/json"
       When I send a "POST" request to "http://llm.localhost:8080/v1/decisions" with timeout 120 seconds and body:
         """
-        {"model":"${BDD_DECISION_FUNCTION_ID}/not-a-model","input":"bdd-unlisted","questions":[{"type":"predicate","text":"Is it listed?"}]}
+        {"model":"${BDD_DECISION_FUNCTION_ID}/not-a-model","input":"bdd-unlisted","questions":[{"type":"predicate","instructions":"Is it listed?"}]}
         """
       Then the HTTP status should be 404
       And the HTTP response JSON field "error.type" should equal "invalid_request_error"
@@ -1092,7 +1111,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP request header "Content-Type" is "application/json"
       When I send a "POST" request to "http://llm.localhost:8080/v1/decisions?mock_error=429" with timeout 120 seconds and body:
         """
-        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":"bdd-429","questions":[{"type":"predicate","text":"Is it limited?"}]}
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":"bdd-429","questions":[{"type":"predicate","instructions":"Is it limited?"}]}
         """
       Then the HTTP status should be 429
       And the HTTP response header "Retry-After" should equal "7"
@@ -1113,7 +1132,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP request header "Content-Type" is "application/json"
       When I send a "POST" request to "http://llm.localhost:8080/v1/decisions?mock_error=400" with timeout 120 seconds and body:
         """
-        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":"bdd-400","questions":[{"type":"predicate","text":"Is it valid?"}]}
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":"bdd-400","questions":[{"type":"predicate","instructions":"Is it valid?"}]}
         """
       Then the HTTP status should be 400
       And the HTTP response JSON field "error.type" should equal "invalid_request_error"
@@ -1175,7 +1194,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       # is involved.
       When I successfully invoke the function selected by NVCF CLI over HTTP with timeout "120" seconds and poll duration "5" seconds:
         """
-        {"input":"bdd-decision-direct-ready","questions":[{"type":"predicate","text":"Is it ready?"}]}
+        {"input":"bdd-decision-direct-ready","questions":[{"type":"predicate","instructions":"Is it ready?"}]}
         """
       Then the command output should contain "answers"
 
@@ -1205,7 +1224,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       # request through the Vanity Gateway.
       When I successfully invoke model "bdd-decision-llm" at "/v1/decisions" with timeout "120" seconds:
         """
-        {"input":"bdd-decision-llm-ready","questions":[{"type":"predicate","text":"Is it ready?"}]}
+        {"input":"bdd-decision-llm-ready","questions":[{"type":"predicate","instructions":"Is it ready?"}]}
         """
       Then the command output should contain "answers"
 
@@ -1274,7 +1293,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP request header "X-Vendor-Test" is "bdd-vendor-value"
       When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/decisions" with timeout 120 seconds and body:
         """
-        {"model":"bdd-decision-direct","input":"bdd-vanity-direct","questions":[{"type":"predicate","name":"red","text":"Is it red?"},{"type":"choice","name":"animal","text":"Which animal?","choices":["cat","dog"]}]}
+        {"model":"bdd-decision-direct","input":"bdd-vanity-direct","questions":[{"type":"predicate","name":"red","instructions":"Is it red?"},{"type":"choice","name":"animal","instructions":"Which animal?","choices":["cat","dog"]}]}
         """
       Then the HTTP status should be 200
       And the HTTP response JSON field "answers.0.type" should equal "predicate"
@@ -1296,20 +1315,23 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
       And the HTTP response JSON field "echo.x-vendor-test" should equal "bdd-vendor-value"
 
-      # LLM models: the gateway sends the request through the LLM gateway.
+      # LLM models: the gateway sends the request through the LLM gateway,
+      # which sets X-Input-Tokens and does not forward the caller's API key.
       Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
       And the HTTP request header "Content-Type" is "application/json"
       And the HTTP request header "TypeSafe-Danger-Zone-Images" is "true"
       And the HTTP request header "X-Vendor-Test" is "bdd-vendor-value"
       When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/decisions" with timeout 120 seconds and body:
         """
-        {"model":"bdd-decision-llm","input":"bdd-vanity-llm","questions":[{"type":"predicate","name":"red","text":"Is it red?"},{"type":"choice","name":"animal","text":"Which animal?","choices":["cat","dog"]}]}
+        {"model":"bdd-decision-llm","input":"bdd-vanity-llm","questions":[{"type":"predicate","name":"red","instructions":"Is it red?"},{"type":"choice","name":"animal","instructions":"Which animal?","choices":["cat","dog"]}]}
         """
       Then the HTTP status should be 200
       And the HTTP response JSON field "answers.0.type" should equal "predicate"
       And the HTTP response JSON field "answers.1.choice" should equal "cat"
       And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
       And the HTTP response JSON field "echo.x-vendor-test" should equal "bdd-vendor-value"
+      And the HTTP response JSON field "echo.x-input-tokens" should be at least 1
+      And the HTTP response JSON field "echo.credentials_received" should equal "false"
 
       Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
       And the HTTP request header "Content-Type" is "application/json"
@@ -1324,6 +1346,92 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP response JSON field "answers.animal.choice" should equal "cat"
       And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
       And the HTTP response JSON field "echo.x-vendor-test" should equal "bdd-vendor-value"
+      And the HTTP response JSON field "echo.x-input-tokens" should be at least 1
+      And the HTTP response JSON field "echo.credentials_received" should equal "false"
+
+      # Backend errors pass through the Vanity Gateway unchanged on both
+      # routes and both paths: status, Retry-After and body.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/decisions?mock_error=429" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-direct","input":"bdd-vanity-direct-429","questions":[{"type":"predicate","instructions":"Is it valid?"}]}
+        """
+      Then the HTTP status should be 429
+      And the HTTP response header "Retry-After" should equal "7"
+      And the HTTP response JSON field "error.type" should equal "rate_limit_error"
+      And the HTTP response JSON field "error.message" should equal "mock rate limit"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/decisions?mock_error=400" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-direct","input":"bdd-vanity-direct-400","questions":[{"type":"predicate","instructions":"Is it valid?"}]}
+        """
+      Then the HTTP status should be 400
+      And the HTTP response JSON field "error.type" should equal "invalid_request_error"
+      And the HTTP response JSON field "error.message" should equal "mock validation error"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/systemone?mock_error=429" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-direct","state":{"text":"bdd-vanity-direct-429"},"questions":{"seen":{"type":"noul"}}}
+        """
+      Then the HTTP status should be 429
+      And the HTTP response header "Retry-After" should equal "7"
+      And the HTTP response JSON field "detail.0.msg" should equal "mock rate limit"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/systemone?mock_error=400" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-direct","state":{"text":"bdd-vanity-direct-400"},"questions":{"seen":{"type":"noul"}}}
+        """
+      Then the HTTP status should be 400
+      And the HTTP response JSON field "detail.0.msg" should equal "mock validation error"
+      And the HTTP response JSON field "detail.0.type" should equal "value_error"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/decisions?mock_error=429" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-llm","input":"bdd-vanity-llm-429","questions":[{"type":"predicate","instructions":"Is it valid?"}]}
+        """
+      Then the HTTP status should be 429
+      And the HTTP response header "Retry-After" should equal "7"
+      And the HTTP response JSON field "error.type" should equal "rate_limit_error"
+      And the HTTP response JSON field "error.message" should equal "mock rate limit"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/decisions?mock_error=400" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-llm","input":"bdd-vanity-llm-400","questions":[{"type":"predicate","instructions":"Is it valid?"}]}
+        """
+      Then the HTTP status should be 400
+      And the HTTP response JSON field "error.type" should equal "invalid_request_error"
+      And the HTTP response JSON field "error.message" should equal "mock validation error"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/systemone?mock_error=429" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-llm","state":{"text":"bdd-vanity-llm-429"},"questions":{"seen":{"type":"noul"}}}
+        """
+      Then the HTTP status should be 429
+      And the HTTP response header "Retry-After" should equal "7"
+      And the HTTP response JSON field "detail.0.msg" should equal "mock rate limit"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/systemone?mock_error=400" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-llm","state":{"text":"bdd-vanity-llm-400"},"questions":{"seen":{"type":"noul"}}}
+        """
+      Then the HTTP status should be 400
+      And the HTTP response JSON field "detail.0.msg" should equal "mock validation error"
+      And the HTTP response JSON field "detail.0.type" should equal "value_error"
 
       # A model listed only in the other section is a 404 in the native error
       # shape of the route that was called, and never reaches a function.
@@ -1342,7 +1450,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP request header "Content-Type" is "application/json"
       When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/decisions" with timeout 120 seconds and body:
         """
-        {"model":"bdd-decision-systemone-only","input":"bdd","questions":[{"type":"predicate","text":"Is it listed?"}]}
+        {"model":"bdd-decision-systemone-only","input":"bdd","questions":[{"type":"predicate","instructions":"Is it listed?"}]}
         """
       Then the HTTP status should be 404
       And the HTTP response JSON field "error.type" should equal "invalid_request_error"
