@@ -106,8 +106,18 @@ type Promoter interface {
 	// when no promoted artifact exists for hash.
 	MountSpec(ctx context.Context, hash string, vol VolumeMeta) (PodMount, error)
 
+	// EnsureClaim makes the shared restore claim for hash exist in ns,
+	// minted from the promoted artifact, so a pod in a namespace other
+	// than the capture's can mount it. NVCF runs every chart in its own
+	// namespace, so the capture and the restores usually live apart.
+	// Idempotent. Returns ErrNotFound when nothing is promoted yet and
+	// ErrUnsupported when the strategy has no shared artifact to bind
+	// (per-pod clone).
+	EnsureClaim(ctx context.Context, hash, ns string) error
+
 	// Delete reclaims every artifact this strategy created for hash in
-	// the given namespace. Idempotent (NotFound == success).
+	// the given namespace and every namespace-local claim minted by
+	// EnsureClaim. Idempotent (NotFound == success).
 	Delete(ctx context.Context, hash, namespace string) error
 
 	// Caps advertises capabilities for startup validation + logging.

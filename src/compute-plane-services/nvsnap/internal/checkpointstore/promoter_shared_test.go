@@ -262,3 +262,76 @@ func TestEnsureSecondaryPVLeavesBoundVolumeAlone(t *testing.T) {
 		t.Error("disturbed the binding of a live, Bound volume")
 	}
 }
+
+// A writer view is the same static PV as a reader view, read-write: the
+// download Job on a filesystem shared while written writes through it.
+func TestSharedVolumePromoter_MintViewFromPVLabels_Writer(t *testing.T) {
+	ctx := context.Background()
+	primary := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-primary"},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("4Ti")},
+			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+			MountOptions:                  []string{"hard", "nconnect=16"},
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "fss.csi.oraclecloud.com", VolumeHandle: "fs:10.0.0.1:/export"}},
+		},
+	}
+	kc := fake.NewSimpleClientset(primary)
+	tx, _ := LookupVolumeHandleTransform("")
+	p := &SharedVolumePromoter{KubeClient: kc, StorageClass: "fs", Transform: tx, MountOptions: []string{"ro"}}
+	if err := p.MintViewFromPVLabels(ctx, "pv-primary", "view-rw", "claim-rw", "fn", map[string]string{"nvsnap.io/model": "k"}, false); err != nil {
+		t.Fatal(err)
+	}
+	pv, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "view-rw", metav1.GetOptions{})
+	if pv.Spec.CSI.ReadOnly || pv.Spec.AccessModes[0] != corev1.ReadWriteMany || pv.Labels["nvsnap.io/role"] != "writer-shared" || pv.Spec.CSI.VolumeHandle != "fs:10.0.0.1:/export" {
+		t.Errorf("writer view: %+v", pv.Spec)
+	}
+	if len(pv.Spec.MountOptions) != 2 || pv.Spec.MountOptions[0] != "hard" {
+		t.Errorf("a writer view keeps the primary's mount options, got %v", pv.Spec.MountOptions)
+	}
+	pvc, _ := kc.CoreV1().PersistentVolumeClaims("fn").Get(ctx, "claim-rw", metav1.GetOptions{})
+	if pvc.Spec.AccessModes[0] != corev1.ReadWriteMany || pvc.Spec.VolumeName != "view-rw" || pvc.Labels["nvsnap.io/role"] != "writer" {
+		t.Errorf("writer view claim: %+v", pvc)
+	}
+	if err := p.MintViewFromPVLabels(ctx, "pv-primary", "view-ro", "claim-ro", "fn", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	ro, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "view-ro", metav1.GetOptions{})
+	if !ro.Spec.CSI.ReadOnly || ro.Spec.AccessModes[0] != corev1.ReadOnlyMany || ro.Labels["nvsnap.io/role"] != "reader-shared" || len(ro.Spec.MountOptions) != 1 || ro.Spec.MountOptions[0] != "ro" {
+		t.Errorf("reader view: %+v", ro.Spec)
+	}
+	primaryAfter, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "pv-primary", metav1.GetOptions{})
+	if primaryAfter.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		t.Error("minting a view retains the primary")
+	}
+}
+
+// A view declares the bytes recorded on the primary, rounded up to GiB,
+// instead of the primary's nominal capacity.
+func TestSharedVolumePromoter_ViewSizedFromRecordedBytes(t *testing.T) {
+	ctx := context.Background()
+	primary := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-primary", Annotations: map[string]string{"nvsnap.io/volume-bytes": "65549091410"}},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("4Ti")},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "fss.csi.oraclecloud.com", VolumeHandle: "fs:ip:/x"}},
+		},
+	}
+	kc := fake.NewSimpleClientset(primary)
+	tx, _ := LookupVolumeHandleTransform("")
+	p := &SharedVolumePromoter{KubeClient: kc, StorageClass: "fs", Transform: tx}
+	if err := p.MintViewFromPVLabels(ctx, "pv-primary", "view-ro", "claim-ro", "fn", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	want := resource.MustParse("62Gi")
+	pv, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "view-ro", metav1.GetOptions{})
+	if got := pv.Spec.Capacity[corev1.ResourceStorage]; got.Cmp(want) != 0 {
+		t.Errorf("view capacity = %s, want %s", got.String(), want.String())
+	}
+	pvc, _ := kc.CoreV1().PersistentVolumeClaims("fn").Get(ctx, "claim-ro", metav1.GetOptions{})
+	if got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; got.Cmp(want) != 0 {
+		t.Errorf("view claim request = %s, want %s", got.String(), want.String())
+	}
+}

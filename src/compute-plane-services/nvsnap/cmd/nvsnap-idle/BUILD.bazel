@@ -1,0 +1,7 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+go_test(
+    name = "nvsnap-idle_test",
+    srcs = ["idle_test.go"],
+    data = ["c/nvsnap-idle.c"],
+)

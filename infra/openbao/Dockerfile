@@ -57,7 +57,7 @@ USER root
 # applied even when the upstream image predates them.
 # hadolint ignore=DL3018
 RUN apk upgrade --no-cache && \
-    apk add --no-cache curl jq bash && \
+    apk add --no-cache 'brotli-libs>=1.2.1-r0' curl jq bash && \
     mkdir -p /openbao/plugins
 
 COPY --from=bao-build --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao

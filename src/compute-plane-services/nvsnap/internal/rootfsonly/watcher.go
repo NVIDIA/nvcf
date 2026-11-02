@@ -33,12 +33,32 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // DefaultCaptureLabel is the pod-label key the agent watches for capture
 // candidates. Operators set `nvsnap.io/capture: "true"` on workloads they
 // want nvsnap to fan out across the cluster.
 const DefaultCaptureLabel = "nvsnap.io/capture"
+
+// stampedHashAnnotation is the hash the election webhook composed at
+// admission (election.HashAnnotation; duplicated here so rootfsonly does
+// not import election). A verified stamp overrides the watcher's own
+// composition, which would otherwise differ from admission's by the
+// resolved image digest and the webhook-injected env.
+const stampedHashAnnotation = "nvsnap.io/hash"
+
+// StampVerifier confirms a pod's stamped hash before the watcher captures
+// under it. The annotation is the pod author's to write, and a capture is
+// published under its hash for every namespace to restore from, so a
+// stamp is honoured only when something the pod cannot forge vouches for
+// it: VerifyStamp returns nil when pod is the elected leader for hash, on
+// a node of the compute capability (nodeComputeCapability) the hash was
+// elected for, and an error naming why not otherwise.
+type StampVerifier interface {
+	VerifyStamp(ctx context.Context, pod *corev1.Pod, hash, nodeComputeCapability string) error
+}
 
 // Watcher subscribes to Pod events on the local node, detects warm pods
 // (label + Ready), and triggers Capturer.Capture once per pod UID via the
@@ -56,6 +76,11 @@ type Watcher struct {
 
 	// KubeClient is the K8s API client. Required.
 	KubeClient kubernetes.Interface
+
+	// Stamps verifies a pod's stamped hash. nil (the election is off)
+	// honours none: every pod is captured under the hash composed from
+	// what it runs.
+	Stamps StampVerifier
 
 	// NodeName restricts the informer to pods on this node. Required for
 	// DaemonSet-mode agents (the common case). Empty = watch all nodes
@@ -144,6 +169,10 @@ func (w *Watcher) HandlePodEvent(ctx context.Context, obj any) {
 	w.handlePodEvent(ctx, obj)
 }
 
+// criuRestoreAnnotation marks a CRIU restore placeholder
+// (webhook.CRIURestoreAnnotation; that package imports this one).
+const criuRestoreAnnotation = "nvsnap.io/criu-restore"
+
 func (w *Watcher) handlePodEvent(ctx context.Context, obj any) {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok || pod == nil {
@@ -152,6 +181,12 @@ func (w *Watcher) handlePodEvent(ctx context.Context, obj any) {
 	plog := w.logger().WithField("pod", pod.Namespace+"/"+pod.Name)
 	if !w.isLabeledForCapture(pod) {
 		plog.Debug("watcher: skipping, not labeled for capture")
+		return
+	}
+	if pod.Annotations[criuRestoreAnnotation] != "" {
+		// A CRIU restore placeholder runs a restored process, not a fresh
+		// engine: its cachedir is the checkpoint's, nothing to capture.
+		plog.Debug("watcher: skipping, a CRIU restore placeholder")
 		return
 	}
 	if !IsPodReady(pod) {
@@ -311,6 +346,7 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 			log.WithError(err).Debug("node lookup for GPU metadata failed; capture proceeds without it")
 		}
 	}
+	req.Hash = w.verifiedStamp(captureCtx, pod, req.HashInput.GPUComputeCapability, log)
 	m, err := w.Capturer.Capture(captureCtx, req)
 	if err != nil {
 		log.WithError(err).Warn("capture failed; will retry on next Update event")
@@ -318,11 +354,37 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 	log.WithFields(logrus.Fields{
-		"hash":     m.Hash[:12],
+		"hash":     checkpointstore.ShortHash(m.Hash),
 		"size_mib": m.TotalSizeBytes / 1024 / 1024,
 		"files":    m.FileCount,
 	}).Info("capture committed for pod")
 	committed = true
+}
+
+// verifiedStamp returns the pod's stamped hash when Stamps vouches for it
+// on a node of compute capability cc, and "" otherwise: the capture is
+// then made under the hash composed from what the pod runs, as for any
+// pod the election did not elect.
+func (w *Watcher) verifiedStamp(ctx context.Context, pod *corev1.Pod, cc string, log logrus.FieldLogger) string {
+	stamped := pod.Annotations[stampedHashAnnotation]
+	if stamped == "" {
+		return ""
+	}
+	var err error
+	switch {
+	case !checkpointstore.IsHash(stamped):
+		err = errors.New("it is not a hash")
+	case w.Stamps == nil:
+		err = errors.New("no election vouches for stamps here")
+	default:
+		err = w.Stamps.VerifyStamp(ctx, pod, stamped, cc)
+	}
+	if err != nil {
+		log.WithError(err).WithField("stamped", checkpointstore.ShortHash(stamped)).
+			Warn("watcher: the pod's stamped hash is not verified; capturing under the hash composed from what it runs")
+		return ""
+	}
+	return stamped
 }
 
 func (w *Watcher) isLabeledForCapture(pod *corev1.Pod) bool {

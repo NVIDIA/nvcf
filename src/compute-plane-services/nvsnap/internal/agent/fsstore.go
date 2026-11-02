@@ -29,9 +29,9 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// Phase 2c of the 16-node distribution plan (docs/TRANSPORT-ARCHITECTURE.md):
-// FSStore is the shared-filesystem backend for clusters with a distributed
-// FS mounted on every node — Lustre, Weka, EFS, Filestore, NFS, etc.
+// FSStore is the shared-filesystem backend (the L2 tier, docs/ARCHITECTURE.md
+// section 6) for clusters with a distributed FS mounted on every node —
+// Lustre, Weka, EFS, Filestore, NFS, etc.
 //
 // When --fsstore-path is set, the agent:
 //

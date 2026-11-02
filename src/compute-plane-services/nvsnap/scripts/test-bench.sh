@@ -22,7 +22,7 @@
 #   whisper           ASR/TTS (whisper-large-v3 NIM)            1xH100  [pending NGC validation]
 #
 # Output:
-#   docs/PDF-BENCH-RESULTS.md  (markdown table, appended per workload)
+#   docs/results/PDF-BENCH-RESULTS.md  (markdown table, appended per workload)
 #
 # Exit codes:
 #   0 = bench complete (each phase recorded, even partial PASS)
@@ -76,7 +76,7 @@ PDF Testing Matrix workloads (in order):
   whisper           ASR/TTS:   whisper-large-v3 NIM         (1xH100)  [requires ngc-api-key]
   gemma-4-31b-nim   LLM:       gemma-4-31B via NIM 1.7.1    (1xH100)  [requires ngc-api-key]
 
-Results appended to docs/PDF-BENCH-RESULTS.md.
+Results appended to docs/results/PDF-BENCH-RESULTS.md.
 EOF
     exit 1
 fi
@@ -149,7 +149,7 @@ case "$WORKLOAD" in
     gemma-4-31b-nim)
         # NIM 1.7.1-variant of the same model — kept for parallel measurement.
         # Blocked on Riva ASR cudaHostUnregister post-restore failure (see
-        # docs/PDF-BENCH-RESULTS.md whisper footnote — same class of bug).
+        # docs/results/PDF-BENCH-RESULTS.md whisper footnote — same class of bug).
         POD_NAME="bench-gemma-4-31b"
         CONTAINER_NAME="nim"
         RESTORE_POD_NAME="bench-gemma-4-31b-restored"
@@ -268,7 +268,7 @@ fi
 # the SOURCE vLLM start with a parallel/streamed weight loader, so the captured
 # EntryArgv carries it and the B′ restore execs it. Lets us measure the
 # model-load GiB/s win from parallel reads off rox (single-stream rox ~0.76
-# GiB/s, parallel ceiling ~2.35 GiB/s — see docs/proposals/rootfs-overlay-mount-
+# GiB/s, parallel ceiling ~2.35 GiB/s — see docs/design/rootfs-overlay-mount-
 # scale.md). Values: "prefetch" → --safetensors-load-strategy=prefetch;
 # "runai_streamer" → --load-format runai_streamer. Default unset = no-op.
 # Only applies to vLLM sources (the args block contains "vllm serve").
@@ -705,7 +705,7 @@ if [ "$SKIP_RESTORE" -eq 0 ] && [ -n "$CHECKPOINT_ID" ]; then
 fi
 
 # ─── Emit PDF table row ───────────────────────────────────────────────────────
-RESULTS="$PROJECT_ROOT/docs/PDF-BENCH-RESULTS.md"
+RESULTS="$PROJECT_ROOT/docs/results/PDF-BENCH-RESULTS.md"
 if [ ! -f "$RESULTS" ]; then
     cat > "$RESULTS" <<EOF
 # PDF Testing Matrix — NvSnap Benchmark Results

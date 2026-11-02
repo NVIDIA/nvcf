@@ -163,35 +163,19 @@ public class IcmsConfigurationProperties {
     // cluster_groups_by_authorized_accounts). Writes are unaffected.
     private boolean clusterByIdReadsEnabled;
 
+    // Feature flag: serve period reads of requests and instances from the indexed creation_bucket
+    // column (storage-attached index) instead of the requests_by_day and instances_by_day lookup
+    // tables. Writes to the by-day tables are unaffected.
+    private boolean creationBucketReadsEnabled = true;
+
     private Map<String, List<String>> supportedGpuDetails = new HashMap<>();
     private Map<String, String> gpusToQueueUrlGpuNameMap = new HashMap<>();
-
-    // Maps a GPU type to the NCA IDs allowed to see/allocate it. A GPU absent from the map is
-    // unrestricted; the wildcard "*" allows everyone. Used to gate limited compute-platform
-    // capacity to dedicated orgs. Empty by default = existing behavior.
-    private Map<String, List<String>> gpuAllowedNcaIds = new HashMap<>();
-
-    // Per-NCA allowlist of GPUs and their instance types: ncaId -> gpuName -> instanceTypes.
-    // Empty by default = existing behavior. Read directly by isGpuAllowedForNca and isInstanceTypeAllowedForNca
-    private Map<String, Map<String, List<String>>> gpuGating = new HashMap<>();
 
     private Set<String> supportedInstanceTypes = new HashSet<>();
     private Set<String> supportedGpus = new HashSet<>();
 
     private static final String MESG_REMOTE_CONFIG_REFRESH =
             "Remote config refresh observed: icms.instance-batch-count = %s";
-
-    private static final String MESG_GPU_GATING_NO_GPUS =
-            "icms.gpu-gating lists ncaId {} with no GPUs, ignoring the entry and leaving the " +
-                    "account ungated";
-
-    private static final String MESG_GPU_GATING_NO_INSTANCE_TYPES =
-            "icms.gpu-gating lists GPU {} for ncaId {} with no instance types, denying the GPU " +
-                    "for this account";
-
-    private static final String MESG_GPU_GATING_BLANK_GPU_NAME =
-            "icms.gpu-gating lists an entry with a null or blank GPU name for ncaId {}, dropping " +
-                    "the entry";
 
     // Temporary verification hook; remove after remote config support is complete.
     @EventListener(RefreshScopeRefreshedEvent.class)
@@ -227,8 +211,6 @@ public class IcmsConfigurationProperties {
             log.info("messageBatchIdConfig is not provided setting null value");
             messageBatchIdConfig = MessageBatchIdConfig.builder().build();
         }
-
-        logGpuGatingIssues();
     }
 
     private void createSqsQueues() {
@@ -304,116 +286,6 @@ public class IcmsConfigurationProperties {
 
     public boolean isGpuSupported(String gpuName) {
         return supportedGpus.contains(gpuName);
-    }
-
-    /**
-     * Whether the given NCA ID may see/allocate the given GPU, per {@code icms.gpu-allowed-nca-ids}.
-     * A GPU absent from the map (or with an empty list) is unrestricted; a list containing the
-     * wildcard {@code "*"} allows everyone. Otherwise only the listed NCA IDs are permitted.
-     *
-     * @param gpu   the GPU type
-     * @param ncaId the requesting NGC org / NCA ID
-     * @return {@code true} if allowed (including the unrestricted default), {@code false} otherwise
-     */
-    public boolean isNcaAllowedForGpu(String gpu, String ncaId) {
-        List<String> allowed = gpuAllowedNcaIds.get(gpu);
-        if (allowed == null || allowed.isEmpty()) {
-            return true;
-        }
-        return allowed.contains("*") || allowed.contains(ncaId);
-    }
-
-    public boolean hasGpuGating(@Nullable String ncaId) {
-        return allowedGpusFor(ncaId) != null;
-    }
-
-    private void logGpuGatingIssues() {
-        if (gpuGating == null || gpuGating.isEmpty()) {
-            return;
-        }
-        gpuGating.forEach((ncaId, configuredGpus) -> {
-            if (configuredGpus == null || configuredGpus.isEmpty()) {
-                log.error(MESG_GPU_GATING_NO_GPUS, ncaId);
-                return;
-            }
-            configuredGpus.forEach((gpuName, instanceTypes) -> {
-                if (gpuName == null || gpuName.isBlank()) {
-                    log.error(MESG_GPU_GATING_BLANK_GPU_NAME, ncaId);
-                } else if (!hasNonBlank(instanceTypes)) {
-                    log.error(MESG_GPU_GATING_NO_INSTANCE_TYPES, gpuName, ncaId);
-                }
-            });
-        });
-    }
-
-    /**
-     * Whether {@code icms.gpu-gating} lets the NCA ID see and allocate the given GPU.
-     *
-     * @param ncaId   the NGC org / NCA ID
-     * @param gpuName the GPU type
-     * @return {@code true} if allowed, including when the NCA ID has no gating entry
-     */
-    public boolean isGpuAllowedForNca(@Nullable String ncaId, @Nullable String gpuName) {
-        Map<String, List<String>> allowedByGpu = allowedGpusFor(ncaId);
-        if (allowedByGpu == null) {
-            return true;
-        }
-
-        if (gpuName == null || gpuName.isBlank()) {
-            return false;
-        }
-        // A GPU configured without usable instance types denies that GPU. Reading it as
-        // "all instance types" would let a truncated config silently widen access.
-        return hasNonBlank(allowedByGpu.get(gpuName));
-    }
-
-    /**
-     * Whether {@code icms.gpu-gating} lets the NCA ID see and allocate the given instance type.
-     * An instance type on a GPU that is itself gated out is never allowed.
-     *
-     * @param ncaId        the NGC org / NCA ID
-     * @param gpuName      the GPU type the instance type belongs to
-     * @param instanceType the instance type name
-     * @return {@code true} if allowed, including when the NCA ID has no gating entry
-     */
-    public boolean isInstanceTypeAllowedForNca(@Nullable String ncaId, @Nullable String gpuName,
-                                               @Nullable String instanceType) {
-        Map<String, List<String>> allowedByGpu = allowedGpusFor(ncaId);
-        if (allowedByGpu == null) {
-            return true;
-        }
-        if (gpuName == null || gpuName.isBlank() || instanceType == null
-                || instanceType.isBlank()) {
-            return false;
-        }
-        List<String> allowedInstanceTypes = allowedByGpu.get(gpuName);
-        return allowedInstanceTypes != null && allowedInstanceTypes.contains(instanceType);
-    }
-
-    /**
-     * The GPUs {@code icms.gpu-gating} configures for this NCA ID, or {@code null} when the
-     * account is ungated. An entry present but empty counts as ungated: the account asked for
-     * nothing in particular, so existing behavior is preserved.
-     */
-    @Nullable
-    private Map<String, List<String>> allowedGpusFor(@Nullable String ncaId) {
-        if (ncaId == null || gpuGating == null) {
-            return null;
-        }
-        Map<String, List<String>> allowedByGpu = gpuGating.get(ncaId);
-        return allowedByGpu == null || allowedByGpu.isEmpty() ? null : allowedByGpu;
-    }
-
-    private static boolean hasNonBlank(@Nullable List<String> values) {
-        if (values == null) {
-            return false;
-        }
-        for (String value : values) {
-            if (value != null && !value.isBlank()) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**

@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Two StatefulSet pods, one engine: TP=2 across nodes over the network (multi-pod capture is opt-in).
+kind: StatefulSet
+launch: exec
+podsPerInstance: 2
+criuCapture: true
