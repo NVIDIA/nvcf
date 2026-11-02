@@ -247,7 +247,10 @@ func TestDecisionRoutesLocalErrorsUseNativeShape(t *testing.T) {
 		s1Code     string
 	}{
 		{"malformed json", `{`, http.StatusBadRequest, "invalid_json"},
-		{"model wrong type", `{"model":1}`, http.StatusBadRequest, "invalid_json"},
+		{"trailing data", `{"model":"x"} x`, http.StatusBadRequest, "invalid_json"},
+		{"model wrong type", `{"model":1}`, http.StatusBadRequest, "invalid_request"},
+		{"body is an array", `[1]`, http.StatusBadRequest, "invalid_request"},
+		{"body is null", `null`, http.StatusBadRequest, "invalid_request"},
 		{"missing model", `{"input":"x"}`, http.StatusBadRequest, "invalid_request"},
 		{"body too large", tooLarge, http.StatusRequestEntityTooLarge, "request_too_large"},
 	} {
@@ -620,5 +623,34 @@ func TestDecisionRouteErrorCodesFollowTheSharedTable(t *testing.T) {
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &systemOne))
 			assert.Equal(t, tc.systemOneCode, systemOne.Error.Code, "systemone code")
 		})
+	}
+}
+
+// Decision routes read only model, so a field the gateway does not use, such
+// as a non-boolean stream, reaches the backend unchanged.
+func TestDecisionRoutesForwardNonBooleanStream(t *testing.T) {
+	for _, llm := range []bool{false, true} {
+		for _, path := range []string{decisionsPath, systemOnePath} {
+			name := path
+			if llm {
+				name += " llm"
+			}
+			t.Run(name, func(t *testing.T) {
+				requests := make(chan capturedRequest, 1)
+				backend := captureServer(t, requests, nil)
+				var mutate func(*config.ModelFunctionDetails)
+				nvcf, llmURL := backend.URL, "http://llm.invalid"
+				if llm {
+					mutate = llmDecision
+					nvcf, llmURL = "http://nvcf.invalid", backend.URL
+				}
+				mux := openAIMux(t, decisionMappings(true, true, mutate), nvcf, llmURL)
+
+				rec := postDecision(t, mux, path, `{"model":"`+decisionModel+`","stream":"no"}`, nil)
+
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				assert.Contains(t, awaitRequest(t, requests).body, `"stream":"no"`)
+			})
+		}
 	}
 }
