@@ -92,26 +92,18 @@ helm plugin install https://github.com/databus23/helm-diff
 
 </Accordion>
 
-<Warning>
-kubectl version must match your cluster within one minor version. Using a
-kubectl version that is more than one minor version ahead of your Kubernetes
-cluster will cause `kubectl apply` and `kubectl patch` commands to fail, not
-just warn, due to stricter server-side field validation in newer clients.
-
-This is especially common on macOS with Homebrew, where `brew install kubectl`
-or `brew upgrade` can silently install a version much newer than your cluster.
-Verify before proceeding:
+Use a kubectl client within one minor version of the Kubernetes API server,
+as required by the [Kubernetes version-skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+A client outside that range is unsupported, even if individual commands work.
+Check both versions before installing, especially after a package-manager update:
 
 ```bash
 kubectl version
-# Ensure the Client Version and Server Version are within one minor version of each other.
-# Example: Client v1.32.x against Server v1.31.x is OK.
-#          Client v1.32.x against Server v1.29.x will cause failures.
 ```
 
-If your client is too new, install a matching version directly from the [Kubernetes release page](https://kubernetes.io/docs/tasks/tools/).
-
-</Warning>
+For example, kubectl 1.36 supports Kubernetes API servers 1.35 through 1.37.
+If your client is outside the supported range, install a compatible version
+from the [Kubernetes tools page](https://kubernetes.io/docs/tasks/tools/).
 
 ### Access Requirements
 
