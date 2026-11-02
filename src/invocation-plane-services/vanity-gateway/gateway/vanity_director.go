@@ -53,7 +53,7 @@ func writeFunctionStatusError(writer http.ResponseWriter, request *http.Request,
 		markGatewayRejected(writer, request)
 		if requestProtocol(request) != nativeProtocolNone {
 			writer.Header().Set("Retry-After", "10800")
-			writeNativeError(writer, request, http.StatusServiceUnavailable, errKindProviderUnavailable, offlineMessage)
+			writeNativeError(writer, request, http.StatusServiceUnavailable, "", offlineMessage)
 			return true
 		}
 		writer.Header().Set("Content-Type", "application/problem+json")
@@ -70,7 +70,7 @@ func writeFunctionStatusError(writer http.ResponseWriter, request *http.Request,
 	if isModelExpired(eol) {
 		if requestProtocol(request) != nativeProtocolNone {
 			markGatewayRejected(writer, request)
-			writeNativeError(writer, request, http.StatusGone, errKindNotFound, "model has reached end of life")
+			writeNativeError(writer, request, http.StatusGone, "", "model has reached end of life")
 			return true
 		}
 		var detail string
@@ -156,7 +156,7 @@ func writeProxyError(writer http.ResponseWriter, request *http.Request, err erro
 			zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeClientCanceled)),
 			zap.Error(err),
 		)
-		if writeProtocolError(writer, proxyErrorProtocol(request), statusClientClosedRequest, errKindInternal, "client closed the request") {
+		if writeProtocolError(writer, proxyErrorProtocol(request), statusClientClosedRequest, "", "client closed the request") {
 			return
 		}
 		writer.Header().Set("Content-Type", "application/problem+json")
@@ -179,7 +179,7 @@ func writeBadGatewayProblem(writer http.ResponseWriter, request *http.Request, e
 		zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeProxyError)),
 		zap.Error(err),
 	)
-	if writeProtocolError(writer, proxyErrorProtocol(request), http.StatusBadGateway, errKindProviderUnavailable, "upstream request failed") {
+	if writeProtocolError(writer, proxyErrorProtocol(request), http.StatusBadGateway, "", "upstream request failed") {
 		return
 	}
 	writer.Header().Set("Content-Type", "application/problem+json")

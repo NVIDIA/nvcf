@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -295,7 +296,7 @@ func TestDecisionRoutesOfflineAndEndOfLifeUseNativeShape(t *testing.T) {
 			}
 			mux := openAIMux(t, decisionMappings(true, true, mutate), "http://nvcf.invalid", "http://llm.invalid")
 
-			requireOpenAIErrorBody(t, postDecision(t, mux, decisionsPath, `{"model":"`+decisionModel+`"}`, nil), http.StatusGone)
+			assert.Equal(t, "model_expired", requireOpenAIErrorBody(t, postDecision(t, mux, decisionsPath, `{"model":"`+decisionModel+`"}`, nil), http.StatusGone).Error.Code)
 			requireSystemOneErrorBody(t, postDecision(t, mux, systemOnePath, `{"model":"`+decisionModel+`"}`, nil), http.StatusGone, "not_found")
 		})
 	}
@@ -337,12 +338,12 @@ func TestDecisionRoutesClientCancelUsesNativeShape(t *testing.T) {
 	req := openAIRequest(t, systemOnePath, `{"model":"`+decisionModel+`"}`).WithContext(ctx)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	requireSystemOneErrorBody(t, rec, 499, "internal_error")
+	requireSystemOneErrorBody(t, rec, 499, "request_cancelled")
 
 	req = openAIRequest(t, decisionsPath, `{"model":"`+decisionModel+`"}`).WithContext(ctx)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	requireOpenAIErrorBody(t, rec, 499)
+	assert.Equal(t, "request_cancelled", requireOpenAIErrorBody(t, rec, 499).Error.Code)
 }
 
 func TestDecisionRoutesPassBackendErrorsThroughUnchanged(t *testing.T) {
@@ -575,4 +576,49 @@ func TestVanityPathEntriesAtNativeRoutePathsKeepProblemShape(t *testing.T) {
 		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 		assert.Contains(t, rec.Body.String(), `"type":"error"`)
 	})
+}
+
+// The gateway and Vanity emit the same error code for the same status on the
+// decision routes.
+func TestDecisionRouteErrorCodesFollowTheSharedTable(t *testing.T) {
+	for _, tc := range []struct {
+		status        int
+		kind          string
+		decisionsCode string
+		decisionsType string
+		systemOneCode string
+	}{
+		{400, errKindInvalidJSON, "invalid_json", "invalid_request_error", "invalid_json"},
+		{400, errKindInvalidRequest, "invalid_request", "invalid_request_error", "invalid_request"},
+		{401, "", "invalid_api_key", "authentication_error", "invalid_api_key"},
+		{403, "", "forbidden", "permission_error", "forbidden"},
+		{404, "", "model_not_found", "invalid_request_error", "not_found"},
+		{410, "", "model_expired", "invalid_request_error", "not_found"},
+		{413, "", "request_too_large", "invalid_request_error", "request_too_large"},
+		{415, "", "unsupported_media_type", "invalid_request_error", "unsupported_media_type"},
+		{422, "", "invalid_request", "invalid_request_error", "invalid_request"},
+		{429, "", "rate_limit_exceeded", "rate_limit_error", "rate_limit_exceeded"},
+		{499, "", "request_cancelled", "invalid_request_error", "request_cancelled"},
+		{502, "", "provider_unavailable", "server_error", "provider_unavailable"},
+		{503, "", "provider_unavailable", "server_error", "provider_unavailable"},
+		{529, "", "provider_unavailable", "overloaded_error", "provider_unavailable"},
+		{504, "", "provider_timeout", "server_error", "provider_timeout"},
+		{500, "", "internal_error", "server_error", "internal_error"},
+		{418, "", "invalid_request", "invalid_request_error", "invalid_request"},
+	} {
+		t.Run(strconv.Itoa(tc.status)+" "+tc.kind, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			require.True(t, writeProtocolError(rec, nativeProtocolDecisions, tc.status, tc.kind, "m"))
+			var openAI OpenAIError
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &openAI))
+			assert.Equal(t, tc.decisionsCode, openAI.Error.Code, "decisions code")
+			assert.Equal(t, tc.decisionsType, openAI.Error.Type, "decisions type")
+
+			rec = httptest.NewRecorder()
+			require.True(t, writeProtocolError(rec, nativeProtocolSystemOne, tc.status, tc.kind, "m"))
+			var systemOne systemOneErrorBody
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &systemOne))
+			assert.Equal(t, tc.systemOneCode, systemOne.Error.Code, "systemone code")
+		})
+	}
 }
