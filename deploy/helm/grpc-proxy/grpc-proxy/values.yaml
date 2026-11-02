@@ -36,7 +36,7 @@ grpcproxy:
 
     pullPolicy: IfNotPresent
 
-    tag: "1.35.1"
+    tag: "1.35.2"
 
   # Image pull secrets for private registries
   imagePullSecrets: []
