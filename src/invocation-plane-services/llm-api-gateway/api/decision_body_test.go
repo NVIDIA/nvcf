@@ -56,7 +56,7 @@ func TestSpliceDecisionModel(t *testing.T) {
 		name, body, want string
 	}{
 		{"only the model value changes", `{"b":1,"model":"fn/x","a":2}`, `{"b":1,"model":"m<&>","a":2}`},
-		{"escaped key still names model", `{"model":"fn/x"}`, `{"model":"m<&>"}`},
+		{"escaped key still names model and stays escaped", `{"a":1,"mod\u0065l":"fn/x","b":2}`, `{"a":1,"mod\u0065l":"m<&>","b":2}`},
 		{"every exact duplicate is replaced", `{"model":"fn/x","model":"fn/y"}`, `{"model":"m<&>","model":"m<&>"}`},
 		{"model value with escapes", `{"model":"fn/\"x\\"}`, `{"model":"m<&>"}`},
 		{"nested model is kept", `{"s":{"model":"fn/x"},"model":"fn/x"}`, `{"s":{"model":"fn/x"},"model":"m<&>"}`},
