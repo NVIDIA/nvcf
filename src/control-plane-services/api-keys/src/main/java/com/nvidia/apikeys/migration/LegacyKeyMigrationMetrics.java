@@ -32,6 +32,7 @@ import org.springframework.stereotype.Component;
 public class LegacyKeyMigrationMetrics {
 
     static final String KEYS = "nvcf_api_keys_legacy_key_migration_keys";
+    static final String OWNER_STATUSES = "nvcf_api_keys_legacy_key_migration_owner_statuses";
     static final String RUNS = "nvcf_api_keys_legacy_key_migration_runs";
     static final String RUN_DURATION = "nvcf_api_keys_legacy_key_migration_run_duration";
     static final String COMPLETED = "nvcf_api_keys_legacy_key_migration_completed";
@@ -39,6 +40,8 @@ public class LegacyKeyMigrationMetrics {
     static final String TAG_OUTCOME = "outcome";
 
     private final Map<KeyResult, Counter> keyCounters = new EnumMap<>(KeyResult.class);
+    private final Map<OwnerStatusResult, Counter> ownerStatusCounters =
+            new EnumMap<>(OwnerStatusResult.class);
     private final Map<RunOutcome, Counter> runCounters = new EnumMap<>(RunOutcome.class);
     private final Timer runDuration;
     private final AtomicInteger completed = new AtomicInteger();
@@ -47,6 +50,12 @@ public class LegacyKeyMigrationMetrics {
         for (var result : KeyResult.values()) {
             keyCounters.put(result, Counter.builder(KEYS)
                     .description("Legacy keys processed by the legacy key migration")
+                    .tag(TAG_RESULT, tagValue(result))
+                    .register(registry));
+        }
+        for (var result : OwnerStatusResult.values()) {
+            ownerStatusCounters.put(result, Counter.builder(OWNER_STATUSES)
+                    .description("Legacy owner status rows processed by the legacy key migration")
                     .tag(TAG_RESULT, tagValue(result))
                     .register(registry));
         }
@@ -66,6 +75,10 @@ public class LegacyKeyMigrationMetrics {
 
     public void recordKey(KeyResult result) {
         keyCounters.get(result).increment();
+    }
+
+    public void recordOwnerStatus(OwnerStatusResult result) {
+        ownerStatusCounters.get(result).increment();
     }
 
     public void recordRun(RunOutcome outcome, Duration elapsed) {

@@ -179,6 +179,7 @@ apikeys:
   key-prefix: nvcfapi-
   data-domain-key: ${kv.data-domain-key.value}
   keep-after-expired-duration: P2D
+  v1-key-management-enabled: true
   migration:
     legacy-keys:
       enabled: false

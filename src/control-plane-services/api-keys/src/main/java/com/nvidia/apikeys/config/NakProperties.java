@@ -19,6 +19,7 @@ package com.nvidia.apikeys.config;
 
 import com.nvidia.boot.jwt.configuration.EncryptedModelConverterProperties;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -74,4 +75,15 @@ public class NakProperties {
     @NestedConfigurationProperty
     @Builder.Default
     private MigrationProperties migration = new MigrationProperties();
+
+    // The v1 key management endpoints write only the legacy tables, which the legacy key
+    // migration cannot keep in sync. They must be off before the migration is enabled.
+    @Builder.Default
+    private boolean v1KeyManagementEnabled = true;
+
+    @AssertTrue(message = "migration.legacy-keys.enabled requires v1-key-management-enabled=false")
+    public boolean isLegacyKeyMigrationAllowed() {
+        return !v1KeyManagementEnabled || migration == null
+                || migration.getLegacyKeys() == null || !migration.getLegacyKeys().isEnabled();
+    }
 }

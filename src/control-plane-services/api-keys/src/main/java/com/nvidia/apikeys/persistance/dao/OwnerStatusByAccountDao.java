@@ -84,7 +84,15 @@ public class OwnerStatusByAccountDao {
 
     public OwnerStatusByAccountModel saveOwnerStatusByAccount(
             String ncaId, KeyOwnerType ownerType, String ownerId, KeyOwnerStatus status) {
-        var now = Instant.now();
+        return saveOwnerStatusByAccount(ncaId, ownerType, ownerId, status, Instant.now());
+    }
+
+    /**
+     * @param now update time, and creation time when no row exists yet
+     */
+    public OwnerStatusByAccountModel saveOwnerStatusByAccount(
+            String ncaId, KeyOwnerType ownerType, String ownerId, KeyOwnerStatus status,
+            Instant now) {
         var createdAt = getOwnerStatusByAccount(ncaId, ownerType, ownerId)
                 .map(OwnerStatusByAccountModel::getCreatedAt)
                 .orElse(now);
@@ -101,7 +109,16 @@ public class OwnerStatusByAccountDao {
     public OwnerStatusByAccountAndServiceModel saveOwnerStatusByAccountAndService(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             KeyOwnerStatus status) {
-        var now = Instant.now();
+        return saveOwnerStatusByAccountAndService(
+                ncaId, ownerType, ownerId, issuerServiceId, status, Instant.now());
+    }
+
+    /**
+     * @param now update time, and creation time when no row exists yet
+     */
+    public OwnerStatusByAccountAndServiceModel saveOwnerStatusByAccountAndService(
+            String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
+            KeyOwnerStatus status, Instant now) {
         var createdAt = getOwnerStatusByAccountAndService(
                 ncaId, ownerType, ownerId, issuerServiceId)
                 .map(OwnerStatusByAccountAndServiceModel::getCreatedAt)

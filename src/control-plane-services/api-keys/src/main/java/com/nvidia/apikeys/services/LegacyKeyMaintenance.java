@@ -40,6 +40,7 @@ public class LegacyKeyMaintenance {
     public static final String LEASE_TABLE = "legacy_key_migration";
     public static final String LEASE_KEY = "leader";
     public static final String COMPLETED_KEY = "completed";
+    public static final String OWNER_STATUS_COMPLETED_KEY = "owner_status_completed";
     private static final int NO_TTL = 0;
     static final String MESG_MAINTENANCE = "Key maintenance in progress";
 
@@ -55,9 +56,16 @@ public class LegacyKeyMaintenance {
      * @throws ServiceUnavailableException with a Retry-After of one lease duration
      */
     public void assertWritable(String ncaId) {
-        if (legacyAccount.isLegacy(ncaId) && rowUpdateLockDao.isLocked(LEASE_TABLE, LEASE_KEY)) {
+        if (legacyAccount.isLegacy(ncaId) && isRunning()) {
             throw new ServiceUnavailableException(MESG_MAINTENANCE, leaseDuration());
         }
+    }
+
+    /**
+     * True while a migration run holds the lease.
+     */
+    public boolean isRunning() {
+        return rowUpdateLockDao.isLocked(LEASE_TABLE, LEASE_KEY);
     }
 
     public boolean acquire(Instant token) {
@@ -86,6 +94,21 @@ public class LegacyKeyMaintenance {
      */
     public void markCompleted(Instant at) {
         rowUpdateLockDao.lock(LEASE_TABLE, COMPLETED_KEY, at, NO_TTL);
+    }
+
+    /**
+     * True once a clean run has recorded that every legacy owner status is copied. After it, the
+     * legacy account reads owner status from the v2 owner status tables.
+     */
+    public boolean isOwnerStatusCompleted() {
+        return rowUpdateLockDao.isLocked(LEASE_TABLE, OWNER_STATUS_COMPLETED_KEY);
+    }
+
+    /**
+     * Records the owner status completion marker with no TTL.
+     */
+    public void markOwnerStatusCompleted(Instant at) {
+        rowUpdateLockDao.lock(LEASE_TABLE, OWNER_STATUS_COMPLETED_KEY, at, NO_TTL);
     }
 
     private int leaseTtlSeconds() {

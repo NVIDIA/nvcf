@@ -20,6 +20,7 @@ package com.nvidia.apikeys.validators;
 import static com.nvidia.apikeys.TestData.API_KEY_HASH_1;
 import static com.nvidia.apikeys.TestData.INTROSPECTION_REQUEST_1;
 import static com.nvidia.apikeys.TestData.KEY_VO_1;
+import static com.nvidia.apikeys.TestData.NCA_ID_1;
 import static com.nvidia.apikeys.utils.TestUtils.assertThrowsExceptionWithDetails;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -30,6 +31,7 @@ import static org.mockito.Mockito.when;
 
 import com.nvidia.apikeys.caching.CachingKeysLoader;
 import com.nvidia.apikeys.caching.IntrospectionKeyOwnerValidator;
+import com.nvidia.apikeys.vo.IntrospectionKeyVo;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.boot.exceptions.NotFoundException;
@@ -49,6 +51,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @ExtendWith(MockitoExtension.class)
 class IntrospectionValidatorTest {
 
+    private static final IntrospectionKeyVo INTROSPECTION_KEY_1 = introspectionKey(KEY_VO_1);
+
     @Mock
     private CachingKeysLoader keyLoader;
     @Mock
@@ -65,7 +69,7 @@ class IntrospectionValidatorTest {
                 .audienceServiceIds(
                         audienceServiceId == null ? null : Set.of(audienceServiceId))
                 .build();
-        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(key);
+        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(introspectionKey(key));
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
@@ -81,7 +85,7 @@ class IntrospectionValidatorTest {
         KeyVo key = KEY_VO_1.toBuilder()
                 .keyStatus(keyStatus)
                 .build();
-        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(key);
+        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(introspectionKey(key));
 
         assertThrowsExceptionWithDetails(
                 NotFoundException.class,
@@ -93,12 +97,12 @@ class IntrospectionValidatorTest {
 
     @Test
     void validate_shouldReturnValidatedKey() {
-        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(KEY_VO_1);
+        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(INTROSPECTION_KEY_1);
 
         assertThat(validator.validate(INTROSPECTION_REQUEST_1, API_KEY_HASH_1))
                 .isEqualTo(KEY_VO_1);
 
-        verify(introspectionKeyOwnerValidatorMock).assertKeyOwnerValid(KEY_VO_1);
+        verify(introspectionKeyOwnerValidatorMock).assertKeyOwnerValid(INTROSPECTION_KEY_1);
     }
 
     @Test
@@ -106,7 +110,7 @@ class IntrospectionValidatorTest {
         KeyVo key = KEY_VO_1.toBuilder()
                 .audienceServiceIds(null)
                 .build();
-        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(key);
+        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(introspectionKey(key));
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
@@ -117,9 +121,9 @@ class IntrospectionValidatorTest {
 
     @Test
     void validate_shouldRethrowKnownExceptions() {
-        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(KEY_VO_1);
+        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(INTROSPECTION_KEY_1);
         doThrow(new NotFoundException("user not found"))
-                .when(introspectionKeyOwnerValidatorMock).assertKeyOwnerValid(KEY_VO_1);
+                .when(introspectionKeyOwnerValidatorMock).assertKeyOwnerValid(INTROSPECTION_KEY_1);
 
         assertThrowsExceptionWithDetails(
                 NotFoundException.class,
@@ -129,9 +133,9 @@ class IntrospectionValidatorTest {
 
     @Test
     void validate_shouldThrowGenericExceptions() {
-        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(KEY_VO_1);
+        when(keyLoader.loadKeyByHash(API_KEY_HASH_1)).thenReturn(INTROSPECTION_KEY_1);
         doThrow(new NullPointerException("null"))
-                .when(introspectionKeyOwnerValidatorMock).assertKeyOwnerValid(KEY_VO_1);
+                .when(introspectionKeyOwnerValidatorMock).assertKeyOwnerValid(INTROSPECTION_KEY_1);
 
         assertThrows(
                 IllegalStateException.class,
@@ -139,4 +143,7 @@ class IntrospectionValidatorTest {
                 "Unexpected error during key introspection");
     }
 
+    private static IntrospectionKeyVo introspectionKey(KeyVo key) {
+        return new IntrospectionKeyVo(NCA_ID_1, key);
+    }
 }

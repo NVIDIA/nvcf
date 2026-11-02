@@ -36,10 +36,14 @@ import com.nvidia.apikeys.config.IntegrationTestConfiguration.TestCleanerExtensi
 import com.nvidia.apikeys.config.exceptions.ServiceUnavailableException;
 import com.nvidia.apikeys.persistance.dao.KeysDao;
 import com.nvidia.apikeys.persistance.dao.KeysV2Dao;
+import com.nvidia.apikeys.persistance.dao.OwnerStatusByAccountDao;
 import com.nvidia.apikeys.persistance.dao.RowUpdateLockDao;
+import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountModel;
 import com.nvidia.apikeys.services.KeysV2Service;
 import com.nvidia.apikeys.services.LegacyKeyMaintenance;
 import com.nvidia.apikeys.utils.TestClock;
+import com.nvidia.apikeys.vo.KeyOwnerStatus;
+import com.nvidia.apikeys.vo.KeyOwnerVo;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyV2Vo;
 import com.nvidia.apikeys.vo.KeyVo;
@@ -70,6 +74,7 @@ class LegacyKeyMigrationIntegrationTest {
     // application-integrationtest.yaml
     private static final String LEGACY_NCA_ID = "test-nca-id";
     private static final String SERVICE_NAME = "nvcf";
+    private static final String OWNER_WITHOUT_KEYS = "owner-without-keys";
 
     private static final KeyVo LEGACY_KEY_2 = KEY_VO_1.toBuilder()
             .keyId(KEY_ID_2)
@@ -98,6 +103,9 @@ class LegacyKeyMigrationIntegrationTest {
 
     @Autowired
     private RowUpdateLockDao rowUpdateLockDao;
+
+    @Autowired
+    private OwnerStatusByAccountDao ownerStatusDao;
 
     @BeforeEach
     void setUp() {
@@ -151,14 +159,75 @@ class LegacyKeyMigrationIntegrationTest {
     }
 
     @Test
+    void copiesLegacyOwnerStatusThenSwitchesTheLegacyAccountToV2() {
+        var suspended = KEY_OWNER_VO_1.toBuilder().ownerStatus(KeyOwnerStatus.SUSPENDED).build();
+        keysDao.save(KEY_VO_1, suspended);
+        keysDao.save(suspended.toBuilder().ownerId(OWNER_WITHOUT_KEYS).build());
+
+        var first = migrationService.run();
+
+        assertThat(first.count(OwnerStatusResult.COPIED)).isEqualTo(2);
+        assertThat(maintenance.isOwnerStatusCompleted()).isFalse();
+        assertThat(ownerStatusDao.getOwnerStatusByAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1))
+                .get()
+                .extracting(OwnerStatusByAccountModel::getOwnerStatus)
+                .isEqualTo(KeyOwnerStatus.SUSPENDED);
+        assertThat(ownerStatusDao.getOwnerStatusByAccountAndService(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME)).isPresent();
+        assertThat(ownerStatusDao.getOwnerStatusByAccount(LEGACY_NCA_ID, USER, OWNER_WITHOUT_KEYS))
+                .isPresent();
+        assertThat(countRows("owner_status_by_account_and_service")).isEqualTo(1);
+
+        var second = migrationService.run();
+
+        assertThat(second.count(OwnerStatusResult.ALREADY_COPIED)).isEqualTo(2);
+        assertThat(second.isClean()).isTrue();
+        assertThat(maintenance.isOwnerStatusCompleted()).isTrue();
+        assertThat(migrationService.run().outcome()).isEqualTo(RunOutcome.ALREADY_COMPLETED);
+
+        keysDao.save(KEY_OWNER_VO_1);
+        assertThat(keysV2Service.getEffectiveOwnerStatus(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
+                .isEqualTo(KeyOwnerStatus.SUSPENDED);
+
+        keysV2Service.updateOwnerStatusByAccount(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.ACTIVE);
+        keysV2Service.updateOwnerStatusByAccountAndService(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KeyOwnerStatus.ACTIVE);
+        assertThat(keysV2Service.getEffectiveOwnerStatus(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
+                .isEqualTo(KeyOwnerStatus.ACTIVE);
+        assertThat(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1))
+                .get()
+                .extracting(KeyOwnerVo::getOwnerStatus)
+                .isEqualTo(KeyOwnerStatus.ACTIVE);
+    }
+
+    @Test
+    void legacyKeyUpdateKeepsLegacyOwnerStatus() {
+        keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
+        var updatedAt = KEY_OWNER_VO_1.getOwnerStatusUpdatedAt();
+        keysDao.save(KEY_OWNER_VO_1.toBuilder().ownerStatus(KeyOwnerStatus.SUSPENDED).build());
+
+        keysV2Service.updateKeyStatus(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1, KeyStatus.SUSPENDED);
+
+        assertThat(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1))
+                .get()
+                .extracting(KeyOwnerVo::getOwnerStatus, KeyOwnerVo::getOwnerStatusUpdatedAt)
+                .containsExactly(KeyOwnerStatus.SUSPENDED, updatedAt);
+    }
+
+    @Test
     void legacyKeyWithUnmappedIssuerIsSkippedAndCompletionIsRecorded() {
         keysDao.save(KEY_VO_1.toBuilder().issuerServiceId("unmapped-service").build(), KEY_OWNER_VO_1);
 
         var result = migrationService.run();
 
         assertThat(result.count(KeyResult.SKIPPED)).isEqualTo(1);
-        assertThat(result.isClean()).isTrue();
+        assertThat(result.count(OwnerStatusResult.COPIED)).isEqualTo(1);
         assertThat(maintenance.isCompleted()).isTrue();
+        assertThat(maintenance.isOwnerStatusCompleted()).isFalse();
         assertThat(countRows("keys_v2")).isZero();
     }
 

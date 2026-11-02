@@ -66,10 +66,12 @@ import org.springframework.stereotype.Service;
  *
  * <p>The configured legacy account also has keys in the legacy tables. Its reads check keys_v2
  * first and fall back to {@link KeysDao}, with service IDs translated by
- * {@link LegacyAccountTranslator}. Updates and deletes go to the table that holds the key. Its
- * owner status stays with the legacy keys through {@link KeyOwnerService}. Every other account
- * uses {@link OwnerStatusByAccountDao} for owner status. While the legacy key migration holds
- * its maintenance lease, key updates and deletes for the legacy account return 503.
+ * {@link LegacyAccountTranslator}. Updates and deletes go to the table that holds the key.
+ * Until {@link LegacyMigrationState} reports its owner status as migrated, the legacy account
+ * reads and writes owner status in the legacy column through {@link KeyOwnerService}. After
+ * that it uses {@link OwnerStatusByAccountDao} like every other account, and account-level
+ * changes are also written to the legacy column. While the legacy key migration holds its
+ * maintenance lease, key updates and deletes for the legacy account return 503.
  *
  * <p>Callers pass validated values. Keys are always returned in v2 form.
  */
@@ -100,6 +102,7 @@ public class KeysV2Service {
     private final MillisecondPrecisionClock clock;
     private final ActionRecorder actionRecorder;
     private final LegacyKeyMaintenance maintenance;
+    private final LegacyMigrationState migrationState;
 
     /**
      * Every new key goes to keys_v2, including keys for the legacy account. The hash is unique
@@ -132,7 +135,8 @@ public class KeysV2Service {
     }
 
     /**
-     * Introspection lookup. Checks keys_v2 first and falls back to the legacy keys table.
+     * Checks keys_v2 first and falls back to the legacy keys table. Key create uses it to keep
+     * hashes unique across both tables. Introspection uses {@link IntrospectionKeyLoader}.
      */
     public Optional<KeyV2Vo> getKeyByHash(String keyHash) {
         return keysV2Dao.getKeyByHash(keyHash)
@@ -257,12 +261,12 @@ public class KeysV2Service {
     }
 
     /**
-     * Owner status for the account. For the legacy account this is the owner status stored with
-     * the owner's legacy keys.
+     * Owner status for the account. For the legacy account, until its owner status is migrated,
+     * this is the owner status stored with the owner's legacy keys.
      */
     public Optional<OwnerStatusByAccountModel> getOwnerStatusByAccount(
             String ncaId, KeyOwnerType ownerType, String ownerId) {
-        if (legacyAccount.isLegacy(ncaId)) {
+        if (usesLegacyOwnerStatus(ncaId)) {
             return keysDao.getKeyOwner(ownerType, ownerId)
                     .filter(owner -> owner.getOwnerStatus() != null)
                     .map(owner -> toOwnerStatusByAccount(ncaId, owner));
@@ -307,11 +311,11 @@ public class KeysV2Service {
     /**
      * The owner's status in one account, ACTIVE when nothing is stored. Reads only the owner's
      * status records, never keys or other accounts' keys. The legacy account has no
-     * account-and-service records.
+     * account-and-service records until its owner status is migrated.
      */
     public OwnerAccountStatusVo getOwnerAccountStatus(
             String ncaId, KeyOwnerType ownerType, String ownerId) {
-        var issuerStatuses = legacyAccount.isLegacy(ncaId)
+        var issuerStatuses = usesLegacyOwnerStatus(ncaId)
                 ? List.<OwnerStatusByAccountAndServiceModel>of()
                 : ownerStatusDao.listOwnerStatusByAccountAndService(ncaId, ownerType, ownerId);
         return OwnerAccountStatusVo.builder()
@@ -329,35 +333,61 @@ public class KeysV2Service {
 
     /**
      * Owner status for the account and issuer service. The legacy account has no
-     * account-and-service records.
+     * account-and-service records until its owner status is migrated.
      */
     public Optional<OwnerStatusByAccountAndServiceModel> getOwnerStatusByAccountAndService(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
-        if (legacyAccount.isLegacy(ncaId)) {
+        if (usesLegacyOwnerStatus(ncaId)) {
             return Optional.empty();
         }
         return ownerStatusDao.getOwnerStatusByAccountAndService(
                 ncaId, ownerType, ownerId, issuerServiceId);
     }
 
+    /**
+     * For the legacy account, until its owner status is migrated, writes only the legacy column
+     * and is rejected while a migration run holds the lease. After the migration, writes the v2
+     * table and also the legacy column, so a replica that has not seen the migration marker yet,
+     * or an older release, still sees the change.
+     */
     public OwnerStatusByAccountModel updateOwnerStatusByAccount(
             String ncaId, KeyOwnerType ownerType, String ownerId, KeyOwnerStatus status) {
         requireOwnerStatus(status);
-        if (legacyAccount.isLegacy(ncaId)) {
-            var owner = keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(ownerType, ownerId);
-            var saved = keyOwnerService.updateKeyOwner(owner, status, clock.instant());
-            return toOwnerStatusByAccount(ncaId, saved);
+        if (usesLegacyOwnerStatus(ncaId)) {
+            maintenance.assertWritable(ncaId);
+            return toOwnerStatusByAccount(ncaId, saveLegacyOwnerStatus(ownerType, ownerId, status));
         }
         var saved = ownerStatusDao.saveOwnerStatusByAccount(ncaId, ownerType, ownerId, status);
+        if (legacyAccount.isLegacy(ncaId)) {
+            mirrorLegacyOwnerStatus(ownerType, ownerId, status);
+        }
         recordOwnerAction(ownerType, ownerId, status, VALUE_NOT_APPLICABLE);
         return saved;
+    }
+
+    private KeyOwnerVo saveLegacyOwnerStatus(
+            KeyOwnerType ownerType, String ownerId, KeyOwnerStatus status) {
+        var owner = keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(ownerType, ownerId);
+        return keyOwnerService.updateKeyOwner(owner, status, clock.instant());
+    }
+
+    /**
+     * Writes the legacy column without recording an action, because the caller records one.
+     */
+    private void mirrorLegacyOwnerStatus(
+            KeyOwnerType ownerType, String ownerId, KeyOwnerStatus status) {
+        var owner = keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(ownerType, ownerId);
+        keysDao.save(owner.toBuilder()
+                             .ownerStatus(status)
+                             .ownerStatusUpdatedAt(clock.instant())
+                             .build());
     }
 
     public OwnerStatusByAccountAndServiceModel updateOwnerStatusByAccountAndService(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             KeyOwnerStatus status) {
         requireOwnerStatus(status);
-        if (legacyAccount.isLegacy(ncaId)) {
+        if (usesLegacyOwnerStatus(ncaId)) {
             throw new BadRequestException(
                     MESG_OWNER_STATUS_FOR_ACCOUNT_AND_SERVICE_UNSUPPORTED.formatted(ncaId));
         }
@@ -400,9 +430,7 @@ public class KeysV2Service {
 
     private void save(StoredKey stored, KeyV2Vo updated) {
         if (stored.legacy()) {
-            var owner = keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(
-                    updated.getOwnerType(), updated.getOwnerId());
-            keysDao.save(legacyAccount.toLegacy(updated), owner);
+            keysDao.saveKeyOnly(legacyAccount.toLegacy(updated));
         } else {
             keysV2Dao.save(updated);
         }
@@ -423,7 +451,7 @@ public class KeysV2Service {
     private KeyOwnerStatus accountStatus(
             String ncaId, KeyOwnerType ownerType, String ownerId,
             Map<String, OwnerStatusByAccountModel> storedStatuses) {
-        if (legacyAccount.isLegacy(ncaId)) {
+        if (usesLegacyOwnerStatus(ncaId)) {
             return getOwnerStatusByAccount(ncaId, ownerType, ownerId)
                     .map(OwnerStatusByAccountModel::getOwnerStatus)
                     .orElse(KeyOwnerStatus.ACTIVE);
@@ -448,16 +476,22 @@ public class KeysV2Service {
     }
 
     /**
-     * The legacy account keeps owner status with the owner's legacy keys.
+     * Owner status that applies to keys issued by the given service. Until its owner status is
+     * migrated, the legacy account keeps owner status with the owner's legacy keys. A missing
+     * record means ACTIVE.
      */
-    private KeyOwnerStatus getEffectiveOwnerStatus(
+    public KeyOwnerStatus getEffectiveOwnerStatus(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
-        if (legacyAccount.isLegacy(ncaId)) {
+        if (usesLegacyOwnerStatus(ncaId)) {
             return keysDao.getKeyOwner(ownerType, ownerId)
                     .map(KeyOwnerVo::getOwnerStatus)
                     .orElse(KeyOwnerStatus.ACTIVE);
         }
         return ownerStatusDao.getEffectiveStatus(ncaId, ownerType, ownerId, issuerServiceId);
+    }
+
+    private boolean usesLegacyOwnerStatus(String ncaId) {
+        return legacyAccount.isLegacy(ncaId) && !migrationState.isOwnerStatusMigrated();
     }
 
     private void lockForAuthorizationUpdates(

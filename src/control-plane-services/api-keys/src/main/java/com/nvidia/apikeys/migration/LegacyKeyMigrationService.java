@@ -21,7 +21,11 @@ import com.nvidia.apikeys.config.MigrationProperties;
 import com.nvidia.apikeys.config.NakProperties;
 import com.nvidia.apikeys.persistance.dao.KeysV2Dao;
 import com.nvidia.apikeys.persistance.dao.LegacyKeyScanDao;
+import com.nvidia.apikeys.persistance.dao.OwnerStatusByAccountDao;
+import com.nvidia.apikeys.persistance.models.KeyByOwnerAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyModel;
+import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountAndServiceModel;
+import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountModel;
 import com.nvidia.apikeys.services.LegacyAccountTranslator;
 import com.nvidia.apikeys.services.LegacyKeyMaintenance;
 import com.nvidia.apikeys.services.MillisecondPrecisionClock;
@@ -35,7 +39,12 @@ import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Supplier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -51,6 +60,11 @@ import org.springframework.stereotype.Service;
  *
  * <p>A clean run records a completion marker before it releases the lease. Every later run on any
  * replica finds the marker and ends without taking the lease.
+ *
+ * <p>In the same window, it copies each owner's legacy status from keys_by_owner_and_service to
+ * owner_status_by_account and owner_status_by_account_and_service, with the same value. This pass
+ * has its own completion marker, so an environment that already copied its keys still copies
+ * owner status. After that marker, the legacy account reads owner status from the v2 tables.
  */
 @Slf4j
 @Service
@@ -63,6 +77,7 @@ public class LegacyKeyMigrationService {
 
     private final LegacyKeyScanDao scanDao;
     private final KeysV2Dao keysV2Dao;
+    private final OwnerStatusByAccountDao ownerStatusDao;
     private final LegacyAccountTranslator legacyAccount;
     private final LegacyKeyMaintenance maintenance;
     private final MillisecondPrecisionClock clock;
@@ -73,12 +88,13 @@ public class LegacyKeyMigrationService {
     public RunResult run() {
         var started = System.nanoTime();
         var counts = new EnumMap<KeyResult, Integer>(KeyResult.class);
+        var ownerStatusCounts = new EnumMap<OwnerStatusResult, Integer>(OwnerStatusResult.class);
         var span = tracer.spanBuilder(SPAN_NAME)
                 .setAttribute(ORG_ID, nakProperties.getNcaId())
                 .startSpan();
         RunOutcome outcome;
         try (var ignored = span.makeCurrent()) {
-            outcome = runWithLease(counts);
+            outcome = runWithLease(counts, ownerStatusCounts);
         } catch (RuntimeException e) {
             log.error("Legacy key migration run failed, ncaId={}", nakProperties.getNcaId(), e);
             span.recordException(e);
@@ -91,16 +107,20 @@ public class LegacyKeyMigrationService {
         span.end();
 
         var elapsed = Duration.ofNanos(System.nanoTime() - started);
-        var result = new RunResult(outcome, counts);
+        var result = new RunResult(outcome, counts, ownerStatusCounts);
         metrics.recordRun(outcome, elapsed);
-        log.info("Legacy key migration run ended, ncaId={}, outcome={}, counts={}, elapsed={}",
+        log.info("Legacy key migration run ended, ncaId={}, outcome={}, counts={}, "
+                         + "ownerStatusCounts={}, elapsed={}",
                  nakProperties.getNcaId(), LegacyKeyMigrationMetrics.tagValue(outcome),
-                 result.counts(), elapsed);
+                 result.counts(), result.ownerStatusCounts(), elapsed);
         return result;
     }
 
-    private RunOutcome runWithLease(Map<KeyResult, Integer> counts) {
-        if (maintenance.isCompleted()) {
+    private RunOutcome runWithLease(
+            Map<KeyResult, Integer> counts, Map<OwnerStatusResult, Integer> ownerStatusCounts) {
+        var keysCompleted = maintenance.isCompleted();
+        var ownerStatusCompleted = maintenance.isOwnerStatusCompleted();
+        if (keysCompleted && ownerStatusCompleted) {
             log.info("Legacy key migration already completed, ncaId={}", nakProperties.getNcaId());
             return RunOutcome.ALREADY_COMPLETED;
         }
@@ -113,10 +133,19 @@ public class LegacyKeyMigrationService {
         log.info("Legacy key migration started, ncaId={}", nakProperties.getNcaId());
         try {
             sleep(settings().getMaintenanceGracePeriod());
-            var outcome = copyAll(token, counts);
-            if (new RunResult(outcome, counts).isClean()) {
-                // Written while the lease is held, so no replica starts another pass first.
-                markCompleted();
+            var outcome = RunOutcome.COMPLETED;
+            if (!keysCompleted) {
+                outcome = copyAll(token, counts);
+                if (new RunResult(outcome, counts).isClean()) {
+                    // Written while the lease is held, so no replica starts another pass first.
+                    markCompleted();
+                }
+            }
+            if (outcome == RunOutcome.COMPLETED && !ownerStatusCompleted) {
+                outcome = copyOwnerStatuses(token, ownerStatusCounts);
+                if (new RunResult(outcome, Map.of(), ownerStatusCounts).isClean()) {
+                    markOwnerStatusCompleted();
+                }
             }
             return outcome;
         } catch (InterruptedException e) {
@@ -153,11 +182,100 @@ public class LegacyKeyMigrationService {
         return RunOutcome.COMPLETED;
     }
 
+    private RunOutcome copyOwnerStatuses(
+            Instant token, Map<OwnerStatusResult, Integer> counts) throws InterruptedException {
+        var copied = new CopiedOwnerStatuses();
+        ByteBuffer cursor = null;
+        do {
+            if (!maintenance.renew(token)) {
+                log.warn("Legacy key migration lease lost, ncaId={}", nakProperties.getNcaId());
+                return RunOutcome.LEASE_LOST;
+            }
+            var pagingState = cursor;
+            var page = fetchPage(() -> scanDao.ownerPage(settings().getPageSize(), pagingState));
+            for (var row : page.rows()) {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedException();
+                }
+                var result = copyOwnerStatus(row, copied);
+                counts.merge(result, 1, Integer::sum);
+                metrics.recordOwnerStatus(result);
+            }
+            cursor = page.next();
+            if (cursor != null) {
+                sleep(settings().getBatchDelay());
+            }
+        } while (cursor != null);
+        return RunOutcome.COMPLETED;
+    }
+
+    /**
+     * Owners and owner and issuer service pairs already handled in this run. Each owner has many
+     * rows, one per key, that all carry the same static owner status.
+     */
+    static final class CopiedOwnerStatuses {
+        private final Set<List<Object>> accounts = new HashSet<>();
+        private final Set<List<Object>> services = new HashSet<>();
+    }
+
+    /**
+     * Copies the owner's legacy status, with the same value, to the account row and to the row
+     * for the row's issuer service. A row is written only when its stored status differs, so a
+     * pass that writes nothing proves the copy is complete.
+     */
+    OwnerStatusResult copyOwnerStatus(KeyByOwnerAndServiceModel row, CopiedOwnerStatuses copied) {
+        var ncaId = nakProperties.getNcaId();
+        var ownerType = row.getOwnerType();
+        var ownerId = row.getOwnerId();
+        var status = row.getOwnerStatus();
+        var firstRowOfOwner = copied.accounts.add(List.of(ownerType, ownerId));
+        if (status == null) {
+            if (firstRowOfOwner) {
+                log.warn("Legacy owner status skipped, status is null, ncaId={}, ownerType={}, "
+                                 + "ownerId={}", ncaId, ownerType, ownerId);
+            }
+            return OwnerStatusResult.SKIPPED;
+        }
+        try {
+            var at = Optional.ofNullable(row.getOwnerStatusUpdatedAt()).orElseGet(clock::instant);
+            var wrote = false;
+            if (firstRowOfOwner && !status.equals(ownerStatusDao
+                    .getOwnerStatusByAccount(ncaId, ownerType, ownerId)
+                    .map(OwnerStatusByAccountModel::getOwnerStatus)
+                    .orElse(null))) {
+                ownerStatusDao.saveOwnerStatusByAccount(ncaId, ownerType, ownerId, status, at);
+                wrote = true;
+            }
+            var serviceId = Optional.ofNullable(row.getIssuerServiceId())
+                    .flatMap(legacyAccount::findServiceId);
+            if (serviceId.isPresent()
+                    && copied.services.add(List.of(ownerType, ownerId, serviceId.get()))
+                    && !status.equals(ownerStatusDao
+                    .getOwnerStatusByAccountAndService(ncaId, ownerType, ownerId, serviceId.get())
+                    .map(OwnerStatusByAccountAndServiceModel::getOwnerStatus)
+                    .orElse(null))) {
+                ownerStatusDao.saveOwnerStatusByAccountAndService(
+                        ncaId, ownerType, ownerId, serviceId.get(), status, at);
+                wrote = true;
+            }
+            return wrote ? OwnerStatusResult.COPIED : OwnerStatusResult.ALREADY_COPIED;
+        } catch (RuntimeException e) {
+            log.error("Legacy key migration failed to copy an owner status, ncaId={}, "
+                              + "ownerType={}, ownerId={}, issuerServiceId={}",
+                      ncaId, ownerType, ownerId, row.getIssuerServiceId(), e);
+            return OwnerStatusResult.FAILED;
+        }
+    }
+
     private LegacyKeyScanDao.Page fetchPage(ByteBuffer cursor) throws InterruptedException {
+        return fetchPage(() -> scanDao.page(settings().getPageSize(), cursor));
+    }
+
+    private <T> T fetchPage(Supplier<T> fetch) throws InterruptedException {
         var attempts = settings().getPageFetchAttempts();
         for (var attempt = 1; ; attempt++) {
             try {
-                return scanDao.page(settings().getPageSize(), cursor);
+                return fetch.get();
             } catch (RuntimeException e) {
                 if (attempt >= attempts) {
                     throw e;
@@ -213,6 +331,17 @@ public class LegacyKeyMigrationService {
         } catch (RuntimeException e) {
             log.warn("Legacy key migration failed to record completion, other replicas run again, "
                              + "ncaId={}", nakProperties.getNcaId(), e);
+        }
+    }
+
+    private void markOwnerStatusCompleted() {
+        try {
+            maintenance.markOwnerStatusCompleted(clock.instant());
+            log.info("Legacy key migration recorded owner status completion, ncaId={}",
+                     nakProperties.getNcaId());
+        } catch (RuntimeException e) {
+            log.warn("Legacy key migration failed to record owner status completion, other "
+                             + "replicas run again, ncaId={}", nakProperties.getNcaId(), e);
         }
     }
 

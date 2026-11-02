@@ -22,6 +22,7 @@ import static java.lang.String.format;
 import com.datastax.driver.core.Cluster;
 import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.Session;
+import com.nvidia.apikeys.services.LegacyMigrationState;
 import jakarta.annotation.Nonnull;
 import java.io.File;
 import java.io.IOException;
@@ -37,6 +38,7 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.restclient.RestTemplateCustomizer;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.context.ApplicationContextInitializer;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -44,6 +46,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.ResolvableType;
+import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.data.cassandra.repository.config.EnableCassandraRepositories;
 import org.springframework.http.HttpInputMessage;
 import org.springframework.http.HttpOutputMessage;
@@ -52,6 +55,7 @@ import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.http.converter.HttpMessageNotWritableException;
 import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
+import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.springframework.util.StreamUtils;
 import org.springframework.web.client.RestTemplate;
 import org.testcontainers.containers.ComposeContainer;
@@ -218,6 +222,12 @@ public class IntegrationTestConfiguration {
         @Override
         public void beforeEach(ExtensionContext context) {
             cleanDatabase();
+            var testClass = context.getRequiredTestClass();
+            if (AnnotatedElementUtils.hasAnnotation(testClass, SpringBootTest.class)) {
+                SpringExtension.getApplicationContext(context)
+                        .getBean(LegacyMigrationState.class)
+                        .forget();
+            }
         }
 
         private void cleanDatabase() {

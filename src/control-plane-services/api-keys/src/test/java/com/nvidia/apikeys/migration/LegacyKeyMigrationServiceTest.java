@@ -21,6 +21,8 @@ import static com.nvidia.apikeys.TestData.KEY_ID_1;
 import static com.nvidia.apikeys.TestData.KEY_VO_1;
 import static com.nvidia.apikeys.TestData.SERVICE_ID_1;
 import static com.nvidia.apikeys.TestData.TEST_TIME;
+import static com.nvidia.apikeys.TestData.USER_KEY_OWNER_ID_1;
+import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -37,10 +39,15 @@ import com.nvidia.apikeys.config.MigrationProperties;
 import com.nvidia.apikeys.config.NakProperties;
 import com.nvidia.apikeys.persistance.dao.KeysV2Dao;
 import com.nvidia.apikeys.persistance.dao.LegacyKeyScanDao;
+import com.nvidia.apikeys.persistance.dao.OwnerStatusByAccountDao;
+import com.nvidia.apikeys.persistance.models.KeyByOwnerAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyModel;
+import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountAndServiceModel;
+import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountModel;
 import com.nvidia.apikeys.services.LegacyAccountTranslator;
 import com.nvidia.apikeys.services.LegacyKeyMaintenance;
 import com.nvidia.apikeys.services.MillisecondPrecisionClock;
+import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyV2Vo;
 import com.nvidia.apikeys.vo.KeyVo;
@@ -48,6 +55,7 @@ import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.ByteBuffer;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -66,6 +74,7 @@ class LegacyKeyMigrationServiceTest {
     private static final String SERVICE_NAME = "nvcf";
     private static final int PAGE_SIZE = 2;
     private static final ByteBuffer NEXT_PAGE = ByteBuffer.wrap(new byte[]{1});
+    private static final Instant STATUS_TIME = TEST_TIME.minusSeconds(3600);
     private static final KeyV2Vo MIGRATED_KEY_1 = KeyV2Vo.builder()
             .keyStatus(KEY_VO_1.getKeyStatus())
             .ncaId(LEGACY_NCA_ID)
@@ -87,6 +96,8 @@ class LegacyKeyMigrationServiceTest {
     private LegacyKeyScanDao scanDao;
     @Mock
     private KeysV2Dao keysV2Dao;
+    @Mock
+    private OwnerStatusByAccountDao ownerStatusDao;
     @Mock
     private LegacyKeyMaintenance maintenance;
     @Mock
@@ -111,13 +122,15 @@ class LegacyKeyMigrationServiceTest {
                 .build();
         registry = new SimpleMeterRegistry();
         service = new LegacyKeyMigrationService(
-                scanDao, keysV2Dao, new LegacyAccountTranslator(nakProperties), maintenance, clock,
+                scanDao, keysV2Dao, ownerStatusDao, new LegacyAccountTranslator(nakProperties),
+                maintenance, clock,
                 new LegacyKeyMigrationMetrics(registry), nakProperties);
 
         lenient().when(clock.instant()).thenReturn(TEST_TIME);
         lenient().when(maintenance.acquire(TEST_TIME)).thenReturn(true);
         lenient().when(maintenance.renew(TEST_TIME)).thenReturn(true);
         lenient().when(maintenance.release(TEST_TIME)).thenReturn(true);
+        lenient().when(maintenance.isOwnerStatusCompleted()).thenReturn(true);
         lenient().when(keysV2Dao.getKeyByHash(any())).thenReturn(Optional.empty());
         lenient().when(keysV2Dao.get(any(), any(), any(), any(), any())).thenReturn(Optional.empty());
     }
@@ -334,9 +347,185 @@ class LegacyKeyMigrationServiceTest {
     }
 
     @Test
+    void copiesOwnerStatusToAccountAndIssuerServiceRows() {
+        givenOnlyOwnerStatusLeft();
+        stubOwnerPages(List.of(ownerRow(SERVICE_ID_1, KeyOwnerStatus.SUSPENDED)));
+
+        var result = service.run();
+
+        assertThat(result.outcome()).isEqualTo(RunOutcome.COMPLETED);
+        assertThat(result.count(OwnerStatusResult.COPIED)).isEqualTo(1);
+        assertThat(result.isClean()).isFalse();
+        verify(ownerStatusDao).saveOwnerStatusByAccount(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED, STATUS_TIME);
+        verify(ownerStatusDao).saveOwnerStatusByAccountAndService(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KeyOwnerStatus.SUSPENDED,
+                STATUS_TIME);
+        verify(maintenance, never()).markOwnerStatusCompleted(any());
+        verify(scanDao, never()).page(anyInt(), any());
+        assertThat(ownerStatusCount(OwnerStatusResult.COPIED)).isEqualTo(1);
+    }
+
+    @Test
+    void matchingOwnerStatusIsNotWrittenAndRecordsCompletion() {
+        givenOnlyOwnerStatusLeft();
+        stubOwnerPages(List.of(ownerRow(SERVICE_ID_1, KeyOwnerStatus.ACTIVE)));
+        when(ownerStatusDao.getOwnerStatusByAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1))
+                .thenReturn(Optional.of(OwnerStatusByAccountModel.builder()
+                                                .ncaId(LEGACY_NCA_ID)
+                                                .ownerType(USER)
+                                                .ownerId(USER_KEY_OWNER_ID_1)
+                                                .ownerStatus(KeyOwnerStatus.ACTIVE).build()));
+        when(ownerStatusDao.getOwnerStatusByAccountAndService(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
+                .thenReturn(Optional.of(OwnerStatusByAccountAndServiceModel.builder()
+                                                .ncaId(LEGACY_NCA_ID)
+                                                .ownerType(USER)
+                                                .ownerId(USER_KEY_OWNER_ID_1)
+                                                .issuerServiceId(SERVICE_NAME)
+                                                .ownerStatus(KeyOwnerStatus.ACTIVE).build()));
+
+        var result = service.run();
+
+        assertThat(result.count(OwnerStatusResult.ALREADY_COPIED)).isEqualTo(1);
+        assertThat(result.isClean()).isTrue();
+        verify(ownerStatusDao, never()).saveOwnerStatusByAccount(any(), any(), any(), any(), any());
+        verify(ownerStatusDao, never())
+                .saveOwnerStatusByAccountAndService(any(), any(), any(), any(), any(), any());
+        var order = inOrder(maintenance);
+        order.verify(maintenance).markOwnerStatusCompleted(TEST_TIME);
+        order.verify(maintenance).release(TEST_TIME);
+        verify(maintenance, never()).markCompleted(any());
+    }
+
+    @Test
+    void ownerWithManyKeysIsReadOncePerAccountAndService() {
+        givenOnlyOwnerStatusLeft();
+        stubOwnerPages(List.of(ownerRow(SERVICE_ID_1, KeyOwnerStatus.SUSPENDED),
+                               ownerRow(SERVICE_ID_1, KeyOwnerStatus.SUSPENDED)));
+
+        var result = service.run();
+
+        assertThat(result.count(OwnerStatusResult.COPIED)).isEqualTo(1);
+        assertThat(result.count(OwnerStatusResult.ALREADY_COPIED)).isEqualTo(1);
+        verify(ownerStatusDao, times(1))
+                .getOwnerStatusByAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1);
+        verify(ownerStatusDao, times(1)).getOwnerStatusByAccountAndService(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME);
+    }
+
+    @Test
+    void ownerWithoutKeysCopiesOnlyTheAccountRow() {
+        givenOnlyOwnerStatusLeft();
+        stubOwnerPages(List.of(ownerRow(null, KeyOwnerStatus.SUSPENDED)));
+
+        var result = service.run();
+
+        assertThat(result.count(OwnerStatusResult.COPIED)).isEqualTo(1);
+        verify(ownerStatusDao).saveOwnerStatusByAccount(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED, STATUS_TIME);
+        verify(ownerStatusDao, never())
+                .saveOwnerStatusByAccountAndService(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void unmappedIssuerCopiesOnlyTheAccountRow() {
+        givenOnlyOwnerStatusLeft();
+        stubOwnerPages(List.of(ownerRow("unmapped", KeyOwnerStatus.SUSPENDED)));
+
+        service.run();
+
+        verify(ownerStatusDao).saveOwnerStatusByAccount(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED, STATUS_TIME);
+        verify(ownerStatusDao, never())
+                .saveOwnerStatusByAccountAndService(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void nullOwnerStatusIsSkippedAndDoesNotBlockCompletion() {
+        givenOnlyOwnerStatusLeft();
+        stubOwnerPages(List.of(ownerRow(SERVICE_ID_1, null)));
+
+        var result = service.run();
+
+        assertThat(result.count(OwnerStatusResult.SKIPPED)).isEqualTo(1);
+        assertThat(result.isClean()).isTrue();
+        verify(maintenance).markOwnerStatusCompleted(TEST_TIME);
+        verify(ownerStatusDao, never()).getOwnerStatusByAccount(any(), any(), any());
+    }
+
+    @Test
+    void ownerStatusWithoutTimestampUsesRunTime() {
+        givenOnlyOwnerStatusLeft();
+        stubOwnerPages(List.of(ownerRow(null, KeyOwnerStatus.SUSPENDED).toBuilder()
+                                       .ownerStatusUpdatedAt(null).build()));
+
+        service.run();
+
+        verify(ownerStatusDao).saveOwnerStatusByAccount(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED, TEST_TIME);
+    }
+
+    @Test
+    void failedOwnerStatusCopyIsCountedAndBlocksCompletion() {
+        givenOnlyOwnerStatusLeft();
+        stubOwnerPages(List.of(ownerRow(SERVICE_ID_1, KeyOwnerStatus.SUSPENDED)));
+        when(ownerStatusDao.getOwnerStatusByAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1))
+                .thenThrow(new IllegalStateException("timeout"));
+
+        var result = service.run();
+
+        assertThat(result.outcome()).isEqualTo(RunOutcome.COMPLETED);
+        assertThat(result.count(OwnerStatusResult.FAILED)).isEqualTo(1);
+        assertThat(result.isClean()).isFalse();
+        verify(maintenance, never()).markOwnerStatusCompleted(any());
+    }
+
+    @Test
+    void keysAndOwnerStatusAreCopiedInOneRun() {
+        when(maintenance.isOwnerStatusCompleted()).thenReturn(false);
+        stubPages(List.of());
+        stubOwnerPages(List.of());
+
+        var result = service.run();
+
+        assertThat(result.isClean()).isTrue();
+        verify(maintenance).markCompleted(TEST_TIME);
+        verify(maintenance).markOwnerStatusCompleted(TEST_TIME);
+        verify(maintenance, times(1)).acquire(TEST_TIME);
+    }
+
+    @Test
+    void ownerStatusIsNotCopiedWhenTheKeyPassLosesTheLease() {
+        when(maintenance.isOwnerStatusCompleted()).thenReturn(false);
+        when(maintenance.renew(TEST_TIME)).thenReturn(false);
+
+        var result = service.run();
+
+        assertThat(result.outcome()).isEqualTo(RunOutcome.LEASE_LOST);
+        verify(scanDao, never()).ownerPage(anyInt(), any());
+    }
+
+    @Test
+    void runEndsWithoutLeaseOnlyWhenBothMarkersExist() {
+        when(maintenance.isCompleted()).thenReturn(true);
+        when(maintenance.isOwnerStatusCompleted()).thenReturn(false);
+        stubOwnerPages(List.of());
+
+        var result = service.run();
+
+        assertThat(result.outcome()).isEqualTo(RunOutcome.COMPLETED);
+        verify(maintenance).acquire(TEST_TIME);
+        verify(scanDao, never()).page(anyInt(), any());
+    }
+
+    @Test
     void countersArePreInitialized() {
         for (var result : KeyResult.values()) {
             assertThat(keyCount(result)).isZero();
+        }
+        for (var result : OwnerStatusResult.values()) {
+            assertThat(ownerStatusCount(result)).isZero();
         }
         for (var outcome : RunOutcome.values()) {
             assertThat(runCount(outcome)).isZero();
@@ -348,6 +537,33 @@ class LegacyKeyMigrationServiceTest {
         var row = mock(KeyModel.class);
         when(scanDao.decrypt(row)).thenReturn(key);
         return row;
+    }
+
+    private void givenOnlyOwnerStatusLeft() {
+        when(maintenance.isCompleted()).thenReturn(true);
+        when(maintenance.isOwnerStatusCompleted()).thenReturn(false);
+    }
+
+    private static KeyByOwnerAndServiceModel ownerRow(
+            String issuerServiceId, KeyOwnerStatus status) {
+        return KeyByOwnerAndServiceModel.builder()
+                .ownerType(USER)
+                .ownerId(USER_KEY_OWNER_ID_1)
+                .issuerServiceId(issuerServiceId)
+                .ownerStatus(status)
+                .ownerStatusUpdatedAt(STATUS_TIME)
+                .build();
+    }
+
+    private void stubOwnerPages(List<KeyByOwnerAndServiceModel> rows) {
+        when(scanDao.ownerPage(PAGE_SIZE, null))
+                .thenReturn(new LegacyKeyScanDao.OwnerPage(rows, null));
+    }
+
+    private double ownerStatusCount(OwnerStatusResult result) {
+        return registry.get(LegacyKeyMigrationMetrics.OWNER_STATUSES)
+                .tag(LegacyKeyMigrationMetrics.TAG_RESULT, LegacyKeyMigrationMetrics.tagValue(result))
+                .counter().count();
     }
 
     private void stubPages(List<KeyModel> rows) {

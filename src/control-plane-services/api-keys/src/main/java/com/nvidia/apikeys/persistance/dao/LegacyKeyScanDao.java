@@ -17,7 +17,9 @@
 
 package com.nvidia.apikeys.persistance.dao;
 
+import com.nvidia.apikeys.persistance.models.KeyByOwnerAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyModel;
+import com.nvidia.apikeys.persistance.repositories.KeyByOwnerAndServiceRepository;
 import com.nvidia.apikeys.persistance.repositories.KeyRepository;
 import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.boot.jwt.services.mapping.EncryptedModelConverter;
@@ -39,6 +41,7 @@ import org.springframework.stereotype.Service;
 public class LegacyKeyScanDao {
 
     private final KeyRepository keyRepository;
+    private final KeyByOwnerAndServiceRepository keyByOwnerAndServiceRepository;
     private final EncryptedModelConverter<KeyModel, KeyVo> converter;
 
     /**
@@ -59,6 +62,21 @@ public class LegacyKeyScanDao {
     }
 
     /**
+     * Full scan of keys_by_owner_and_service for the owner status copy. Only the owner, issuer
+     * service, and static owner status columns are used, so the rows are not decrypted. An owner
+     * whose keys were all deleted still has one row, with a null issuer service.
+     */
+    public OwnerPage ownerPage(int limit, ByteBuffer pagingState) {
+        var slice = keyByOwnerAndServiceRepository.findAll(
+                CassandraPageRequest.of(PageRequest.of(0, limit), pagingState));
+        ByteBuffer next = null;
+        if (slice.hasNext()) {
+            next = ((CassandraPageRequest) slice.getPageable()).getPagingState();
+        }
+        return new OwnerPage(slice.getContent(), next);
+    }
+
+    /**
      * @param next paging state of the next page, or null after the last page
      */
     public record Page(List<KeyModel> rows, ByteBuffer next) {
@@ -66,5 +84,11 @@ public class LegacyKeyScanDao {
         public boolean hasNext() {
             return next != null;
         }
+    }
+
+    /**
+     * @param next paging state of the next page, or null after the last page
+     */
+    public record OwnerPage(List<KeyByOwnerAndServiceModel> rows, ByteBuffer next) {
     }
 }

@@ -20,22 +20,34 @@ package com.nvidia.apikeys.migration;
 import java.util.Map;
 
 /**
- * Outcome of one migration run and the number of keys per result.
+ * Outcome of one migration run, the number of keys per result, and the number of owner status
+ * rows per result.
  */
-public record RunResult(RunOutcome outcome, Map<KeyResult, Integer> counts) {
+public record RunResult(
+        RunOutcome outcome, Map<KeyResult, Integer> counts,
+        Map<OwnerStatusResult, Integer> ownerStatusCounts) {
 
     public RunResult {
         counts = Map.copyOf(counts);
+        ownerStatusCounts = Map.copyOf(ownerStatusCounts);
+    }
+
+    public RunResult(RunOutcome outcome, Map<KeyResult, Integer> counts) {
+        this(outcome, counts, Map.of());
     }
 
     public int count(KeyResult result) {
         return counts.getOrDefault(result, 0);
     }
 
+    public int count(OwnerStatusResult result) {
+        return ownerStatusCounts.getOrDefault(result, 0);
+    }
+
     /**
-     * A full pass that found nothing left to copy, or a run that found the completion marker. The
-     * task stops scheduling itself after it. Skipped keys do not count against it, because no
-     * later run can copy a key whose issuer service is unmapped.
+     * A full pass that found nothing left to copy, or a run that found both completion markers.
+     * The task stops scheduling itself after it. Skipped keys and owner statuses do not count
+     * against it, because no later run can copy them.
      */
     public boolean isClean() {
         if (outcome == RunOutcome.ALREADY_COMPLETED) {
@@ -43,6 +55,8 @@ public record RunResult(RunOutcome outcome, Map<KeyResult, Integer> counts) {
         }
         return outcome == RunOutcome.COMPLETED
                 && count(KeyResult.MIGRATED) == 0
-                && count(KeyResult.FAILED) == 0;
+                && count(KeyResult.FAILED) == 0
+                && count(OwnerStatusResult.COPIED) == 0
+                && count(OwnerStatusResult.FAILED) == 0;
     }
 }

@@ -20,16 +20,14 @@ package com.nvidia.apikeys.caching;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
-import com.nvidia.apikeys.persistance.dao.KeysDao;
-
+import com.nvidia.apikeys.services.KeysV2Service;
+import com.nvidia.apikeys.vo.IntrospectionKeyVo;
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyOwnerType;
-import com.nvidia.apikeys.vo.KeyOwnerVo;
 import com.nvidia.apikeys.vo.KeyVo;
-import com.nvidia.boot.exceptions.NotFoundException;
 import com.nvidia.boot.exceptions.BadRequestException;
+import com.nvidia.boot.exceptions.NotFoundException;
 import java.time.Duration;
-import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -39,55 +37,56 @@ public class IntrospectionKeyOwnerValidator {
 
     public static final Duration KEY_OWNER_CACHE_DURATION = Duration.ofMinutes(1);
 
-    private final KeysDao keysDao;
-    private final LoadingCache<KeyOwnerTypeId, Optional<KeyOwnerVo>> keyOwnerCache;
+    private final KeysV2Service keysV2Service;
+    private final LoadingCache<OwnerScope, KeyOwnerStatus> ownerStatusCache;
 
     /**
      * The purpose of this record is to make a composite key for the cache.
      */
-    private record KeyOwnerTypeId(KeyOwnerType type, String id) {
+    private record OwnerScope(
+            String ncaId, KeyOwnerType type, String id, String issuerServiceId) {
 
     }
 
-    public IntrospectionKeyOwnerValidator(
-            KeysDao keysDao) {
+    public IntrospectionKeyOwnerValidator(KeysV2Service keysV2Service) {
+        this.keysV2Service = keysV2Service;
 
-        this.keysDao = keysDao;
-
-        keyOwnerCache = CacheBuilder.newBuilder()
+        ownerStatusCache = CacheBuilder.newBuilder()
                 .expireAfterWrite(KEY_OWNER_CACHE_DURATION)
                 .maximumSize(1000)
-                .build(CacheLoader.from(this::getUpToDateKeyOwner));
+                .build(CacheLoader.from(this::getUpToDateOwnerStatus));
     }
 
-    private Optional<KeyOwnerVo> getUpToDateKeyOwner(KeyOwnerTypeId keyOwner) {
-        return keysDao.getKeyOwner(keyOwner.type, keyOwner.id);
+    private KeyOwnerStatus getUpToDateOwnerStatus(OwnerScope owner) {
+        return keysV2Service.getEffectiveOwnerStatus(
+                owner.ncaId, owner.type, owner.id, owner.issuerServiceId);
     }
 
-    public void assertKeyOwnerValid(KeyVo key) {
-        KeyOwnerTypeId owner = new KeyOwnerTypeId(key.getOwnerType(), key.getOwnerId());
+    public void assertKeyOwnerValid(IntrospectionKeyVo introspectionKey) {
+        KeyVo key = introspectionKey.key();
+        if (key.getOwnerType() == null || key.getOwnerId() == null) {
+            throw new BadRequestException("Invalid key owner");
+        }
+        OwnerScope owner = new OwnerScope(introspectionKey.ncaId(), key.getOwnerType(),
+                                          key.getOwnerId(), key.getIssuerServiceId());
 
-        Optional<KeyOwnerVo> keyOwner;
+        KeyOwnerStatus ownerStatus;
         try {
-            keyOwner = keyOwnerCache.get(owner);
+            ownerStatus = ownerStatusCache.get(owner);
         } catch (Exception e) {
-            log.error("failed to retrieve key-owner-id:'{}' of key-owner-type:'{}' via cache",
-                      owner.id, owner.type, e);
+            log.error("failed to retrieve key-owner-id:'{}' of key-owner-type:'{}' in nca-id:'{}'"
+                      + " via cache", owner.id, owner.type, owner.ncaId, e);
             throw new IllegalStateException("Failed to retrieve key owner details", e);
         }
 
-        if (keyOwner.isEmpty()) {
-            throw new BadRequestException("Invalid key owner");
-        }
-
-        if (keyOwner.get().getOwnerStatus() != KeyOwnerStatus.ACTIVE) {
+        if (ownerStatus != KeyOwnerStatus.ACTIVE) {
             // for introspection, we pretend key just does not exist
             throw new NotFoundException("Key not found.");
         }
     }
 
     public void invalidateCaches() {
-        keyOwnerCache.invalidateAll();
+        ownerStatusCache.invalidateAll();
     }
 
 }
