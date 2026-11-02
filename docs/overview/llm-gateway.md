@@ -91,8 +91,8 @@ gateway does not wrap it in a second NVCF envelope.
 | `/v1/responses` | Supports native Responses API requests. Streaming clients receive server-sent events (SSE). Non-streaming clients receive the terminal Responses JSON object. |
 | `/v1/embeddings` | Supports embeddings requests with string or string array input. |
 | `/v1/messages` | Preserves native Anthropic Messages JSON responses and server-sent events, including tool and thinking content blocks. |
-| `/v1/decisions` | Beta. Passes OpenAI Decisions requests and responses through unchanged. Not streamed. |
-| `/v1/systemone` | Beta. Passes TypeSafe System One requests and responses through unchanged. Not streamed. |
+| `/v1/decisions` | Beta. Forwards OpenAI Decisions requests unchanged except for the model value, and returns responses unchanged. Not streamed. |
+| `/v1/systemone` | Beta. Forwards TypeSafe System One requests unchanged except for the model value, and returns responses unchanged. Not streamed. |
 
 `llmConfig.routingMethod` is a routing algorithm name, optionally followed by
 tuning parameters, such as `pulsar;seed=stable-a;consider_kv_free_tokens=true`.
@@ -242,7 +242,7 @@ body.
 | `/v1/chat/completions` | `model` with the `<function-id>/` prefix, `stream`, `max_tokens`, `max_completion_tokens`, `prompt_cache_key`, `stream_options`, and a non-empty `messages` array |
 | `/v1/responses` | `model` with the `<function-id>/` prefix, `stream`, `max_output_tokens`, `prompt_cache_key`, `conversation.id`, and a non-empty `input` unless `prompt`, `previous_response_id`, or `conversation` is present |
 | `/v1/embeddings` | `model` with the `<function-id>/` prefix, and a non-empty `input` with at most 2048 entries |
-| `/v1/decisions`, `/v1/systemone` | `model` with the `<function-id>/` prefix. No other field. |
+| `/v1/decisions`, `/v1/systemone` | `model` with the `<function-id>/` prefix, and a body nested at most 64 levels deep. No other field. |
 
 The body must be a JSON object. A checked field that appears twice in
 different letter cases returns `400`.
@@ -252,7 +252,8 @@ The gateway forwards the body unchanged except for these fields:
 - Chat: sets `model` and `stream`, merges `stream_options`, and removes `debug`.
 - Responses: sets `model` and `stream`.
 - Embeddings: sets `model`.
-- Decisions and System One: sets `model`.
+- Decisions and System One: replaces only the value of `model`. Every other
+  byte of the body, including key order and spacing, is unchanged.
 
 The gateway does not add `service_tier`. The backend receives it only when the
 client sends it.
@@ -265,11 +266,10 @@ instead of generated text. Two beta routes pass these requests through:
 - `POST /v1/decisions` for the OpenAI Decisions format.
 - `POST /v1/systemone` for the TypeSafe System One format.
 
-The gateway reads only `model`, rewrites it to the backend model name, and
-forwards the rest of the body unchanged. It does not translate between the two
-formats, so the backend must implement each route that it declares. Responses
-are not streamed: `stream` is ignored. Client headers, including
-`TypeSafe-Danger-Zone-Images`, reach the backend.
+The gateway reads only `model` and replaces its value with the backend model
+name. The body is forwarded unchanged except for the model value. The gateway
+does not translate between the two formats, so the backend must implement each
+route that it declares. Responses are not streamed: `stream` is ignored.
 
 ```bash
 curl -sS -X POST "http://${GATEWAY_ADDR}/v1/decisions" \
@@ -279,46 +279,143 @@ curl -sS -X POST "http://${GATEWAY_ADDR}/v1/decisions" \
   -d '{
     "model": "<function-id>/decision-model",
     "input": "The sky is clear.",
-    "questions": [{"type": "predicate", "text": "Is it raining?"}]
+    "questions": [{"type": "predicate", "name": "raining", "instructions": "Is it raining?"}]
   }'
 ```
+
+The gateway returns `400` for a body it cannot route:
+
+- The body is not valid JSON (`invalid_json`).
+- The body is not a JSON object, or `model` is missing, not a string, or has
+  no `<function-id>/` prefix (`invalid_request`).
+- The body has two `model` keys that differ only in letter case, such as
+  `model` and `Model` (`invalid_request`).
+- The body is nested more than 64 levels deep (`invalid_request`).
 
 A model is enabled for a route only when its `llmConfig.uris` lists that path.
 A model with no `uris`, or without the route in them, returns `404` in the
 error shape of the route. These routes have no default-allow, and
-`MODEL_URI_ALLOWLIST_ENABLED` does not change this.
+`MODEL_URI_ALLOWLIST_ENABLED` does not change this. `llmConfig.uris` is fixed
+when the function is created, so declare the decision routes at creation.
 
-`llmConfig.uris` is fixed when the function is created, so declare the decision
-routes at creation. A function that serves both routes should use
-`usePexec: false` in the Vanity Gateway mapping, because a `usePexec: true`
-function reaches only its default path.
+#### Headers
+
+Client headers, including `TypeSafe-Danger-Zone-Images`, reach the backend,
+with these exceptions:
+
+- Credentials are not forwarded. The gateway removes `Authorization`,
+  `X-Api-Key`, `Proxy-Authorization`, and `Cookie`.
+- The gateway owns the request router control headers. It removes
+  `X-Max-Wait-Ms`, `X-Request-Slo-Ms`, `X-Cache-Affinity-Key`,
+  `X-Input-Tokens`, and `X-Token-Estimate` sent by the client, and sets
+  `X-Input-Tokens` and `X-Token-Estimate` to its own estimate, at least `1`.
+
+#### Token estimate
 
 Token admission counts one request and an estimate of the input tokens. The
-estimate counts every string in the body as text. Each image counts a flat
-number, `1024` by default, set with `NVCF_DECISION_IMAGE_TOKENS` on the gateway.
-Base64 image data is never counted. An image is an object with `type` set to
-`input_image`, an element of `images`, a value of `assets`, or any string that
-is a base64 data URL. The estimate is sent as `X-Input-Tokens` and
-`X-Token-Estimate`.
+estimate counts every string in the body as text, with these exceptions for
+images:
 
-Errors that the gateway or the request router generates use the shape of the
-route:
+- Each image counts a flat number of tokens, `1024` by default, set with
+  `llmApiGateway.config.decisionImageTokens` in the Helm chart
+  (`NVCF_DECISION_IMAGE_TOKENS` on the gateway).
+- An image is an element of `images`, a value of `assets`, or a string that
+  starts with `data:image/<type>;base64,`. Its base64 data is not counted.
+- A nested object with `type` set to `input_image` counts one image in place
+  of its `image_url` and `base64` fields. Its other strings still count as
+  text. The top-level object is never counted as an image.
 
-- `/v1/decisions` uses the OpenAI error shape.
-- `/v1/systemone` uses `{"error":{"code","message","request_id"},"request_id"}`.
-  `request_id` equals the `X-Request-ID` response header. Codes are
-  `invalid_json`, `invalid_request`, `invalid_api_key`, `not_found`,
-  `request_too_large`, `rate_limit_exceeded`, `internal_error`,
-  `provider_unavailable`, and `provider_timeout`.
-
-An error from the backend is relayed unchanged, whatever its shape, size, or
-encoding.
+Base64 data in any other field, or in a data URL that is not an image, counts
+as text.
 
 When a successful response reports `usage.input_tokens`, the gateway records it
 on `llm_api_gateway_llm_tokens_total` and counts the response in
 `llm_api_gateway_decision_usage_observations_total` with `status="observed"`. A
 response without it counts as `absent`. The estimate remains the admission
 value.
+
+#### Request size
+
+By default the gateway does not limit request body size, and it holds the
+whole body in memory while it reads `model` and estimates tokens. Image
+requests can be large, so limit request body size in front of the gateway when
+you enable these routes.
+
+#### Errors
+
+Errors that the gateway, the request router, or the Vanity Gateway generate
+use the shape of the route:
+
+- `/v1/decisions` uses the OpenAI error shape,
+  `{"error":{"message","type","param","code"}}`. `type` follows the status, as
+  for the other OpenAI endpoints.
+- `/v1/systemone` uses `{"error":{"code","message","request_id"},"request_id"}`.
+  `request_id` equals the `X-Request-ID` response header.
+
+| Status | `/v1/decisions` code | `/v1/systemone` code |
+| --- | --- | --- |
+| `400`, body is not valid JSON | `invalid_json` | `invalid_json` |
+| `400`, any other reason | `invalid_request` | `invalid_request` |
+| `401` | `invalid_api_key` | `invalid_api_key` |
+| `403` | `forbidden` | `forbidden` |
+| `404` | `model_not_found` | `not_found` |
+| `410`, model past end of life | `model_expired` | `not_found` |
+| `413` | `request_too_large` | `request_too_large` |
+| `415` | `unsupported_media_type` | `unsupported_media_type` |
+| `422` | `invalid_request` | `invalid_request` |
+| `429` | `rate_limit_exceeded` | `rate_limit_exceeded` |
+| `499` | `request_cancelled` | `request_cancelled` |
+| `502`, `503`, `529` | `provider_unavailable` | `provider_unavailable` |
+| `504` | `provider_timeout` | `provider_timeout` |
+| Other `4xx` | `invalid_request` | `invalid_request` |
+| Other `5xx` | `internal_error` | `internal_error` |
+
+An error from the backend is relayed unchanged, whatever its shape, size, or
+encoding. The request router marks the errors it generates with the
+`X-Stargate-Error-Code` response header. For older request router builds that
+do not set the marker, the gateway also treats a `413`, `499`, `502`, `503`, or
+`504` with an empty body as a router error and rewrites it in the route's
+shape. A backend response with one of these statuses and an empty body is
+therefore rewritten too.
+
+#### Vanity Gateway mapping
+
+To serve decision models through the Vanity Gateway, map them under
+`v2config.openai.decisions` and `v2config.typesafeSystemOne` on the shared API
+host. A model is enabled for a route only when it is listed in that route's
+section. An entry with `functionType: LLM` reaches the function through this
+gateway, which keeps the path:
+
+```json
+{
+  "v2config": {
+    "openai": {
+      "host": "api.example.com",
+      "decisions": {
+        "decision-model": {
+          "modelName": "decision-model",
+          "functionID": "<function-id>",
+          "functionType": "LLM"
+        }
+      }
+    },
+    "typesafeSystemOne": {
+      "decision-model": {
+        "modelName": "decision-model",
+        "functionID": "<function-id>",
+        "functionType": "LLM"
+      }
+    }
+  }
+}
+```
+
+The Vanity Gateway rejects `usePexec` on `functionType: LLM` entries. For a
+direct entry, one without `functionType: LLM`, of a function that serves both
+routes, set `usePexec: false`. A direct `usePexec: true` entry reaches only the
+function's default invocation path. On the decision routes the Vanity Gateway
+returns `415` when a request sets a `Content-Type` other than
+`application/json`, and accepts request bodies up to 25 MB.
 
 ### Anthropic Messages
 
