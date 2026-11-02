@@ -629,6 +629,53 @@ When the LLM invocation route is enabled in self-managed deployments, send OpenA
 
 </Tip>
 
+### NVCF API connection idle timeout
+
+The NVCF API server closes idle keep-alive connections after 60 seconds by
+default (`server.tomcat.keep-alive-timeout`). A proxy that reuses a pooled
+upstream connection while the server is closing it can return a transient
+gateway error.
+
+Configure your chosen Gateway controller to close unused upstream connections
+before the API server does. Keep the connection idle timeout positive and below
+the API keep-alive timeout, with a margin for timer scheduling. Adjust both
+values together if you override the API default. This concerns idle connections,
+not request duration. The operator owns this configuration independently of the
+shared routes chart and stack values.
+
+The required relationship is:
+
+```text
+API keep-alive timeout > proxy upstream connection idle timeout
+Example: 60s > 30s
+```
+
+#### Envoy Gateway example
+
+For Envoy Gateway, copy the standalone
+[API connection idle policy example](../overview/samples/configs/envoy-api-connection-idle.yaml)
+and customize it for your cluster. It sets `connectionIdleTimeout: 30s` and
+requires Envoy Gateway's `BackendTrafficPolicy` CRD. Other controllers use their
+own connection pool configuration.
+
+Set `metadata.namespace` to the NVCF API HTTPRoute's namespace and
+`spec.targetRefs[0].name` to that route's name. The example uses
+`envoy-gateway-system` and `nvcf-api`. If the route already has a
+`BackendTrafficPolicy`, merge the idle timeout into that policy to avoid
+conflicting policies.
+
+Apply your customized file using the control-plane context. Replace
+`YOUR_CONTEXT` and the file path:
+
+```bash
+kubectl --context YOUR_CONTEXT apply -f /path/to/envoy-api-connection-idle.yaml
+```
+
+The example targets only the API HTTPRoute. It does not add request retries or
+limit request duration. It is managed separately from Helm and works with an
+existing routes chart release. After applying it, inspect the policy status to
+confirm that Envoy Gateway accepted it for the target route.
+
 ### Invocation Path Diagrams
 
 For local and multi-cluster invocation-path diagrams, see
