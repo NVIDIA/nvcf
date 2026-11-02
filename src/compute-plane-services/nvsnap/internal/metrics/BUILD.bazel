@@ -2,7 +2,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "metrics",
-    srcs = ["metrics.go"],
+    srcs = [
+        "lifecycle.go",
+        "metrics.go",
+    ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
@@ -14,6 +17,10 @@ go_library(
 
 go_test(
     name = "metrics_test",
-    srcs = ["register_test.go"],
+    srcs = [
+        "lifecycle_test.go",
+        "register_test.go",
+    ],
     embed = [":metrics"],
+    deps = ["@com_github_prometheus_client_golang//prometheus"],
 )

@@ -242,6 +242,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		log.WithField("budget", budget.Round(time.Second).String()).Info(msg)
 	}
 	criuStart := time.Now()
+	times := &rankTimes{}
 	// What the helper hands CRIU: the placeholder's root and network
 	// namespace, its listening sockets (bound in its own mount namespace)
 	// and its stdout and stderr.
@@ -320,6 +321,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2 restore: %w (output: %s; restore.log tail: %s)", err, strings.TrimSpace(string(out)), tail)
 	}
 	criuSpan.End()
+	times.add("criu", time.Since(criuStart))
 	// Through a GPU reload the whole restore is recorded at the GPU resume
 	// (continueTasks), not CRIU's part of it.
 	if !clockThroughGPU {
@@ -383,6 +385,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil
 	}
 	resumeGPU := func(holdGate bool) error {
+		defer func(t0 time.Time) { times.add("gpu", time.Since(t0)) }(time.Now())
 		_, gsSpan := tracing.Tracer().Start(ctx, "restore.gpushare_resume")
 		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
 		resumePID := hostPID
@@ -495,6 +498,11 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 
 	duration := time.Since(startTime).Seconds()
 	log.WithField("duration", fmt.Sprintf("%.2fs", duration)).Info("criu-v2: restore completed")
+	if ci := metadata.CatalogInfo; ci != nil && ci.GPUCount > 0 {
+		// A rank's restore, for history; a companion is not a GPU workload.
+		times.add("rank", time.Since(startTime))
+		observeRankRestore(ci.GPUType, a.placeholderRanks(ctx, group.Namespace, group.Pod), times)
+	}
 
 	return &RestoreResult{
 		NewContainerID: placeholderInfo.ID,

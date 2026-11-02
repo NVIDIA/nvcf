@@ -37,6 +37,7 @@ go_library(
     deps = [
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/election",
+        "//src/compute-plane-services/nvsnap/internal/metrics",
         "//src/compute-plane-services/nvsnap/internal/modelid",
         "//src/compute-plane-services/nvsnap/internal/modelvolume",
         "//src/compute-plane-services/nvsnap/internal/rootfsonly",
@@ -54,6 +55,7 @@ go_library(
 go_test(
     name = "webhook_test",
     srcs = [
+        "admission_metrics_test.go",
         "admission_test.go",
         "admitted_config_test.go",
         "cachedir_noshim_test.go",
@@ -84,9 +86,11 @@ go_test(
     deps = [
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/election",
+        "//src/compute-plane-services/nvsnap/internal/metrics",
         "//src/compute-plane-services/nvsnap/internal/modelid",
         "//src/compute-plane-services/nvsnap/internal/modelvolume",
         "//src/compute-plane-services/nvsnap/internal/rootfsonly",
+        "@com_github_prometheus_client_golang//prometheus",
         "@com_github_sirupsen_logrus//:logrus",
         "@io_k8s_api//admission/v1:admission",
         "@io_k8s_api//apps/v1:apps",

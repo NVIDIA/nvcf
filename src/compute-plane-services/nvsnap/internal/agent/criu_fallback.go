@@ -279,6 +279,7 @@ func (c *criuAutoRestorer) considerGPUShareFailure(ctx context.Context, pod *cor
 		return
 	}
 	log.Warn("gpushare: the pod never started under the library; its configuration falls back to the cachedir without it, and the pod is replaced")
+	c.observeGPUShareFailed(ctx, pod, log)
 	if err := c.a.deletePodRetrying(ctx, pod.Namespace, pod.Name, pod.UID); err != nil {
 		log.WithError(err).Warn("gpushare: cannot delete the pod; its replacement will be admitted without the library")
 	}
@@ -562,6 +563,7 @@ func (c *criuAutoRestorer) captureFallbackRank(ctx context.Context, pod *corev1.
 		err = c.a.markCachedirReady(id)
 	}
 	if err != nil {
+		c.observeCachedirCapture(ctx, pod, 0, err, time.Since(start), log)
 		if endErr := c.endCachedirRank(context.WithoutCancel(ctx), key, ordinal, 0, false); endErr != nil {
 			log.WithError(endErr).Warn("CRIU fallback: cannot release the rank")
 		}
@@ -581,6 +583,7 @@ func (c *criuAutoRestorer) captureFallbackRank(ctx context.Context, pod *corev1.
 	}
 	log.WithFields(logrus.Fields{"capture": id, "bytes": man.Bytes, "files": len(man.Files), "elapsed": time.Since(start).Round(time.Millisecond)}).
 		Info("CRIU fallback: captured the rank's cachedir")
+	c.observeCachedirCapture(ctx, pod, man.Bytes, nil, time.Since(start), log)
 	return false, nil
 }
 

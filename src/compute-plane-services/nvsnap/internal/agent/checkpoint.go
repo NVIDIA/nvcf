@@ -717,7 +717,12 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	// deletion). A checkpoint without its diff cannot restore, so a failed
 	// archive fails the dump, which CRIU then rolls back.
 	var replayMounts []ReplayMount
-	snapshot := a.dumpSnapshot(ctx, containerInfo, checkpointDir, sourceUpperdir, sourceMountPoints, &replayMounts, log)
+	times := &rankTimes{}
+	takeSnapshot := a.dumpSnapshot(ctx, containerInfo, checkpointDir, sourceUpperdir, sourceMountPoints, &replayMounts, log)
+	snapshot := func(criuSaves map[string]bool) error {
+		defer func(t0 time.Time) { times.add("snapshot", time.Since(t0)) }(time.Now())
+		return takeSnapshot(criuSaves)
+	}
 
 	// Step 4.9: drop external TCP_ESTABLISHED sockets before CRIU dump.
 	//
@@ -787,7 +792,9 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		}
 		dopts.PostDumpDir = a.postDumpDir(session, req.Namespace, req.PodName)
 	}
+	dumpStart := time.Now()
 	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, dopts, log)
+	times.add("dump", time.Since(dumpStart))
 	if err != nil {
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")
@@ -952,6 +959,11 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 
 	duration := time.Since(startTime).Seconds()
 	log.WithField("duration", fmt.Sprintf("%.2fs", duration)).Info("Checkpoint completed")
+	if !req.Companion {
+		// A rank's capture, for history; a companion is not a GPU workload.
+		times.add("rank", time.Since(startTime))
+		observeRankCapture(catalog.GPUType, max(req.GPUShareGroupSize, 1), times, checkpointDir, checkpointSize)
+	}
 
 	result := &CheckpointResult{
 		CheckpointID:   checkpointID,

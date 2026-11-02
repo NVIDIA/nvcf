@@ -33,7 +33,7 @@ was not re-checked against the code.
 | You are | Read, in order |
 |---|---|
 | New to nvsnap | [START-HERE](START-HERE.md), [glossary](GLOSSARY.md), [architecture](ARCHITECTURE.md), [gpushare](design/GPUSHARE.md) |
-| Installing or operating it | [Install](operate/INSTALL.md), [pull secrets](operate/PULL-SECRETS.md), the chart's [values](../deploy/helm/nvsnap/values.yaml), [reference](REFERENCE.md) |
+| Installing or operating it | [Install](operate/INSTALL.md), [pull secrets](operate/PULL-SECRETS.md), [metrics and history](operate/METRICS.md), the chart's [values](../deploy/helm/nvsnap/values.yaml), [reference](REFERENCE.md) |
 | Changing the code | [Developing](operate/DEVELOPING.md), [architecture](ARCHITECTURE.md), the design note for the area you touch, [CONTRIBUTING](../CONTRIBUTING.md) |
 | Reviewing a claim or a number | [RESULTS](RESULTS.md), then [ARCHITECTURE §0](ARCHITECTURE.md#0-evidence-levels) for what each capability's evidence is |
 
@@ -59,6 +59,7 @@ was not re-checked against the code.
 |---|---|---|
 | [INSTALL.md](operate/INSTALL.md) | The one install guide (Helm): prerequisites, the values that decide behaviour, turning nvsnap off, upgrade, troubleshooting | Current, 2026-10-21 |
 | [PULL-SECRETS.md](operate/PULL-SECRETS.md) | Registry credentials for the agent and the pods it creates | Current, 2026-10-21 |
+| [METRICS.md](operate/METRICS.md) | The capture and restore history: metrics, summary log lines, events, and how to keep them | Current, 2026-11-02 |
 | [DEVELOPING.md](operate/DEVELOPING.md) | Build, deploy, capture, validate, merge | Current, 2026-10-21 |
 | [Chart README](../deploy/helm/nvsnap/README.md) | What each chart template renders; chart development | Current, 2026-10-21 |
 

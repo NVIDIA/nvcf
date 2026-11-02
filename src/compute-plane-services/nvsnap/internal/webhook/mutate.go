@@ -42,6 +42,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
@@ -625,6 +626,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		ctx = withCRIUFallback(ctx, fallback)
 		m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "reason": fallback.Reason, "capture": fallback.Capture}).
 			Info("CRIU fallback: the configuration falls back to the cachedir")
+		metrics.CountAdmission(metrics.AdmitFallback, fallback.Reason)
 	}
 	// gpushare placement is independent of every other decision below and
 	// rides along with whichever patches they return.

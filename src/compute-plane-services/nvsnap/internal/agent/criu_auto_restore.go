@@ -31,6 +31,7 @@ import (
 	"k8s.io/client-go/util/retry"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
@@ -83,6 +84,10 @@ type criuAutoRestorer struct {
 	goneSince sync.Map // restored pod UID -> when its engine was first seen gone
 	verdicts  sync.Map // pod UID, checkpoint, group key -> why its restore is refused ("" admitted); restore_trust.go
 	seenReady sync.Map // pod UID -> struct{}: seen Ready, so its failures are not a failed start (criu_fallback.go)
+	// readyObserved: pod UID -> struct{}: its start was recorded
+	// (lifecycle_metrics.go); pods Ready before watchStart are not.
+	readyObserved sync.Map
+	watchStart    time.Time
 
 	mu        sync.Mutex
 	blocked   map[string]bool
@@ -97,7 +102,9 @@ func (a *Agent) startCRIUAutoRestore(ctx context.Context) error {
 		return fmt.Errorf("CRIU auto-restore needs the kube client and the node name")
 	}
 	c := a.criuRestorer()
-	go c.recoverInterruptedCaptures(ctx, time.Now())
+	c.watchStart = time.Now()
+	metrics.SetBuildInfo(a.currentBundle())
+	go c.recoverInterruptedCaptures(ctx, c.watchStart)
 	factory := informers.NewSharedInformerFactoryWithOptions(a.kubeClient, 30*time.Second,
 		informers.WithTweakListOptions(func(o *metav1.ListOptions) { o.FieldSelector = "spec.nodeName=" + a.config.NodeName }))
 	informer := factory.Core().V1().Pods().Informer()
@@ -151,6 +158,7 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	c.considerRestored(ctx, pod)
 	c.considerRestoredCondition(ctx, pod)
 	c.considerRestoredStacks(ctx, pod)
+	c.observePodReady(ctx, pod)
 	if !c.admitted(ctx, pod) {
 		return
 	}
@@ -232,6 +240,7 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod string, uid type
 	rctx, cancel := context.WithTimeout(ctx, criuAutoRestoreTimeout)
 	defer cancel()
 	t0 := time.Now()
+	ref := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: pod, UID: uid}}
 	err := func() error {
 		_, err := a.Restore(rctx, RestoreRequest{
 			CheckpointID:             id,
@@ -251,9 +260,14 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod string, uid type
 	}
 	if err == nil {
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU auto-restore: restored")
+		c.observeRestore(groupKey, ref, a.nodeGPU(ctx, a.config.NodeName), 1, metrics.RestoreRestored, nil, time.Since(t0), log)
 		c.recordLoneRestore(ctx, ns, pod, id, container, log)
 		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
-		record(func(d map[string]string) bool { return recordRestored(d, id, string(uid)+"/"+container) })
+		took, now := time.Since(t0), time.Now()
+		record(func(d map[string]string) bool {
+			changed := recordRestored(d, id, string(uid)+"/"+container)
+			return recordRestoreHistory(d, id, now, took) || changed
+		})
 		return
 	}
 	if ctx.Err() != nil {
@@ -266,6 +280,11 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod string, uid type
 		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
 		return
 	}
+	outcome := metrics.RestoreFailed
+	if errors.Is(err, errCheckpointUnavailable) {
+		outcome = metrics.RestoreNotRun
+	}
+	c.observeRestore(groupKey, ref, a.nodeGPU(ctx, a.config.NodeName), 1, outcome, err, 0, log)
 	switch {
 	case errors.Is(err, errCheckpointUnavailable):
 		log.WithError(err).Warn("CRIU auto-restore did not run; deleting the pod so its replacement tries again")

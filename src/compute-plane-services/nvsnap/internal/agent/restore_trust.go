@@ -344,6 +344,7 @@ func (c *criuAutoRestorer) restoreRefusal(ctx context.Context, pod *corev1.Pod) 
 func (c *criuAutoRestorer) forgetPod(pod *corev1.Pod) {
 	c.dropRestoreRecord(pod.UID)
 	c.forgetFallback(pod.UID)
+	c.readyObserved.Delete(pod.UID)
 	prefix := string(pod.UID) + "\x00"
 	c.verdicts.Range(func(k, _ any) bool {
 		if strings.HasPrefix(k.(string), prefix) {

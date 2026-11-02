@@ -34,8 +34,25 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
+
+// fetchSource is the metrics label of a cascade tier.
+func fetchSource(tier string) string {
+	switch tier {
+	case "rails":
+		return "rails"
+	case "L2-peer":
+		return "peer"
+	case "L2-fsstore":
+		return "fsstore"
+	case "L2-volume":
+		return "volume"
+	default:
+		return "unknown"
+	}
+}
 
 // Phase 5d.1 restore-side cascading peer fetch.
 //
@@ -140,9 +157,16 @@ var peerHTTPClient = &http.Client{
 //
 // Idempotent: same-node check first means a no-op if the dump is
 // already local (e.g., this is the capture node itself).
-func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
+func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) (retErr error) {
 	ctx, span := tracing.Tracer().Start(ctx, "cascade.ensure_local")
 	defer span.End()
+	// Where the bytes came from, for the fetch metrics; "" until a tier
+	// has them.
+	var tier string
+	setTier := func(t string) {
+		tier = t
+		span.SetAttributes(attribute.String("nvsnap.cascade.tier", t))
+	}
 	span.SetAttributes(attribute.String("nvsnap.checkpoint_id", checkpointID))
 
 	// This ID becomes a directory that the cascade below creates, deletes
@@ -163,12 +187,17 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 	// Tier 1: same-node short-circuit: the capture node, or a finished
 	// earlier fetch.
 	if localCheckpointComplete(a.config.CheckpointDir, checkpointID) {
-		span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L1-local"))
+		setTier("L1-local")
 		a.log.WithField("checkpoint_id", checkpointID).Info("EnsureLocal: same-node hit, skipping cascade")
 		// Still register as peer in case we somehow weren't tracked.
 		_ = a.registerAsPeer(ctx, checkpointID)
 		return nil
 	}
+	// From here on the checkpoint is fetched: its source and time are kept.
+	start := time.Now()
+	defer func() {
+		metrics.ObserveFetch(fetchSource(tier), retErr == nil, time.Since(start))
+	}()
 
 	// Tier 2: shared filesystem (FSStore). Phase 2c — when the cluster
 	// has a DFS mounted on every node, the agent reads directly from
@@ -205,7 +234,7 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 			a.log.WithError(err).WithField("checkpoint_id", checkpointID).Warn("EnsureLocal: cannot list the sources for the rails tier; trying the next tier")
 		} else if err := a.fetchOverRails(ctx, checkpointID, localDir, sources.Peers); err == nil {
 			fetched = true
-			span.SetAttributes(attribute.String("nvsnap.cascade.tier", "rails"))
+			setTier("rails")
 			a.log.WithFields(map[string]interface{}{"checkpoint_id": checkpointID, "elapsed": time.Since(railsStart).String()}).
 				Info("EnsureLocal: fetched over the rails")
 			if err := a.registerAsPeer(ctx, checkpointID); err != nil {
@@ -231,7 +260,7 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 		err := a.fetchFromPeers(ctx, checkpointID, localDir, sources)
 		if err == nil {
 			fetched = true
-			span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-peer"))
+			setTier("L2-peer")
 			return nil
 		}
 		a.log.WithError(err).WithField("checkpoint_id", checkpointID).Warn("EnsureLocal: the peers could not deliver a small checkpoint; trying the shared tiers")
@@ -251,7 +280,7 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 			_ = clearFiles(localDir)
 		} else {
 			fsSpan.End()
-			span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-fsstore"))
+			setTier("L2-fsstore")
 			a.log.WithFields(map[string]interface{}{
 				"checkpoint_id": checkpointID,
 				"elapsed":       time.Since(fsStart).String(),
@@ -270,7 +299,7 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 	l2Start := time.Now()
 	if err := a.fetchFromL2(ctx, checkpointID, localDir); err == nil {
 		fetched = true
-		span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-volume"))
+		setTier("L2-volume")
 		a.log.WithFields(map[string]interface{}{"checkpoint_id": checkpointID, "elapsed": time.Since(l2Start).String()}).
 			Info("EnsureLocal: fetched from the L2 volume")
 		if err := a.registerAsPeer(ctx, checkpointID); err != nil {
@@ -301,7 +330,7 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 		return err
 	}
 	fetched = true
-	span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-peer"))
+	setTier("L2-peer")
 	return nil
 }
 

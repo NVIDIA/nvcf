@@ -39,6 +39,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/kubernetes"
+	k8sevents "k8s.io/client-go/tools/record"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
@@ -392,6 +393,13 @@ type Agent struct {
 	// enabled; populated by startRootfsCapture before the webhook
 	// server starts.
 	kubeClient kubernetes.Interface
+
+	// gpuProducts caches node name -> GPU product (lifecycle_metrics.go).
+	gpuProducts sync.Map
+	// events records what pods' captures, restores and starts did on the
+	// pods (lifecycle_metrics.go); made once the kube client is.
+	eventsOnce sync.Once
+	events     k8sevents.EventRecorder
 
 	// peerLoad counts this agent's in-flight peer fetches per peer
 	// URL. Used by EnsureLocal to pick the least-loaded peer when

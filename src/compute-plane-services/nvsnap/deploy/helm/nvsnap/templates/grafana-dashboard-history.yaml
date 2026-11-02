@@ -1,0 +1,35 @@
+{{- if .Values.agent.metrics.dashboard.enabled }}
+{{- /* Guard first: a disabled feature must emit nothing at all (see grafana-dashboard.yaml). */ -}}
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The capture and restore history dashboard (docs/operate/METRICS.md), for a
+# Grafana whose dashboard sidecar loads ConfigMaps labelled
+# grafana_dashboard. The JSON is files/grafana-dashboard-nvsnap-history.json.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nvsnap.fullname" . }}-dashboard-history
+  namespace: {{ .Release.Namespace }}
+  labels:
+    grafana_dashboard: "1"
+    {{- include "nvsnap.labels" . | nindent 4 }}
+    {{- range $k, $v := .Values.agent.metrics.dashboard.labels }}
+    {{ $k }}: {{ $v | toString | quote }}
+    {{- end }}
+data:
+  nvsnap-history.json: |-
+    {{ .Files.Get "files/grafana-dashboard-nvsnap-history.json" | nindent 4 }}
+{{- end }}

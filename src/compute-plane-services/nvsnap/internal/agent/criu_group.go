@@ -37,6 +37,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
@@ -532,6 +533,7 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		}
 		log.WithField("duration", time.Since(t0).Round(time.Second).String()).Info("CRIU group capture: recorded; the instance restores from it to verify it")
 	}
+	c.observeGroupCapture(ctx, key, leader, len(ranks), len(members), err, time.Since(t0), log)
 	started := record.Data["startedAt"]
 	if uerr := c.updateGroupRecord(context.WithoutCancel(ctx), key, func(d map[string]string) bool {
 		if d["state"] != criuGroupStateCapturing || d["startedAt"] != started {
@@ -795,6 +797,7 @@ func (c *criuAutoRestorer) recordRefusal(ctx context.Context, key, scope string,
 	}
 	c.writeGroupAliases(ctx, key, scope, uris, ranks, log)
 	log.Warn("CRIU group capture: recorded as failed; the preflight refuses every capture of this configuration under this agent version")
+	c.observeRefusal(ctx, key, leader, ranks, why, log)
 }
 
 // updateGroupRecord applies change to the group record of key; change
@@ -1009,16 +1012,19 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 	}
 	if err == nil {
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU group restore: restored")
+		c.observeRestore(key, leader, a.podGPU(ctx, leader), gpuRanks(ranks), metrics.RestoreRestored, nil, time.Since(t0), log)
 		uids := make([]string, 0, len(ranks))
 		for _, p := range ranks {
 			a.markRestored(context.WithoutCancel(ctx), p.Namespace, p.Name, log)
 			uids = append(uids, string(p.UID)+"/"+p.Annotations[webhook.CRIURestoreContainerAnnotation])
 		}
 		id := leader.Annotations[webhook.CRIURestoreAnnotation]
+		took, now := time.Since(t0), time.Now()
 		if uerr := c.updateGroupRecord(context.WithoutCancel(ctx), key, func(d map[string]string) bool {
 			// The pods this restore made: the restored-pod watch acts on a
 			// rank only when its group record names it.
-			return recordRestored(d, id, strings.Join(uids, ","))
+			changed := recordRestored(d, id, strings.Join(uids, ","))
+			return recordRestoreHistory(d, id, now, took) || changed
 		}); uerr != nil && !apierrors.IsNotFound(uerr) {
 			log.WithError(uerr).Warn("CRIU group restore: cannot record the restored pods; their engines are not watched")
 		}
@@ -1117,6 +1123,11 @@ func (c *criuAutoRestorer) groupRestoredContainer(ctx context.Context, key strin
 // checkpoints and lets the configuration be captured again; any other
 // failure keeps them, and counts toward criuGroupMaxStalls.
 func (c *criuAutoRestorer) failGroup(ctx context.Context, leader *corev1.Pod, key string, restoreFailed bool, cause error, log *logrus.Entry) {
+	outcome := metrics.RestoreNotRun
+	if restoreFailed {
+		outcome = metrics.RestoreFailed
+	}
+	c.observeRestore(key, leader, c.a.podGPU(ctx, leader), podRanks(leader), outcome, cause, 0, log)
 	c.endGroup(ctx, leader, key, restoreFailed, false, cause, log)
 }
 
