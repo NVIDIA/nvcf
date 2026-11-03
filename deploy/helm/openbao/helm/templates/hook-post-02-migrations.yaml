@@ -68,6 +68,7 @@ spec:
               readOnly: true
             {{- end }}
           env:
+            {{- include "nvcf-openbao.kubectlEnv" . | nindent 12 }}
             - name: OIDC_DISCOVERY_ENABLED
               value: "{{ .Values.openbao.migrations.issuerDiscovery.enabled }}"
             - name: OIDC_DISCOVERY_URL

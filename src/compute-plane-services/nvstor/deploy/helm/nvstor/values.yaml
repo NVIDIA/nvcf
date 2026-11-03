@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# nvstor Server Helm Values
+
+replicaCount: 3
+
+image:
+  repository: registry.example.com/nvstor/nvstor-server
+  tag: "0.2.0"
+  pullPolicy: Always
+
+# Image pull secret for a private registry
+imagePullSecrets:
+  # Set to true to create secret from provided credentials
+  create: false
+  name: ""
+  # Required if create: true
+  registry: registry.example.com
+  username: ""  # Set via --set or values file
+  password: ""  # Set via --set imagePullSecrets.password=<token>
+
+# Service configuration
+service:
+  type: ClusterIP
+  grpc:
+    port: 9100
+  http:
+    port: 9101
+  raft:
+    port: 9102
+  s3:
+    port: 9000
+  nbd:
+    port: 10809
+  nfs:
+    port: 2049
+
+# Who may mount the NFS export (it has no other authentication): required.
+# The CSI node plugin uses host networking, so list your node CIDRs (IPv6
+# too on dual-stack clusters), plus the pod CIDR for the controller's
+# mount; [] admits loopback only. Example:
+#   --set-json 'nfs.allowClients=["10.0.0.0/16","fd00:10::/56"]'
+nfs:
+  allowClients: null
+
+# Storage configuration
+storage:
+  # Use hostPath for direct disk access (recommended for storage service)
+  type: hostPath
+  hostPath: /var/lib/nvstor
+  # For testing only - use emptyDir
+  # type: emptyDir
+  
+  # Storage settings
+  chunkSize: 16777216  # 16 MiB
+  directIO: true
+  verifyChecksums: true
+  gcEnabled: true
+  gcIntervalSecs: 300
+
+# Network configuration
+network:
+  rdmaPort: 9877
+
+node:
+  name: "nvstor-server"
+
+# Cluster configuration
+cluster:
+  name: "nvstor-cluster"
+  bootstrap: false
+  minReplicasForQuorum: 2
+
+limits:
+  maxConnections: 10000
+  requestTimeoutSecs: 30
+  idleTimeoutSecs: 300
+  maxObjectSize: 5368709120
+
+logging:
+  json: true
+  level: "info"
+
+auth:
+  secretName: ""
+
+kms:
+  secretName: ""
+
+# Resources
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "4"
+    memory: "8Gi"
+
+# Pod settings
+podAnnotations: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: nvstor-server
+          topologyKey: kubernetes.io/hostname
+
+# TLS (disabled by default)
+tls:
+  enabled: false
+  secretName: ""

@@ -48,6 +48,7 @@ spec:
               image: "{{ include "sis.image.full" (dict "image" .Values.sis.lls.hmacRotation.image "name" "sis.lls.hmacRotation.image") }}"
               imagePullPolicy: {{ .Values.sis.lls.hmacRotation.image.pullPolicy }}
               env:
+                {{- include "sis.kubectlEnv" . | nindent 16 }}
                 - name: BAO_SERVICE
                   value: {{ (.Values.sis.lls.hmacRotation.baoService | default (printf "openbao-server.%s.svc.cluster.local" .Values.sis.lls.namespace)) | quote }}
                 - name: BAO_PORT

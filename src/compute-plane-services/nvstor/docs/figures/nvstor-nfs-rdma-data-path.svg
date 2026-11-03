@@ -1,0 +1,91 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="782" viewBox="0 0 1300 782" role="img" aria-labelledby="title desc">
+<title id="title">NFS over RDMA: One READ, Zero Copy</title>
+<desc id="desc">A Linux kernel NFS client sends an NFS call over an RDMA reliable-connection queue pair. The connection's I/O thread hands the COMPOUND to the same NFS workers that serve NFS over TCP. For a READ the file is read straight into a slot of the device's registered pool and the server RDMA-writes the slot into the client's Write chunk, then sends the reply. A WRITE runs the other way: the server RDMA-reads the client's Read chunk into a slot and writes the file from it. Connections are admitted by the RDMA-CM listener against the client allow list.</desc>
+<defs>
+<symbol id="icon-admit" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#f2c230"/><g fill="none" stroke="#1a1a1a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 15h22l-8.5 10v8l-5 3V25z"/></g></symbol>
+<symbol id="icon-folder" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v16h24V20H24l-3-3z"/></g></symbol>
+<symbol id="icon-hardware" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="16" height="16" rx="1.5"/><path d="M20 12v4M24 12v4M28 12v4M20 32v4M24 32v4M28 32v4M12 20h4M12 24h4M12 28h4M32 20h4M32 24h4M32 28h4"/></g></symbol>
+<symbol id="icon-run" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#f2c230"/><g fill="none" stroke="#1a1a1a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="12" y="14" width="24" height="20" rx="2"/><path d="M17 21l4 3-4 3M24 28h7"/></g></symbol>
+<symbol id="icon-service" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#76b900"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M24 12l11 6v12l-11 6-11-6V18z"/><path d="M13 18l11 6 11-6M24 24v12"/></g></symbol>
+<symbol id="icon-third" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#d0453f"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12v7M29 12v7"/><path d="M15 19h18v4a9 9 0 0 1-18 0z"/><path d="M24 32v5"/></g></symbol>
+<marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#000000"/></marker>
+<marker id="arrow-opt" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#999999"/></marker>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#000000}.title{font-size:20px;font-weight:600}.sub{font-size:12px;fill:#333333}.group{fill:#ffffff;stroke:#cccccc;stroke-width:1}.group-nv{fill:#ffffff;stroke:#76b900;stroke-width:1.5}.group-partner{fill:#f4f7f7;stroke:#cccccc;stroke-width:1}.group-label{font-size:12px;font-weight:600}.card{fill:#ffffff;stroke:#cccccc;stroke-width:1}.label{font-size:12px}.small{font-size:10px;fill:#333333}.plabel{font-size:10px;font-weight:500}.path{fill:none;stroke:#000000;stroke-width:1;stroke-linejoin:round}.opt{fill:none;stroke:#999999;stroke-width:1;stroke-dasharray:5 3;stroke-linejoin:round}.callout{fill:#000000}.callout-text{font-size:11px;font-weight:600;fill:#ffffff}.note{font-size:11px;fill:#333333}.note-b{font-size:11px;font-weight:600}</style></defs>
+<rect x="0" y="0" width="1300" height="782" fill="#ffffff"/>
+<text x="40" y="44" class="title">NFS over RDMA: One READ, Zero Copy</text>
+<text x="40" y="64" class="sub">nvstor-nfs-export and nvstor-server share this listener (crates/nvstor-nfs/src/rdma_server.rs). Numbers 1-5 are one READ.</text>
+<rect x="40" y="110" width="260" height="500" rx="10" class="group-partner"/>
+<text x="54" y="132" class="group-label" text-anchor="start">Client node or pod</text>
+<text x="54" y="147" class="small" text-anchor="start">Linux kernel, xprtrdma</text>
+<rect id="card-client" x="70" y="160" width="200" height="112" rx="8" class="card"/>
+<use href="#icon-third" x="146" y="168" width="48" height="48"/>
+<text x="170" y="232" class="label" text-anchor="middle" data-fit="card-client" data-fit-padding="4">Kernel NFS client</text>
+<text x="170" y="247" class="small" text-anchor="middle" data-fit="card-client" data-fit-padding="4">mount proto=rdma / rdma6</text>
+<text x="170" y="260" class="small" text-anchor="middle" data-fit="card-client" data-fit-padding="4">vers=4.1 or 4.2</text>
+<rect id="card-cmem" x="70" y="350" width="200" height="112" rx="8" class="card"/>
+<use href="#icon-hardware" x="146" y="358" width="48" height="48"/>
+<text x="170" y="422" class="label" text-anchor="middle" data-fit="card-cmem" data-fit-padding="4">Client memory</text>
+<text x="170" y="437" class="small" text-anchor="middle" data-fit="card-cmem" data-fit-padding="4">Write chunk (READ data)</text>
+<text x="170" y="450" class="small" text-anchor="middle" data-fit="card-cmem" data-fit-padding="4">Read chunk (WRITE data)</text>
+<text x="450" y="136" class="note-b" text-anchor="middle">RoCE v2 or InfiniBand</text>
+<text x="450" y="151" class="note" text-anchor="middle">RC queue pairs, one per rail</text>
+<rect x="600" y="110" width="660" height="500" rx="10" class="group-nv"/>
+<text x="614" y="132" class="group-label" text-anchor="start">nvstor-nfs-export or nvstor-server</text>
+<text x="614" y="147" class="small" text-anchor="start">NFS/RDMA listener, port 20049, dual-stack [::]</text>
+<rect id="card-io" x="640" y="160" width="170" height="112" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-run" x="701" y="168" width="48" height="48"/>
+<text x="725" y="232" class="label" text-anchor="middle" data-fit="card-io" data-fit-padding="4">Connection I/O thread</text>
+<text x="725" y="247" class="small" text-anchor="middle" data-fit="card-io" data-fit-padding="4">128 credits</text>
+<text x="725" y="260" class="small" text-anchor="middle" data-fit="card-io" data-fit-padding="4">posts WRITE chains + SEND</text>
+<rect id="card-workers" x="870" y="160" width="160" height="112" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="926" y="168" width="48" height="48"/>
+<text x="950" y="232" class="label" text-anchor="middle" data-fit="card-workers" data-fit-padding="4">NFS COMPOUND workers</text>
+<text x="950" y="247" class="small" text-anchor="middle" data-fit="card-workers" data-fit-padding="4">same processor as TCP</text>
+<rect id="card-file" x="1070" y="160" width="160" height="112" rx="8" class="card"/>
+<use href="#icon-folder" x="1126" y="168" width="48" height="48"/>
+<text x="1150" y="232" class="label" text-anchor="middle" data-fit="card-file" data-fit-padding="4">Export directory</text>
+<text x="1150" y="247" class="small" text-anchor="middle" data-fit="card-file" data-fit-padding="4">or PmStore (nvstor-server)</text>
+<rect id="card-pool" x="950" y="350" width="280" height="112" rx="8" class="card"/>
+<use href="#icon-hardware" x="1066" y="358" width="48" height="48"/>
+<text x="1090" y="422" class="label" text-anchor="middle" data-fit="card-pool" data-fit-padding="4">Registered pool, per device</text>
+<text x="1090" y="437" class="small" text-anchor="middle" data-fit="card-pool" data-fit-padding="4">256 MiB of 1 MiB slots</text>
+<text x="1090" y="450" class="small" text-anchor="middle" data-fit="card-pool" data-fit-padding="4">on-demand MRs, pinned-memory caps</text>
+<rect id="card-cm" x="640" y="480" width="170" height="112" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-admit" x="701" y="488" width="48" height="48"/>
+<text x="725" y="552" class="label" text-anchor="middle" data-fit="card-cm" data-fit-padding="4">RDMA-CM listener</text>
+<text x="725" y="567" class="small" text-anchor="middle" data-fit="card-cm" data-fit-padding="4">--allow-client, 64 per client</text>
+<text x="725" y="580" class="small" text-anchor="middle" data-fit="card-cm" data-fit-padding="4">15 s first-call timeout</text>
+<path class="path" d="M270 196 L640 196" marker-end="url(#arrow)"/>
+<circle cx="455" cy="196" r="9" class="callout"/><text x="455" y="200" class="callout-text" text-anchor="middle">1</text>
+<path class="path" d="M810 216 L870 216" marker-end="url(#arrow)"/>
+<circle cx="836" cy="216" r="9" class="callout"/><text x="836" y="220" class="callout-text" text-anchor="middle">2</text>
+<path class="path" d="M1030 216 L1070 216" marker-end="url(#arrow)"/>
+<path class="path" d="M1130 272 L1130 350" marker-end="url(#arrow)"/>
+<circle cx="1130" cy="306" r="9" class="callout"/><text x="1130" y="310" class="callout-text" text-anchor="middle">3</text>
+<path class="path" d="M950 396 L270 396" marker-end="url(#arrow)"/>
+<circle cx="455" cy="396" r="9" class="callout"/><text x="455" y="400" class="callout-text" text-anchor="middle">4</text>
+<path class="path" d="M640 236 L270 236" marker-end="url(#arrow)"/>
+<circle cx="455" cy="236" r="9" class="callout"/><text x="455" y="240" class="callout-text" text-anchor="middle">5</text>
+<path class="opt" d="M270 436 L950 436" marker-end="url(#arrow-opt)"/>
+<rect x="450.7" y="430" width="218.6" height="14" fill="#ffffff"/>
+<text x="560" y="440" class="plabel" text-anchor="middle">WRITE: server RDMA-reads the Read chunk</text>
+<path class="opt" d="M1200 350 L1200 272" marker-end="url(#arrow-opt)"/>
+<path class="opt" d="M300 536 L640 536" marker-end="url(#arrow-opt)"/>
+<rect x="425.5" y="530" width="89" height="14" fill="#ffffff"/>
+<text x="470" y="540" class="plabel" text-anchor="middle">RDMA-CM connect</text>
+<circle cx="49" cy="648" r="9" class="callout"/><text x="49" y="652" class="callout-text" text-anchor="middle">1</text>
+<text x="66" y="652" class="note" text-anchor="start">The client SENDs the call inline (4 KiB negotiated, RFC 8797) with a Write chunk naming where READ data should land. A call holds one of 128 credits until its reply is posted.</text>
+<circle cx="49" cy="669" r="9" class="callout"/><text x="49" y="673" class="callout-text" text-anchor="middle">2</text>
+<text x="66" y="673" class="note" text-anchor="start">The connection's I/O thread hands the COMPOUND to NFS workers: the same COMPOUND processor, session table and export policy as NFS over TCP.</text>
+<circle cx="49" cy="690" r="9" class="callout"/><text x="49" y="694" class="callout-text" text-anchor="middle">3</text>
+<text x="66" y="694" class="note" text-anchor="start">The file is read (O_DIRECT when offset and length are 4 KiB aligned) straight into a 1 MiB pool slot. With the pool empty the transfer registers its own memory, within per-connection and per-process</text>
+<text x="66" y="709" class="note" text-anchor="start">caps.</text>
+<circle cx="49" cy="726" r="9" class="callout"/><text x="49" y="730" class="callout-text" text-anchor="middle">4</text>
+<text x="66" y="730" class="note" text-anchor="start">The server RDMA-WRITEs the slot into the client's Write chunk. Chains are posted without waiting on each one; only RPC/RDMA headers are copied.</text>
+<circle cx="49" cy="747" r="9" class="callout"/><text x="49" y="751" class="callout-text" text-anchor="middle">5</text>
+<text x="66" y="751" class="note" text-anchor="start">The reply SEND follows the WRITE chain on the same queue pair. Dashed: a WRITE pulls the client's Read chunk into a slot with RDMA READ, then writes the file from it.</text>
+</svg>

@@ -1,0 +1,95 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="833" viewBox="0 0 1300 833" role="img" aria-labelledby="title desc">
+<title id="title">S3-over-RDMA Protocol v2: Authenticate, Then the Server Moves the Bytes</title>
+<desc id="desc">A client connects over TCP. The server sends a random challenge; the client proves a credential with an HMAC over the challenge before any queue pair exists. Admission maps the credential to a role, applies connection limits and, in nvstor-peer, the fetcher cap. Then queue pairs are created; server queue pairs grant no remote access. A signed GET on lane 0 names the client's buffer; the server reads the range into a local pool slot and RDMA-writes it into that buffer on a bulk lane, then replies with the generation and CRC-32C. PERSIST is the reverse: the server RDMA-reads the buffer the client named.</desc>
+<defs>
+<symbol id="icon-admit" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#f2c230"/><g fill="none" stroke="#1a1a1a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 15h22l-8.5 10v8l-5 3V25z"/></g></symbol>
+<symbol id="icon-data" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#e07b1f"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 12h11l6 6v18H16z"/><path d="M27 12v6h6M20 24h9M20 29h9"/></g></symbol>
+<symbol id="icon-guard" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M24 12l10 4v7c0 7-4.5 11-10 13-5.5-2-10-6-10-13v-7z"/><path d="M19.5 24l3 3 6-6"/></g></symbol>
+<symbol id="icon-hardware" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="16" height="16" rx="1.5"/><path d="M20 12v4M24 12v4M28 12v4M20 32v4M24 32v4M28 32v4M12 20h4M12 24h4M12 28h4M32 20h4M32 24h4M32 28h4"/></g></symbol>
+<symbol id="icon-run" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#f2c230"/><g fill="none" stroke="#1a1a1a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="12" y="14" width="24" height="20" rx="2"/><path d="M17 21l4 3-4 3M24 28h7"/></g></symbol>
+<symbol id="icon-service" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#76b900"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M24 12l11 6v12l-11 6-11-6V18z"/><path d="M13 18l11 6 11-6M24 24v12"/></g></symbol>
+<marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#000000"/></marker>
+<marker id="arrow-opt" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#999999"/></marker>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#000000}.title{font-size:20px;font-weight:600}.sub{font-size:12px;fill:#333333}.group{fill:#ffffff;stroke:#cccccc;stroke-width:1}.group-nv{fill:#ffffff;stroke:#76b900;stroke-width:1.5}.group-partner{fill:#f4f7f7;stroke:#cccccc;stroke-width:1}.group-label{font-size:12px;font-weight:600}.card{fill:#ffffff;stroke:#cccccc;stroke-width:1}.label{font-size:12px}.small{font-size:10px;fill:#333333}.plabel{font-size:10px;font-weight:500}.path{fill:none;stroke:#000000;stroke-width:1;stroke-linejoin:round}.opt{fill:none;stroke:#999999;stroke-width:1;stroke-dasharray:5 3;stroke-linejoin:round}.callout{fill:#000000}.callout-text{font-size:11px;font-weight:600;fill:#ffffff}.note{font-size:11px;fill:#333333}.note-b{font-size:11px;font-weight:600}</style></defs>
+<rect x="0" y="0" width="1300" height="833" fill="#ffffff"/>
+<text x="40" y="44" class="title">S3-over-RDMA Protocol v2: Authenticate, Then the Server Moves the Bytes</text>
+<text x="40" y="64" class="sub">nvstor-server (S3-over-RDMA, rail 0 on 9877) and nvstor-peer serve (9890 + rail) run this protocol. Numbers 1-6 are a bootstrap and one GET.</text>
+<rect x="40" y="110" width="290" height="500" rx="10" class="group-nv"/>
+<text x="54" y="132" class="group-label" text-anchor="start">Client node</text>
+<text x="54" y="147" class="small" text-anchor="start">nvstor-peer fetch, s3_hydrate</text>
+<rect id="c-client" x="70" y="160" width="230" height="262" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="161" y="168" width="48" height="48"/>
+<text x="185" y="232" class="label" text-anchor="middle" data-fit="c-client" data-fit-padding="4">S3RdmaClient</text>
+<text x="185" y="247" class="small" text-anchor="middle" data-fit="c-client" data-fit-padding="4">one RdmaTransport per rail</text>
+<text x="185" y="260" class="small" text-anchor="middle" data-fit="c-client" data-fit-padding="4">control_txn: one request per peer</text>
+<rect id="c-buf" x="70" y="470" width="230" height="112" rx="8" class="card"/>
+<use href="#icon-hardware" x="161" y="478" width="48" height="48"/>
+<text x="185" y="542" class="label" text-anchor="middle" data-fit="c-buf" data-fit-padding="4">Client buffer</text>
+<text x="185" y="557" class="small" text-anchor="middle" data-fit="c-buf" data-fit-padding="4">registered, REMOTE_WRITE</text>
+<text x="185" y="570" class="small" text-anchor="middle" data-fit="c-buf" data-fit-padding="4">named per request</text>
+<text x="490" y="136" class="note-b" text-anchor="middle">TCP bootstrap, then RC queue pairs</text>
+<text x="490" y="151" class="note" text-anchor="middle">lane 0: SEND/RECV control; lanes 1+: bulk</text>
+<rect x="650" y="110" width="610" height="500" rx="10" class="group-nv"/>
+<text x="664" y="132" class="group-label" text-anchor="start">Server: nvstor-server or nvstor-peer serve</text>
+<text x="664" y="147" class="small" text-anchor="start">one transport per RDMA NIC (rail)</text>
+<rect id="s-boot" x="690" y="160" width="170" height="112" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-guard" x="751" y="168" width="48" height="48"/>
+<text x="775" y="232" class="label" text-anchor="middle" data-fit="s-boot" data-fit-padding="4">Bootstrap</text>
+<text x="775" y="247" class="small" text-anchor="middle" data-fit="s-boot" data-fit-padding="4">HELLO challenge, AUTH</text>
+<text x="775" y="260" class="small" text-anchor="middle" data-fit="s-boot" data-fit-padding="4">HMAC-SHA256</text>
+<rect id="s-admit" x="920" y="160" width="170" height="112" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-admit" x="981" y="168" width="48" height="48"/>
+<text x="1005" y="232" class="label" text-anchor="middle" data-fit="s-admit" data-fit-padding="4">Admission</text>
+<text x="1005" y="247" class="small" text-anchor="middle" data-fit="s-admit" data-fit-padding="4">role, AcceptLimits</text>
+<text x="1005" y="260" class="small" text-anchor="middle" data-fit="s-admit" data-fit-padding="4">BUSY (nvstor-peer)</text>
+<rect id="s-disp" x="690" y="300" width="170" height="112" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-run" x="751" y="308" width="48" height="48"/>
+<text x="775" y="372" class="label" text-anchor="middle" data-fit="s-disp" data-fit-padding="4">Lane 0 dispatcher</text>
+<text x="775" y="387" class="small" text-anchor="middle" data-fit="s-disp" data-fit-padding="4">verify signature, replay</text>
+<text x="775" y="400" class="small" text-anchor="middle" data-fit="s-disp" data-fit-padding="4">IAM action, permit</text>
+<rect id="s-store" x="1060" y="300" width="170" height="112" rx="8" class="card"/>
+<use href="#icon-data" x="1121" y="308" width="48" height="48"/>
+<text x="1145" y="372" class="label" text-anchor="middle" data-fit="s-store" data-fit-padding="4">PmObjectStore</text>
+<text x="1145" y="387" class="small" text-anchor="middle" data-fit="s-store" data-fit-padding="4">or nvstor-peer export</text>
+<rect id="s-pool" x="920" y="470" width="310" height="112" rx="8" class="card"/>
+<use href="#icon-hardware" x="1051" y="478" width="48" height="48"/>
+<text x="1075" y="542" class="label" text-anchor="middle" data-fit="s-pool" data-fit-padding="4">Server pool slot</text>
+<text x="1075" y="557" class="small" text-anchor="middle" data-fit="s-pool" data-fit-padding="4">LOCAL access; never advertised</text>
+<text x="1075" y="570" class="small" text-anchor="middle" data-fit="s-pool" data-fit-padding="4">rail 0 REMOTE_READ in nvstor-server</text>
+<path class="path" d="M300 206 L690 206" marker-end="url(#arrow)"/>
+<circle cx="495" cy="206" r="9" class="callout"/><text x="495" y="210" class="callout-text" text-anchor="middle">1</text>
+<path class="path" d="M860 216 L920 216" marker-end="url(#arrow)"/>
+<circle cx="890" cy="216" r="9" class="callout"/><text x="890" y="220" class="callout-text" text-anchor="middle">2</text>
+<path class="path" d="M300 336 L690 336" marker-end="url(#arrow)"/>
+<circle cx="495" cy="336" r="9" class="callout"/><text x="495" y="340" class="callout-text" text-anchor="middle">3</text>
+<path class="path" d="M860 356 L1060 356" marker-end="url(#arrow)"/>
+<circle cx="960" cy="356" r="9" class="callout"/><text x="960" y="360" class="callout-text" text-anchor="middle">4</text>
+<path class="path" d="M1145 412 L1145 470" marker-end="url(#arrow)"/>
+<path class="path" d="M920 512 L300 512" marker-end="url(#arrow)"/>
+<circle cx="495" cy="512" r="9" class="callout"/><text x="495" y="516" class="callout-text" text-anchor="middle">5</text>
+<path class="path" d="M690 376 L300 376" marker-end="url(#arrow)"/>
+<circle cx="495" cy="376" r="9" class="callout"/><text x="495" y="380" class="callout-text" text-anchor="middle">6</text>
+<path class="opt" d="M300 552 L920 552" marker-end="url(#arrow-opt)"/>
+<rect x="579.9" y="546" width="240.2" height="14" fill="#ffffff"/>
+<text x="700" y="556" class="plabel" text-anchor="middle">PERSIST: server RDMA-READs the named buffer</text>
+<path class="opt" d="M1200 470 L1200 412" marker-end="url(#arrow-opt)"/>
+<circle cx="49" cy="648" r="9" class="callout"/><text x="49" y="652" class="callout-text" text-anchor="middle">1</text>
+<text x="66" y="652" class="note" text-anchor="start">The server sends HELLO with a 32-byte random challenge and its GID. The client answers AUTH: access key, GID, one QPN per lane and an HMAC-SHA256 over "nvstor-rdma-bootstrap-v3\0", the HELLO and its own</text>
+<text x="66" y="667" class="note" text-anchor="start">message.</text>
+<circle cx="49" cy="684" r="9" class="callout"/><text x="49" y="688" class="callout-text" text-anchor="middle">2</text>
+<text x="66" y="688" class="note" text-anchor="start">The verifier maps the credential to Denied (REJECT), Client or Cluster; only Cluster may REPLICATE. Accept limits: 64 handshakes, 4096 peers, 512 per source address, 5 s. nvstor-peer's admitter answers</text>
+<text x="66" y="703" class="note" text-anchor="start">BUSY past --max-fetchers. Only now are CQs and QPs created, and the TCP stream stays open as the liveness channel.</text>
+<circle cx="49" cy="720" r="9" class="callout"/><text x="49" y="724" class="callout-text" text-anchor="middle">3</text>
+<text x="66" y="724" class="note" text-anchor="start">The client SENDs a signed GET naming its buffer (address, rkey, length) and, optionally, the generation it expects. A process-wide replay guard rejects a reused nonce.</text>
+<circle cx="49" cy="741" r="9" class="callout"/><text x="49" y="745" class="callout-text" text-anchor="middle">4</text>
+<text x="66" y="745" class="note" text-anchor="start">The dispatcher reads the range into a slot of the server's own pool (PmObjectStore in nvstor-server, the exported directory in nvstor-peer).</text>
+<circle cx="49" cy="762" r="9" class="callout"/><text x="49" y="766" class="callout-text" text-anchor="middle">5</text>
+<text x="66" y="766" class="note" text-anchor="start">The server RDMA-WRITEs the slot into the client buffer on a bulk lane: chains of at most 128 work requests, only the last one signaled.</text>
+<circle cx="49" cy="783" r="9" class="callout"/><text x="49" y="787" class="callout-text" text-anchor="middle">6</text>
+<text x="66" y="787" class="note" text-anchor="start">The reply on lane 0 carries length, object size, generation and CRC-32C; the client checks both. Dashed: PERSIST names the buffer and its CRC-32C after ALLOC reserved a slot; the server RDMA-READs it,</text>
+<text x="66" y="802" class="note" text-anchor="start">recomputes the CRC and stores it.</text>
+</svg>

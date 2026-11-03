@@ -33,6 +33,8 @@ const (
 	responsesEndpointPath       = "/v1/responses"
 	embeddingsEndpointPath      = "/v1/embeddings"
 	messagesEndpointPath        = "/v1/messages"
+	decisionsEndpointPath       = "/v1/decisions"
+	systemOneEndpointPath       = "/v1/systemone"
 )
 
 // requireModelURIAllowlist checks the model's declared uris allowlist for
