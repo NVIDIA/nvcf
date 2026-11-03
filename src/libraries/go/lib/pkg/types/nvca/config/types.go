@@ -20,7 +20,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -195,6 +197,8 @@ type BYOOOTelCollectorConfig struct {
 	LogBatch       BYOOOTelBatchConfig          `mapstructure:"logBatch" yaml:"logBatch,omitempty" json:"logBatch,omitempty"`
 	LogSampling    BYOOOTelLogSamplingConfig    `mapstructure:"logSampling" yaml:"logSampling,omitempty" json:"logSampling,omitempty"`
 	TraceSampling  BYOOOTelSamplingConfig       `mapstructure:"traceSampling" yaml:"traceSampling,omitempty" json:"traceSampling,omitempty"`
+	// PlatformMetricsFederation configures the platform metrics federation scrape on Kubernetes backends.
+	PlatformMetricsFederation BYOOOTelPlatformMetricsFederationConfig `mapstructure:"platformMetricsFederation" yaml:"platformMetricsFederation,omitempty" json:"platformMetricsFederation,omitempty"`
 }
 
 const (
@@ -209,7 +213,8 @@ func (c BYOOOTelCollectorConfig) IsZero() bool {
 		c.Batch.IsZero() &&
 		c.LogBatch.IsZero() &&
 		c.LogSampling.IsZero() &&
-		c.TraceSampling.IsZero()
+		c.TraceSampling.IsZero() &&
+		c.PlatformMetricsFederation.IsZero()
 }
 
 // EnvVars returns the BYOO collector env vars for the structured config.
@@ -230,13 +235,61 @@ func (c BYOOOTelCollectorConfig) EnvVars() []corev1.EnvVar {
 	}}
 }
 
-// Validate rejects BYOO OTel sampler settings that the pinned collector cannot apply safely.
+// Validate rejects BYOO OTel sampler and federation settings that the pinned collector cannot apply safely.
 func (c BYOOOTelCollectorConfig) Validate() error {
 	if err := c.LogSampling.validate(); err != nil {
 		return fmt.Errorf("log sampling: %w", err)
 	}
 	if err := c.TraceSampling.validate(); err != nil {
 		return fmt.Errorf("trace sampling: %w", err)
+	}
+	if err := c.PlatformMetricsFederation.validate(); err != nil {
+		return fmt.Errorf("platform metrics federation: %w", err)
+	}
+	return nil
+}
+
+// BYOOOTelPlatformMetricsFederationConfig configures the BYOO collector scrape
+// jobs that read platform metrics (worker, NVCA, cAdvisor, kube-state-metrics,
+// and DCGM) from a Prometheus-compatible /federate endpoint. It applies to
+// Kubernetes backends only. An unset config keeps the collector default.
+type BYOOOTelPlatformMetricsFederationConfig struct {
+	// Enabled turns the federation scrape jobs on or off. When unset, the jobs
+	// are rendered.
+	Enabled *bool `mapstructure:"enabled" yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Target is the host:port of the server that serves /federate. When empty,
+	// the collector uses its built-in target.
+	Target string `mapstructure:"target" yaml:"target,omitempty" json:"target,omitempty"`
+}
+
+// IsZero returns true when neither enabled nor target is set.
+func (c BYOOOTelPlatformMetricsFederationConfig) IsZero() bool {
+	return c.Enabled == nil && c.Target == ""
+}
+
+var byooOTelFederationHostPattern = regexp.MustCompile(
+	`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$`)
+
+func (c BYOOOTelPlatformMetricsFederationConfig) validate() error {
+	if c.Target == "" {
+		return nil
+	}
+	return validateBYOOOTelFederationTarget(c.Target)
+}
+
+// validateBYOOOTelFederationTarget accepts a DNS name or IP address with a
+// port, such as prometheus.monitoring.svc.cluster.local:9090.
+func validateBYOOOTelFederationTarget(target string) error {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return fmt.Errorf("target %q must be host:port: %w", target, err)
+	}
+	if net.ParseIP(host) == nil && !byooOTelFederationHostPattern.MatchString(host) {
+		return fmt.Errorf("target %q must use a DNS name or IP address as its host", target)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return fmt.Errorf("target %q must use a port between 1 and 65535", target)
 	}
 	return nil
 }
@@ -489,6 +542,9 @@ func (c Config) Validate() error {
 	if err := c.Agent.BYOOOTelCollector.Validate(); err != nil {
 		return fmt.Errorf("agent.byooOtelCollector: %w", err)
 	}
+	if err := c.Agent.AgentTimeConfig.Validate(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -723,6 +779,47 @@ type AgentTimeConfig struct {
 	ICMSRequestAckRetryTimeout     time.Duration `yaml:",omitempty"`
 }
 
+// NegativeDurationError reports a negative agent timeout interval. Callers
+// detect it with errors.As to tell a recoverable bad timeout value apart from
+// other config validation failures.
+//
+// +k8s:deepcopy-gen=false
+type NegativeDurationError struct {
+	Field string
+	Value time.Duration
+}
+
+func (e *NegativeDurationError) Error() string {
+	return fmt.Sprintf("%s: must not be negative, got %s", e.Field, e.Value)
+}
+
+// Validate rejects negative durations. A negative interval is not a valid
+// periodic timer period and would otherwise reach time.NewTicker undetected,
+// which panics at agent startup with "non-positive interval for NewTicker".
+// Zero is intentionally allowed through: Complete() treats it as "unset" and
+// fills in a default.
+func (t AgentTimeConfig) Validate() error {
+	fields := []struct {
+		name  string
+		value time.Duration
+	}{
+		{"agent.credRenewInterval", t.CredRenewInterval},
+		{"agent.heartbeatInterval", t.HeartbeatInterval},
+		{"agent.syncQueueInterval", t.SyncQueueInterval},
+		{"agent.syncRequestStatusInterval", t.SyncRequestStatusInterval},
+		{"agent.syncAcknowledgeRequestInterval", t.SyncAcknowledgeRequestInterval},
+		{"agent.periodicInstanceStatusInterval", t.PeriodicInstanceStatusInterval},
+		{"agent.icmsRequestAckInterval", t.ICMSRequestAckInterval},
+		{"agent.icmsRequestAckRetryTimeout", t.ICMSRequestAckRetryTimeout},
+	}
+	for _, f := range fields {
+		if f.value < 0 {
+			return &NegativeDurationError{Field: f.name, Value: f.value}
+		}
+	}
+	return nil
+}
+
 func (t AgentTimeConfig) Complete() AgentTimeConfig {
 	if t.CredRenewInterval == 0 {
 		t.CredRenewInterval = defaultCredRenewInterval
@@ -777,6 +874,23 @@ type SharedStorageTaskDataConfig struct {
 	StorageCapacity resource.Quantity `yaml:",omitempty"`
 }
 
+// MarshalYAML encodes storage capacity as its canonical Kubernetes quantity string.
+func (c SharedStorageTaskDataConfig) MarshalYAML() (any, error) {
+	storageCapacity := ""
+	if !c.StorageCapacity.IsZero() {
+		storageCapacity = c.StorageCapacity.String()
+	}
+	return struct {
+		StorageClassName *string  `yaml:"storageClassName,omitempty"`
+		PVMountOptions   []string `yaml:"pvMountOptions,omitempty"`
+		StorageCapacity  string   `yaml:"storageCapacity,omitempty"`
+	}{
+		StorageClassName: c.StorageClassName,
+		PVMountOptions:   c.PVMountOptions,
+		StorageCapacity:  storageCapacity,
+	}, nil
+}
+
 type ModelCacheConfig struct {
 	// StorageClassName is the storage class model cache volumes are provisioned on. Empty uses the default.
 	// Both the storage controller (which creates the volumes) and model cache backend selection (which checks
@@ -829,6 +943,14 @@ type WorkloadConfig struct {
 	// applied to task workloads before translation.
 	// Example keys: INIT_CONTAINER, UTILS_CONTAINER, ESS_AGENT_CONTAINER
 	TaskEnvOverrides map[string]string `yaml:",omitempty"`
+	// WorkerInitDownload tunes the worker-init artifact downloader. It is
+	// delivered as environment variables in the launch environment, so it
+	// reaches every container that runs worker-init: the worker pod's init
+	// container, the model-cache writer Job, and the Helm model-cache-init
+	// container. Unset fields keep worker-init's built-in defaults. An
+	// explicit FunctionEnvOverrides or TaskEnvOverrides entry for the same
+	// variable wins.
+	WorkerInitDownload *WorkerInitDownloadConfig `yaml:"workerInitDownload,omitempty"`
 
 	// Stargate configuration
 	DefaultStargateAddress string `yaml:",omitempty"`
@@ -861,10 +983,122 @@ type TransportTLSConfig struct {
 	InstalledBundleMountPath string    `yaml:"installedBundleMountPath"`
 }
 
-// Validate rejects workload settings that disable configured transport trust.
+// Environment variables worker-init reads for its artifact downloader.
+// They are the contract between NVCA and the worker-init image and must
+// match worker-init's configs package.
+const (
+	WorkerInitConcurrentDownloadsEnv = "WORKER_CONCURRENT_DOWNLOADS"
+	WorkerInitConcurrentChunksEnv    = "WORKER_CONCURRENT_CHUNKS"
+	WorkerInitChunkSizeEnv           = "WORKER_CHUNK_SIZE"
+
+	// workerInitMinChunkSizeBytes is the smallest chunk worth a ranged GET.
+	// Below it the per-request overhead dominates and the CDN's per-range
+	// cache entries fragment. 1 MiB.
+	workerInitMinChunkSizeBytes int64 = 1 << 20
+	// workerInitMaxChunkSizeBytes bounds a single ranged GET. 4 GiB.
+	workerInitMaxChunkSizeBytes int64 = 4 << 30
+	// workerInitMaxConcurrency bounds each concurrency knob. The two multiply
+	// into the number of simultaneous streams, so 256 each is already far
+	// past anything a node NIC sustains.
+	workerInitMaxConcurrency = 256
+)
+
+// WorkerInitDownloadConfig tunes the worker-init artifact downloader. Zero
+// means unset: the variable is not emitted and worker-init keeps its default.
+type WorkerInitDownloadConfig struct {
+	// ConcurrentDownloads is how many artifacts worker-init fetches at once
+	// (WORKER_CONCURRENT_DOWNLOADS).
+	ConcurrentDownloads int `yaml:"concurrentDownloads,omitempty"`
+	// ConcurrentChunks is how many ranged GETs run per artifact
+	// (WORKER_CONCURRENT_CHUNKS). Total streams are ConcurrentDownloads times
+	// ConcurrentChunks.
+	ConcurrentChunks int `yaml:"concurrentChunks,omitempty"`
+	// ChunkSizeBytes is the size of each ranged GET (WORKER_CHUNK_SIZE).
+	ChunkSizeBytes int64 `yaml:"chunkSizeBytes,omitempty"`
+}
+
+// Validate rejects values worker-init cannot use. Zero is unset and valid.
+func (c *WorkerInitDownloadConfig) Validate() error {
+	if c == nil {
+		return nil
+	}
+	if c.ConcurrentDownloads < 0 || c.ConcurrentDownloads > workerInitMaxConcurrency {
+		return fmt.Errorf("workload.workerInitDownload.concurrentDownloads must be between 0 (unset) and %d, got %d",
+			workerInitMaxConcurrency, c.ConcurrentDownloads)
+	}
+	if c.ConcurrentChunks < 0 || c.ConcurrentChunks > workerInitMaxConcurrency {
+		return fmt.Errorf("workload.workerInitDownload.concurrentChunks must be between 0 (unset) and %d, got %d",
+			workerInitMaxConcurrency, c.ConcurrentChunks)
+	}
+	if c.ChunkSizeBytes != 0 && (c.ChunkSizeBytes < workerInitMinChunkSizeBytes || c.ChunkSizeBytes > workerInitMaxChunkSizeBytes) {
+		return fmt.Errorf("workload.workerInitDownload.chunkSizeBytes must be 0 (unset) or between %d and %d bytes, got %d",
+			workerInitMinChunkSizeBytes, workerInitMaxChunkSizeBytes, c.ChunkSizeBytes)
+	}
+	return nil
+}
+
+// EnvOverrides returns the worker-init variables for the fields that are set.
+// It is nil when nothing is set so callers can skip the merge.
+func (c *WorkerInitDownloadConfig) EnvOverrides() map[string]string {
+	if c == nil {
+		return nil
+	}
+	env := map[string]string{}
+	if c.ConcurrentDownloads > 0 {
+		env[WorkerInitConcurrentDownloadsEnv] = strconv.Itoa(c.ConcurrentDownloads)
+	}
+	if c.ConcurrentChunks > 0 {
+		env[WorkerInitConcurrentChunksEnv] = strconv.Itoa(c.ConcurrentChunks)
+	}
+	if c.ChunkSizeBytes > 0 {
+		env[WorkerInitChunkSizeEnv] = strconv.FormatInt(c.ChunkSizeBytes, 10)
+	}
+	if len(env) == 0 {
+		return nil
+	}
+	return env
+}
+
+// EffectiveFunctionEnvOverrides is FunctionEnvOverrides with the worker-init
+// download variables folded in. An explicit override for the same variable
+// wins, so an operator can still pin a value per cluster the old way.
+func (t WorkloadConfig) EffectiveFunctionEnvOverrides() map[string]string {
+	return mergeEnvOverrides(t.WorkerInitDownload.EnvOverrides(), t.FunctionEnvOverrides)
+}
+
+// EffectiveTaskEnvOverrides is TaskEnvOverrides with the worker-init download
+// variables folded in, explicit entries winning.
+func (t WorkloadConfig) EffectiveTaskEnvOverrides() map[string]string {
+	return mergeEnvOverrides(t.WorkerInitDownload.EnvOverrides(), t.TaskEnvOverrides)
+}
+
+// mergeEnvOverrides layers explicit over derived. Explicit keys are compared
+// case-insensitively, matching how NVCA normalizes override names, so an
+// explicit lower-case key still wins over the derived upper-case one. It
+// returns nil when both inputs are empty, preserving "no overrides".
+func mergeEnvOverrides(derived, explicit map[string]string) map[string]string {
+	if len(derived) == 0 {
+		return explicit
+	}
+	merged := make(map[string]string, len(derived)+len(explicit))
+	for k, v := range derived {
+		merged[k] = v
+	}
+	for k, v := range explicit {
+		delete(merged, strings.ToUpper(k))
+		merged[k] = v
+	}
+	return merged
+}
+
+// Validate rejects workload settings that disable configured transport trust
+// and worker-init download values worker-init cannot use.
 func (t WorkloadConfig) Validate() error {
 	if t.StargateQUICInsecure && t.TransportTLS != nil && t.TransportTLS.TrustMode == TrustModeBundle {
 		return fmt.Errorf("workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle; set workload.stargateQUICInsecure=false or use trustMode=system")
+	}
+	if err := t.WorkerInitDownload.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

@@ -48,15 +48,76 @@ The shipped `job.yaml` sets a default placeholder value for this variable so the
 
 ## Building the container
 
-The `Dockerfile` uses the public upstream OpenBao 2.6.2 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/crypto v0.56.0, gRPC v1.83.2, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
+The `Dockerfile` uses the public upstream OpenBao 2.6.3 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/net v0.60.0, x/crypto v0.57.0, gRPC v1.83.2, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
 
-The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0. It rebuilds Kubernetes v1.36.4 `kubectl` from the checksum-pinned official source archive with a digest-pinned Go 1.26.6 toolchain and vendored dependencies. Keeping the 1.36 client preserves `kubectl`'s supported one-minor skew across this repository's Kubernetes latest-and-N-2 support window (1.35 through 1.37). The build verifies the source identity, embedded Go and target metadata, and the executable client's version, commit, build date, and platform.
+The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.2.
+It rebuilds Kubernetes v1.37.2 `kubectl` from the checksum-pinned official source
+archive with a digest-pinned Go 1.26.10 toolchain. The build retains the
+`golang.org/x/net` v0.60.0 HTTP/2 security floor, synchronizes the Kubernetes
+workspace, and regenerates vendored dependencies before offline compilation.
+The client reports a dirty source tree to identify that dependency patch.
+Build checks verify its source, toolchain, architecture, and runtime identity.
+
+The default client aligns with the Kubernetes toolbox at 1.37.2. The same
+image includes a patched 1.36.6 client for Kubernetes 1.35 clusters. Both clients
+use Go 1.26.10, x/net 0.60.0 and aligned stable OTel modules at 1.44.0.
+The OTel floor prevents the compatible client from retaining the affected
+1.41.0 baggage parser described in
+[GO-2026-5158](https://pkg.go.dev/vuln/GO-2026-5158). Set `NVCF_KUBECTL_MINOR=1.36`
+in the migration Job environment when the target API server is Kubernetes 1.35.
+Unset selects 1.37; explicit `1.37` also selects the default. Empty or other
+values fail with exit status 64 before contacting a cluster. The selector does
+not detect server versions or fall back automatically.
+
+Both PATH lookup and `/usr/local/bin/kubectl` or `/usr/bin/kubectl` use the
+selector. The wrapper preserves arguments and the client exit status. Apply the
+same setting to OpenBao migration Jobs and each enabled SIS HMAC rotation,
+UI and LLM PKI hook. Chart and stack consumers must propagate that environment
+value when selecting the new image; the image does not configure those Jobs.
+
+Upstream supports `kubectl` within one minor of `kube-apiserver`: client 1.37
+covers servers 1.36-1.38, and client 1.36 covers servers 1.35-1.37. This preserves
+NVCF's current latest-and-N-2 cluster policy without requiring a cluster upgrade.
+See the [Kubernetes version-skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+Qualify the selected client and every enabled hook on the target cluster
+version before release.
+
+Run `sh tests/verify-kubectl-build-test.sh` for source, selector and metadata
+checks. Set `RUNTIME_IMAGE` when running `tests/kubectl-selection-test.sh` to
+execute both clients and an invalid selection in a built image.
+
+The final Alpine stage requires `brotli-libs>=1.2.1-r0`. Changing that
+requirement invalidates the previous Docker package layer. Run
+`sh tests/runtime-packages-test.sh` for the source check; set `RUNTIME_IMAGE`
+to verify installed packages and non-root identity in a built image.
+Repeat image validation for both architectures before publication.
+
+The image does not include the Helm CLI. The core migrations and LLS, LLM, and
+UI addons use `bao`, `kubectl`, and shell utilities. Helm runs outside this image
+to create the hook Jobs. The image build checks that neither a Helm executable
+nor its Alpine package is installed on either supported architecture.
+
+Use an OpenBao chart whose initialization script checks for Helm only in
+standalone `script` mode. Older charts check for Helm even in the in-cluster
+`helm` hook mode and cannot initialize with this image. Publish and consume
+the chart prerequisite fix together with the migration image update, including
+for maintenance backports. Validate the packaged chart and exact image together
+on a fresh installation before release. An upgrade alone does not exercise the
+`post-install` initialization hook. Scan the published image and validate each
+enabled addon before updating downstream chart and stack pins.
 
 ```bash
-docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .
+docker build --build-arg GIT_SHA="$(git rev-parse HEAD)" \
+  -t <your-registry>/<your-org>/openbao-migrations:<version> .
 ```
 
 ## Running the migrations
+
+The OpenBao 2.6.3 update changes the bundled CLI and runtime base, not the
+migration scripts or secret schema. Updating this image alone does not upgrade
+the running OpenBao servers or injected agents. Use the matching chart and
+stack release, then follow the
+[OpenBao patch upgrade runbook](../../docs/self-managed/runbooks/openbao-patch-upgrade.md).
 
 The container expects the following at runtime:
 
@@ -72,10 +133,12 @@ Environment variables consumed by the entrypoint:
 | `BAO_SERVICE` | `openbao-server.vault-system.svc.cluster.local` | DNS name of the OpenBao Service |
 | `CORE_MIGRATIONS_ENABLED` | `true` | Run the numbered scripts under `migrations/` |
 | `ADDONS_LLS_ENABLED` | `false` | Run the LLS addon under `addons/lls/setup_lls.sh` (fail-hard when enabled, see [addons/lls/README.md](addons/lls/README.md)) |
-| `ADDONS_LLM_ENABLED` | `false` | Run the LLM addon under `addons/llm/setup_llm.sh` (fail-hard when enabled, see [addons/llm/README.md](addons/llm/README.md)) |
+| `NVCF_SERVICE_PKI_ENABLED` | `false` | Run the service PKI addon under `addons/service-pki/setup_service_pki.sh` (fail-hard when enabled, see [addons/service-pki/README.md](addons/service-pki/README.md)) |
+| `ADDONS_LLM_ENABLED` | `false` | Same as `NVCF_SERVICE_PKI_ENABLED`; kept for the llm-request-router chart and existing installs |
 | `ADDONS_NVCF_UI_ENABLED` | `false` | Run the nvcf-ui addon under `addons/nvcf-ui/setup_nvcf-ui.sh` (fail-hard when enabled, see [addons/nvcf-ui/README.md](addons/nvcf-ui/README.md)) |
 | `DEFAULT_CASSANDRA_PASSWORD` | `ch@ng3m3` (override required) | See above |
 | `NVCF_API_SIDECARS_IMAGE_PULL_SECRET` | `""` | Image pull secret name passed to the NVCF API sidecar mount |
+| `ADMIN_ISSUER_PROXY_ENABLED` | `true` | Run `migrations/10_setup_admin-issuer.sh`. Set `false` alongside `adminIssuerProxy.enabled: false` so the admin signing role, policy and auth role are not created for a proxy that is not installed. Unlike the addon switches this defaults to `true`, so an existing install is unchanged |
 | `MIGRATIONS_ALLOW_FAILURES` | `false` | Emergency rollback only. When `true`, the entrypoint exits 0 even if core migrations or opted-in addons failed. Default behavior fails the Job non-zero so a misconfigured deployment blocks the Helm hook Job instead of silently leaving OpenBao in a partial state. |
 | `BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS` | `60` | Total time `enable_secrets_mount` waits for a kv-v2 mount's storage upgrade (HTTP 400 "Upgrading from non-versioned to versioned data") to finish before failing the migration. Errors outside that wait fail immediately. |
 

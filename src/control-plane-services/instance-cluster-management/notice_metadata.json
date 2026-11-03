@@ -91,6 +91,13 @@
       "name": "Jackson dataformat: CBOR",
       "url": "https://github.com/FasterXML/jackson-dataformats-binary"
     },
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.21.8": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson dataformat: CBOR",
+      "url": "https://github.com/FasterXML/jackson-dataformats-binary"
+    },
     "com.google.code.gson:gson:2.13.2": {
       "licenses": [
         "Apache-2.0"

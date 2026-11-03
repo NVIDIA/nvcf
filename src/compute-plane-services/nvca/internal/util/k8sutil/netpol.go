@@ -61,7 +61,10 @@ const (
 	// Crowdstrike
 	EgressCrowdstrikeNetworkPolicyName  = "allow-egress-crowdstrike"
 	IngressCrowdstrikeNetworkPolicyName = "allow-ingress-crowdstrike"
-	// BYOO
+	// BYOO. This policy allows only the default platform metrics federation
+	// target. Self-hosted clusters prune every policy in workload namespaces,
+	// so it never applies there; a managed cluster that sets a different
+	// byooOtelCollector.platformMetricsFederation.target needs a custom policy.
 	EgressBYOOOTelPrometheusNetworkPolicyName = "allow-egress-prometheus-nvcf-byoo"
 	// This label k/v must be set on all pods containing the byoo-otel-collector container
 	// so metrics can be forwarded to the local prometheus instance running in a separate namespace.

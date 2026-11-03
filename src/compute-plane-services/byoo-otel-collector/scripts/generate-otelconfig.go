@@ -56,10 +56,13 @@ func main() {
 	// Render the OpenTelemetry configuration - returns data in yaml format
 	// WorkloadType can be container or helm for any NVCF or NVCT
 	// BackendType can be VM or K8s
+	// Examples show a deployment that sets OTEL_EXPORTER_OTLP_ENDPOINT, so they
+	// include the collector's own trace export.
 	tcfg := otelconfig.TemplateConfig{
-		BackendType:  otelconfig.BackendType(backend),
-		WorkloadType: otelconfig.WorkloadType(workloadType),
-		Namespace:    "sr-fake-namespace",
+		BackendType:            otelconfig.BackendType(backend),
+		WorkloadType:           otelconfig.WorkloadType(workloadType),
+		Namespace:              "sr-fake-namespace",
+		CollectorTracesEnabled: true,
 	}
 	switch computeType {
 	case "function":

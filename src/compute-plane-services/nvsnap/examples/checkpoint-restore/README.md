@@ -15,8 +15,12 @@ and imports nothing from nvsnap internals.
 5. `POST /api/v1/restores` — *(with `-restore`)* restore from the checkpoint
 6. `DELETE /api/v1/checkpoints/{id}` — *(with `-delete`)* clean up
 
-Single-GPU pods are captured with CRIU + cuda-checkpoint; multi-GPU pods
-auto-route to the rootfs path. The API contract is identical either way.
+The agent runs the checkpoint only on a cluster whose `agent.captureMethod`
+is `criu`; a multi-GPU pod must run under gpushare. On a `cachedir` cluster
+the agent declines with HTTP 422 and a redirect to the cachedir path, which
+captures pods labelled `nvsnap.io/capture: "true"` on its own
+(`internal/agent/agent.go`, `internal/agent/nim_backend.go`
+`resolveCheckpointRedirect`).
 
 ## Run it
 

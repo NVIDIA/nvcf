@@ -1,139 +1,59 @@
-# Release Process
+# Release process
 
-NVCF is a monorepo. Each subproject under `src/`, `deploy/stacks/`, and
-`migrations/` (services, CLIs, Helm stacks, migration sets) is versioned and
-released independently. There is no single repo-wide release; releases happen
-per subproject, driven by commits that touch that subproject's path.
+NVCF components release independently. An umbrella product release selects one
+qualified combination of Self-Managed, Compute Plane and Observability; it does
+not assign their versions or release every service together.
 
-The automation that implements this lives in
-[`.github/workflows/release-tags.yml`](.github/workflows/release-tags.yml) and
-[`tools/ci/github-release`](tools/ci/github-release). Read those files for the
-authoritative behavior; this document summarizes it for contributors.
+## Choose a release workflow
 
-## Release Cadence
+| Task | Guide |
+| --- | --- |
+| Component versioning, tags, maintenance branches and RCs | [GitHub release automation](docs/dev/github-release-process.md) |
+| Select stacks, assemble a QA candidate and publish the product | [Umbrella releases](docs/dev/umbrella-releases.md) |
+| Correct or activate maintained product docs | [Umbrella docs workflow](docs/dev/umbrella-releases.md#prepare-and-activate-maintained-docs) |
+| Prepare a legacy immutable docs edition | [Docs editions](docs/dev/docs-editions.md) |
+| Inventory, Development catalog and manifest tooling | [docs-version-sync](tools/docs-version-sync/README.md) |
 
-Releases are commit-triggered, not calendar-triggered. There is no fixed
-weekly or monthly cadence. On every push to `main`, the `service-release` job
-runs `./tools/ci/github-release auto`. Every subproject registered in
-[`tools/ci/github-release-subprojects.json`](tools/ci/github-release-subprojects.json)
-uses the same model: semantic-release walks the commits since the
-subproject's last release tag and decides whether to cut a new version.
+The workflows and helpers linked by those guides are the implementation
+reference. Check the workflow at the actual release ref and live repository
+variables before execution, especially on an older maintenance branch.
 
-- Commits typed `feat`, `fix`, or `perf` (the "customer" commit types defined
-  in [`CONTRIBUTING.md`](CONTRIBUTING.md#how-to-select-a-commit-type)) trigger
-  a new stable release tag for the subproject they touch.
-- Commits typed `docs`, `build`, `test`, `refactor`, `ci`, `chore`, `style`,
-  or `revert` (the "foundational" types) do not trigger a release on their
-  own.
-- A commit whose type carries a `!` breaking marker triggers a release
-  regardless of type.
+## Component releases
 
-Only commits that touch a subproject's own path count toward its version.
-`semantic-release-monorepo` scopes the commit analysis to the subtree, so a
-`fix(grpc-proxy):` commit cannot release `nvcf-cli` and vice versa.
+Services and charts normally use path-scoped semantic-release on `main`.
+Release-worthy commits create component tags and GitHub Releases. The scheduled
+artifact publisher discovers published Releases after their tags reach its
+source mirror. A source release is not proof of registry availability.
 
-`nvca` and the three Helm stacks under `deploy/stacks/` previously used a
-separate model: a push to `main` only bumped a `-dev.N` prerelease read from
-a `VERSION` file, and a stable version was cut only on a release branch.
-Those subprojects now release from `main` like every other one, the `VERSION`
-files are gone, and the `-dev.N` tags they already published remain in the
-repository as history.
+Ordinary service/chart maintenance merges do not auto-tag. Reuse a verified
+fixed release in the required minor or backport and explicitly release the next
+unused patch. Main pin-update PRs do not update maintenance branches. Preserve
+newer main selections and immutable historical tags/assets.
 
-Release notes are generated from commit messages (semantic-release
-conventions) and attached to the GitHub Release for each tag.
+The three stacks declare `version_file` and `release_branch_only`. They release
+from `release-deploy/stacks/<stack>/vX.Y`, not `main`. A new train uses
+`branch-cut`; patches use the existing train. Once a stable release exists,
+a change to the stack tree excluding `VERSION` creates the next patch. An
+unrelated CI or version-file-only change does not. The tag workflow attaches
+the original dependency inventory.
 
-## Branch Naming
+Stack source releases may proceed before umbrella QA. Their stable versions
+and inventories become candidate inputs. Customer resource publication is a
+separate operation and does not publish a stack's referenced images/charts.
 
-- `main`: the active development branch. All pull requests target `main`,
-  except hotfixes (see [`CONTRIBUTING.md`](CONTRIBUTING.md#step-2-create-a-branch)).
-- `release-<service-path>/vMAJOR.MINOR`: a maintenance branch for one
-  subproject's release train. These branches still run the build, test, lint,
-  and scan workflows, but they no longer cut release tags. Release automation
-  runs on `main` only.
+## Umbrella qualification and publication
 
-Real examples from this repository:
+Select three exact stable released stacks in
+`deploy/releases/X.Y.Z/manifest.json`. Candidate CI validates their public
+source identities and original inventories, then assembles a QA artifact.
+It does not publish a stable umbrella or run deployment qualification.
 
-- `release-src/compute-plane-services/nvca/v3.1`
-- `release-src/compute-plane-services/nvca/v3.2`
-- `release-deploy/stacks/self-managed/v0.7`
+QA approves the selected combination, tested configuration and final assets.
+Changing pins or artifact bytes requires renewed acceptance. Product metadata
+and notes must land on `main` before the explicit `Publish Umbrella Release`
+workflow runs with a fixed reviewed target SHA through validate, draft and
+promote. The immutable product tag is `nvcf/X.Y.Z`.
 
-The separator between the service id and the version can vary by how a
-subproject registers its release metadata; for example
-`release-nvcf-cassandra-migrations-v0.10` uses a flattened id instead of a
-path segment. Check a subproject's entry in
-[`tools/ci/github-release-subprojects.json`](tools/ci/github-release-subprojects.json)
-for its exact tag prefix and branch name.
-
-Tags follow the matching format `<service-path>/vMAJOR.MINOR.PATCH`, for
-example `src/clis/nvcf-cli/v1.15.11` and
-`src/compute-plane-services/nvca/v3.4.0`.
-
-## Who Can Trigger a Release
-
-Any contributor whose reviewed pull request merges to `main` has triggered a
-release for the subprojects their commits touch, as long as at least one
-commit is a `feat`, `fix`, or `perf` type. No separate release action is
-needed after merge.
-
-Manual: `.github/workflows/release-tags.yml` also accepts a
-`workflow_dispatch` trigger that re-runs the same automatic logic on demand,
-optionally scoped to a single service through the `service` input. This is a
-recovery path for a run that failed or was cancelled, not a way to force a
-version that the commits do not justify.
-
-`workflow_dispatch` requires GitHub write access to the repository. In this
-repository that access is granted through organization team membership:
-maintainers (`NVIDIA/nvcf-dev` and `NVIDIA/nvcf-admin`) can run it. Area
-ownership for review is defined in
-[`.github/CODEOWNERS`](.github/CODEOWNERS).
-
-Publishing additionally requires the `NV_GITHUB_TOKEN` repository secret,
-because a tag pushed with the default `GITHUB_TOKEN` does not start the
-follow-up tag workflow that creates release notes.
-
-## Artifact Destinations
-
-GitHub tags and GitHub Releases are the primary release artifact, one per
-subproject version. Publishing is gated by two repository variables read in
-`release-tags.yml`: `NVCF_GITHUB_AUTO_TAGGING_ENABLED` and
-`NVCF_GITHUB_RELEASE_DRY_RUN`. These are configured in repository settings,
-not in source, so check their current values in the repository if you need
-to confirm whether tag and release publishing is live or running in dry-run
-preview mode at a given point in time.
-
-Container images are handled separately from the tag and release flow.
-[`.github/workflows/image-push-manual.yml`](.github/workflows/image-push-manual.yml)
-builds and pushes a multi-arch image for one service subtree to an internal
-NGC registry, either via manual `workflow_dispatch` or automatically for a
-pull request carrying the `deploy-to-stg` label. This path exists for
-pre-merge and staging testing; it is not an automatic per-release publish
-step tied to a version tag.
-
-## Backport Policy
-
-A fix lands on `main` first, where it releases normally for every subproject
-it touches.
-
-Maintenance branches are the exception, not the default. Most subprojects do
-not have one: a fix ships by merging to `main` like any other change. Open a
-maintenance branch only when a released train needs a fix that cannot wait
-for, or must not carry, the current state of `main`.
-
-Support window: where a subproject does maintain release branches, only the
-latest minor release train and the one before it (N and N-1) are maintained.
-A release branch older than N-1 is effectively end of life and does not
-receive further backports.
-
-Mechanism: cherry-pick the commit from `main` onto the `release-*` branch,
-following the same commit and review conventions as `main`. Because release
-automation runs on `main` only, a maintainer then creates the patch tag by
-hand:
-
-```sh
-git tag <service-path>/vMAJOR.MINOR.PATCH <commit-on-the-release-branch>
-git push origin <service-path>/vMAJOR.MINOR.PATCH
-```
-
-Push the tag with a token that can start workflows, so the tag workflow
-creates the matching GitHub Release. There is no automation that backports a
-commit or cuts a maintenance release for you.
+Product publication does not change the docs default. Maintained umbrella docs
+and legacy immutable editions have distinct workflows; follow the supported
+manifest-schema requirements in the owning guide. Preserve frozen editions.

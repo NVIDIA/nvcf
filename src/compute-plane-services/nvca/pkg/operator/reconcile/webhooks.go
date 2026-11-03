@@ -83,7 +83,14 @@ func getWebHooksListenPort(nb *nvidiaiov1.NVCFBackend) int32 {
 }
 
 func (bc *BackendK8sCache) setupTLSCertSecrets(ctx context.Context, nb *nvidiaiov1.NVCFBackend, wc WebhookCert) error {
-	tlsSec := &v1.Secret{
+	return bc.createOrUpdateSecret(ctx, newTLSCertSecret(nb, wc))
+}
+
+// newTLSCertSecret builds the serving cert Secret. It also carries the CA so the
+// serving cert and the CA that issued it are always written in a single object;
+// the separate CA Secret is a copy of that value.
+func newTLSCertSecret(nb *nvidiaiov1.NVCFBackend, wc WebhookCert) *v1.Secret {
+	return &v1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        NVCAWebhookTLSCertSecretName,
 			Namespace:   getSystemNamespace(nb),
@@ -92,10 +99,10 @@ func (bc *BackendK8sCache) setupTLSCertSecrets(ctx context.Context, nb *nvidiaio
 		Data: map[string][]byte{
 			TLSCertName: wc.TLSCert,
 			TLSKeyName:  wc.TLSKey,
+			TLSCAName:   wc.CACertBytes,
 		},
 		Type: v1.SecretTypeTLS,
 	}
-	return bc.createOrUpdateSecret(ctx, tlsSec)
 }
 
 func (bc *BackendK8sCache) setupTLSCASecret(ctx context.Context, nb *nvidiaiov1.NVCFBackend, wc WebhookCert) error {

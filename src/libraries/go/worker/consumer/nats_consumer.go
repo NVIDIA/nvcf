@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -44,6 +45,8 @@ var tracer = otel.Tracer("nats-consumer")
 type GlobalNatsConsumer struct {
 	primaryRegion     string
 	functionVersionId string
+
+	conn *nats.Conn
 
 	primaryConsumer    jetstream.Consumer
 	secondaryConsumers map[string]jetstream.Consumer
@@ -69,6 +72,7 @@ func NewNatsConsumer(ctx context.Context, js jetstream.JetStream, provisionRegio
 		primaryRegion:       primaryRegion,
 		primaryConsumer:     consumer,
 		functionVersionId:   functionVersionId,
+		conn:                js.Conn(),
 		workLimiter:         semaphore.NewWeighted(int64(maxRequestConcurrency)),
 		notifyWorkCompleted: sync.NewCond(&sync.Mutex{}),
 		secondaryConsumers:  make(map[string]jetstream.Consumer),
@@ -131,7 +135,7 @@ func getRegionalNatsConsumer(ctx context.Context, js jetstream.JetStream, region
 			consumer, err = js.Consumer(ctx, streamName, consumerName)
 		}
 		return err
-	}, backoff.NewExponentialBackOff(backoff.WithMaxElapsedTime(5*time.Second)))
+	}, backoff.WithContext(backoff.NewExponentialBackOff(backoff.WithMaxElapsedTime(5*time.Second)), ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create consumer %s for stream %s: %w", consumerName, streamName, err)
 	}
@@ -149,9 +153,11 @@ func getRegionalNatsConsumer(ctx context.Context, js jetstream.JetStream, region
 // maxReq - the available work capacity at time of fetch. don't grab the work capacity though.
 // notifyWorkCompleted - wakes up consumers that are waiting on available work capacity to start fetching again.
 func (c *GlobalNatsConsumer) FetchWorkStream(ctx context.Context) (<-chan *WorkRequest, error) {
+	reconnects := c.watchReconnects(ctx)
+
 	primaryChan := make(chan *WorkRequest)
 	go func() {
-		_ = c.singleConsumer(ctx, c.primaryConsumer, c.primaryRegion, primaryChan)
+		_ = c.singleConsumer(ctx, c.primaryConsumer, c.primaryRegion, reconnects, primaryChan)
 		c.currentlyConnectedRegionsLock.Lock()
 		delete(c.currentlyConnectedRegions, c.primaryRegion)
 		c.currentlyConnectedRegionsLock.Unlock()
@@ -165,7 +171,7 @@ func (c *GlobalNatsConsumer) FetchWorkStream(ctx context.Context) (<-chan *WorkR
 		consumer := consumer
 		wg.Add(1)
 		go func() {
-			_ = c.singleConsumer(ctx, consumer, region, secondaryChan)
+			_ = c.singleConsumer(ctx, consumer, region, reconnects, secondaryChan)
 			c.currentlyConnectedRegionsLock.Lock()
 			delete(c.currentlyConnectedRegions, region)
 			c.currentlyConnectedRegionsLock.Unlock()
@@ -221,8 +227,62 @@ func (c *GlobalNatsConsumer) FetchWorkStream(ctx context.Context) (<-chan *WorkR
 	return biasedChan, nil
 }
 
+// reconnectSignal hands out a channel that is closed on the next NATS reconnect.
+type reconnectSignal struct {
+	mu sync.Mutex
+	ch chan struct{}
+}
+
+func newReconnectSignal() *reconnectSignal {
+	return &reconnectSignal{ch: make(chan struct{})}
+}
+
+func (r *reconnectSignal) next() <-chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ch
+}
+
+func (r *reconnectSignal) fire() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	close(r.ch)
+	r.ch = make(chan struct{})
+}
+
+// watchReconnects fires the returned signal every time the NATS connection
+// reconnects, until ctx is done.
+//
+// Fetch does not re-issue its pull request after a reconnect. If a message
+// reached the consumer while this worker was disconnected, the server drops
+// the pull because nobody was listening on its reply subject, and the fetch
+// sits idle until it misses two heartbeats. Requests queued in that window
+// wait the whole time, so fetches re-pull as soon as the connection is back.
+func (c *GlobalNatsConsumer) watchReconnects(ctx context.Context) *reconnectSignal {
+	signal := newReconnectSignal()
+	if c.conn == nil {
+		return signal
+	}
+	statusChanged := c.conn.StatusChanged(nats.CONNECTED)
+	go func() {
+		defer c.conn.RemoveStatusListener(statusChanged)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-statusChanged:
+				if !ok {
+					return
+				}
+				signal.fire()
+			}
+		}
+	}()
+	return signal
+}
+
 // singleConsumer is a blocking call
-func (c *GlobalNatsConsumer) singleConsumer(ctx context.Context, consumer jetstream.Consumer, region string, msgChan chan<- *WorkRequest) error {
+func (c *GlobalNatsConsumer) singleConsumer(ctx context.Context, consumer jetstream.Consumer, region string, reconnects *reconnectSignal, msgChan chan<- *WorkRequest) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -233,7 +293,7 @@ func (c *GlobalNatsConsumer) singleConsumer(ctx context.Context, consumer jetstr
 		backoffConfig := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(backoff.WithMaxElapsedTime(0)), 10), ctx)
 		err := backoff.Retry(func() error {
 			// msgs will close and drain by itself on cancellation
-			msgs, fetchErrChan, err := c.fetchMax(ctx, consumer)
+			msgs, fetchErrChan, err := c.fetchMax(ctx, consumer, reconnects)
 			if err != nil {
 				return err
 			}
@@ -287,7 +347,7 @@ func (c *GlobalNatsConsumer) adjustMaxBatchIfNeeded(err error) (bool, error) {
 	return false, nil
 }
 
-func (c *GlobalNatsConsumer) fetchMax(ctx context.Context, consumer jetstream.Consumer) (<-chan jetstream.Msg, <-chan error, error) {
+func (c *GlobalNatsConsumer) fetchMax(ctx context.Context, consumer jetstream.Consumer, reconnects *reconnectSignal) (<-chan jetstream.Msg, <-chan error, error) {
 	// wait until there is space available before optimistically pulling
 	// we may end up having to nack if another region comes in first
 	c.notifyWorkCompleted.L.Lock()
@@ -304,7 +364,7 @@ func (c *GlobalNatsConsumer) fetchMax(ctx context.Context, consumer jetstream.Co
 		maxReq = maxPullBatchSize
 	}
 
-	return fetchMax(ctx, consumer, maxReq)
+	return fetchMax(ctx, consumer, maxReq, reconnects.next())
 }
 
 func endFetchSpan(fetchSpan trace.Span, err error, messagesFetched int) {
@@ -323,14 +383,29 @@ func (c *GlobalNatsConsumer) releaseWork() {
 	c.notifyWorkCompleted.L.Unlock()
 }
 
-// fetchMax will close and drain the returned stream on context cancellation
-func fetchMax(ctx context.Context, consumer jetstream.Consumer, maxReq int64) (<-chan jetstream.Msg, <-chan error, error) {
+// fetchMax will close and drain the returned stream on context cancellation.
+// The fetch ends without an error when reconnected is closed, so the caller
+// issues a new pull request right away.
+func fetchMax(ctx context.Context, consumer jetstream.Consumer, maxReq int64, reconnected <-chan struct{}) (<-chan jetstream.Msg, <-chan error, error) {
 	zap.L().Debug("sending nats fetch request", zap.Int64("maxReq", maxReq), zap.String("consumer", consumer.CachedInfo().Name))
 	ctx, fetchSpan := tracer.Start(ctx, "Fetch", trace.WithSpanKind(trace.SpanKindClient), trace.WithNewRoot(), trace.WithAttributes(attribute.Int64("maxReq", maxReq), attribute.String("consumer", consumer.CachedInfo().Name)))
-	activeFetch, err := consumer.Fetch(int(maxReq), jetstream.FetchHeartbeat(5*time.Second), jetstream.FetchMaxWait(5*time.Minute))
+	// Detached from ctx: on ctx cancellation the fetch keeps running so the
+	// drain below can nack whatever the server still delivers to it.
+	// FetchContext sets the pull expiry to the deadline minus up to 1s, and
+	// cannot be combined with FetchMaxWait.
+	fetchCtx, cancelFetch := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute+time.Second)
+	activeFetch, err := consumer.Fetch(int(maxReq), jetstream.FetchHeartbeat(5*time.Second), jetstream.FetchContext(fetchCtx))
 	if err != nil {
+		cancelFetch()
 		return nil, nil, err
 	}
+	go func() {
+		select {
+		case <-reconnected:
+			cancelFetch()
+		case <-fetchCtx.Done():
+		}
+	}()
 
 	retChan := make(chan jetstream.Msg, maxReq)
 	errChan := make(chan error, 1) // buffered, so we can exit this goroutine and defer close the ret chan. the error chan is checked afterward.
@@ -344,10 +419,9 @@ func fetchMax(ctx context.Context, consumer jetstream.Consumer, maxReq int64) (<
 			select {
 			case msg = <-activeFetch.Messages():
 			case <-ctx.Done():
-				// sure wish we could cancel fetches. best we can do is nack.
-				// TODO https://github.com/nats-io/nats.go/issues/1651
 				// drain and nack remainder of messages
 				go func() {
+					defer cancelFetch()
 					for msg := range activeFetch.Messages() {
 						if msg != nil {
 							messagesFetched++
@@ -374,6 +448,15 @@ func fetchMax(ctx context.Context, consumer jetstream.Consumer, maxReq int64) (<
 			}
 		}
 		err := activeFetch.Error() // may be nil
+		switch {
+		case errors.Is(err, context.Canceled):
+			zap.L().Info("nats reconnected, re-issuing fetch request", zap.String("consumer", consumer.CachedInfo().Name))
+			err = nil
+		case errors.Is(err, context.DeadlineExceeded):
+			// the fetch expired with no messages; same as the server's request timeout
+			err = nil
+		}
+		cancelFetch()
 		endFetchSpan(fetchSpan, err, messagesFetched)
 		if err != nil {
 			errChan <- err

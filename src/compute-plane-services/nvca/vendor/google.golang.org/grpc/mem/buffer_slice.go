@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
  *
  * Copyright 2024 gRPC authors.
@@ -168,7 +165,7 @@ func (r *Reader) Close() error {
 }
 
 func (r *Reader) freeFirstBufferIfEmpty() bool {
-	if len(r.data) == 0 || r.bufferIdx != len(r.data[0].ReadOnlyData()) {
+	if len(r.data) == 0 || r.bufferIdx != r.data[0].Len() {
 		return false
 	}
 

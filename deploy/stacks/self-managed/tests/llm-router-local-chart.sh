@@ -142,6 +142,8 @@ test -z "$backend_tag" || {
   echo "llm-router-local-chart: expected backend router tag to inherit the chart default, got $backend_tag" >&2
   exit 1
 }
+expected_backend_tag="$(yq -r '.llmRequestRouter.backendRouter.image.tag // ""' "$stack_dir/../../helm/llm-request-router/llm-request-router/values.yaml")"
+expected_backend_tag="${expected_backend_tag:-$expected_main_tag}"
 
 helm template llm-request-router "$stack_dir/../../helm/llm-request-router/llm-request-router" \
   --namespace nvcf \
@@ -160,8 +162,9 @@ test "$main_image" = "$expected_stargate_image" || {
 backend_image="$(yq ea -r \
   'select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router" and .metadata.namespace == "nvcf") | .spec.template.spec.containers[] | select(.name == "backend-router") | .image' \
   "$local_manifest")"
-test "$backend_image" = "$expected_stargate_image" || {
-  echo "llm-router-local-chart: expected backend router image $expected_stargate_image, got ${backend_image:-missing}" >&2
+expected_backend_image="${main_registry:+${main_registry}/}${main_repository}:${expected_backend_tag}"
+test "$backend_image" = "$expected_backend_image" || {
+  echo "llm-router-local-chart: expected backend router image $expected_backend_image, got ${backend_image:-missing}" >&2
   exit 1
 }
 

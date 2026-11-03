@@ -754,6 +754,80 @@ class AuthManagerResolverTest {
         assertThrows(AuthenticationServiceException.class, () -> authResolver.resolve(req));
     }
 
+    // --- trusted-issuers[] refresh tests ---
+
+    @Test
+    void trustedIssuers_entryAddedThenRebuilt_isTrusted() {
+        TrustedJwtIssuerProperties props = new TrustedJwtIssuerProperties();
+        AuthManagerResolver multi = buildResolverWithTrustedIssuers(props);
+
+        HttpServletRequest req = mock(HttpServletRequest.class);
+        when(req.getHeader("Authorization"))
+                .thenReturn(bearerWithIssuer("http://api.external-nvcf.example.com", "admin"));
+
+        AuthenticationManagerResolver<HttpServletRequest> before =
+                multi.authenticationManagerResolver();
+        assertThrows(AuthenticationServiceException.class, () -> before.resolve(req));
+
+        props.setTrustedIssuers(List.of(trustedIssuerEntry(
+                "http://api.external-nvcf.example.com",
+                "http://openbao.external/v1/services/nvcf-api/jwt/jwks")));
+
+        assertNotNull(multi.authenticationManagerResolver().resolve(req),
+                "issuer added at runtime must be trusted after the bean is rebuilt");
+    }
+
+    @Test
+    void trustedIssuers_entryRemovedThenRebuilt_isNoLongerTrusted() {
+        TrustedJwtIssuerProperties props = trustedIssuers(
+                "http://api.external-nvcf.example.com",
+                "http://openbao.external/v1/services/nvcf-api/jwt/jwks");
+        AuthManagerResolver multi = buildResolverWithTrustedIssuers(props);
+
+        HttpServletRequest req = mock(HttpServletRequest.class);
+        when(req.getHeader("Authorization"))
+                .thenReturn(bearerWithIssuer("http://api.external-nvcf.example.com", "admin"));
+        assertNotNull(multi.authenticationManagerResolver().resolve(req));
+
+        props.setTrustedIssuers(List.of());
+
+        AuthenticationManagerResolver<HttpServletRequest> after =
+                multi.authenticationManagerResolver();
+        assertThrows(AuthenticationServiceException.class, () -> after.resolve(req),
+                "issuer removed at runtime must stop being trusted — revocation must apply");
+    }
+
+    @Test
+    void trustedIssuers_primaryIssuerSurvivesRebuild() {
+        TrustedJwtIssuerProperties props = new TrustedJwtIssuerProperties();
+        AuthManagerResolver multi = buildResolverWithTrustedIssuers(props);
+
+        props.setTrustedIssuers(List.of(trustedIssuerEntry(
+                "http://api.external-nvcf.example.com",
+                "http://openbao.external/v1/services/nvcf-api/jwt/jwks")));
+
+        HttpServletRequest req = mock(HttpServletRequest.class);
+        when(req.getHeader("Authorization"))
+                .thenReturn(bearerWithIssuer("http://api.sis.svc.cluster.local", "admin"));
+        assertNotNull(multi.authenticationManagerResolver().resolve(req),
+                "primary issuer must remain trusted across a rebuild");
+    }
+
+    @Test
+    void trustedIssuers_conflictingJwksOnRebuild_failsLoudly() {
+        // Rejected on rebuild exactly as at startup, rather than silently keeping stale trust.
+        TrustedJwtIssuerProperties props = new TrustedJwtIssuerProperties();
+        AuthManagerResolver multi = buildResolverWithTrustedIssuers(props);
+        assertNotNull(multi.authenticationManagerResolver());
+
+        props.setTrustedIssuers(List.of(trustedIssuerEntry(
+                "http://api.sis.svc.cluster.local", "http://openbao.other/jwks")));
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                multi::authenticationManagerResolver);
+        assertTrue(ex.getMessage().contains("http://api.sis.svc.cluster.local"));
+    }
+
     @Test
     void authenticationManagerResolver_clusterOidcUnknownCluster_throwsGenericMessage() {
         AuthenticationManagerResolver<HttpServletRequest> authResolver =
@@ -869,12 +943,31 @@ class AuthManagerResolverTest {
 
         /** Build a TrustedJwtIssuerProperties carrying one {issuer-uri, jwk-set-uri} entry. */
         private static TrustedJwtIssuerProperties trustedIssuers(String issuerUri, String jwkSetUri) {
-            TrustedJwtIssuerProperties.TrustedIssuer entry =
-                    new TrustedJwtIssuerProperties.TrustedIssuer();
-            entry.setIssuerUri(issuerUri);
-            entry.setJwkSetUri(jwkSetUri);
             TrustedJwtIssuerProperties props = new TrustedJwtIssuerProperties();
-            props.setTrustedIssuers(List.of(entry));
+            props.setTrustedIssuers(List.of(trustedIssuerEntry(issuerUri, jwkSetUri)));
             return props;
         }
+
+    private static TrustedJwtIssuerProperties.TrustedIssuer trustedIssuerEntry(
+            String issuerUri, String jwkSetUri) {
+        TrustedJwtIssuerProperties.TrustedIssuer entry =
+                new TrustedJwtIssuerProperties.TrustedIssuer();
+        entry.setIssuerUri(issuerUri);
+        entry.setJwkSetUri(jwkSetUri);
+        return entry;
+    }
+
+    /** Resolver over a caller-held properties instance, so the test can mutate it and refresh. */
+    private AuthManagerResolver buildResolverWithTrustedIssuers(TrustedJwtIssuerProperties props) {
+        NvcaConfigurationProperties cfg = new NvcaConfigurationProperties();
+        cfg.setOidcClusterIdentityEnabled(true);
+        return new AuthManagerResolver(
+                apiKeysService, clusterRepository, cfg, "ES256",
+                "http://api.sis.svc.cluster.local",
+                "http://openbao/v1/services/sis-api/jwt/jwks",
+                "",
+                "",
+                props,
+                /* apiKeyAuthEnabled */ true);
+    }
 }

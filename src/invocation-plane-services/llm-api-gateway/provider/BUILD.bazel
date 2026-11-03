@@ -21,13 +21,14 @@ go_library(
         "echo.go",
         "provider.go",
         "stargate.go",
+        "upstream_error.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider",
     visibility = ["//visibility:public"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/config",
         "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
-        "//src/invocation-plane-services/llm-api-gateway/internal/servicetier",
+        "//src/invocation-plane-services/llm-api-gateway/lastcluster",
         "//src/invocation-plane-services/llm-api-gateway/models",
         "//src/invocation-plane-services/llm-api-gateway/ratelimit",
         "//src/invocation-plane-services/llm-api-gateway/requestctx",
@@ -48,12 +49,17 @@ alias(
 
 go_test(
     name = "provider_test",
-    srcs = ["stargate_test.go"],
+    srcs = [
+        "chat_passthrough_test.go",
+        "stargate_last_cluster_test.go",
+        "stargate_test.go",
+        "upstream_error_test.go",
+    ],
     embed = [":provider"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/config",
         "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
-        "//src/invocation-plane-services/llm-api-gateway/internal/servicetier",
+        "//src/invocation-plane-services/llm-api-gateway/lastcluster",
         "//src/invocation-plane-services/llm-api-gateway/models",
         "//src/invocation-plane-services/llm-api-gateway/requestctx",
         "@com_github_stretchr_testify//require",

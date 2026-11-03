@@ -30,6 +30,7 @@ import (
 
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	otelmetric "go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -109,6 +110,48 @@ func TestMetricsDefinitionsUseServiceScopedNames(t *testing.T) {
 			t.Fatalf("missing metric %q in %#v", want, names)
 		}
 	}
+}
+
+func TestLastClusterMetrics(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	oldProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(oldProvider)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	InitializeMetrics()
+	RecordLastClusterLookup(context.Background(), LastClusterLookupHit, 3*time.Millisecond)
+	RecordLastClusterLookup(context.Background(), LastClusterLookupSkipped, 0)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	metrics := map[string]metricdata.Metrics{}
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			metrics[m.Name] = m
+		}
+	}
+	resultCounts := func(name string) map[string]int64 {
+		out := map[string]int64{}
+		for _, dp := range metrics[name].Data.(metricdata.Sum[int64]).DataPoints {
+			value, _ := dp.Attributes.Value("result")
+			out[value.AsString()] = dp.Value
+		}
+		return out
+	}
+	require.Equal(t,
+		map[string]int64{"hit": 1, "miss": 0, "error": 0, "timeout": 0, "skipped": 1},
+		resultCounts("llm_api_gateway_last_cluster_lookups_total"))
+	require.Equal(t,
+		map[string]int64{"ok": 0, "error": 0},
+		resultCounts("llm_api_gateway_last_cluster_writes_total"))
+
+	hist := metrics["llm_api_gateway_last_cluster_lookup_duration_seconds"].Data.(metricdata.Histogram[float64])
+	require.Len(t, hist.DataPoints, 1, "skipped lookups are not timed")
+	require.Equal(t, []float64{0.001, 0.002, 0.005, 0.01, 0.02, 0.05}, hist.DataPoints[0].Bounds)
 }
 
 func TestFunctionIDAttribute(t *testing.T) {

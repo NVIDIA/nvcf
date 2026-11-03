@@ -26,6 +26,9 @@ import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.rest.function.management.dto.SecretDto;
 import com.nvidia.nvcf.service.ess.EssService;
 import com.nvidia.nvcf.service.function.FunctionLookupService;
+import com.nvidia.nvcf.service.telemetry.TelemetryLookupService;
+import com.nvidia.nvcf.service.telemetry.TelemetryMapperService;
+import com.nvidia.nvcf.service.telemetry.TelemetryProviderValidator;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -56,10 +59,15 @@ public class SecretManagementFacade {
             "Function id '%s', version '%s': Forbidden to update secrets for this function";
     private static final String MESG_TELEMETRY_SECRETS_UPDATED =
             "Account '%s', telemetryId '%s' : Successfully updated secrets";
+    private static final String MESG_TELEMETRY_SKIPPED_TYPES =
+            "Account '%s', telemetryId '%s': Provider '%s' does not export stored types %s. "
+                    + "Validated the secret without them";
 
     private final EssService essService;
     private final FunctionLookupService functionLookupService;
     private final FunctionsRepository functionsRepository;
+    private final TelemetryLookupService telemetryLookupService;
+    private final TelemetryMapperService telemetryMapperService;
 
     public void updateFunctionSecrets(
             String ncaId,
@@ -127,6 +135,16 @@ public class SecretManagementFacade {
     }
 
     public void updateTelemetrySecret(String ncaId, UUID telemetryId, SecretDto secret) {
+        var telemetryEntity =
+                telemetryLookupService.lookupByAccountAndTelemetryIdOrThrow(ncaId, telemetryId);
+        var provider = telemetryMapperService.toTelemetryProviderEnum(telemetryEntity.getProvider());
+        var types = telemetryMapperService.toTelemetryTypeEnums(telemetryEntity.getTypes());
+        var skippedTypes = TelemetryProviderValidator.validateStoredSecretValue(
+                provider, types, secret.value());
+        if (!skippedTypes.isEmpty()) {
+            log.warn(MESG_TELEMETRY_SKIPPED_TYPES.formatted(
+                    ncaId, telemetryId, provider, skippedTypes));
+        }
         essService.saveTelemetrySecret(ncaId, telemetryId, secret);
 
         // ### TODO: Set last updated timestamp on the account when it becomes available.

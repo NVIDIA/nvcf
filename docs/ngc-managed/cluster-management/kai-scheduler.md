@@ -4,13 +4,13 @@
 To use the KAI Scheduler for NVCF Workloads the following configuration should be applied post the installation of the KAI Scheduler in the cluster and the [Optimized AI Workload Scheduling](./configuration.md#managing-feature-flags) enabled on the
 cluster. NVCF Workloads deployed will be automatically BinPacked upon this cluster configuration changes.
 
-**KAI Scheduler Installation**
+## KAI Scheduler Installation
 
 <Note>
 Upgrade to latest [KAI Scheduler release](https://github.com/kai-scheduler/KAI-Scheduler/releases) is recommended to get latest fixes and security patches
 </Note>
 
-Create `values.yaml` with queue attributes ([download template](samples/kai-scheduler-queues.yaml)):
+Create `values.yaml` with queue attributes ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/7e7f41d2586c7db401f8b23f520643d7ed770b6d/docs/ngc-managed/cluster-management/samples/kai-scheduler-queues.yaml)):
 
 <details>
 <summary>kai-scheduler-queues.yaml</summary>

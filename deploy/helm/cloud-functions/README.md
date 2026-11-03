@@ -94,6 +94,28 @@ The default values include development-oriented placeholders. Override them befo
 
 Set `api.remoteConfig.enabled: false` to opt out: the chart no longer renders the broad RBAC, and the service runs on JAR sidecar defaults in `application-ncp.yaml`. The SA keeps default-token automount on (the K8s default) so the vault-k8s injector's fallback service-account discovery continues to find a mount. Hot reload is unavailable.
 
+## Worker sidecar image tags
+
+The chart composes the function worker references in
+`api.remoteConfig.configData.nvcf.sidecars` from one tag per worker:
+
+| Key | Sidecar entry | Image |
+|-----|---------------|-------|
+| `api.remoteConfig.workerImageTags.init` | `init-container` | `nvcf-worker-init-oss` |
+| `api.remoteConfig.workerImageTags.utils` | `utils-container-image.go` | `nvcf-worker-utils-oss` |
+| `api.remoteConfig.workerImageTags.llmCredentials` | `llm-credential-manager-image` | `nvcf-worker-llm-credentials-oss` |
+
+Each reference renders as
+`${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/<image>:<tag>`, and the
+API resolves the placeholders at runtime. A worker release moves its key through
+`tools/chart-version-bumper`, which reads the `deploys` entries in
+`tools/ci/github-release-subprojects.json`. To replace a whole reference, for
+example to use another image name, set the matching
+`api.remoteConfig.configData.nvcf.sidecars` entry. It takes precedence over the
+composed value, and the matching tag is then optional. That keeps
+`helm upgrade --reuse-values` working for a release whose stored values predate
+`workerImageTags`.
+
 ## Sidecar release-artifact annotations
 
 The `api.remoteConfig.configData.nvcf.sidecars` worker images reference the

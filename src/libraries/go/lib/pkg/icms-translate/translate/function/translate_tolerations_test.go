@@ -146,6 +146,49 @@ func TestTranslateHelmChartUtilsDeploy_AppliesConfiguredTolerations(t *testing.T
 	))
 }
 
+// TestTranslateUtilsDeployment_PreservesFSGroup verifies that emitted utils
+// Deployment templates retain the shared-volume permissions set during translation.
+func TestTranslateUtilsDeployment_PreservesFSGroup(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		newMessage  func() CreationQueueMessage
+		withSecrets bool
+	}{
+		{name: "container", newMessage: newContainerFunctionMessage},
+		{name: "container with secrets", newMessage: newContainerFunctionMessage, withSecrets: true},
+		{name: "helm", newMessage: newHelmFunctionMessage},
+		{name: "helm with secrets", newMessage: newHelmFunctionMessage, withSecrets: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := tc.newMessage()
+			if tc.withSecrets {
+				msg.LaunchSpecification.EnvironmentB64 = encodeTextEnv(map[string]string{
+					common.ContainerFunctionImageEnv: "function:latest",
+					common.UtilsImageEnv:             "utils:latest",
+					common.InitImageEnv:              "init:latest",
+					common.ESSAgentContainerEnv:      "ess:latest",
+					common.SecretsAssertionTokenEnv:  "assertion-token",
+					common.FunctionSecretsPresentEnv: "true",
+				})
+			}
+
+			objs, err := Translate(msg, TranslateConfig{
+				TranslateConfig:     newFunctionTranslateConfig(nil),
+				SidecarAsDeployment: true,
+			})
+			require.NoError(t, err)
+
+			deployment := findDeploymentByName(t, objs, "request-utils")
+			securityContext := deployment.Spec.Template.Spec.SecurityContext
+			require.NotNil(t, securityContext)
+			require.NotNil(t, securityContext.FSGroup)
+			assert.Equal(t, int64(1000), *securityContext.FSGroup)
+			require.NotNil(t, securityContext.FSGroupChangePolicy)
+			assert.Equal(t, corev1.FSGroupChangeOnRootMismatch, *securityContext.FSGroupChangePolicy)
+		})
+	}
+}
+
 // TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers verifies the Helm
 // LLM sidecars and metrics port.
 func TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers(t *testing.T) {
@@ -399,9 +442,21 @@ func TestTranslateContainerWithCacheAndSecrets(t *testing.T) {
 	pod := findPodByName(t, objs, "0-request")
 	assertUtilsMetricsPort(t, findContainerByName(t, pod.Spec.Containers, common.UtilsContainerName))
 	assert.Equal(t, "value", envSliceToMap(findContainerByName(t, pod.Spec.Containers, inferenceContainerName).Env)["INFERENCE_ENV"])
-	assert.Equal(t, "ess", findContainerByName(t, pod.Spec.Containers, "ess").Name)
+	essContainer := findContainerByName(t, pod.Spec.Containers, "ess")
+	assert.Equal(t, "ess", essContainer.Name)
+	require.NotNil(t, essContainer.SecurityContext)
+	assert.Equal(t, common.EssAgentUID, *essContainer.SecurityContext.RunAsUser)
+	assert.True(t, *essContainer.SecurityContext.RunAsNonRoot)
 	require.Len(t, pod.Spec.InitContainers, 2)
-	assert.Equal(t, "ess-init", pod.Spec.InitContainers[1].Name)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.InitContainers[0].SecurityContext.RunAsUser)
+	assert.True(t, *pod.Spec.InitContainers[0].SecurityContext.RunAsNonRoot)
+	essInitContainer := pod.Spec.InitContainers[1]
+	assert.Equal(t, "ess-init", essInitContainer.Name)
+	require.NotNil(t, essInitContainer.SecurityContext)
+	assert.Equal(t, common.EssAgentUID, *essInitContainer.SecurityContext.RunAsUser)
+	require.NotNil(t, pod.Spec.SecurityContext)
+	assert.Equal(t, common.EssAgentUID, *pod.Spec.SecurityContext.FSGroup)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.SecurityContext.FSGroup)
 	assert.NotNil(t, findObjectByName(t, objs, "rw-pvc-function-cache"))
 	assert.NotNil(t, findObjectByName(t, objs, "writer-job-function-cache"))
 }

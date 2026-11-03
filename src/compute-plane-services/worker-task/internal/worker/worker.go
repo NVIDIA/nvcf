@@ -74,9 +74,13 @@ func NewNVCTWorker(ctx context.Context, zapLogger *logs.ZapLogger, config config
 		config.HealthPort = configs.DefaultHealthPort
 	}
 
-	otelUrl, err := url.Parse(config.OTELExporterOTLPEndpoint)
+	otlpHost, otlpInsecure, err := otlpTraceTarget(config.OTELExporterOTLPEndpoint)
 	if err != nil {
 		return nil, sharedTypes.NewInternalError(err)
+	}
+	if otlpHost == "" {
+		zap.L().Info("OTEL_EXPORTER_OTLP_ENDPOINT is not set, tracing is disabled",
+			zap.String("task_id", config.TaskId))
 	}
 
 	workerHealth := health.New()
@@ -179,9 +183,9 @@ func NewNVCTWorker(ctx context.Context, zapLogger *logs.ZapLogger, config config
 				ServiceName: "gdn-nvct-worker-service",
 				Version:     utils.Version,
 				Tracing: tracing.OTELConfig{
-					Enabled:     true,
-					Endpoint:    otelUrl.Host,
-					Insecure:    otelUrl.Scheme == "http",
+					Enabled:     otlpHost != "",
+					Endpoint:    otlpHost,
+					Insecure:    otlpInsecure,
 					AccessToken: config.TracingAccessToken,
 					Attributes: tracing.Attributes{
 						Extra: map[string]string{
@@ -520,4 +524,22 @@ func (w *NVCTWorker) waitForTaskReady(ctx context.Context, timeout time.Duration
 			}
 		}
 	}
+}
+
+// otlpTraceTarget parses OTEL_EXPORTER_OTLP_ENDPOINT into the host and
+// transport security for the OTLP gRPC trace exporter. An empty or unset
+// endpoint returns an empty host, which means tracing is disabled.
+func otlpTraceTarget(endpoint string) (host string, insecure bool, err error) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "", false, nil
+	}
+	otelURL, err := url.Parse(endpoint)
+	if err != nil {
+		return "", false, err
+	}
+	if otelURL.Host == "" {
+		return "", false, errors.New("OTEL_EXPORTER_OTLP_ENDPOINT must be a URL with a host, such as http://otel-collector:4317")
+	}
+	return otelURL.Host, otelURL.Scheme == "http", nil
 }

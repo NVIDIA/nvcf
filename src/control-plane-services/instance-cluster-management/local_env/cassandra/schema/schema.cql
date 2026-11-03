@@ -43,6 +43,7 @@ gpu_specification_id uuid,
 nca_id text,
 reservation_id uuid,
 gpu_count_per_instance int,
+creation_bucket timestamp,
 PRIMARY KEY (request_id)
 );
 
@@ -54,6 +55,9 @@ CREATE CUSTOM INDEX IF NOT EXISTS idx_requests_by_deployment_id
 
 CREATE CUSTOM INDEX IF NOT EXISTS idx_requests_by_nca_id
    ON test.requests (nca_id) USING 'StorageAttachedIndex';
+
+CREATE CUSTOM INDEX IF NOT EXISTS  idx_requests_by_creation_day
+    ON test.requests  (creation_bucket) USING 'StorageAttachedIndex';
 
 
 CREATE TABLE IF NOT exists test.requests_by_day (
@@ -99,6 +103,7 @@ instance_expiration_time timestamp,
 backup_to_primary_migration_scheduled boolean,
 deployment_id uuid,
 gpu_specification_id uuid,
+creation_bucket timestamp,
 PRIMARY KEY (instance_id)
 );
 
@@ -119,6 +124,9 @@ CREATE CUSTOM INDEX IF NOT EXISTS idx_instances_by_deployment_id
 
 CREATE CUSTOM INDEX IF NOT EXISTS idx_instances_by_gpu_specification_id
     ON test.instances (gpu_specification_id) USING 'StorageAttachedIndex';
+
+CREATE CUSTOM INDEX IF NOT EXISTS  idx_instances_by_creation_day
+    ON test.instances (creation_bucket) USING 'StorageAttachedIndex';
 
 
 CREATE TABLE IF NOT exists test.instances_by_day (
@@ -323,6 +331,7 @@ CREATE TYPE IF NOT EXISTS test.creation_queue
     queue_type text
 );
 
+-- Deprecated: cluster_by_group_id_and_cluster_id is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT exists test.cluster_by_group_id_and_cluster_id (
 cluster_name text,
 cluster_id text,
@@ -415,6 +424,7 @@ cluster_configuration_files map<text, text>,
 PRIMARY KEY (cluster_id)
 );
 
+-- Deprecated: cluster_group_by_cluster_group_id is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT exists test.cluster_group_by_cluster_group_id (
 cluster_group_name text,
 cluster_group_id text,
@@ -432,6 +442,7 @@ cluster_id text,
 PRIMARY KEY (cluster_id)
 );
 
+-- Deprecated: clusters_by_account is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT exists test.clusters_by_account (
 cluster_name text,
 registration_time timestamp,
@@ -483,6 +494,7 @@ authorized_nca_ids set<text>,
 PRIMARY KEY ((nca_id_key), cluster_group_name, cluster_group_id)
 );
 
+-- Deprecated: clusters_by_authorized_accounts is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT exists test.clusters_by_authorized_accounts (
 nca_id_key text,
 cluster_name text,
@@ -503,6 +515,7 @@ cluster_key_id text,
 PRIMARY KEY ((nca_id_key), cluster_id)
 );
 
+-- Deprecated: cluster_groups_by_account is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT exists test.cluster_groups_by_account (
 cluster_group_name text,
 cluster_group_id text,

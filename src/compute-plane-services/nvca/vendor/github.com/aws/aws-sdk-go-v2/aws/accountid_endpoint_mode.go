@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 package aws
 
 // AccountIDEndpointMode controls how a resolved AWS account ID is handled for endpoint routing.

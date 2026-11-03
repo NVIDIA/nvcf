@@ -95,6 +95,21 @@ var (
 			Help:      "total number of lame duck messages",
 		})
 
+	EventLedgerPublishCounter = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: RootNamespace,
+			Name:      "event_ledger_publish_total",
+			Help:      "total events published to the event ledger, by event type and result",
+		}, []string{"event_type", "result"})
+
+	// EventLedgerSendDurationSeconds covers a whole send, including retries.
+	EventLedgerSendDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: RootNamespace,
+			Name:      "event_ledger_send_duration_seconds",
+			Help:      "time to deliver an event to the event ledger, including retries",
+		}, []string{"result"})
+
 	_ = promauto.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: NatsNamespace,
 		Name:      "out_bytes",
@@ -361,6 +376,9 @@ const (
 	ConnectTokenUnknown      = "rejected_token_unknown"      // 403, token was never issued by this pod
 	ConnectRequestIDMismatch = "rejected_requestid_mismatch" // 403, token valid but bound to another request
 	ConnectHijackFailed      = "rejected_hijack_failed"      // 500
+	// The tunnel was hijacked but could not be attached, for example during
+	// shutdown or when another worker already took the request.
+	ConnectRegisterFailed = "rejected_register_failed"
 )
 
 var ConnectResults = []string{
@@ -373,6 +391,7 @@ var ConnectResults = []string{
 	ConnectTokenUnknown,
 	ConnectRequestIDMismatch,
 	ConnectHijackFailed,
+	ConnectRegisterFailed,
 }
 
 var (

@@ -70,13 +70,19 @@ func Test_newWorkloadTelemetriesEnvVars(t *testing.T) {
 	require.NotEmpty(t, envs)
 
 	envNames := make(map[string]bool, len(envs))
+	envValues := make(map[string]string, len(envs))
 	for _, e := range envs {
 		envNames[e.Name] = true
+		envValues[e.Name] = e.Value
 	}
 	assert.True(t, envNames[common.OTelExporterLogsEndpointEnv], "should have logs endpoint")
 	assert.True(t, envNames[common.OTelExporterMetricsEndpointEnv], "should have metrics endpoint")
 	assert.True(t, envNames[common.OTelExporterTracesEndpointEnv], "should have traces endpoint")
 	assert.True(t, envNames[common.OTelHealthCheckEndpointEnv], "should have health check endpoint")
+	// HTTP telemetry must use a protocol value from the OpenTelemetry spec, not "http".
+	assert.Equal(t, "http/protobuf", envValues[common.OTelExporterLogsProtocolEnv])
+	assert.Equal(t, "http/protobuf", envValues[common.OTelExporterMetricsProtocolEnv])
+	assert.Equal(t, "http/protobuf", envValues[common.OTelExporterTracesProtocolEnv])
 }
 
 func Test_newInstanceIDEnv(t *testing.T) {

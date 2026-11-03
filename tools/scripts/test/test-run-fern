@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+mkdir -p "$workdir/fern" "$workdir/bin" "$workdir/cache/5.144.1/node_modules/fern-api"
+cp "$repo_root/tools/ci/run-fern" "$workdir/run-fern"
+printf '{"version":"5.144.1"}\n' > "$workdir/fern/fern.config.json"
+printf '{"version":"5.144.1"}\n' > "$workdir/cache/5.144.1/node_modules/fern-api/package.json"
+cat > "$workdir/cache/5.144.1/node_modules/fern-api/cli.cjs" <<'JS'
+console.log(JSON.stringify(process.argv.slice(2)));
+process.exit(Number(process.env.TEST_FERN_EXIT || 0));
+JS
+cat > "$workdir/bin/npm" <<'SH'
+#!/usr/bin/env bash
+echo 'unexpected npm install for a populated cache' >&2
+exit 99
+SH
+chmod +x "$workdir/bin/npm"
+cd "$workdir"
+export FERN_CLI_CACHE="$workdir/cache"
+export PATH="$workdir/bin:$PATH"
+output="$(./run-fern generate --docs --id 'preview with spaces')"
+[ "$output" = '["generate","--docs","--id","preview with spaces"]' ]
+status=0
+TEST_FERN_EXIT=42 ./run-fern check > output.txt 2>&1 || status=$?
+[ "$status" -eq 42 ] || { echo "Fern exit status was lost: $status"; exit 1; }
+printf '{"version":"5.38.0"}\n' > "$workdir/cache/5.144.1/node_modules/fern-api/package.json"
+if ./run-fern check > output.txt 2>&1; then
+  echo 'expected a cached version mismatch to fail'; exit 1
+fi
+grep -q 'cache version mismatch' output.txt
+printf '{"version":"latest"}\n' > fern/fern.config.json
+if ./run-fern check > output.txt 2>&1; then
+  echo 'expected an unpinned version to fail'; exit 1
+fi
+grep -q 'Invalid Fern version' output.txt
+echo 'test-run-fern: PASS'

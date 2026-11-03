@@ -46,6 +46,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/interfaces"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/nvca"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/tracing"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy"
@@ -154,7 +155,7 @@ func runService(cfg config.Config) error {
 	}
 	defer publisher.Stop()
 
-	server := service.NewServer(conns, logger, publisher, cfg.Telemetry.ServiceVersion, &cfg.HTTP, cfg.Pagination, cfg.Stats)
+	server := service.NewServer(conns, logger, publisher, cfg.Telemetry.ServiceVersion, &cfg.HTTP, cfg.Pagination, cfg.Stats).WithAccountColumns(cfg.V3.AccountColumnsEnabled)
 	router := mux.NewRouter()
 	router.Use(middleware.EnableCORS)
 	router.Use(middleware.BodyLimitMiddleware(10 * 1024 * 1024)) // 10MB limit
@@ -294,7 +295,25 @@ func runService(cfg config.Config) error {
 				opts.Issuer = cfg.Auth.Issuer
 				opts.Audience = cfg.Auth.Audience
 				opts.TenantClaim = cfg.Auth.TenantClaim
+				opts.RequireExpiration = true
 				jwtOpts = &opts
+			}
+
+			var introspector nvca.Introspector
+			if cfg.Auth.Introspection.Enabled {
+				introspectionCfg := cfg.Auth.Introspection.WithDefaults()
+				logger.Warn("nvca psat introspection enabled", zap.String("url", introspectionCfg.URL))
+
+				introspectionClient, err := nvca.NewClient(
+					introspectionCfg.URL,
+					time.Duration(introspectionCfg.TimeoutSeconds)*time.Second,
+					time.Duration(introspectionCfg.CacheTTLSeconds)*time.Second,
+				)
+				if err != nil {
+					logger.Error("failed to create nvca introspection client", zap.Error(err))
+					return fmt.Errorf("failed to create nvca introspection client: %w", err)
+				}
+				introspector = introspectionClient
 			}
 
 			requireLocalScopeCheck = cfg.SelfManaged
@@ -304,7 +323,7 @@ func runService(cfg config.Config) error {
 				"nv-cloud-functions",
 				jwtOpts,
 				jwkCache,
-				cfg.SelfManaged,
+				introspector,
 				logger,
 			))
 		default:
@@ -447,12 +466,12 @@ func runService(cfg config.Config) error {
 	}
 
 	authRouter.Handle("/v3/ledger/k8s-events",
-		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(wrapper(http.HandlerFunc(server.PostK8sEventV3))),
+		middleware.MaybeRequireScopesAllowNVCA(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(wrapper(http.HandlerFunc(server.PostK8sEventV3))),
 	).Methods("POST", "OPTIONS")
 
 	// CloudEvents receiver endpoint
 	authRouter.Handle("/v3/ledger/cloudevents",
-		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.PostCloudEventV3)),
+		middleware.MaybeRequireScopesAllowNVCA(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.PostCloudEventV3)),
 	).Methods("POST", "OPTIONS")
 
 	// V3 Stats endpoint - retrieve aggregated stats for a namespace
@@ -463,6 +482,14 @@ func runService(cfg config.Config) error {
 	// V3 Events endpoint - retrieve all events for a specific namespace and context (context via query params)
 	authRouter.Handle("/v3/ledger/namespace/{namespace}/events",
 		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.ReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetEventsV3)),
+	).Methods("GET", "OPTIONS")
+
+	// Account-scoped V3 reads for KAS. The account in the path is trusted.
+	authRouter.Handle("/v3/ledger/accounts/{ncaId}/functions/{functionId}/versions/{functionVersionId}/events",
+		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.AdminReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetAccountEventsV3)),
+	).Methods("GET", "OPTIONS")
+	authRouter.Handle("/v3/ledger/accounts/{ncaId}/functions/{functionId}/versions/{functionVersionId}/stats",
+		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.AdminReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetAccountStatsV3)),
 	).Methods("GET", "OPTIONS")
 
 	// Cross Account Endpoints for KAS (V2)

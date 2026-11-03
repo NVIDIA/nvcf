@@ -209,11 +209,12 @@ func TestRequireScopes(t *testing.T) {
 	logger := otelzap.New(zaptest.NewLogger(t))
 
 	tests := []struct {
-		name             string
-		claims           jwt.MapClaims
-		requiredScopes   Scopes
-		scopeRequirement ScopeRequirement
-		expectedStatus   int
+		name              string
+		claims            jwt.MapClaims
+		requiredScopes    Scopes
+		scopeRequirement  ScopeRequirement
+		allowNVCAIdentity bool
+		expectedStatus    int
 	}{
 		{
 			name: "Has all required scopes",
@@ -277,7 +278,7 @@ func TestRequireScopes(t *testing.T) {
 			})
 
 			// Create middleware
-			middleware := requireScopes(tt.requiredScopes, tt.scopeRequirement)
+			middleware := requireScopes(tt.requiredScopes, tt.scopeRequirement, tt.allowNVCAIdentity)
 			wrappedHandler := middleware(testHandler)
 
 			// Create a test request
@@ -300,6 +301,58 @@ func TestRequireScopes(t *testing.T) {
 			wrappedHandler.ServeHTTP(rec, req)
 
 			// Check the status code
+			assert.Equal(t, tt.expectedStatus, rec.Code)
+		})
+	}
+}
+
+func TestRequireScopesNVCAIdentity(t *testing.T) {
+	logger := otelzap.New(zaptest.NewLogger(t))
+
+	tests := []struct {
+		name              string
+		requiredScopes    Scopes
+		allowNVCAIdentity bool
+		expectedStatus    int
+	}{
+		{
+			name:              "NVCA identity on an allowed write route passes",
+			requiredScopes:    WriteScopes,
+			allowNVCAIdentity: true,
+			expectedStatus:    http.StatusOK,
+		},
+		{
+			name:              "NVCA identity on a write route that didn't opt in is forbidden, not unauthorized",
+			requiredScopes:    WriteScopes,
+			allowNVCAIdentity: false,
+			expectedStatus:    http.StatusForbidden,
+		},
+		{
+			name:              "NVCA identity on a non-write route is forbidden, not unauthorized",
+			requiredScopes:    ReadScopes,
+			allowNVCAIdentity: true,
+			expectedStatus:    http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+
+			middleware := requireScopes(tt.requiredScopes, RequireAnyScopes, tt.allowNVCAIdentity)
+			wrappedHandler := middleware(testHandler)
+
+			req := httptest.NewRequest("POST", "/test", nil)
+			traceLogger := logging.NewTraceLogger(req.Context(), logger)
+			ctx := context.WithValue(req.Context(), logging.LoggerKey, traceLogger)
+			ctx = WithNVCAIdentity(ctx, NVCAIdentity{Subject: "system:serviceaccount:customer-ns:nvca", ClusterID: "cluster-a"})
+			req = req.WithContext(ctx)
+
+			rec := httptest.NewRecorder()
+			wrappedHandler.ServeHTTP(rec, req)
+
 			assert.Equal(t, tt.expectedStatus, rec.Code)
 		})
 	}

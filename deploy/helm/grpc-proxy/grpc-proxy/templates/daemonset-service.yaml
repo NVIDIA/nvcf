@@ -29,7 +29,7 @@ metadata:
 spec:
   type: {{ .Values.grpcproxy.service.type | default "ClusterIP" }}
   ports:
-    {{- range .Values.grpcproxy.ports }}
+    {{- range include "grpc-proxy.ports" . | fromJsonArray }}
     - name: {{ .name }}
       port: {{ .containerPort }}
       targetPort: {{ .containerPort }}

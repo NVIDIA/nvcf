@@ -165,12 +165,12 @@ pub(crate) fn token_delay(state: &AppState, request_id: &str, token_index: usize
     }
 }
 
-pub(crate) fn jitter_ms(request_id: &str, salt: &str, max_jitter_ms: u64) -> u64 {
+pub(crate) fn jitter_ms(request_id: &str, domain: &str, max_jitter_ms: u64) -> u64 {
     if max_jitter_ms == 0 {
         return 0;
     }
 
-    let hash = deterministic_hash(request_id, salt);
+    let hash = deterministic_hash(request_id, domain);
     max_jitter_ms
         .checked_add(1)
         .map_or(hash, |range| hash % range)
@@ -228,18 +228,20 @@ enum HashDomain {
     TokensGaussianAngle,
 }
 
-fn deterministic_hash(request_id: &str, salt: &str) -> u64 {
-    deterministic_hash_bytes(request_id, salt.bytes())
+/// Non-cryptographic hash of a request ID within a named domain, so each
+/// timing draw for a request is independent and reproducible.
+fn deterministic_hash(request_id: &str, domain: &str) -> u64 {
+    deterministic_hash_bytes(request_id, domain.bytes())
 }
 
 fn deterministic_hash_domain(request_id: &str, domain: HashDomain) -> u64 {
     deterministic_hash_bytes(request_id, [domain as u8])
 }
 
-fn deterministic_hash_bytes(request_id: &str, salt: impl IntoIterator<Item = u8>) -> u64 {
+fn deterministic_hash_bytes(request_id: &str, domain: impl IntoIterator<Item = u8>) -> u64 {
     request_id
         .bytes()
-        .chain(salt)
+        .chain(domain)
         .fold(1469598103934665603, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(1099511628211)
         })

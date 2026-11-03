@@ -21,6 +21,7 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 use crate::AppState;
+use crate::engine_driver::EngineDriver;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
@@ -37,8 +38,16 @@ pub(crate) enum StatsStreamEvent {
         #[serde(skip_serializing_if = "is_false")]
         finished: bool,
     },
+    /// Keepalive. The batched engine also advertises its concurrency limit,
+    /// which Pylon uses instead of `--max-engine-concurrency`.
     #[serde(rename = "ping")]
-    Ping { v: u8 },
+    Ping {
+        v: u8,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_engine_concurrency: Option<u64>,
+    },
 }
 
 fn is_false(value: &bool) -> bool {
@@ -47,6 +56,8 @@ fn is_false(value: &bool) -> bool {
 
 pub(crate) async fn stats_stream(State(state): State<AppState>) -> Response {
     let mut events = state.stats_events.subscribe();
+    let max_engine_concurrency = state.engine.as_ref().map(EngineDriver::max_concurrency);
+    let model = max_engine_concurrency.map(|_| state.model_name.clone());
     let stream = async_stream::stream! {
         let mut ping = tokio::time::interval(Duration::from_secs(1));
         ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -59,7 +70,11 @@ pub(crate) async fn stats_stream(State(state): State<AppState>) -> Response {
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
-                _ = ping.tick() => StatsStreamEvent::Ping { v: 1 },
+                _ = ping.tick() => StatsStreamEvent::Ping {
+                    v: 1,
+                    model: model.clone(),
+                    max_engine_concurrency,
+                },
             };
             yield Ok::<Bytes, std::convert::Infallible>(ndjson_event(&event));
         }

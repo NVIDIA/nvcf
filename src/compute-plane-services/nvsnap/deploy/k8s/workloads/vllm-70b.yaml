@@ -6,9 +6,9 @@
 # nvsnap agent's rootfs watcher captures this pod after the warmup window.
 #
 # Customer-shape minimal yaml — no CRIU init container ladder. The
-# rootfs path captures the pod's overlay upperdir + Hugging Face cache
-# + compiled engine caches and replays them via webhook-injected bind
-# mounts on the corresponding `vllm-70b-fresh` pod.
+# cachedir path captures ONLY the pod's cache mount (Hugging Face model
+# + compiled engine caches), not the whole container rootfs, and replays
+# it via webhook-injected mounts on the corresponding restore pod.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -17,14 +17,14 @@ metadata:
   labels:
     app: vllm-70b
     nvsnap.io/demo: "true"
-    nvsnap.io/capture: "true"   # opt-in to rootfs capture (multi-GPU only)
+    nvsnap.io/capture: "true"   # opt-in to cachedir capture (multi-GPU only)
   annotations:
     nvsnap.io/demo-name: "vLLM"
-    nvsnap.io/desc: "Llama-3.1-70B multi-GPU tensor-parallel (TP=4, rootfs)"
+    nvsnap.io/desc: "Llama-3.1-70B multi-GPU tensor-parallel (TP=4, cachedir)"
     nvsnap.io/model: "meta-llama/Llama-3.1-70B-Instruct"
     nvsnap.io/port: "8000"
     nvsnap.io/gpus: "4"
-    nvsnap.io/path: "rootfs"
+    nvsnap.io/path: "cachedir"
     nvsnap.io/ckpt-size: "132 GB"
 spec:
   tolerations:

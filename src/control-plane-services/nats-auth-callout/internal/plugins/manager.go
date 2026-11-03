@@ -104,13 +104,14 @@ func (pm *Manager) initializePlugins() {
 			if alias == "" {
 				alias = plugin.ID // Default to plugin ID if no alias
 			}
+			pluginAccountName := accountName
 			if plugin.ID == "nkey" {
 				// the nkey plugin maintains its own internal account list and is special cased.
 				// we don't know the account name until the nkey is looked up by the plugin.
-				accountName = ""
+				pluginAccountName = ""
 			}
 			pluginKey := PluginKey{
-				AccountName: accountName,
+				AccountName: pluginAccountName,
 				PluginName:  alias,
 			}
 

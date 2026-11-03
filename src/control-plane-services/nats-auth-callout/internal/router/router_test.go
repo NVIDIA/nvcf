@@ -23,6 +23,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
 )
 
@@ -173,5 +175,62 @@ func TestMetricsDisabled(t *testing.T) {
 	router.engine.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status code %d for healthz endpoint, but got %d", http.StatusOK, w.Code)
+	}
+}
+
+type fakeNATSStatus nats.Status
+
+func (f fakeNATSStatus) Status() nats.Status { return nats.Status(f) }
+
+func TestHealthProbes_FollowNATSStatus(t *testing.T) {
+	tests := []struct {
+		name        string
+		nats        NATSStatusSource
+		wantHealthz int
+		wantReadyz  int
+	}{
+		{"no NATS dependency", nil, http.StatusOK, http.StatusOK},
+		{"connected", fakeNATSStatus(nats.CONNECTED), http.StatusOK, http.StatusOK},
+		{"connecting", fakeNATSStatus(nats.CONNECTING), http.StatusOK, http.StatusServiceUnavailable},
+		{"reconnecting", fakeNATSStatus(nats.RECONNECTING), http.StatusOK, http.StatusServiceUnavailable},
+		{"disconnected", fakeNATSStatus(nats.DISCONNECTED), http.StatusOK, http.StatusServiceUnavailable},
+		{"draining", fakeNATSStatus(nats.DRAINING_SUBS), http.StatusOK, http.StatusServiceUnavailable},
+		{"closed", fakeNATSStatus(nats.CLOSED), http.StatusServiceUnavailable, http.StatusServiceUnavailable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := New(zap.NewNop(), &Config{ServiceName: "test-service", NATS: tt.nats})
+			// Existing deployments probe liveness on /health, so it must follow /healthz.
+			for path, want := range map[string]int{"/healthz": tt.wantHealthz, "/readyz": tt.wantReadyz, "/health": tt.wantHealthz} {
+				w := httptest.NewRecorder()
+				router.engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+				if w.Code != want {
+					t.Errorf("GET %s = %d, want %d", path, w.Code, want)
+				}
+			}
+		})
+	}
+}
+
+func TestPrometheusMiddleware_ProbePaths_CountedExceptHealthz(t *testing.T) {
+	router := New(zap.NewNop(), &Config{ServiceName: "test-service", Metrics: &MetricsConfig{Enabled: true}})
+	tests := []struct {
+		path        string
+		wantCounted bool
+	}{
+		{"/healthz", false},
+		{"/readyz", true},
+		{"/health", true},
+		{"/v1/ping", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			counter := RequestCounter.WithLabelValues(tt.path, http.MethodGet, "200")
+			before := testutil.ToFloat64(counter)
+			router.engine.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, tt.path, nil))
+			if counted := testutil.ToFloat64(counter) > before; counted != tt.wantCounted {
+				t.Errorf("GET %s counted = %v, want %v", tt.path, counted, tt.wantCounted)
+			}
+		})
 	}
 }

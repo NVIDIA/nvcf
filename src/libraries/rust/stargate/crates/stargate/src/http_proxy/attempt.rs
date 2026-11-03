@@ -30,9 +30,10 @@ use crate::routing_state::{RoutedInferenceServerSnapshot, RoutingReservation};
 use super::ProxyAppState;
 use super::retry::{
     FinalRetryDisposition, RetryDecision, UpstreamRetry, decide_proxy_error_retry,
-    decide_upstream_response_retry, header_str, retry_budget_has_remaining,
-    should_release_queue_mismatch_reservation,
+    decide_upstream_response_retry, header_str, is_internal_capacity_rejection,
+    retry_budget_has_remaining, should_release_queue_mismatch_reservation,
 };
+use super::routing::overloaded_response;
 use super::run::{ProxyRequestRun, SelectedClusterRun};
 use super::upstream::{
     UpstreamStreamingResponse, copy_forwardable_headers, headers_for_upstream_attempt,
@@ -41,6 +42,16 @@ use super::upstream::{
 
 const HEADER_CHOSEN_INFERENCE_SERVER_URL: &str = "x-inference-server-url";
 const HEADER_CHOSEN_CLUSTER_ID: &str = "x-stargate-cluster-id";
+
+fn clamp_routing_reservation_ttl(
+    rtt: std::time::Duration,
+    min: std::time::Duration,
+    max: std::time::Duration,
+) -> std::time::Duration {
+    // Startup rejects min > max; `Duration::clamp` would panic on every
+    // dispatch if a programmatic config bypassed that check, so max wins.
+    rtt.max(min).min(max)
+}
 
 #[derive(Default)]
 pub(super) struct ProxyAttemptCounters {
@@ -71,6 +82,7 @@ impl ProxyRequestRun<'_> {
         selected: &SelectedClusterRun,
         chosen: &Arc<RoutedInferenceServerSnapshot>,
     ) -> ProxyAttemptOutcome {
+        self.last_attempt_capacity_rejected = false;
         self.attempt_counters.attempt += 1;
         Span::current().record("proxy.attempt", self.attempt_counters.attempt as i64);
         Span::current().record(
@@ -110,11 +122,24 @@ impl ProxyRequestRun<'_> {
             }
         }
 
-        let reservation: Option<RoutingReservation> = selected.cluster.reserve_backend(
-            &chosen.registration,
-            self.request.request_inputs.input_tokens,
-            self.request.request_inputs.priority,
-        );
+        let reservation: Option<RoutingReservation> =
+            selected.cluster.reserve_backend_with_rtt_ttl(
+                &chosen.registration,
+                self.request.request_inputs.input_tokens,
+                self.request.request_inputs.priority,
+                |rtt| {
+                    clamp_routing_reservation_ttl(
+                        rtt,
+                        self.app.routing_reservation_ttl_min,
+                        self.app.routing_reservation_ttl_max,
+                    )
+                },
+                self.app.metrics.clone(),
+                &crate::routing_state::RoutingTargetKey::new(
+                    self.routing_key().map(str::to_owned),
+                    self.model_id(),
+                ),
+            );
         record_proxy_attempt_start(self, selected, chosen);
 
         let upstream_span = proxy_upstream_attempt_span(self, selected, chosen);
@@ -132,13 +157,27 @@ impl ProxyRequestRun<'_> {
             selected.expected_queue_ms,
         );
         let upstream_start = Instant::now();
+        let mut request_body_started = false;
         let upstream = proxy_via_quic_streaming(
             self.app,
             &chosen.registration,
             self.request.method.clone(),
             &self.request.path_and_query,
             attempt_headers,
-            || self.request.replay_body.body_for_attempt(),
+            || {
+                // The tunnel calls this after opening the stream and sending
+                // the request head, so the soft expiry starts only once the
+                // request has left Stargate. Attempts that end earlier arm
+                // when the reservation is dropped.
+                if let Some(reservation) = &reservation {
+                    reservation.arm();
+                }
+                let body = self.request.replay_body.body_for_attempt()?;
+                // After handing the body to the tunnel, a transport failure
+                // cannot establish whether the backend applied this POST.
+                request_body_started = true;
+                Ok(body)
+            },
         )
         .instrument(upstream_span.clone())
         .await;
@@ -152,6 +191,7 @@ impl ProxyRequestRun<'_> {
                     &self.app.retry,
                     retry_budget_has_remaining(self.request.retry_deadline),
                     self.attempt_counters.connect_retries,
+                    request_body_started,
                     self.request.replay_body.replay_readiness(),
                 ) {
                     RetryDecision::Final(disposition) => {
@@ -187,6 +227,8 @@ impl ProxyRequestRun<'_> {
             }
         };
 
+        self.last_attempt_capacity_rejected =
+            is_internal_capacity_rejection(upstream.status, &upstream.headers);
         if should_release_queue_mismatch_reservation(upstream.status, &upstream.headers)
             && let Some(reservation) = reservation
         {
@@ -357,6 +399,10 @@ fn finish_attempt(
     }
     let upstream = match disposition {
         FinalRetryDisposition::PassThrough | FinalRetryDisposition::ReplayIncomplete(_) => upstream,
+        FinalRetryDisposition::AmbiguousDelivery => {
+            metrics.proxy_ambiguous_delivery_total().inc();
+            upstream
+        }
         FinalRetryDisposition::Exhausted(retry_reason) => {
             metrics
                 .proxy_retry_exhausted_total(run.routing_key(), run.model_id(), &retry_reason)
@@ -365,7 +411,14 @@ fn finish_attempt(
         }
         FinalRetryDisposition::PayloadTooLarge(_) => Err(StatusCode::PAYLOAD_TOO_LARGE),
     };
-    let status = upstream_status(&upstream);
+    let capacity_rejected = upstream
+        .as_ref()
+        .is_ok_and(|response| is_internal_capacity_rejection(response.status, &response.headers));
+    let status = if capacity_rejected {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        upstream_status(&upstream)
+    };
     metrics
         .requests_total(
             run.routing_key(),
@@ -376,6 +429,9 @@ fn finish_attempt(
         .inc();
     if let Some(failure) = failure {
         failure.log(run, chosen, status);
+    }
+    if capacity_rejected {
+        return ProxyAttemptOutcome::ReturnFinal(overloaded_response());
     }
     match upstream.and_then(|upstream| build_proxy_response(upstream, chosen)) {
         Ok(response) => ProxyAttemptOutcome::ReturnFinal(response),
@@ -500,4 +556,411 @@ fn upstream_status(result: &Result<UpstreamStreamingResponse, StatusCode>) -> St
     result
         .as_ref()
         .map_or_else(|status| *status, |response| response.status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, Method};
+    use prometheus::Encoder;
+    use stargate_proto::pb::{InferenceServerStatus, ModelStats};
+    use stargate_protocol::tunnel_contract::{
+        HEADER_INPUT_TOKENS, HEADER_MODEL, HEADER_REQUEST_ID, HEADER_STARGATE_RETRY_AFTER_MS,
+    };
+    use std::time::Duration;
+
+    use super::super::HEADER_STARGATE_ERROR_CODE;
+    use super::super::request::{ProxyRequestInputs, parse_proxy_request_inputs};
+    use super::super::retry::ReplayableRequestBody;
+    use super::super::run::PreparedProxyRequest;
+    use super::super::test_support::test_proxy_app_state;
+    use crate::load_balancer::LoadBalancerCandidateChoice;
+    use crate::routing_state::{
+        RegistrationIdentity, RoutingTargetKey, StargateState, test_registration_generation,
+    };
+
+    fn chat_request_inputs(target: RoutingTargetKey) -> ProxyRequestInputs {
+        let mut headers = HeaderMap::new();
+        headers.insert(HEADER_REQUEST_ID, "req-1".parse().unwrap());
+        headers.insert(HEADER_MODEL, target.model_id.parse().unwrap());
+        headers.insert(HEADER_INPUT_TOKENS, "10".parse().unwrap());
+        let mut inputs = parse_proxy_request_inputs(&headers).unwrap();
+        inputs.target = target;
+        inputs
+    }
+
+    #[test]
+    fn reservation_ttl_is_clamped_to_the_configured_bounds() {
+        let min = Duration::from_millis(1);
+        let max = Duration::from_millis(1000);
+
+        assert_eq!(clamp_routing_reservation_ttl(Duration::ZERO, min, max), min);
+        assert_eq!(
+            clamp_routing_reservation_ttl(Duration::from_millis(60), min, max),
+            Duration::from_millis(60)
+        );
+        assert_eq!(
+            clamp_routing_reservation_ttl(Duration::from_secs(5), min, max),
+            max
+        );
+    }
+
+    #[test]
+    fn reservation_ttl_clamp_does_not_panic_on_inverted_bounds() {
+        let min = Duration::from_millis(20);
+        let max = Duration::from_millis(10);
+
+        for rtt in [Duration::ZERO, Duration::from_millis(15), Duration::MAX] {
+            assert_eq!(clamp_routing_reservation_ttl(rtt, min, max), max);
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_reservation_ttl_uses_the_selected_backends_rtt() {
+        let mut app = test_proxy_app_state();
+        app.state = Arc::new(StargateState::new_with_metrics(app.metrics.clone()));
+        let target = RoutingTargetKey::new(Some("tenant-a".to_string()), "model-a");
+
+        for (backend_id, port, rtt_ms) in [("fast", 5001, 10), ("slow", 5002, 100)] {
+            let identity = RegistrationIdentity {
+                inference_server_id: backend_id.to_string(),
+                cluster_id: "cluster-a".to_string(),
+                inference_server_url: format!("quic://127.0.0.1:{port}"),
+                routing_key: target.routing_key.clone(),
+                reverse_tunnel: true,
+            };
+            let registration = app.state.begin_registration(&identity).unwrap();
+            let update = stargate_proto::pb::InferenceServerRegistration {
+                inference_server_id: identity.inference_server_id.clone(),
+                cluster_id: identity.cluster_id.clone(),
+                inference_server_url: identity.inference_server_url.clone(),
+                models: std::collections::HashMap::from([(
+                    target.model_id.clone(),
+                    stargate_proto::pb::InferenceServerModelRegistration {
+                        stats: Some(ModelStats {
+                            last_mean_input_tps: 100.0,
+                            queue_time_estimate_ms_by_priority: std::collections::HashMap::from([
+                                (0, 10),
+                            ]),
+                            ..ModelStats::default()
+                        }),
+                        status: InferenceServerStatus::Active.into(),
+                    },
+                )]),
+                reverse_tunnel: true,
+            };
+            app.state
+                .apply_registration_update(
+                    &registration,
+                    &update,
+                    true,
+                    Some(Duration::from_millis(rtt_ms)),
+                )
+                .await;
+        }
+
+        let candidates = app.state.candidates_for_target(&target).await;
+        let chosen = Arc::new(
+            candidates
+                .into_iter()
+                .min_by_key(|candidate| candidate.rtt)
+                .expect("both backends should be routable"),
+        );
+        assert_eq!(chosen.inference_server_id, "fast");
+        assert_eq!(chosen.rtt, Duration::from_millis(10));
+
+        let target_snapshot = app
+            .state
+            .routing_target_snapshot(&target)
+            .await
+            .expect("registered backends should produce a target snapshot");
+        let resolution = app
+            .lb_router
+            .resolve_algorithm_override(&target.model_id, None)
+            .unwrap();
+        let selected = super::super::run::SelectedClusterRun::new(
+            target_snapshot,
+            resolution.selection(LoadBalancerCandidateChoice::with_rank_depth_1(0)),
+            0,
+        );
+        let request = PreparedProxyRequest {
+            lb_resolution: resolution,
+            request_inputs: chat_request_inputs(target),
+            endpoint_name: "chat_completions",
+            method: Method::POST,
+            path_and_query: "/v1/chat/completions".to_string(),
+            forwarded_headers: HeaderMap::new(),
+            retry_deadline: None,
+            request_start: Instant::now(),
+            replay_body: ReplayableRequestBody::new(&HeaderMap::new(), Body::empty(), 1024)
+                .unwrap(),
+        };
+        let mut run = ProxyRequestRun::new(&app, request);
+        let _ = run.run_proxy_attempt(&selected, &chosen).await;
+
+        let mut encoded = Vec::new();
+        prometheus::TextEncoder::new()
+            .encode(&app.metrics.registry().gather(), &mut encoded)
+            .unwrap();
+        let metrics = String::from_utf8(encoded).unwrap();
+        assert!(metrics.contains(
+            "stargate_routing_reservation_ttl_seconds_sum{model=\"model-a\",routing_key=\"tenant-a\"} 0.01"
+        ));
+        assert!(metrics.contains(
+            "stargate_routing_reservations_active{model=\"model-a\",routing_key=\"tenant-a\"} 1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn same_backend_retry_reserves_with_the_current_backend_rtt() {
+        let mut app = test_proxy_app_state();
+        app.state = Arc::new(StargateState::new_with_metrics(app.metrics.clone()));
+        let target = RoutingTargetKey::new(Some("tenant-a".to_string()), "model-a");
+        let identity = RegistrationIdentity {
+            inference_server_id: "backend-a".to_string(),
+            cluster_id: "cluster-a".to_string(),
+            inference_server_url: "quic://127.0.0.1:5001".to_string(),
+            routing_key: target.routing_key.clone(),
+            reverse_tunnel: true,
+        };
+        let registration = app.state.begin_registration(&identity).unwrap();
+        let update = stargate_proto::pb::InferenceServerRegistration {
+            inference_server_id: identity.inference_server_id.clone(),
+            cluster_id: identity.cluster_id.clone(),
+            inference_server_url: identity.inference_server_url.clone(),
+            models: std::collections::HashMap::from([(
+                target.model_id.clone(),
+                stargate_proto::pb::InferenceServerModelRegistration {
+                    stats: Some(ModelStats::default()),
+                    status: InferenceServerStatus::Active.into(),
+                },
+            )]),
+            reverse_tunnel: true,
+        };
+        app.state
+            .apply_registration_update(
+                &registration,
+                &update,
+                true,
+                Some(Duration::from_millis(60)),
+            )
+            .await;
+        let resolution = app
+            .lb_router
+            .resolve_algorithm_override(&target.model_id, None)
+            .unwrap();
+        let selected = super::super::run::SelectedClusterRun::new(
+            app.state
+                .routing_target_snapshot(&target)
+                .await
+                .expect("registered backend should produce a target snapshot"),
+            resolution.selection(LoadBalancerCandidateChoice::with_rank_depth_1(0)),
+            0,
+        );
+        // A same-backend retry reuses the snapshot chosen for the first attempt.
+        let retained = selected
+            .cluster
+            .select_backend(&std::collections::HashSet::new())
+            .expect("registered backend should be selectable");
+        assert_eq!(retained.rtt, Duration::from_millis(60));
+
+        app.state
+            .apply_registration_update(
+                &registration,
+                &update,
+                true,
+                Some(Duration::from_millis(200)),
+            )
+            .await;
+        let request = PreparedProxyRequest {
+            lb_resolution: resolution,
+            request_inputs: chat_request_inputs(target),
+            endpoint_name: "chat_completions",
+            method: Method::POST,
+            path_and_query: "/v1/chat/completions".to_string(),
+            forwarded_headers: HeaderMap::new(),
+            retry_deadline: None,
+            request_start: Instant::now(),
+            replay_body: ReplayableRequestBody::new(&HeaderMap::new(), Body::empty(), 1024)
+                .unwrap(),
+        };
+        let mut run = ProxyRequestRun::new(&app, request);
+        let _ = run.run_proxy_attempt(&selected, &retained).await;
+
+        let ttl = app
+            .metrics
+            .routing_reservation_ttl_seconds(Some("tenant-a"), "model-a");
+        assert_eq!(ttl.get_sample_count(), 1);
+        assert_eq!(
+            Duration::from_secs_f64(ttl.get_sample_sum()),
+            Duration::from_millis(200),
+            "a new dispatch must use the backend's current RTT, not the retained snapshot"
+        );
+        app.state.end_registration(registration).await;
+    }
+
+    fn finish_response(
+        disposition: FinalRetryDisposition,
+        status: StatusCode,
+        headers: HeaderMap,
+    ) -> ProxyAttemptOutcome {
+        let app = test_proxy_app_state();
+        let target = RoutingTargetKey::new(None, "model-a");
+        let request = PreparedProxyRequest {
+            lb_resolution: app
+                .lb_router
+                .resolve_algorithm_override(&target.model_id, None)
+                .unwrap(),
+            request_inputs: ProxyRequestInputs {
+                request_id: "req-1".to_string(),
+                target,
+                input_tokens: 1,
+                priority: 0,
+                max_wait_ms: None,
+                request_slo_ms: None,
+                cache_affinity_key: None,
+                routing_algorithm_override: None,
+                routing_expression: None,
+                last_cluster: Default::default(),
+            },
+            endpoint_name: "chat_completions",
+            method: Method::POST,
+            path_and_query: "/v1/chat/completions".to_string(),
+            forwarded_headers: HeaderMap::new(),
+            retry_deadline: None,
+            request_start: Instant::now(),
+            replay_body: ReplayableRequestBody::new(&HeaderMap::new(), Body::empty(), 1024)
+                .unwrap(),
+        };
+        let run = ProxyRequestRun::new(&app, request);
+        let chosen = RoutedInferenceServerSnapshot {
+            registration: test_registration_generation(RegistrationIdentity {
+                inference_server_id: "backend-a".to_string(),
+                cluster_id: "cluster-a".to_string(),
+                inference_server_url: "quic://127.0.0.1:5000".to_string(),
+                routing_key: None,
+                reverse_tunnel: false,
+            }),
+            cluster_id: "cluster-a".to_string(),
+            inference_server_id: "backend-a".to_string(),
+            inference_server_url: "quic://127.0.0.1:5000".to_string(),
+            stats: ModelStats::default(),
+            rtt: Duration::from_millis(1),
+            snapshot_updated_at: Instant::now(),
+            update_received_at: Instant::now(),
+            status: InferenceServerStatus::Active,
+            reverse_tunnel: false,
+        };
+        finish_attempt(
+            &run,
+            &chosen,
+            disposition,
+            Ok(UpstreamStreamingResponse {
+                status,
+                headers,
+                body: Body::from(
+                    r#"{"reason":"queue_estimate_mismatch","expected_queue_ms":0,"actual_queue_ms":100}"#,
+                ),
+            }),
+        )
+    }
+
+    fn admission_headers() -> HeaderMap {
+        HeaderMap::from_iter([
+            (
+                HeaderName::from_static(HEADER_STARGATE_RETRYABLE),
+                HeaderValue::from_static("true"),
+            ),
+            (
+                HeaderName::from_static(HEADER_STARGATE_RETRY_REASON),
+                HeaderValue::from_static("queue_estimate_mismatch"),
+            ),
+            (
+                HeaderName::from_static(HEADER_STARGATE_RETRY_AFTER_MS),
+                HeaderValue::from_static("100"),
+            ),
+            (
+                axum::http::header::CONTENT_ENCODING,
+                HeaderValue::from_static("gzip"),
+            ),
+        ])
+    }
+
+    #[tokio::test]
+    async fn terminal_admission_rejection_is_sanitized_for_every_final_disposition() {
+        for disposition in [
+            FinalRetryDisposition::PassThrough,
+            FinalRetryDisposition::Exhausted("retry_budget_exhausted".to_string()),
+            FinalRetryDisposition::Exhausted("queue_estimate_mismatch".to_string()),
+            FinalRetryDisposition::ReplayIncomplete("queue_estimate_mismatch".to_string()),
+        ] {
+            let ProxyAttemptOutcome::ReturnFinal(response) = finish_response(
+                disposition,
+                StatusCode::TOO_MANY_REQUESTS,
+                admission_headers(),
+            ) else {
+                panic!("expected an overload response")
+            };
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(response.headers().len(), 2);
+            assert_eq!(
+                response.headers()[HEADER_STARGATE_ERROR_CODE],
+                "overloaded_error"
+            );
+            assert_eq!(
+                response.headers()[axum::http::header::CONTENT_TYPE],
+                "application/json"
+            );
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({
+                    "error": {
+                        "code": "overloaded_error",
+                        "message": "Inference capacity is temporarily unavailable.",
+                        "param": "",
+                        "type": "overloaded_error",
+                    }
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn application_errors_are_not_classified_by_body_text() {
+        for status in [
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let ProxyAttemptOutcome::ReturnFinal(response) =
+                finish_response(FinalRetryDisposition::PassThrough, status, HeaderMap::new())
+            else {
+                panic!("expected the application response")
+            };
+            assert_eq!(response.status(), status);
+            assert!(!response.headers().contains_key(HEADER_STARGATE_ERROR_CODE));
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert!(
+                std::str::from_utf8(&body)
+                    .unwrap()
+                    .contains("queue_estimate_mismatch")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn payload_limit_takes_precedence_over_admission_rejection() {
+        assert!(matches!(
+            finish_response(
+                FinalRetryDisposition::PayloadTooLarge(Some("queue_estimate_mismatch".to_string())),
+                StatusCode::TOO_MANY_REQUESTS,
+                admission_headers(),
+            ),
+            ProxyAttemptOutcome::ProxyError(StatusCode::PAYLOAD_TOO_LARGE)
+        ));
+    }
 }

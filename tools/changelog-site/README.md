@@ -12,6 +12,11 @@ path. During the old-to-new tag transition it also reads
 diff grouped into customer-facing (`feat`/`fix`/`perf`) and other commits,
 each linked to its GitLab commit.
 
+This is a historical GitLab changelog consumer, not the current release
+procedure. Its configuration and hosting are deployment-specific. For current
+source versions and publication, use the
+[release workflow](../../docs/dev/github-release-process.md).
+
 ## Run locally
 
 ```bash
@@ -28,9 +33,9 @@ go run -C tools/changelog-site . \
 
 ## CI
 
-The umbrella `pages` job runs this on every default-branch pipeline and
-publishes `public/` to GitLab Pages (project-private, members-only). New
-release tags appear automatically on the next merge to `main`.
+The legacy integration ran this from a GitLab `pages` job and published
+`public/` to GitLab Pages. Verify the current hosting repository before relying
+on that job. This tool does not create tags or publish product artifacts.
 
 ## Service sources
 

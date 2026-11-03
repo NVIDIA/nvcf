@@ -163,13 +163,13 @@ public class IcmsConfigurationProperties {
     // cluster_groups_by_authorized_accounts). Writes are unaffected.
     private boolean clusterByIdReadsEnabled;
 
+    // Feature flag: serve period reads of requests and instances from the indexed creation_bucket
+    // column (storage-attached index) instead of the requests_by_day and instances_by_day lookup
+    // tables. Writes to the by-day tables are unaffected.
+    private boolean creationBucketReadsEnabled = true;
+
     private Map<String, List<String>> supportedGpuDetails = new HashMap<>();
     private Map<String, String> gpusToQueueUrlGpuNameMap = new HashMap<>();
-
-    // Maps a GPU type to the NCA IDs allowed to see/allocate it. A GPU absent from the map is
-    // unrestricted; the wildcard "*" allows everyone. Used to gate limited compute-platform
-    // capacity to dedicated orgs. Empty by default = existing behavior.
-    private Map<String, List<String>> gpuAllowedNcaIds = new HashMap<>();
 
     private Set<String> supportedInstanceTypes = new HashSet<>();
     private Set<String> supportedGpus = new HashSet<>();
@@ -286,23 +286,6 @@ public class IcmsConfigurationProperties {
 
     public boolean isGpuSupported(String gpuName) {
         return supportedGpus.contains(gpuName);
-    }
-
-    /**
-     * Whether the given NCA ID may see/allocate the given GPU, per {@code icms.gpu-allowed-nca-ids}.
-     * A GPU absent from the map (or with an empty list) is unrestricted; a list containing the
-     * wildcard {@code "*"} allows everyone. Otherwise only the listed NCA IDs are permitted.
-     *
-     * @param gpu   the GPU type
-     * @param ncaId the requesting NGC org / NCA ID
-     * @return {@code true} if allowed (including the unrestricted default), {@code false} otherwise
-     */
-    public boolean isNcaAllowedForGpu(String gpu, String ncaId) {
-        List<String> allowed = gpuAllowedNcaIds.get(gpu);
-        if (allowed == null || allowed.isEmpty()) {
-            return true;
-        }
-        return allowed.contains("*") || allowed.contains(ncaId);
     }
 
     /**

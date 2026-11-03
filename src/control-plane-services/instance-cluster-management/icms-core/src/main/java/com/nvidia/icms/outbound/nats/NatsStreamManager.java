@@ -95,7 +95,7 @@ public class NatsStreamManager implements AutoCloseable {
             throws IOException, JetStreamApiException {
         try {
             var streamInfo = jetStreamManagement.getStreamInfo(streamConfig.getName());
-            validateStreamConfiguration(streamConfig, streamInfo.getConfiguration());
+            reconcileExistingStream(streamConfig, streamInfo.getConfiguration());
             return;
         } catch (JetStreamApiException e) {
             // non-404 related error gets passed back up
@@ -111,10 +111,24 @@ public class NatsStreamManager implements AutoCloseable {
         } catch (JetStreamApiException e) {
             if (e.getApiErrorCode() == 10058) {
                 var streamInfo = jetStreamManagement.getStreamInfo(streamConfig.getName());
-                validateStreamConfiguration(streamConfig, streamInfo.getConfiguration());
+                reconcileExistingStream(streamConfig, streamInfo.getConfiguration());
                 return;
             }
             throw e;
+        }
+    }
+
+    private void reconcileExistingStream(StreamConfiguration expected, StreamConfiguration actual)
+            throws IOException, JetStreamApiException {
+        validateStreamConfiguration(expected, actual);
+        // Replicas are only raised: a stream created under HA keeps its copies if the
+        // configured count later drops.
+        if (actual.getReplicas() < expected.getReplicas()) {
+            log.info("Raising NATS stream {} replicas from {} to {}", expected.getName(),
+                     actual.getReplicas(), expected.getReplicas());
+            jetStreamManagement.updateStream(StreamConfiguration.builder(actual)
+                                                     .replicas(expected.getReplicas())
+                                                     .build());
         }
     }
 
@@ -166,6 +180,7 @@ public class NatsStreamManager implements AutoCloseable {
                 .retentionPolicy(RetentionPolicy.WorkQueue)
                 .maxMessages(MAX_MESSAGES)
                 .maxAge(natsConfigurationProperties.getMessageTtl())
+                .replicas(natsConfigurationProperties.getReplicas())
                 .build();
     }
 

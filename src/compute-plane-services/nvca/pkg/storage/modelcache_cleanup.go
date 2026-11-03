@@ -329,14 +329,51 @@ func (r *Reconciler) cleanupIdleModelCaches(ctx context.Context) error { //nolin
 		return err
 	}
 
-	// Collect all volume handles from active storage requests to filter out PVs.
-	activeVolumeHandles := sets.Set[string]{}
-	for _, st := range stList.Items {
+	// Collect the volumes and cache handles of active storage requests to
+	// filter out PVs. A request's status carries its secondary PV's handle,
+	// which is the primary's handle with the namespace segment rewritten
+	// (updateSecondaryPVVolumeHandle), so the two are compared by volume
+	// identity, not verbatim: a verbatim comparison never matched and the GC
+	// deleted a primary while a function was serving from its secondary
+	// (2026-10-03), after which that request's own reconcile could not find
+	// the primary and tore the secondary down too.
+	//
+	// The spec's cache handle protects a request that is still on its way
+	// to publishing a status. A request in a terminal phase can outlive its
+	// readers (legacy MiniService installs keep a failed request for the
+	// life of the workload), so it protects the primary only while its
+	// read-only claim is still bound, through its status handle when it
+	// published one and through its spec handle otherwise.
+	activeVolumeKeys := sets.Set[string]{}
+	activeCacheHandles := sets.Set[string]{}
+	for i := range stList.Items {
+		st := &stList.Items[i]
 		if st.DeletionTimestamp != nil {
 			continue
 		}
+		if terminalStoragePhase(st.Status.Phase) {
+			inUse, err := r.secondaryInUse(ctx, st)
+			if err != nil {
+				return err
+			}
+			if inUse {
+				// A request can fail before publishing its status (artifact
+				// decode failing on a later reconcile) and still leave the
+				// reader bound; the spec cache handle is the only link then.
+				switch {
+				case st.Status.ModelCache != nil && st.Status.ModelCache.VolumeHandle != "":
+					activeVolumeKeys = activeVolumeKeys.Insert(volumeHandleKey(st.Status.ModelCache.VolumeHandle))
+				case st.Spec.ModelCache != nil && st.Spec.ModelCache.CacheHandle != "":
+					activeCacheHandles = activeCacheHandles.Insert(st.Spec.ModelCache.CacheHandle)
+				}
+			}
+			continue
+		}
 		if st.Status.ModelCache != nil && st.Status.ModelCache.VolumeHandle != "" {
-			activeVolumeHandles = activeVolumeHandles.Insert(st.Status.ModelCache.VolumeHandle)
+			activeVolumeKeys = activeVolumeKeys.Insert(volumeHandleKey(st.Status.ModelCache.VolumeHandle))
+		}
+		if st.Spec.ModelCache != nil && st.Spec.ModelCache.CacheHandle != "" {
+			activeCacheHandles = activeCacheHandles.Insert(st.Spec.ModelCache.CacheHandle)
 		}
 	}
 
@@ -373,7 +410,10 @@ func (r *Reconciler) cleanupIdleModelCaches(ctx context.Context) error { //nolin
 			if primaryPVLastReferenced.Add(r.k8sTimeConfig.ModelCacheIdlePeriod).After(now) {
 				continue
 			}
-			if pv.Spec.CSI != nil && activeVolumeHandles.Has(pv.Spec.CSI.VolumeHandle) {
+			if pv.Spec.CSI != nil && activeVolumeKeys.Has(volumeHandleKey(pv.Spec.CSI.VolumeHandle)) {
+				continue
+			}
+			if pv.Labels != nil && activeCacheHandles.Has(pv.Labels[modelCacheHandleLabelKey]) {
 				continue
 			}
 		case corev1.VolumeFailed:
@@ -609,4 +649,10 @@ func deleteStorageClassIfEncrypted(ctx context.Context, c client.Client, scName 
 	if err := c.Delete(ctx, sc); err != nil && !apierrors.IsNotFound(err) {
 		log.Error(err, "Failed to delete storage class, manual cleanup needed")
 	}
+}
+
+// terminalStoragePhase reports whether a storage request has failed for
+// good: its reconcile runs the cleanup and it will never publish a status.
+func terminalStoragePhase(p nvcav1new.StoragePhase) bool {
+	return p == nvcav1new.StorageFailed || p == nvcav1new.StorageRuntimeError
 }

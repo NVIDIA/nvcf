@@ -22,8 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.integration.IntegrationTest;
 import com.nvidia.icms.outbound.sqs.QueueManager;
-import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -120,30 +118,6 @@ public class IcmsConfigurationPropertiesTest extends IntegrationTest {
 
         // Invalid Gpu
         assertFalse(icmsConfigurationProperties.isGpuSupported("DUMMY_GPU_UNSUPPORTED"));
-    }
-
-    @Test
-    void test_isNcaAllowedForGpu() {
-        // Uses a fresh instance so the shared Spring bean's config is not mutated.
-        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
-
-        // Empty map -> unrestricted (existing behavior).
-        assertTrue(props.isNcaAllowedForGpu("dummy-restricted-gpu", "any-nca"));
-
-        // GPU listed with a specific allowlist.
-        props.setGpuAllowedNcaIds(Map.of("dummy-restricted-gpu", List.of("allowed-nca")));
-        assertTrue(props.isNcaAllowedForGpu("dummy-restricted-gpu", "allowed-nca"));
-        assertFalse(props.isNcaAllowedForGpu("dummy-restricted-gpu", "other-nca"));
-        // GPU not present in the map -> unrestricted.
-        assertTrue(props.isNcaAllowedForGpu("dummy-gpu", "other-nca"));
-
-        // Wildcard -> everyone allowed.
-        props.setGpuAllowedNcaIds(Map.of("dummy-restricted-gpu", List.of("*")));
-        assertTrue(props.isNcaAllowedForGpu("dummy-restricted-gpu", "other-nca"));
-
-        // Empty list for the GPU -> treated as unrestricted.
-        props.setGpuAllowedNcaIds(Map.of("dummy-restricted-gpu", List.of()));
-        assertTrue(props.isNcaAllowedForGpu("dummy-restricted-gpu", "other-nca"));
     }
 
     @Test

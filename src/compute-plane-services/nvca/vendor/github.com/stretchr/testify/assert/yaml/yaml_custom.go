@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 //go:build testify_yaml_custom && !testify_yaml_fail && !testify_yaml_default
 
 // Package yaml is an implementation of YAML functions that calls a pluggable implementation.

@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 # NOTE: the mkdocs dependencies will need to be installed out of
 # band until this whole thing gets more automated:
 #

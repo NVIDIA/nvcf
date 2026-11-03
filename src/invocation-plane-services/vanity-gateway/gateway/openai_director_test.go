@@ -31,6 +31,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -50,6 +51,14 @@ func testShadowConfigs(modelNames []string, percentage int) []shadowConfig {
 	return testShadowConfigsWithPolicy(modelNames, percentage, config.ShadowSamplingMethodRandom, false)
 }
 
+func testShadowSamplingMethods(methods ...config.ShadowSamplingMethod) config.ShadowSamplingMethods {
+	result := append(config.ShadowSamplingMethods(nil), methods...)
+	if len(result) == 0 || result[len(result)-1] != config.ShadowSamplingMethodRandom {
+		result = append(result, config.ShadowSamplingMethodRandom)
+	}
+	return result
+}
+
 func testShadowConfigsWithPolicy(
 	modelNames []string,
 	percentage int,
@@ -61,7 +70,7 @@ func testShadowConfigsWithPolicy(
 		shadows = append(shadows, shadowConfig{
 			modelName:                modelName,
 			percentage:               percentage,
-			samplingMethod:           samplingMethod,
+			samplingMethods:          testShadowSamplingMethods(samplingMethod),
 			cancelOnClientDisconnect: cancelOnClientDisconnect,
 		})
 	}
@@ -375,8 +384,8 @@ func TestBuildModelMappingPreservesAndDefaultsShadowSamplingMethod(t *testing.T)
 
 	optShadows := mapping.modelNameToNVCFUrl["facebook/opt-125m"].shadows
 	llamaShadows := mapping.modelNameToNVCFUrl["meta/llama-3.1-8b"].shadows
-	assert.Equal(t, config.ShadowSamplingMethodPerBearerKey, optShadows[0].samplingMethod)
-	assert.Equal(t, config.ShadowSamplingMethodRandom, llamaShadows[0].samplingMethod)
+	assert.Equal(t, testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey), optShadows[0].samplingMethods)
+	assert.Equal(t, testShadowSamplingMethods(config.ShadowSamplingMethodRandom), llamaShadows[0].samplingMethods)
 }
 
 func TestResolveModelMappedRequestAddsMetricAttributes(t *testing.T) {
@@ -460,10 +469,10 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2(t *testing.T) {
 			ShadowModelName:                "private/facebook/opt-125m-shadow",
 			ShadowModelNames:               []string{"private/facebook/opt-125m-shadow-b"},
 			ShadowPercentage:               &shadowPct,
-			ShadowSamplingMethod:           config.ShadowSamplingMethodPerBearerKey,
+			ShadowSamplingMethod:           config.ShadowSamplingMethods{config.ShadowSamplingMethodPerBearerKey},
 			ShadowCancelOnClientDisconnect: true,
 		},
-	})
+	}, "openai.chatCompletions")
 
 	expected, ok := result["facebook/opt-125m"]
 	require.True(t, ok)
@@ -474,6 +483,7 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2(t *testing.T) {
 	assert.Equal(t, config.SessionTimeoutSeconds(900), expected.SessionTimeout)
 	assert.Equal(t, eolDate, expected.EOL)
 	assert.Equal(t, "Try a partner API!", expected.TooManyRequestsMessage)
+	assert.Equal(t, []string{config.DefaultPromptCacheKeyHeader}, expected.PromptCacheKeyHeaders)
 	assert.Equal(t, testShadowConfigsWithPolicy(
 		[]string{
 			"private/facebook/opt-125m-shadow",
@@ -495,13 +505,13 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2PreservesPerShadow
 				{
 					ModelName:                "private/facebook/opt-125m-shadow-a",
 					Percentage:               &percentage,
-					SamplingMethod:           config.ShadowSamplingMethodPerBearerKey,
+					SamplingMethod:           config.ShadowSamplingMethods{config.ShadowSamplingMethodPerBearerKey},
 					CancelOnClientDisconnect: true,
 				},
 				{ModelName: "private/facebook/opt-125m-shadow-b"},
 			},
 		},
-	})
+	}, "openai.chatCompletions")
 
 	expected, ok := result["facebook/opt-125m"]
 	require.True(t, ok)
@@ -509,13 +519,13 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2PreservesPerShadow
 		{
 			modelName:                "private/facebook/opt-125m-shadow-a",
 			percentage:               percentage,
-			samplingMethod:           config.ShadowSamplingMethodPerBearerKey,
+			samplingMethods:          testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey),
 			cancelOnClientDisconnect: true,
 		},
 		{
-			modelName:      "private/facebook/opt-125m-shadow-b",
-			percentage:     100,
-			samplingMethod: config.ShadowSamplingMethodRandom,
+			modelName:       "private/facebook/opt-125m-shadow-b",
+			percentage:      100,
+			samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodRandom),
 		},
 	}, expected.Shadows)
 }
@@ -525,6 +535,54 @@ func TestDefaultShadowPercentage(t *testing.T) {
 
 	assert.Equal(t, 100, defaultShadowPercentage(nil))
 	assert.Equal(t, custom, defaultShadowPercentage(&custom))
+}
+
+func TestDefaultShadowSamplingMethodsAppendsRandomFallback(t *testing.T) {
+	tests := []struct {
+		name string
+		in   config.ShadowSamplingMethods
+		want config.ShadowSamplingMethods
+	}{
+		{name: "omitted", want: testShadowSamplingMethods()},
+		{
+			name: "deterministic scalar",
+			in:   config.ShadowSamplingMethods{config.ShadowSamplingMethodPerBearerKey},
+			want: testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey),
+		},
+		{
+			name: "ordered list",
+			in: config.ShadowSamplingMethods{
+				config.ShadowSamplingMethodPromptCacheKey,
+				config.ShadowSamplingMethodFirstMessageHash,
+			},
+			want: testShadowSamplingMethods(
+				config.ShadowSamplingMethodPromptCacheKey,
+				config.ShadowSamplingMethodFirstMessageHash,
+			),
+		},
+		{
+			name: "explicit random",
+			in: config.ShadowSamplingMethods{
+				config.ShadowSamplingMethodPromptCacheKey,
+				config.ShadowSamplingMethodRandom,
+			},
+			want: config.ShadowSamplingMethods{
+				config.ShadowSamplingMethodPromptCacheKey,
+				config.ShadowSamplingMethodRandom,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := defaultShadowSamplingMethods(tc.in)
+			assert.Equal(t, tc.want, got)
+			if len(tc.in) > 0 {
+				got[0] = config.ShadowSamplingMethodRandom
+				assert.NotEqual(t, got[0], tc.in[0])
+			}
+		})
+	}
 }
 
 func TestResolveModelMappedRequestPreservesShadowConfig(t *testing.T) {
@@ -590,7 +648,7 @@ func TestDispatchShadowIfNeededReplaysHandlerAndRewritesBody(t *testing.T) {
 			shadows: testShadowConfigs([]string{"private/facebook/opt-125m-shadow"}, 100),
 		},
 	}
-	director.dispatchShadowIfNeeded(resolved, modelMapping)
+	director.dispatchShadowIfNeeded(resolved, modelMapping, shadowSamplingEndpointNone)
 
 	assert.Eventually(t, func() bool { return received.Load() }, 5*time.Second, 10*time.Millisecond)
 
@@ -646,7 +704,7 @@ func TestDispatchShadowIfNeededIsolatesRewriteFailure(t *testing.T) {
 		request:      req,
 		functionInfo: FunctionInfo{functionId: "primary-func", shadows: shadows},
 	}
-	finish := director.dispatchShadowIfNeeded(resolved, modelMapping)
+	finish := director.dispatchShadowIfNeeded(resolved, modelMapping, shadowSamplingEndpointNone)
 
 	assert.Eventually(t, func() bool { return receivedCount.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
 	_, healthyReceived := receivedModels.Load(healthyTarget)
@@ -703,7 +761,7 @@ func TestDispatchShadowIfNeededPerBearerKeyUsesBearerBucket(t *testing.T) {
 	director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
 		request:      req,
 		functionInfo: modelMapping["facebook/opt-125m"],
-	}, modelMapping)
+	}, modelMapping, shadowSamplingEndpointNone)
 
 	assert.Eventually(t, func() bool { return received.Load() }, 5*time.Second, 10*time.Millisecond)
 
@@ -781,16 +839,16 @@ func TestDispatchShadowIfNeededAppliesCancellationPerShadow(t *testing.T) {
 			{
 				modelName:                "attached-shadow",
 				percentage:               100,
-				samplingMethod:           config.ShadowSamplingMethodRandom,
+				samplingMethods:          testShadowSamplingMethods(config.ShadowSamplingMethodRandom),
 				cancelOnClientDisconnect: true,
 			},
 			{
-				modelName:      "detached-shadow",
-				percentage:     100,
-				samplingMethod: config.ShadowSamplingMethodRandom,
+				modelName:       "detached-shadow",
+				percentage:      100,
+				samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodRandom),
 			},
 		}},
-	}, modelMapping)
+	}, modelMapping, shadowSamplingEndpointNone)
 
 	for name, started := range map[string]<-chan struct{}{
 		"attached": attachedStarted,
@@ -870,7 +928,7 @@ func TestShadowCancelledWhenPrimaryProxyErrorsBeforeRequestContextCancels(t *tes
 	req.Header.Set("Content-Type", "application/json")
 
 	require.NoError(t, req.Context().Err())
-	director.proxyModelMappedRequest(httptest.NewRecorder(), req, modelMapping)
+	director.proxyModelMappedRequest(httptest.NewRecorder(), req, modelMapping, shadowSamplingEndpointNone)
 
 	select {
 	case <-shadowStarted:
@@ -957,7 +1015,7 @@ func TestShadowCancelledWhenPrimaryResponseWriteFails(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(tc.requestBody))
 			req.Header.Set("Content-Type", "application/json")
 
-			director.proxyModelMappedRequest(newFailingResponseWriter(), req, modelMapping)
+			director.proxyModelMappedRequest(newFailingResponseWriter(), req, modelMapping, shadowSamplingEndpointNone)
 
 			select {
 			case <-shadowStarted:
@@ -1024,7 +1082,7 @@ func TestShadowCancelledWhenPrimaryProxyPanics(t *testing.T) {
 				t.Fatal("expected primary proxy panic")
 			}
 		}()
-		director.proxyModelMappedRequest(httptest.NewRecorder(), req, modelMapping)
+		director.proxyModelMappedRequest(httptest.NewRecorder(), req, modelMapping, shadowSamplingEndpointNone)
 	}()
 
 	select {
@@ -1056,7 +1114,7 @@ func TestDispatchShadowIfNeededSkipsShadowRequests(t *testing.T) {
 		"private/facebook/opt-125m-shadow": {
 			functionId: "shadow-func",
 		},
-	})
+	}, shadowSamplingEndpointNone)
 
 	// Shadow should not be dispatched since NVCF-Shadow header is already set.
 	// If it were dispatched, the shadower's goroutine would eventually call
@@ -1187,4 +1245,60 @@ func TestIsModelExpired(t *testing.T) {
 			assert.Equal(t, tc.expected, isModelExpired(tc.eolDate))
 		})
 	}
+}
+
+func TestOpenAIRoutesRejectInvalidJSONAsClientError(t *testing.T) {
+	routes := []string{
+		"/v1/chat/completions",
+		"/v1/completions",
+		"/v1/embeddings",
+		"/v1/responses",
+		"/v1/images/generations",
+		"/v1/images/edits",
+		"/v1/images/variations",
+	}
+	bodies := []struct{ name, body string }{
+		{"malformed", `{not json`},
+		{"truncated", `{"model":`},
+		{"array", `[{"model":"m"}]`},
+		{"empty", ``},
+		{"model wrong type", `{"model":1}`},
+		{"null", `null`},
+		{"null with whitespace", " null\n"},
+	}
+	mux := openAIMux(t, llmMappings(llmModelEntry()), "http://nvcf.invalid", "http://llm.invalid")
+	for _, route := range routes {
+		for _, tc := range bodies {
+			t.Run(route+"/"+tc.name, func(t *testing.T) {
+				req := openAIRequest(t, route, tc.body)
+				req.Header.Set("Content-Type", "application/json")
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+
+				require.Equal(t, http.StatusBadRequest, rec.Code)
+				require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+				require.Equal(t, "gateway_rejected", rec.Header().Get("NVCF-Error-Source"))
+				var payload OpenAIError
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+				require.Equal(t, "invalid_request_error", payload.Error.Type)
+				require.Equal(t, "invalid_json", payload.Error.Code)
+				require.NotEmpty(t, payload.Error.Message)
+			})
+		}
+	}
+}
+
+func TestOpenAIRouteBodyReadFailureStaysServerError(t *testing.T) {
+	director := &OpenAIDirector{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", io.MultiReader(
+		bytes.NewBufferString(`{"model":`),
+		iotest.ErrReader(errors.New("connection reset")),
+	))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	_, handled := director.resolveModelMappedRequest(rec, req, map[string]FunctionInfo{})
+
+	require.True(t, handled)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
 }

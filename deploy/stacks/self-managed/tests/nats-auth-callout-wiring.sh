@@ -89,8 +89,13 @@ helm template nats-auth-callout-service \
   --show-only templates/deployment.yaml >"$manifest_file" ||
   fail "NATS auth-callout chart did not render"
 
+# Read the default tag from the chart so service releases do not need a test edit.
+chart_app_version="$(yq -r '.appVersion // ""' "$stack_dir/../../helm/nats-auth-callout/Chart.yaml")"
+test -n "$chart_app_version" ||
+  fail "could not read appVersion from the NATS auth-callout Chart.yaml"
+
 actual_image="$(yq -r '.spec.template.spec.containers[0].image // ""' "$manifest_file")"
-expected_image="$expected_repository:0.8.3"
+expected_image="$expected_repository:$chart_app_version"
 test "$actual_image" = "$expected_image" ||
   fail "rendered image is $actual_image, expected $expected_image"
 

@@ -1,0 +1,31 @@
+version: 1
+defaults:
+  maxTokens: 256
+  timeoutSeconds: 30
+  requestSloMs: 10000
+  maxWaitMs: 10000
+  cooldownSeconds: 10
+algorithms:
+  wait-and-widen:
+    routingHeader: null
+  power-of-n:
+    routingHeader: powerOfN
+suites:
+  performance:
+  - session-affinity
+scenarios:
+  sustained-capacity:
+    kind: requests
+    requests: 5760
+    rate: 48
+    workers: 96
+    promptBytes: 2048
+  session-affinity:
+    kind: session-affinity
+    sessions: 128
+    turnsPerSession: 12
+    repeats: 1
+    rate: 24
+    workers: 48
+    stablePrefixBytes: 3584
+    turnBytes: 512

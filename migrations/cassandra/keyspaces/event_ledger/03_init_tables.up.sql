@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS event_ledger.events_v3 (
     timestamp TIMESTAMP,
     created_at TIMESTAMP,
     updated_at TIMESTAMP,
+    nca_id TEXT,           -- Owning/calling account; NULL on rows written before account scoping
+    function_id TEXT,
     PRIMARY KEY ((namespace, context), event_name)
 );
 
@@ -25,5 +27,7 @@ CREATE TABLE IF NOT EXISTS event_ledger.stats_v3 (
     timestamp TIMESTAMP,
     created_at TIMESTAMP,  -- When this namespace+context first got an event
     updated_at TIMESTAMP,  -- When last updated
+    nca_id TEXT,
+    function_id TEXT,
     PRIMARY KEY ((namespace), context)
 );

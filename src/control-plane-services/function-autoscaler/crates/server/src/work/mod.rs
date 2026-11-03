@@ -22,14 +22,15 @@ use crate::models::NodeHealth;
 use crate::nvcf_api::nvcf_client::NvcfApiService;
 use crate::nvcf_api::{DeploymentInfo, NvcfApiError};
 use crate::scaling::{
-    decide_scaling, sanitize_utilization, MetricSource, ScalingInputs, ScalingSettings,
+    decide_scaling, sanitize_utilization, ActiveFunctionSource, MetricSource, ScalingInputs,
+    ScalingSettings,
 };
 use crate::{
     cassandra::cassandra_service::CassandraServiceManager,
     timeseries_db::timeseries_db_client::TimeseriesDbClient,
 };
 use anyhow::{Context, Result};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use moka::sync::Cache;
 
 use std::sync::Arc;
@@ -83,12 +84,25 @@ struct GatheredScalingInputs {
 
 pub mod bucket;
 pub mod discovery;
+pub mod local_registry;
+use local_registry::LocalFunctionRegistry;
 
 use discovery::get_recently_invoked_functions;
 
 const TIMESERIES_DB_QUERY_STEP: StdDuration = StdDuration::from_secs(60); // 1 minute step for TimeseriesDb queries
 pub const CALCULATE_UTILIZATION_LOCK_PREFIX: &str = "util_lock";
 const ACTIVE_FUNCTION_SET_NAME: &str = "RecentlyInvokedFunctions";
+
+/// Return the previous complete TimeseriesDb step.
+///
+/// The current step may contain only a subset of the latest scrape cycle.
+fn settled_timeseries_end_time(now: DateTime<Utc>) -> DateTime<Utc> {
+    let step_seconds = TIMESERIES_DB_QUERY_STEP.as_secs() as i64;
+    let current_boundary = now.timestamp().div_euclid(step_seconds) * step_seconds;
+    let settled_timestamp = current_boundary.saturating_sub(step_seconds);
+
+    DateTime::from_timestamp(settled_timestamp, 0).unwrap_or(now)
+}
 
 fn scaling_lock_name(bucket_index: usize) -> String {
     format!(
@@ -131,10 +145,10 @@ async fn get_function_utilization_history(
     env: &str,
     metric_source: MetricSource,
     ignore_env: bool,
+    end_time: DateTime<Utc>,
     lookback: StdDuration,
     utilization_window_seconds: u64,
 ) -> Result<Vec<(i64, String)>> {
-    let end_time = Utc::now();
     let start_time = end_time - Duration::from_std(lookback)?;
     let step = TIMESERIES_DB_QUERY_STEP;
 
@@ -268,6 +282,7 @@ async fn get_byoc_instance_count(
     function_version_id: &Uuid,
     env: &str,
     ignore_env: bool,
+    end_time: DateTime<Utc>,
 ) -> Result<Option<usize>> {
     let env_suffix = if ignore_env {
         String::new()
@@ -283,14 +298,7 @@ async fn get_byoc_instance_count(
         env = env_suffix
     );
 
-    // Align end to the previous fully-settled step boundary (one step back from now).
-    // Reading the bleeding edge can pick up a partial scrape cycle and report a wrong count.
-    const STEP_SECS: i64 = 60;
-    let now_secs = Utc::now().timestamp();
-    let end_secs = (now_secs / STEP_SECS) * STEP_SECS - STEP_SECS;
-    let end_time = chrono::DateTime::from_timestamp(end_secs, 0).unwrap_or_else(Utc::now);
-    let start_time = end_time - chrono::Duration::seconds(STEP_SECS);
-    let step = std::time::Duration::from_secs(STEP_SECS as u64);
+    let start_time = end_time - Duration::from_std(TIMESERIES_DB_QUERY_STEP)?;
 
     tracing::info!(
         "BYOC instance count query for {}:{}: {}",
@@ -300,7 +308,7 @@ async fn get_byoc_instance_count(
     );
 
     let response = timeseries_db_client
-        .query_range(&query, start_time, end_time, step)
+        .query_range(&query, start_time, end_time, TIMESERIES_DB_QUERY_STEP)
         .await?;
 
     tracing::info!(
@@ -501,12 +509,7 @@ async fn llm_gateway_recently_invoked(
         r#"sum by(function_id) (increase(llm_api_gateway_http_requests_total{{function_id="{function_id}"{env_suffix}}}[{lookback_seconds}s])) > 0"#,
     );
     let response = timeseries_db_client
-        .query_range(
-            &query,
-            end_time,
-            end_time,
-            TIMESERIES_DB_QUERY_STEP,
-        )
+        .query_range(&query, end_time, end_time, TIMESERIES_DB_QUERY_STEP)
         .await?;
     Ok(!response.data.result.is_empty())
 }
@@ -587,6 +590,7 @@ async fn gather_scaling_inputs(
     env: &str,
     ignore_env: bool,
     scaling_settings: &ScalingSettings,
+    utilization_lookback: StdDuration,
     routing_cache: &MetricRoutingCache,
 ) -> Result<Option<GatheredScalingInputs>> {
     let key = (*function_id, *function_version_id);
@@ -636,6 +640,12 @@ async fn gather_scaling_inputs(
         }
     }
 
+    // Control-plane instance count and utilization must describe the same settled snapshot.
+    // Otherwise a running-instance transition can combine an old count with new utilization
+    // and produce contradictory targets.
+    let control_plane_query_end_time = (metric_source == MetricSource::ControlPlane)
+        .then(|| settled_timeseries_end_time(Utc::now()));
+
     match metric_source {
         MetricSource::WorkerThreads => {}
         MetricSource::LlmGateway => {
@@ -657,6 +667,7 @@ async fn gather_scaling_inputs(
                 function_version_id,
                 env,
                 ignore_env,
+                control_plane_query_end_time.expect("control-plane query end time must be present"),
             )
             .await
             .unwrap_or_else(|error| {
@@ -687,6 +698,7 @@ async fn gather_scaling_inputs(
         return Ok(None);
     };
 
+    let utilization_end_time = control_plane_query_end_time.unwrap_or_else(Utc::now);
     let raw_utilization = get_function_utilization_history(
         timeseries_db_client,
         function_id,
@@ -694,7 +706,8 @@ async fn gather_scaling_inputs(
         env,
         metric_source,
         ignore_env,
-        scaling_settings.lookback,
+        utilization_end_time,
+        utilization_lookback,
         scaling_settings.utilization_window_seconds,
     )
     .await?;
@@ -730,6 +743,7 @@ async fn gather_scaling_inputs(
             metric_source,
             current_instances,
             utilization_samples,
+            window_end: utilization_end_time.timestamp(),
             recently_invoked,
         },
         gateway_target,
@@ -772,10 +786,11 @@ pub async fn run_autoscaling_logic_p0(
     scaling_settings: Arc<ScalingSettings>,
     env: &str,
     ignore_env: bool,
-    bucket_manager: &bucket::NodeBucketManager,
+    bucket_manager: Arc<bucket::NodeBucketManager>,
     lock_manager: &DistributedLockManager,
     function_state_cache: Arc<FunctionStateCache>,
     metric_routing_cache: Arc<MetricRoutingCache>,
+    local_registry: Option<Arc<LocalFunctionRegistry>>,
 ) -> Result<()> {
     tracing::info!("Starting P0 autoscaling logic for env: {}", env);
 
@@ -790,6 +805,7 @@ pub async fn run_autoscaling_logic_p0(
         lock_manager,
         function_state_cache,
         metric_routing_cache,
+        local_registry,
     )
     .await?;
 
@@ -804,10 +820,11 @@ async fn make_scaling_requests(
     scaling_settings: Arc<ScalingSettings>,
     env: &str,
     ignore_env: bool,
-    bucket_manager: &bucket::NodeBucketManager,
+    bucket_manager: Arc<bucket::NodeBucketManager>,
     lock_manager: &DistributedLockManager,
     function_state_cache: Arc<FunctionStateCache>,
     metric_routing_cache: Arc<MetricRoutingCache>,
+    local_registry: Option<Arc<LocalFunctionRegistry>>,
 ) -> Result<()> {
     let bucket_ranges = bucket_manager.get_all_bucket_ranges();
     let mut task_failures = 0usize;
@@ -818,13 +835,30 @@ async fn make_scaling_requests(
         return Ok(());
     }
 
+    if scaling_settings.active_function_source == ActiveFunctionSource::LocalDiscovery
+        && !local_registry
+            .as_ref()
+            .is_some_and(|registry| registry.is_initialized())
+    {
+        tracing::warn!("Local discovery has not completed; skipping scaling cycle");
+        return Ok(());
+    }
+
     let page_size = scaling_settings.cassandra_page_size;
 
     for (bucket_index, (start_token, end_token)) in bucket_ranges.iter() {
         let token_range = [*start_token, *end_token];
-        let functions_in_bucket = cassandra_service
-            .get_active_functions_with_token_range(&token_range, page_size)
-            .await?;
+        let functions_in_bucket = match scaling_settings.active_function_source {
+            ActiveFunctionSource::Cassandra => {
+                cassandra_service
+                    .get_active_functions_with_token_range(&token_range, page_size)
+                    .await?
+            }
+            ActiveFunctionSource::LocalDiscovery => local_registry
+                .as_ref()
+                .expect("local registry initialized for local discovery")
+                .functions_in_bucket(*bucket_index, &bucket_manager),
+        };
 
         tracing::info!(
             "Processing {} recently invoked functions in bucket {}",
@@ -845,6 +879,9 @@ async fn make_scaling_requests(
             )
             .await
         {
+            if local_registry.is_some() && !bucket_manager.owns_bucket(*bucket_index) {
+                continue;
+            }
             tracing::debug!(
                 "Acquired lock for bucket {}, processing {} functions",
                 bucket_index,
@@ -866,6 +903,8 @@ async fn make_scaling_requests(
                 let scaling_settings = scaling_settings.clone();
                 let function_state_cache = function_state_cache.clone();
                 let metric_routing_cache = metric_routing_cache.clone();
+                let local_registry = local_registry.clone();
+                let bucket_manager = Arc::clone(&bucket_manager);
                 let env = env.to_string();
                 let bucket_index = *bucket_index;
 
@@ -881,6 +920,14 @@ async fn make_scaling_requests(
                         .and_then(|c| c.last_predicted_desired_instance_count)
                         .unwrap_or(0) as usize;
 
+                    // Resolved before gathering so stickiness windows longer than the
+                    // default lookback still get a full window of samples.
+                    let policy = scaling_settings
+                        .get_policy_for_function(&function.function_version_id)
+                        .await;
+                    let utilization_lookback =
+                        policy.utilization_lookback(scaling_settings.lookback);
+
                     // Acquire all metrics into one sanitized struct, then run the single
                     // decision path that is shared by every metric source. NaN handling,
                     // metric-source selection, and scale-to-zero all live behind these calls.
@@ -892,6 +939,7 @@ async fn make_scaling_requests(
                         &env,
                         ignore_env,
                         &scaling_settings,
+                        utilization_lookback,
                         &metric_routing_cache,
                     )
                     .await
@@ -933,14 +981,11 @@ async fn make_scaling_requests(
                         inputs.recently_invoked,
                     );
 
-                    let policy = scaling_settings
-                        .get_policy_for_function(&function.function_version_id)
-                        .await;
-
                     let Some(decision) = decide_scaling(
                         &inputs,
                         &policy,
                         scaling_settings.decay_factor,
+                        scaling_settings.lookback,
                         last_predicted_instance_count,
                     ) else {
                         tracing::info!(
@@ -1012,6 +1057,10 @@ async fn make_scaling_requests(
                         utilization,
                     );
 
+                    if local_registry.is_some() && !bucket_manager.owns_bucket(bucket_index) {
+                        return Ok(());
+                    }
+
                     // Renew TTL so the function stays in the active set as long as instances exist.
                     // If desired is 0 we let the row expire naturally — no explicit delete needed.
                     if desired_instance_count > 0 {
@@ -1022,6 +1071,13 @@ async fn make_scaling_requests(
                                 function.function_version_id,
                                 e
                             );
+                        }
+                    }
+
+
+                    if let Some(registry) = &local_registry {
+                        if desired_instance_count > 0 {
+                            registry.retain_positive(&function);
                         }
                     }
 
@@ -1157,6 +1213,16 @@ mod tests {
     }
 
     #[test]
+    fn settled_timeseries_end_time_uses_previous_complete_step() {
+        let now = DateTime::from_timestamp(1_700_000_123, 456_000_000).expect("valid timestamp");
+
+        assert_eq!(
+            settled_timeseries_end_time(now),
+            DateTime::from_timestamp(1_700_000_040, 0).expect("valid timestamp"),
+        );
+    }
+
+    #[test]
     fn utilization_data_age_never_goes_negative() {
         assert_eq!(
             utilization_data_age_milliseconds(Some(1_700_000_005), 1_700_000_007_500),
@@ -1219,6 +1285,7 @@ mod tests {
             "stg",
             true,
             &ScalingSettings::default(),
+            ScalingSettings::default().lookback,
             &routing_cache,
         )
         .await
@@ -1325,6 +1392,7 @@ mod tests {
             "stg",
             MetricSource::ControlPlane,
             true,
+            Utc::now(),
             StdDuration::from_secs(5 * 60),
             60,
         )
@@ -1332,6 +1400,55 @@ mod tests {
         .expect("control-plane utilization");
 
         assert_eq!(utilization, vec![(1_700_000_000, "42".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn test_utilization_query_covers_stickiness_window_longer_than_default() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let end_time = DateTime::from_timestamp(1_700_000_000, 0).expect("end time");
+        let policy = crate::scaling::ResolvedScalingPolicy {
+            thresholds: Default::default(),
+            factors: Default::default(),
+            scale_up_stickiness: Some(crate::scaling::Stickiness {
+                window_minutes: 30,
+                required_minutes: 15,
+            }),
+            scale_down_stickiness: None,
+        };
+        let lookback = policy.utilization_lookback(ScalingSettings::default().lookback);
+
+        let mut server = mockito::Server::new_async().await;
+        let utilization = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded(
+                    "start".to_string(),
+                    (1_700_000_000 - 30 * 60).to_string(),
+                ),
+                mockito::Matcher::UrlEncoded("end".to_string(), "1700000000".to_string()),
+            ]))
+            .with_status(200)
+            .with_body(vm_empty())
+            .expect(1)
+            .create_async()
+            .await;
+
+        get_function_utilization_history(
+            &ts_client(server.url()),
+            &fid,
+            &fvid,
+            "stg",
+            MetricSource::ControlPlane,
+            true,
+            end_time,
+            lookback,
+            60,
+        )
+        .await
+        .expect("utilization history");
+
+        utilization.assert_async().await;
     }
 
     #[tokio::test]
@@ -1367,6 +1484,7 @@ mod tests {
                 configured_env,
                 MetricSource::ControlPlane,
                 false,
+                Utc::now(),
                 StdDuration::from_secs(5 * 60),
                 60,
             )
@@ -1448,7 +1566,10 @@ mod tests {
             Some(MetricSource::LlmGateway)
         );
         assert_eq!(gathered.inputs.current_instances, 2);
-        assert_eq!(gathered.inputs.utilization_samples, vec![25.0]);
+        assert_eq!(
+            gathered.inputs.utilization_samples,
+            vec![(1_700_000_000, 25.0)]
+        );
         assert!(gathered.inputs.recently_invoked);
         let target = gathered.gateway_target.expect("gateway target");
         assert_eq!(target.function_version_id, active_version);
@@ -1521,6 +1642,7 @@ mod tests {
                 "prod",
                 MetricSource::LlmGateway,
                 false,
+                Utc::now(),
                 StdDuration::from_secs(5 * 60),
                 70,
             )
@@ -1540,17 +1662,15 @@ mod tests {
             .with_body(function_series)
             .create_async()
             .await;
-        assert!(
-            llm_gateway_recently_invoked(
-                &ts_client(server.url()),
-                &fid,
-                StdDuration::ZERO,
-                "prod",
-                false,
-            )
-                .await
-                .expect("gateway recent invocation query")
-        );
+        assert!(llm_gateway_recently_invoked(
+            &ts_client(server.url()),
+            &fid,
+            StdDuration::ZERO,
+            "prod",
+            false,
+        )
+        .await
+        .expect("gateway recent invocation query"));
     }
 
     /// No worker or gateway series -> fall back to control-plane metrics without
@@ -1638,13 +1758,13 @@ mod tests {
         let client = ts_client(server.url());
 
         assert_eq!(
-            get_byoc_instance_count(&client, &fid, &fvid, "prd", false)
+            get_byoc_instance_count(&client, &fid, &fvid, "prd", false, Utc::now())
                 .await
                 .expect("prod cp instance count"),
             Some(3)
         );
         assert_eq!(
-            get_byoc_instance_count(&client, &fid, &fvid, "stg", false)
+            get_byoc_instance_count(&client, &fid, &fvid, "stg", false, Utc::now())
                 .await
                 .expect("stage cp instance count"),
             Some(3)
@@ -1675,6 +1795,7 @@ mod tests {
                 &fvid,
                 "stg",
                 true,
+                Utc::now(),
             )
             .await
             .expect("missing cp instance count"),
@@ -1703,6 +1824,7 @@ mod tests {
                 &fvid,
                 "stg",
                 true,
+                Utc::now(),
             )
             .await
             .expect("zero cp instance count"),
@@ -1751,6 +1873,7 @@ mod tests {
             "stg",
             true,
             &ScalingSettings::default(),
+            ScalingSettings::default().lookback,
             &new_metric_routing_cache(),
         )
         .await
@@ -1791,6 +1914,7 @@ mod tests {
             "stg",
             true,
             &settings,
+            settings.lookback,
             &routing_cache,
         )
         .await
@@ -1804,7 +1928,7 @@ mod tests {
 
         assert_eq!(inputs.current_instances, 5);
         assert_eq!(inputs.metric_source, MetricSource::WorkerThreads);
-        assert_eq!(inputs.utilization_samples, vec![5.0]);
+        assert_eq!(inputs.utilization_samples, vec![(1_700_000_000, 5.0)]);
         assert!(inputs.recently_invoked);
     }
 

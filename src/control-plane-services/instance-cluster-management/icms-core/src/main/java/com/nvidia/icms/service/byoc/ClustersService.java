@@ -16,6 +16,7 @@
  */
 package com.nvidia.icms.service.byoc;
 
+import com.nvidia.icms.configuration.bean.CapacityGatingProperties;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.configuration.nvca.NvcaConfigurationProperties;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroupResponse;
@@ -39,6 +40,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.extensions.api.ClusterAuthorizationService;
+import com.nvidia.icms.service.gating.CapacityGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.util.GsonCompatMapper;
 import io.micrometer.observation.annotation.Observed;
@@ -79,12 +81,15 @@ public class ClustersService {
     private final InstanceServiceHelper instanceServiceHelper;
 
     private final IcmsConfigurationProperties icmsConfigurationProperties;
+    private final CapacityGatingProperties capacityGatingProperties;
 
     private final ClusterTargetingHelper clusterTargetingHelper;
 
     private final ComputePlatformService computePlatformService;
 
     private final ClusterAuthorizationService clusterAuthorizationService;
+
+    private final CapacityGatingService capacityGatingService;
 
     /**
      * This is a static class to store READY cluster information per GPU from a cluster
@@ -137,6 +142,9 @@ public class ClustersService {
             clusterGroupsSet.addAll(fetchClusterGroupsForBart(ncaId));
         }
 
+        // Applied last so every branch above (NVCA, detailed targeting, BART) is covered once.
+        capacityGatingService.removeGatedClusterGroups(clusterGroupsSet, ncaId);
+
         return ClusterGroupResponse.builder()
                 .clusterGroup(clusterGroupsSet)
                 .build();
@@ -174,7 +182,7 @@ public class ClustersService {
             }
             if (clusterGroup.getGpus() != null) {
                 clusterGroup.getGpus().removeIf(gpu ->
-                        !icmsConfigurationProperties.isNcaAllowedForGpu(gpu.getName(), ncaId));
+                        !capacityGatingProperties.isNcaAllowedForGpu(gpu.getName(), ncaId));
             }
             return clusterGroup.getGpus() == null || clusterGroup.getGpus().isEmpty();
         });

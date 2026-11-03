@@ -22,6 +22,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
@@ -35,6 +38,64 @@ type OTelCollectorConfig struct {
 	LogBatch       BatchConfig          `json:"logBatch,omitempty"`
 	LogSampling    LogSamplingConfig    `json:"logSampling,omitempty"`
 	TraceSampling  SamplingConfig       `json:"traceSampling,omitempty"`
+	// PlatformMetricsFederation configures the Kubernetes /federate scrape jobs.
+	PlatformMetricsFederation PlatformMetricsFederationConfig `json:"platformMetricsFederation,omitempty"`
+}
+
+// DefaultPlatformMetricsFederationTarget is the in-cluster Prometheus that the
+// Kubernetes templates federate platform metrics from when no target is set.
+const DefaultPlatformMetricsFederationTarget = "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+
+// PlatformMetricsFederationConfig configures the scrape jobs that read
+// platform metrics (worker, NVCA, cAdvisor, kube-state-metrics, and DCGM)
+// from a Prometheus-compatible /federate endpoint on Kubernetes backends.
+type PlatformMetricsFederationConfig struct {
+	// Enabled turns the federation scrape jobs on or off. Unset means enabled.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Target is the host:port that serves /federate. Empty means
+	// DefaultPlatformMetricsFederationTarget.
+	Target string `json:"target,omitempty"`
+}
+
+// IsZero returns true when neither enabled nor target is set.
+func (c *PlatformMetricsFederationConfig) IsZero() bool {
+	return c == nil || (c.Enabled == nil && c.Target == "")
+}
+
+// IsEnabled reports whether the federation scrape jobs are rendered.
+func (c PlatformMetricsFederationConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// EffectiveTarget returns the configured target or the default target.
+func (c PlatformMetricsFederationConfig) EffectiveTarget() string {
+	if c.Target == "" {
+		return DefaultPlatformMetricsFederationTarget
+	}
+	return c.Target
+}
+
+var federationHostPattern = regexp.MustCompile(
+	`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$`)
+
+// validate accepts an empty target or a DNS name or IP address with a port.
+// The target is rendered into the collector YAML, so anything else is rejected.
+func (c PlatformMetricsFederationConfig) validate() error {
+	if c.Target == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(c.Target)
+	if err != nil {
+		return fmt.Errorf("target %q must be host:port: %w", c.Target, err)
+	}
+	if net.ParseIP(host) == nil && !federationHostPattern.MatchString(host) {
+		return fmt.Errorf("target %q must use a DNS name or IP address as its host", c.Target)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return fmt.Errorf("target %q must use a port between 1 and 65535", c.Target)
+	}
+	return nil
 }
 
 const (
@@ -52,7 +113,8 @@ func (c *OTelCollectorConfig) IsZero() bool {
 		c.Batch.IsZero() &&
 		c.LogBatch.IsZero() &&
 		c.LogSampling.IsZero() &&
-		c.TraceSampling.IsZero()
+		c.TraceSampling.IsZero() &&
+		c.PlatformMetricsFederation.IsZero()
 }
 
 // SamplingConfig configures a BYOO collector trace probabilistic sampling processor.
@@ -235,13 +297,16 @@ func applyOTelCollectorConfig(otelConfig *OpenTelemetryConfig, cfg OTelCollector
 	return nil
 }
 
-// Validate rejects sampler settings that the pinned collector cannot apply safely.
+// Validate rejects sampler and federation settings that the pinned collector cannot apply safely.
 func (c OTelCollectorConfig) Validate() error {
 	if err := c.LogSampling.validate(); err != nil {
 		return fmt.Errorf("log sampling: %w", err)
 	}
 	if err := c.TraceSampling.validate(); err != nil {
 		return fmt.Errorf("trace sampling: %w", err)
+	}
+	if err := c.PlatformMetricsFederation.validate(); err != nil {
+		return fmt.Errorf("platform metrics federation: %w", err)
 	}
 	return nil
 }

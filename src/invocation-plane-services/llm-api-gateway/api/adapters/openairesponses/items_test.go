@@ -29,6 +29,27 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
 )
 
+func TestInputAudioContentRoundTrip(t *testing.T) {
+	body := `{"type":"input_audio","input_audio":{"data":"T2dnUw==","format":"ogg"}}`
+	var content InputContent
+	require.NoError(t, json.Unmarshal([]byte(body), &content))
+	audio, ok := content.GetAudioContent()
+	require.True(t, ok)
+	require.Equal(t, "ogg", audio.InputAudio.Format)
+	encoded, err := json.Marshal(content)
+	require.NoError(t, err)
+	require.JSONEq(t, body, string(encoded))
+
+	// Parts missing data or format stay raw for the backend to validate.
+	for _, member := range []string{"null", `{}`, `{"data":"T2dnUw=="}`, `{"format":"ogg"}`} {
+		part := `{"type":"input_audio","input_audio":` + member + `}`
+		var invalid InputContent
+		require.NoError(t, json.Unmarshal([]byte(part), &invalid))
+		require.Equal(t, ContentTypeInputAudio, invalid.Type)
+		require.JSONEq(t, part, string(invalid.Raw))
+	}
+}
+
 // to update test
 // go test ./api/adapters/openai_responses -run TestOutputItem_MarshalJSON -update
 func TestOutputItem_MarshalJSON(t *testing.T) {

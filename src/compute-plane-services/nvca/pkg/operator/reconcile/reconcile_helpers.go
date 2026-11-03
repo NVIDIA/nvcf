@@ -109,26 +109,86 @@ func getNBAnnotations(nb *nvidiaiov1.NVCFBackend) map[string]string {
 	}
 }
 
-//nolint:dupl
-func (bc *BackendK8sCache) createOrUpdateNamespace(ctx context.Context, ns *v1.Namespace) error {
-	// get and create if not exists
-	_, err := bc.clients.K8s.CoreV1().Namespaces().Get(ctx, ns.Name, metav1.GetOptions{})
-	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			_, err := bc.clients.K8s.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-			if err != nil && !k8serrors.IsAlreadyExists(err) {
-				return fmt.Errorf("failed to create %v namespace, err: %v", ns.Name, err)
-			}
-		} else {
-			return fmt.Errorf("failed to get %v namespace, err: %v", ns.Name, err)
+// namespaceOwnedKeys names the metadata keys NVCA owns on a namespace but does not always set. Labels and
+// annotations are listed separately so a conditional label never removes an annotation that happens to share its
+// key. A listed key is deleted when the desired object omits it; an unlisted key is never deleted.
+type namespaceOwnedKeys struct {
+	labels      []string
+	annotations []string
+}
+
+// mergeOwnedKeys writes the desired key/value pairs into live and deletes the optional owned keys that desired
+// omits. Keys absent from both desired and optionalOwnedKeys are left untouched, so metadata written by other
+// controllers survives. It returns the resulting map and whether anything changed.
+func mergeOwnedKeys(live, desired map[string]string, optionalOwnedKeys []string) (map[string]string, bool) {
+	merged := live
+	changed := false
+
+	for key, value := range desired {
+		if current, ok := merged[key]; ok && current == value {
+			continue
 		}
-	} else {
-		// update namespace with new labels
-		_, err = bc.clients.K8s.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to update %v namespace, err: %v", ns.Name, err)
+		if merged == nil {
+			merged = make(map[string]string, len(desired))
+		}
+		merged[key] = value
+		changed = true
+	}
+
+	for _, key := range optionalOwnedKeys {
+		if _, ok := desired[key]; ok {
+			continue
+		}
+		if _, ok := merged[key]; ok {
+			delete(merged, key)
+			changed = true
 		}
 	}
+
+	return merged, changed
+}
+
+// createOrUpdateNamespace creates ns when it does not exist. When it already exists, the live namespace is read
+// and only the label and annotation keys ns names are written back, so identity, finalizers, owner references and
+// metadata owned by other controllers (GitOps tracking annotations, for example) are preserved.
+// optional names the label and annotation keys NVCA owns but does not always set; they are removed from the live
+// namespace when ns omits them. Reads and writes are retried on conflict so a concurrent external edit is merged
+// rather than overwritten.
+func (bc *BackendK8sCache) createOrUpdateNamespace(ctx context.Context, ns *v1.Namespace,
+	optional namespaceOwnedKeys) error {
+	namespaces := bc.clients.K8s.CoreV1().Namespaces()
+
+	retriable := func(err error) bool {
+		return k8serrors.IsConflict(err) || k8serrors.IsAlreadyExists(err)
+	}
+
+	err := retry.OnError(retry.DefaultRetry, retriable, func() error {
+		live, err := namespaces.Get(ctx, ns.Name, metav1.GetOptions{})
+		if err != nil {
+			if !k8serrors.IsNotFound(err) {
+				return err
+			}
+			// Another writer may win the race; retriable sends AlreadyExists back through the merge path.
+			_, err = namespaces.Create(ctx, ns, metav1.CreateOptions{})
+			return err
+		}
+
+		updated := live.DeepCopy()
+		labels, labelsChanged := mergeOwnedKeys(updated.Labels, ns.Labels, optional.labels)
+		annotations, annotationsChanged := mergeOwnedKeys(updated.Annotations, ns.Annotations, optional.annotations)
+		if !labelsChanged && !annotationsChanged {
+			return nil
+		}
+
+		updated.Labels = labels
+		updated.Annotations = annotations
+		_, err = namespaces.Update(ctx, updated, metav1.UpdateOptions{})
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reconcile %v namespace, err: %w", ns.Name, err)
+	}
+
 	return nil
 }
 
@@ -186,25 +246,33 @@ func (bc *BackendK8sCache) deleteConfigMapIfExists(ctx context.Context, namespac
 	return nil
 }
 
-//nolint:dupl
+// isCreateOrUpdateRace reports whether a create-or-update lost a race with another
+// writer and should re-read the object and try again.
+func isCreateOrUpdateRace(err error) bool {
+	return k8serrors.IsAlreadyExists(err) || k8serrors.IsConflict(err)
+}
+
 func (bc *BackendK8sCache) createOrUpdateSecret(ctx context.Context, s *v1.Secret) error {
-	// get and create if not exists, updated if it does
-	_, err := bc.clients.K8s.CoreV1().Secrets(s.Namespace).Get(ctx, s.Name, metav1.GetOptions{})
-	if err != nil {
+	secrets := bc.clients.K8s.CoreV1().Secrets(s.Namespace)
+	var op string
+	err := retry.OnError(retry.DefaultRetry, isCreateOrUpdateRace, func() error {
+		// get and create if not exists, updated if it does
+		_, err := secrets.Get(ctx, s.Name, metav1.GetOptions{})
 		if k8serrors.IsNotFound(err) {
-			_, err := bc.clients.K8s.CoreV1().Secrets(s.Namespace).Create(ctx, s, metav1.CreateOptions{})
-			if err != nil {
-				return fmt.Errorf("failed to create %v secret, err: %v", s.Name, err)
-			}
-		} else {
-			return fmt.Errorf("failed to get %v secret, err: %v", s.Name, err)
+			op = "create"
+			_, err = secrets.Create(ctx, s, metav1.CreateOptions{})
+			return err
 		}
-	} else {
-		// update secret
-		_, err = bc.clients.K8s.CoreV1().Secrets(s.Namespace).Update(ctx, s, metav1.UpdateOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to update %v secret, err: %v", s.Name, err)
+			op = "get"
+			return err
 		}
+		op = "update"
+		_, err = secrets.Update(ctx, s, metav1.UpdateOptions{})
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("failed to %v %v secret, err: %w", op, s.Name, err)
 	}
 	return nil
 }
@@ -334,110 +402,106 @@ func (bc *BackendK8sCache) createOrUpdateClusterRoleBinding(ctx context.Context,
 func (bc *BackendK8sCache) createOrUpdateServiceAccount(ctx context.Context, sa *v1.ServiceAccount) error {
 	// get and create if not exists, updated if it does
 	_, err := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Get(ctx, sa.Name, metav1.GetOptions{})
-	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			_, err := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Create(ctx, sa, metav1.CreateOptions{})
-			if err != nil && !k8serrors.IsAlreadyExists(err) {
-				return fmt.Errorf("failed to create %v serviceAccount, err: %v", sa.Name, err)
-			}
-		} else {
-			return fmt.Errorf("failed to get %v serviceAccount, err: %v", sa.Name, err)
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return fmt.Errorf("failed to get %v serviceAccount, err: %w", sa.Name, err)
+	}
+	if k8serrors.IsNotFound(err) {
+		_, err = bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Create(ctx, sa, metav1.CreateOptions{})
+		if err == nil {
+			return nil
 		}
-	} else {
-		retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-			// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
-			saLatest, err := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Update(ctx, sa, metav1.UpdateOptions{})
-			if err != nil {
-				return fmt.Errorf("failed to get latest version of serviceAccount: %v", err)
-			}
-
-			// Update the AutomountServiceAccountToken field directly on the latest ServiceAccount object
-			saLatest.AutomountServiceAccountToken = sa.AutomountServiceAccountToken
-
-			_, updateErr := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Update(ctx, saLatest, metav1.UpdateOptions{})
-			return updateErr
-		})
-
-		if retryErr != nil {
-			return fmt.Errorf("failed to update %v serviceAccount, err: %v", sa.Name, retryErr)
+		if !k8serrors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to create %v serviceAccount, err: %w", sa.Name, err)
 		}
+		// In a new namespace the ServiceAccount controller can create "default"
+		// first; fall through so the desired settings are still applied.
+	}
+
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
+		saLatest, err := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Get(ctx, sa.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get latest version of serviceAccount: %w", err)
+		}
+
+		// Update the AutomountServiceAccountToken field directly on the latest ServiceAccount object
+		saLatest.AutomountServiceAccountToken = sa.AutomountServiceAccountToken
+
+		_, updateErr := bc.clients.K8s.CoreV1().ServiceAccounts(sa.Namespace).Update(ctx, saLatest, metav1.UpdateOptions{})
+		return updateErr
+	})
+	if retryErr != nil {
+		return fmt.Errorf("failed to update %v serviceAccount, err: %w", sa.Name, retryErr)
 	}
 	return nil
 }
 
-//nolint:dupl
 func (bc *BackendK8sCache) createOrUpdateValidatingWebhookConfiguration(ctx context.Context,
 	vw *admissionregistrationv1.ValidatingWebhookConfiguration) error {
-	// get and create if not exists, updated if it does
-	cw, err := bc.clients.K8s.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(ctx, vw.Name, metav1.GetOptions{})
+	return bc.createOrUpdateWebhookConfiguration(ctx, vw.Name, false, vw)
+}
+
+// createOrUpdateWebhookConfiguration creates the webhook configuration, or updates
+// it to the desired state when it already exists. Losing a race with another writer
+// (AlreadyExists on create, Conflict on update) re-reads the live object and
+// retries, so the desired caBundle is always applied rather than dropped.
+func (bc *BackendK8sCache) createOrUpdateWebhookConfiguration(ctx context.Context, name string, isMutating bool, webhook interface{}) error {
+	kind := "ValidatingWebhookConfiguration"
+	if isMutating {
+		kind = "MutatingWebhookConfiguration"
+	}
+	var op string
+	err := retry.OnError(retry.DefaultRetry, isCreateOrUpdateRace, func() error {
+		var err error
+		op, err = bc.createOrUpdateWebhookConfigurationOnce(ctx, name, isMutating, webhook)
+		return err
+	})
 	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			_, err := bc.clients.K8s.AdmissionregistrationV1().ValidatingWebhookConfigurations().Create(ctx, vw, metav1.CreateOptions{})
-			if err != nil {
-				return fmt.Errorf("failed to create %v validatingWebhookConfiguration, err: %v", vw.Name, err)
-			}
-		} else {
-			return fmt.Errorf("failed to get %v validatingWebhookConfiguration, err: %v", vw.Name, err)
-		}
-	} else {
-		// update validating webhook
-		vw.ObjectMeta.UID = cw.ObjectMeta.UID                         //nolint:staticcheck
-		vw.ObjectMeta.ResourceVersion = cw.ObjectMeta.ResourceVersion //nolint:staticcheck
-		_, err = bc.clients.K8s.AdmissionregistrationV1().ValidatingWebhookConfigurations().Update(ctx, vw, metav1.UpdateOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to update %v validatingWebhookConfiguration, err: %v", vw.Name, err)
-		}
+		return fmt.Errorf("failed to %v %v %v, err: %w", op, name, kind, err)
 	}
 	return nil
 }
 
-func (bc *BackendK8sCache) createOrUpdateWebhookConfiguration(ctx context.Context, name string, isMutating bool, webhook interface{}) error {
+// createOrUpdateWebhookConfigurationOnce makes a single create-or-update attempt and
+// reports which operation it attempted.
+func (bc *BackendK8sCache) createOrUpdateWebhookConfigurationOnce(ctx context.Context, name string, isMutating bool,
+	webhook interface{}) (string, error) {
+	admission := bc.clients.K8s.AdmissionregistrationV1()
 	if isMutating {
 		vw := webhook.(*admissionregistrationv1.MutatingWebhookConfiguration)
 		// get and create if not exists, updated if it does
-		cw, err := bc.clients.K8s.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			if k8serrors.IsNotFound(err) {
-				_, err := bc.clients.K8s.AdmissionregistrationV1().MutatingWebhookConfigurations().Create(ctx, vw, metav1.CreateOptions{})
-				if err != nil {
-					return fmt.Errorf("failed to create %v MutatingWebhookConfiguration, err: %v", name, err)
-				}
-			} else {
-				return fmt.Errorf("failed to get %v MutatingWebhookConfiguration, err: %v", name, err)
-			}
-		} else {
-			// update Mutating webhook
-			vw.ObjectMeta.UID = cw.ObjectMeta.UID                         //nolint:staticcheck
-			vw.ObjectMeta.ResourceVersion = cw.ObjectMeta.ResourceVersion //nolint:staticcheck
-			_, err = bc.clients.K8s.AdmissionregistrationV1().MutatingWebhookConfigurations().Update(ctx, vw, metav1.UpdateOptions{})
-			if err != nil {
-				return fmt.Errorf("failed to update %v MutatingWebhookConfiguration, err: %v", name, err)
-			}
+		cw, err := admission.MutatingWebhookConfigurations().Get(ctx, name, metav1.GetOptions{})
+		if k8serrors.IsNotFound(err) {
+			vw.ObjectMeta.ResourceVersion = "" //nolint:staticcheck
+			_, err = admission.MutatingWebhookConfigurations().Create(ctx, vw, metav1.CreateOptions{})
+			return "create", err
 		}
-	} else {
-		vw := webhook.(*admissionregistrationv1.ValidatingWebhookConfiguration)
-		// get and create if not exists, updated if it does
-		cw, err := bc.clients.K8s.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
-			if k8serrors.IsNotFound(err) {
-				_, err := bc.clients.K8s.AdmissionregistrationV1().ValidatingWebhookConfigurations().Create(ctx, vw, metav1.CreateOptions{})
-				if err != nil {
-					return fmt.Errorf("failed to create %v ValidatingWebhookConfiguration, err: %v", name, err)
-				}
-			} else {
-				return fmt.Errorf("failed to get %v ValidatingWebhookConfiguration, err: %v", name, err)
-			}
-		} else {
-			// update Validating webhook
-			vw.ObjectMeta.UID = cw.ObjectMeta.UID                         //nolint:staticcheck
-			vw.ObjectMeta.ResourceVersion = cw.ObjectMeta.ResourceVersion //nolint:staticcheck
-			_, err = bc.clients.K8s.AdmissionregistrationV1().ValidatingWebhookConfigurations().Update(ctx, vw, metav1.UpdateOptions{})
-			if err != nil {
-				return fmt.Errorf("failed to update %v ValidatingWebhookConfiguration, err: %v", name, err)
-			}
+			return "get", err
 		}
+		// update Mutating webhook
+		vw.ObjectMeta.UID = cw.ObjectMeta.UID                         //nolint:staticcheck
+		vw.ObjectMeta.ResourceVersion = cw.ObjectMeta.ResourceVersion //nolint:staticcheck
+		_, err = admission.MutatingWebhookConfigurations().Update(ctx, vw, metav1.UpdateOptions{})
+		return "update", err
 	}
-	return nil
+
+	vw := webhook.(*admissionregistrationv1.ValidatingWebhookConfiguration)
+	// get and create if not exists, updated if it does
+	cw, err := admission.ValidatingWebhookConfigurations().Get(ctx, name, metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		vw.ObjectMeta.ResourceVersion = "" //nolint:staticcheck
+		_, err = admission.ValidatingWebhookConfigurations().Create(ctx, vw, metav1.CreateOptions{})
+		return "create", err
+	}
+	if err != nil {
+		return "get", err
+	}
+	// update Validating webhook
+	vw.ObjectMeta.UID = cw.ObjectMeta.UID                         //nolint:staticcheck
+	vw.ObjectMeta.ResourceVersion = cw.ObjectMeta.ResourceVersion //nolint:staticcheck
+	_, err = admission.ValidatingWebhookConfigurations().Update(ctx, vw, metav1.UpdateOptions{})
+	return "update", err
 }
 
 func (bc *BackendK8sCache) createOrUpdateMutatingWebhookConfiguration(ctx context.Context,

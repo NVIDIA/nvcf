@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarEntry;
 import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
-import net.devh.boot.grpc.server.event.GrpcServerStartedEvent;
+import org.springframework.grpc.server.lifecycle.GrpcServerStartedEvent;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.context.ApplicationContextInitializer;

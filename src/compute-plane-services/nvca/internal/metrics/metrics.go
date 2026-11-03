@@ -82,6 +82,9 @@ const (
 	KataRuntimeIsolationEnabledMetricName = "nvca_kata_runtime_isolation_enabled"
 	MaintenanceModeStateMetricName        = "nvca_maintenance_mode_state"
 
+	// BYOO metrics
+	BYOOPlatformMetricsFederationStateMetricName = "nvca_byoo_platform_metrics_federation_state"
+
 	// Cluster-validator metrics — populated by a SharedInformer that
 	// watches the cluster-validator-summary ConfigMap. The dynamic-cardinality
 	// metrics (per endpoint / per netpol pair) are prune-on-update so only
@@ -170,6 +173,9 @@ const (
 
 	// Maintenance-mode label
 	MaintenanceModeLabel = "mode"
+
+	// BYOO platform metrics federation check label
+	BYOOPlatformMetricsFederationStateLabel = "state"
 
 	// UpstreamOperation values for use with RecordUpstreamRequest.
 	UpstreamOperationHeartbeat   = "heartbeat"
@@ -304,6 +310,11 @@ type Metrics struct {
 	// the update protocol.
 	MaintenanceModeState *prometheus.GaugeVec
 
+	// BYOOPlatformMetricsFederationState reports the latest result of the
+	// BYOO platform metrics federation target check (one-hot encoding). See
+	// SetBYOOPlatformMetricsFederationState().
+	BYOOPlatformMetricsFederationState *prometheus.GaugeVec
+
 	// Cluster-validator metrics — see SetClusterValidatorSummary() for the
 	// update protocol. The dynamic-cardinality vectors (Endpoint, NetpolPair)
 	// are prune-on-update so only the current run's label values are
@@ -320,6 +331,9 @@ type Metrics struct {
 	// clusterValidatorMu.
 	clusterValidatorLastEmitted *clusterValidatorEmittedSet
 	clusterValidatorMu          sync.Mutex
+	// clusterValidatorEnabled gates the cluster-validator baseline; see
+	// WithClusterValidatorEnabled.
+	clusterValidatorEnabled bool
 
 	// Workload result metrics
 	WorkloadResultTotal *prometheus.CounterVec
@@ -379,6 +393,7 @@ func (m *Metrics) Destroy() {
 	prometheus.Unregister(m.ModelCacheReclaimedTotal)
 	prometheus.Unregister(m.KataRuntimeIsolationEnabled)
 	prometheus.Unregister(m.MaintenanceModeState)
+	prometheus.Unregister(m.BYOOPlatformMetricsFederationState)
 	prometheus.Unregister(m.ClusterValidatorReady)
 	prometheus.Unregister(m.ClusterValidatorCheckStatus)
 	prometheus.Unregister(m.ClusterValidatorEndpointReachable)
@@ -420,6 +435,16 @@ func WithKataRuntimeIsolationEnabled(enabled bool) DefaultMetricsOption {
 			}
 			m.KataRuntimeIsolationEnabled.WithLabelValues(m.WithDefaultLabelValues()...).Set(val)
 		}
+	}
+}
+
+// WithClusterValidatorEnabled publishes the cluster-validator baseline (every
+// fixed gauge at 0 until the first summary) when the validator runs on this
+// cluster, at startup and after a reset. Without it the validator's series
+// appear only with a summary.
+func WithClusterValidatorEnabled(enabled bool) DefaultMetricsOption {
+	return func(m *Metrics) {
+		m.clusterValidatorEnabled = enabled
 	}
 }
 
@@ -762,6 +787,16 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 		m.MaintenanceModeState.WithLabelValues(m.WithDefaultLabelValues(mode.String())...).Set(0)
 	}
 
+	m.BYOOPlatformMetricsFederationState = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: BYOOPlatformMetricsFederationStateMetricName,
+		Help: "Latest result of NVCA's check of the configured BYOO platform metrics federation " +
+			"target. The series whose state label matches the result is 1 and every other state " +
+			"series is 0 (one-hot encoding). state is one of not_checked, reachable, unreachable. " +
+			"not_checked means BYOObservability is off, federation is disabled, or no target is set.",
+	}, withDefaultLabels(BYOOPlatformMetricsFederationStateLabel))
+	// Every series appears on the first Prometheus scrape, starting at not_checked.
+	m.SetBYOOPlatformMetricsFederationState(BYOOPlatformMetricsFederationNotChecked)
+
 	// Cluster-validator metrics. Fixed-cardinality vectors (Ready,
 	// LastRun*, CheckStatus per known check) are initialized to zero so
 	// they appear on the first Prometheus scrape — same pattern as
@@ -770,13 +805,16 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	// reconcile fires from a real ConfigMap update.
 	m.ClusterValidatorReady = promFactory.NewGaugeVec(prometheus.GaugeOpts{
 		Name: ClusterValidatorReadyMetricName,
-		Help: "Cluster-validator overall verdict (1=NVCF-Ready, 0=NVCF-Not-Ready). " +
-			"Driven by the most recent run's verdictReady field.",
+		Help: "Cluster-validator overall verdict from the latest run's verdictReady field " +
+			"(1=NVCF-Ready, possibly with warnings; 0=NVCF-Not-Ready, including a critical check " +
+			"that could not be observed). 0 before the first run.",
 	}, withDefaultLabels())
 	m.ClusterValidatorCheckStatus = promFactory.NewGaugeVec(prometheus.GaugeOpts{
 		Name: ClusterValidatorCheckStatusMetricName,
-		Help: "Per-check status from the latest cluster-validator run " +
-			"(1=passed, 0=failed/skipped). The set of check names is fixed; see CheckKey* constants.",
+		Help: "Per-check status from the latest cluster-validator run (1=passed, possibly with a " +
+			"warning; 0=failed). A check is absent when its role or configuration does not run it, " +
+			"when it could not be observed, or when it does not apply. Every known check is 0 " +
+			"before the first run.",
 	}, withDefaultLabels(ClusterValidatorCheckLabel))
 	m.ClusterValidatorEndpointReachable = promFactory.NewGaugeVec(prometheus.GaugeOpts{
 		Name: ClusterValidatorEndpointReachableMetricName,
@@ -801,7 +839,7 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	))
 	m.ClusterValidatorLastRunTimestamp = promFactory.NewGaugeVec(prometheus.GaugeOpts{
 		Name: ClusterValidatorLastRunTimestampMetricName,
-		Help: "Unix timestamp (seconds) of the latest cluster-validator run. " +
+		Help: "Unix timestamp (seconds) of the latest cluster-validator run; 0 before the first run. " +
 			"Operators alert on staleness via `time() - <metric> > <threshold>`.",
 	}, withDefaultLabels())
 	m.ClusterValidatorLastRunDuration = promFactory.NewGaugeVec(prometheus.GaugeOpts{
@@ -812,7 +850,11 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	// Initialize the fixed-cardinality cluster-validator gauges to 0 so they
 	// appear on the first Prometheus scrape — same "absent metric" pattern as
 	// KataRuntimeIsolationEnabled. Each run updates these series in place.
-	m.emitClusterValidatorBaseline()
+	// Only where the validator runs: elsewhere the baseline would read as a
+	// validator that never ran, and a "never ran" alert would fire forever.
+	if m.clusterValidatorEnabled {
+		m.emitClusterValidatorBaseline()
+	}
 
 	// Workload result metric (uses default labels)
 	m.WorkloadResultTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
@@ -1188,6 +1230,44 @@ func (m *Metrics) SetMaintenanceModeState(mode types.MaintenanceMode) {
 	}
 }
 
+// BYOOPlatformMetricsFederationState is the result of NVCA's check of the
+// configured BYOO platform metrics federation target.
+type BYOOPlatformMetricsFederationState string
+
+const (
+	// BYOOPlatformMetricsFederationNotChecked means NVCA does not check a
+	// target: BYOObservability is off, federation is disabled, or no target is set.
+	BYOOPlatformMetricsFederationNotChecked BYOOPlatformMetricsFederationState = "not_checked"
+	// BYOOPlatformMetricsFederationReachable means the target answered /federate.
+	BYOOPlatformMetricsFederationReachable BYOOPlatformMetricsFederationState = "reachable"
+	// BYOOPlatformMetricsFederationUnreachable means the target did not answer /federate successfully.
+	BYOOPlatformMetricsFederationUnreachable BYOOPlatformMetricsFederationState = "unreachable"
+)
+
+// AllBYOOPlatformMetricsFederationStates lists every federation check state,
+// used to initialize every series of the state gauge.
+var AllBYOOPlatformMetricsFederationStates = []BYOOPlatformMetricsFederationState{
+	BYOOPlatformMetricsFederationNotChecked,
+	BYOOPlatformMetricsFederationReachable,
+	BYOOPlatformMetricsFederationUnreachable,
+}
+
+// SetBYOOPlatformMetricsFederationState updates the federation check gauge:
+// the series for the given state is set to 1 and every other known state is
+// set to 0 (one-hot encoding). Safe to call repeatedly and on a nil receiver.
+func (m *Metrics) SetBYOOPlatformMetricsFederationState(state BYOOPlatformMetricsFederationState) {
+	if m == nil || m.BYOOPlatformMetricsFederationState == nil {
+		return
+	}
+	for _, s := range AllBYOOPlatformMetricsFederationStates {
+		val := 0.0
+		if s == state {
+			val = 1.0
+		}
+		m.BYOOPlatformMetricsFederationState.WithLabelValues(m.WithDefaultLabelValues(string(s))...).Set(val)
+	}
+}
+
 // RecordWorkloadStatus records the terminal outcome of a workload.
 func (m *Metrics) RecordWorkloadStatus(
 	workloadType workloadtypes.WorkloadType,
@@ -1310,6 +1390,16 @@ func clusterValidatorCheckKeys() []string {
 		"gpu_operator",
 		"configurable_netpol",
 		"netpol_enforcement",
+		// Control-plane-specific keys (only populated when VALIDATOR_ROLE=control-plane).
+		"default_storage_class",
+		"gateway_api_crds",
+		"envoy_gateway",
+		"gateway_routes",
+		"external_lb",
+		"node_to_node",
+		// Control-plane HA readiness keys.
+		"tier1_deployments",
+		"tier2_statefulsets",
 	}
 }
 
@@ -1467,12 +1557,11 @@ func (m *Metrics) SetClusterValidatorSummary(s *ClusterValidatorSummary) {
 	m.clusterValidatorLastEmitted = current
 }
 
-// ResetClusterValidatorMetrics drops every emitted cluster-validator
-// series and resets the cluster-level gauges to zero. Called by the agent when
-// it observes the explicit cluster-validator-metrics-reset ConfigMap — an
-// operator-initiated one-shot signal to clear the metrics to baseline.
-// Deleting the summary ConfigMap does NOT trigger this: last-known-good is
-// preserved on delete.
+// ResetClusterValidatorMetrics drops every emitted cluster-validator series and,
+// where the validator is enabled, restores the init-to-zero baseline. Called by
+// the agent when it observes the explicit cluster-validator-metrics-reset
+// ConfigMap, an operator-initiated one-shot signal. Deleting the summary
+// ConfigMap does NOT trigger this: last-known-good is preserved on delete.
 func (m *Metrics) ResetClusterValidatorMetrics() {
 	if m == nil {
 		return
@@ -1481,10 +1570,13 @@ func (m *Metrics) ResetClusterValidatorMetrics() {
 	defer m.clusterValidatorMu.Unlock()
 
 	m.pruneClusterValidatorEmitted()
+	m.clusterValidatorLastEmitted = nil
 
-	// Re-emit the init-to-zero baseline so /metrics doesn't go quiet on the
-	// cluster-validator gauges.
-	m.emitClusterValidatorBaseline()
+	// Without the validator a baseline last_run of 0 would read as a
+	// validator that never ran, so a reset there leaves no series at all.
+	if m.clusterValidatorEnabled {
+		m.emitClusterValidatorBaseline()
+	}
 }
 
 // pruneClusterValidatorEmitted deletes every series recorded in

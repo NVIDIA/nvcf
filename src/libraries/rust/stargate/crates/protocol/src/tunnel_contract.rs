@@ -24,6 +24,12 @@ pub const HEADER_STARGATE_UPSTREAM_RETRYABLE: &str = "x-stargate-upstream-retrya
 pub const HEADER_STARGATE_RETRYABLE: &str = "x-stargate-retryable";
 pub const HEADER_STARGATE_RETRY_REASON: &str = "x-stargate-retry-reason";
 pub const HEADER_STARGATE_RETRY_AFTER_MS: &str = "x-stargate-retry-after-ms";
+/// Gateway hint naming the cluster that served the session's last request.
+pub const HEADER_STARGATE_LAST_CLUSTER_ID: &str = "x-stargate-last-cluster-id";
+
+pub const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
+pub const RETRY_REASON_UPSTREAM_ADMISSION_REJECTED: &str = "upstream_admission_rejected";
+pub const RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED: &str = "chat_usage_rewrite_saturated";
 
 pub const HEADER_INFERENCE_SERVER_ID: &str = "x-inference-server-id";
 pub const HEADER_REVERSE_AUTH_TOKEN: &str = "x-stargate-auth-token";
@@ -32,6 +38,12 @@ pub const WEBTRANSPORT_TUNNEL_PATH: &str = "/_stargate/webtransport";
 
 pub const REQUIRED_REQUEST_HEADERS: [&str; 3] =
     [HEADER_REQUEST_ID, HEADER_MODEL, HEADER_INPUT_TOKENS];
+
+/// Stargate control metadata is consumed at a proxy boundary, never forwarded
+/// unchanged to an inference application or customer.
+pub fn is_internal_control_header(name: &http::header::HeaderName) -> bool {
+    name.as_str().starts_with("x-stargate-")
+}
 
 #[cfg(test)]
 mod tests {
@@ -60,6 +72,10 @@ mod tests {
         assert_eq!(HEADER_STARGATE_RETRYABLE, "x-stargate-retryable");
         assert_eq!(HEADER_STARGATE_RETRY_REASON, "x-stargate-retry-reason");
         assert_eq!(HEADER_STARGATE_RETRY_AFTER_MS, "x-stargate-retry-after-ms");
+        assert_eq!(
+            HEADER_STARGATE_LAST_CLUSTER_ID,
+            "x-stargate-last-cluster-id"
+        );
         assert_eq!(HEADER_INFERENCE_SERVER_ID, "x-inference-server-id");
         assert_eq!(HEADER_REVERSE_AUTH_TOKEN, "x-stargate-auth-token");
         assert_eq!(WEBTRANSPORT_TUNNEL_PATH, "/_stargate/webtransport");

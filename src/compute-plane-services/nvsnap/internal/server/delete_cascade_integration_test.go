@@ -20,7 +20,7 @@ limitations under the License.
 // yesterday's premature close of #137: assert that after a single
 // DELETE call, EVERY related resource is gone — catalog rows
 // sharing the hash, L2 PVCs, VolumeSnapshot, promote Lease,
-// GPUCheckpoint CRDs, blobstore captures.
+// GPUCheckpoint CRDs.
 //
 // If a regression strips a cleanup step (refactor, accidental
 // short-circuit, missed RBAC), one of these assertions fails
@@ -58,7 +58,6 @@ func newCascadeTestServer(
 	hash string,
 	namespace string,
 	rowIDs []string,
-	blobstoreURL string,
 ) *Server {
 	t.Helper()
 
@@ -135,7 +134,6 @@ func newCascadeTestServer(
 	s.kubeClient = kubeClient
 	s.dynClient = dynClient
 	s.catalog = d
-	s.config.BlobstoreURL = blobstoreURL
 	s.setupRoutes()
 	return s
 }
@@ -145,16 +143,12 @@ func newCascadeTestServer(
 // row per content hash, so the #137 sibling-survival bug is
 // structurally prevented (no siblings can exist). A single DELETE
 // must remove the one catalog row AND all the per-hash L2 + K8s
-// artifacts AND fire a blobstore DELETE for the row's agentID.
+// artifacts.
 func TestDeleteCascade_SingleRow(t *testing.T) {
 	hash := "deadbeefcafe0123deadbeefcafe0123deadbeefcafe0123deadbeefcafe0123"
 	ns := "nvcf-backend"
 
-	fb, fbSrv := newFakeBlobstore()
-	defer fbSrv.Close()
-
-	s := newCascadeTestServer(t, hash, ns,
-		[]string{"row-a"}, fbSrv.URL)
+	s := newCascadeTestServer(t, hash, ns, []string{"row-a"})
 
 	// Call deleteCheckpoint on the single converged row.
 	res := s.cascadeDeleteCheckpoint(context.Background(), "row-a",
@@ -229,16 +223,6 @@ func TestDeleteCascade_SingleRow(t *testing.T) {
 		t.Errorf("CaptureCMs=%d, want 1", res.CaptureCMs)
 	}
 
-	// Blobstore must have received a DELETE for the row's agentID
-	// (CAS dedup means blobs only get GC'd when refcount drops to
-	// zero — that requires the capture to be deleted).
-	gotDeletes := fb.deletes()
-	if len(gotDeletes) != 1 {
-		t.Errorf("blobstore DELETEs=%d, want 1 (single row); got=%v", len(gotDeletes), gotDeletes)
-	}
-	if res.Blobstores != 1 {
-		t.Errorf("Blobstores=%d, want 1", res.Blobstores)
-	}
 }
 
 // TestDeleteCascade_ByHashEndpoint — the new /by-hash/{hash} DELETE
@@ -247,10 +231,7 @@ func TestDeleteCascade_ByHashEndpoint(t *testing.T) {
 	hash := "feedfacecafe0123feedfacecafe0123feedfacecafe0123feedfacecafe0123"
 	ns := "nvcf-backend"
 
-	fb, fbSrv := newFakeBlobstore()
-	defer fbSrv.Close()
-
-	s := newCascadeTestServer(t, hash, ns, []string{"r1"}, fbSrv.URL)
+	s := newCascadeTestServer(t, hash, ns, []string{"r1"})
 
 	req := httptest.NewRequest("DELETE", "/api/v1/checkpoints/by-hash/"+hash, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -265,10 +246,6 @@ func TestDeleteCascade_ByHashEndpoint(t *testing.T) {
 		t.Errorf("row r1 still in catalog after by-hash delete")
 	}
 
-	// One blobstore DELETE (single row).
-	if len(fb.deletes()) != 1 {
-		t.Errorf("blobstore DELETEs=%d, want 1; got=%v", len(fb.deletes()), fb.deletes())
-	}
 }
 
 // TestDeleteCascade_ByHashNotFound — 404 when no rows match.
@@ -288,7 +265,7 @@ func TestDeleteCascade_ByHashNotFound(t *testing.T) {
 func TestDeleteCascade_NotFoundTolerant(t *testing.T) {
 	hash := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
 	ns := "nvcf-backend"
-	s := newCascadeTestServer(t, hash, ns, []string{"row-x"}, "")
+	s := newCascadeTestServer(t, hash, ns, []string{"row-x"})
 
 	// First call should succeed.
 	row := mustGetRow(t, s, "row-x")

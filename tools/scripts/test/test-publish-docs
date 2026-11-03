@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+mkdir -p "$workdir/source/tools/ci" "$workdir/bin"
+cp "$repo_root/tools/ci/publish-docs" "$workdir/source/tools/ci/"
+export FIXTURE_ROOT="$workdir/source" FIXTURE_LOG="$workdir/log" DOCS_VERSION_SYNC_BIN="$workdir/bin/sync"
+cat > "$DOCS_VERSION_SYNC_BIN" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$2" == docs-mode ]]; then echo "${FIXTURE_MODE:-legacy}"; exit "${FAIL_MODE:-0}"; fi
+[[ "$2" == docs-stage ]]
+if [[ "${FAIL_STAGE:-0}" != 0 ]]; then exit 17; fi
+mkdir -p "$6"
+printf 'approved\n' > "$6/content"
+printf '{}\n' > "$6/docs-build-receipt.json"
+SH
+cat > "$workdir/source/tools/ci/check-docs" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$PWD" == "$FIXTURE_ROOT" ]]
+echo legacy-check >> "$FIXTURE_LOG"
+exit "${FAIL_CHECK:-0}"
+SH
+cat > "$workdir/source/tools/ci/check-doc-version-sync" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$PWD" == "$FIXTURE_ROOT" ]]
+echo catalog-check >> "$FIXTURE_LOG"
+SH
+cat > "$workdir/source/tools/ci/run-fern" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${FIXTURE_MODE:-legacy}" == umbrella ]]; then
+  [[ "$PWD" != "$FIXTURE_ROOT" ]]
+  [[ "$(cat content)" == approved ]]
+  # Simulate an advancing source branch after validation. Generation must use its staged copy.
+  printf 'unapproved\n' > "$FIXTURE_ROOT/content"
+fi
+echo "$1" >> "$FIXTURE_LOG"
+if [[ "$1" == check ]]; then exit "${FAIL_CHECK:-0}"; fi
+[[ "$*" == 'generate --docs --strict-broken-links' ]]
+SH
+chmod +x "$workdir/source/tools/ci/"* "$DOCS_VERSION_SYNC_BIN"
+mkdir -p "$FIXTURE_ROOT/docs" "$FIXTURE_ROOT/fern"
+printf 'reviewed docs\n' > "$FIXTURE_ROOT/docs/page.md"
+printf 'reviewed config\n' > "$FIXTURE_ROOT/fern/docs.yml"
+printf 'ignored.md\n' > "$FIXTURE_ROOT/.gitignore"
+git -C "$FIXTURE_ROOT" init --quiet
+git -C "$FIXTURE_ROOT" add .
+git -C "$FIXTURE_ROOT" -c user.name=Test -c user.email=test@example.com commit --quiet -m fixture
+: > "$FIXTURE_LOG"
+"$workdir/source/tools/ci/publish-docs" --publish
+[[ "$(cat "$FIXTURE_LOG")" == $'legacy-check\ngenerate' ]]
+: > "$FIXTURE_LOG"
+FIXTURE_MODE=umbrella "$workdir/source/tools/ci/publish-docs" --publish
+[[ "$(cat "$FIXTURE_LOG")" == $'catalog-check\ncheck\ngenerate' ]]
+for failure in FAIL_CHECK FAIL_STAGE; do
+  : > "$FIXTURE_LOG"
+  if env FIXTURE_MODE=umbrella "$failure"=17 "$workdir/source/tools/ci/publish-docs" --publish; then
+    echo "expected publisher failure"; exit 1
+  fi
+  ! grep -q generate "$FIXTURE_LOG"
+done
+: > "$FIXTURE_LOG"
+FIXTURE_MODE=umbrella "$workdir/source/tools/ci/publish-docs" --check
+! grep -q generate "$FIXTURE_LOG"
+for tree in docs fern; do
+  for dirty in tracked staged untracked ignored; do
+    case "$dirty" in
+      tracked|staged)
+        if [[ "$tree" == docs ]]; then path=docs/page.md; else path=fern/docs.yml; fi
+        printf 'unreviewed edit\n' >> "$FIXTURE_ROOT/$path"
+        if [[ "$dirty" == staged ]]; then git -C "$FIXTURE_ROOT" add "$path"; fi
+        ;;
+      untracked) printf 'untracked content\n' > "$FIXTURE_ROOT/$tree/new.md" ;;
+      ignored) printf 'ignored content\n' > "$FIXTURE_ROOT/$tree/ignored.md" ;;
+    esac
+    for mode in --check --publish; do
+      : > "$FIXTURE_LOG"
+      if FIXTURE_MODE=umbrella "$FIXTURE_ROOT/tools/ci/publish-docs" "$mode" > "$workdir/dirty.log" 2>&1; then
+        echo "accepted $dirty $tree input in $mode"; exit 1
+      fi
+      grep -q 'requires a clean docs/ and fern/ tree' "$workdir/dirty.log"
+      [[ ! -s "$FIXTURE_LOG" ]]
+    done
+    git -C "$FIXTURE_ROOT" restore --source=HEAD --staged --worktree -- docs fern
+    rm -f "$FIXTURE_ROOT/$tree/new.md" "$FIXTURE_ROOT/$tree/ignored.md"
+  done
+done
+# The opt-in guard does not alter the legacy publisher's working-tree behavior.
+printf 'legacy edit\n' >> "$FIXTURE_ROOT/docs/page.md"
+: > "$FIXTURE_LOG"
+"$FIXTURE_ROOT/tools/ci/publish-docs" --publish
+[[ "$(cat "$FIXTURE_LOG")" == $'legacy-check\ngenerate' ]]
+# Exercise the real checker too: no mode lookup failure may select legacy fallback.
+cp "$repo_root/tools/ci/check-docs" "$FIXTURE_ROOT/tools/ci/check-docs-real"
+cat > "$workdir/bin/go" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+shift 4
+exec "$DOCS_VERSION_SYNC_BIN" "$@"
+SH
+chmod +x "$workdir/bin/go"
+for failure in failed unknown; do
+  for entrypoint in publish-check publish-generate check-docs; do
+    : > "$FIXTURE_LOG"
+    case "$entrypoint" in
+      publish-check) args=("$FIXTURE_ROOT/tools/ci/publish-docs" --check) ;;
+      publish-generate) args=("$FIXTURE_ROOT/tools/ci/publish-docs" --publish) ;;
+      check-docs) args=(bash "$FIXTURE_ROOT/tools/ci/check-docs-real") ;;
+    esac
+    if [[ "$failure" == failed ]]; then
+      mode=legacy; mode_exit=23; expected=23
+    else
+      mode=unexpected; mode_exit=0; expected=1
+    fi
+    status=0
+    PATH="$workdir/bin:$PATH" FIXTURE_MODE="$mode" FAIL_MODE="$mode_exit" "${args[@]}" > "$workdir/mode.log" 2>&1 || status=$?
+    [[ "$status" == "$expected" ]] || { echo "$entrypoint accepted $failure docs mode: $status"; exit 1; }
+    ! grep -Eq 'legacy-check|generate|^check$' "$FIXTURE_LOG"
+    if [[ "$failure" == unknown ]]; then grep -q 'Unknown docs mode' "$workdir/mode.log"; fi
+  done
+done
+echo 'test-publish-docs: PASS'

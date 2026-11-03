@@ -157,7 +157,7 @@ var (
 
 func (h *OpenAIProxyHandlers) Embeddings(ec echo.Context) error {
 	c := must.As[*GatewayContext](ec)
-	reqCtx, err := h.requireFunctionRequestContext(c)
+	reqCtx, err := h.handlers.requireFunctionRequestContext(c)
 	if err != nil {
 		return err
 	}
@@ -165,6 +165,9 @@ func (h *OpenAIProxyHandlers) Embeddings(ec echo.Context) error {
 	rawBody, err := captureRequestBody(c.Request())
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if err := rejectAmbiguousMembers(rawBody, models.CreateEmbeddingRequest{}); err != nil {
+		return err
 	}
 
 	var request models.CreateEmbeddingRequest
@@ -197,7 +200,7 @@ func (h *OpenAIProxyHandlers) Embeddings(ec echo.Context) error {
 
 func (h *OpenAIProxyHandlers) Reranking(ec echo.Context) error {
 	c := must.As[*GatewayContext](ec)
-	reqCtx, err := h.requireFunctionRequestContext(c)
+	reqCtx, err := h.handlers.requireFunctionRequestContext(c)
 	if err != nil {
 		return err
 	}
@@ -239,7 +242,7 @@ func (h *OpenAIProxyHandlers) Reranking(ec echo.Context) error {
 
 func (h *OpenAIProxyHandlers) TextToSpeech(ec echo.Context) error {
 	c := must.As[*GatewayContext](ec)
-	reqCtx, err := h.requireFunctionRequestContext(c)
+	reqCtx, err := h.handlers.requireFunctionRequestContext(c)
 	if err != nil {
 		return err
 	}
@@ -340,14 +343,6 @@ func (h *OpenAIProxyHandlers) validateEmbeddingRequest(
 			http.StatusBadRequest,
 			fmt.Sprintf("'input' array is too large, must be less than %d elements", MaxEmbeddingInputs),
 		)
-	}
-	for idx, input := range request.Input {
-		if len(input) == 0 {
-			return "", echo.NewHTTPError(
-				http.StatusBadRequest,
-				fmt.Sprintf("'input.%d' must not be empty", idx),
-			)
-		}
 	}
 	return requestModel, nil
 }
@@ -565,7 +560,13 @@ func countEmbeddingTokens(
 ) int {
 	total := 0
 	for _, input := range request.Input {
-		total += estimatedTokenCountForText(input)
+		if input.Raw != nil {
+			total += estimatedTokenCountForRawJSON(input.Raw)
+		} else if input.Tokens != nil {
+			total += len(input.Tokens)
+		} else {
+			total += estimatedTokenCountForText(input.Text)
+		}
 	}
 	return total
 }

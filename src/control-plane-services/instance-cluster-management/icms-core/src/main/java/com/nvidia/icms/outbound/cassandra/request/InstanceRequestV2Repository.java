@@ -76,6 +76,7 @@ public class InstanceRequestV2Repository {
             if (entity.getCreateTimeuuid() == null) {
                 entity.setCreateTimeuuid(TimeUtils.getTimeUuidNow());
             }
+            populateCreationBucket(entity);
 
             if (!instanceRequestV2Repo.isInserted(entity) ||
                     !instanceRequestV2ByDayRepo.isInserted(InstanceRequestConverter.toInstanceRequest2ByDayEntity(entity)))
@@ -139,6 +140,7 @@ public class InstanceRequestV2Repository {
     @Observed
     public void restore(InstanceRequestV2Entity entity) {
         try {
+            populateCreationBucket(entity);
             // Update: Update existing entry if present else insert
             instanceRequestV2Repo.update(entity);
             instanceRequestV2ByDayRepo.update(InstanceRequestConverter.toInstanceRequest2ByDayEntity(entity));
@@ -297,14 +299,26 @@ public class InstanceRequestV2Repository {
 
             Set<String> allRequestIds = new HashSet<>();
 
+            boolean creationBucketReadsEnabled =
+                    icmsConfigurationProperties.isCreationBucketReadsEnabled();
 
             while (currentDate.isBefore(periodDateEnd)) {
-                List<InstanceRequestV2ByDayEntity> requestsByDay = instanceRequestV2ByDayRepo.findAllByKeyTruncatedTsByDay(currentDate, Limit.unlimited());
-                requestsByDay.forEach(r -> {
-                    if (!r.isMarkedAsDeleted()) {
-                        allRequestIds.add(r.getKey().getRequestId());
-                    }
-                });
+                if (creationBucketReadsEnabled) {
+                    // Deleted requests are removed from the requests table,
+                    // so there are no tombstones to filter out.
+                    instanceRequestV2Repo.findRequestIdsByCreationBucket(currentDate)
+                            .forEach(row -> allRequestIds.add(
+                                    row.getString(InstanceRequestV2Entity.COLUMN_REQUEST_ID)));
+                } else {
+                    List<InstanceRequestV2ByDayEntity> requestsByDay =
+                            instanceRequestV2ByDayRepo.findAllByKeyTruncatedTsByDay(
+                                    currentDate, Limit.unlimited());
+                    requestsByDay.forEach(r -> {
+                        if (!r.isMarkedAsDeleted()) {
+                            allRequestIds.add(r.getKey().getRequestId());
+                        }
+                    });
+                }
                 currentDate = currentDate.plus(1, ChronoUnit.DAYS);
             }
 
@@ -446,6 +460,13 @@ public class InstanceRequestV2Repository {
             }
         }
 
+    }
+
+    private void populateCreationBucket(InstanceRequestV2Entity entity) {
+        if (entity.getCreationBucket() == null && entity.getCreateTimeuuid() != null) {
+            entity.setCreationBucket(TimeUtils.getDateFromInstant(
+                    TimeUtils.getInstantFromUuid(entity.getCreateTimeuuid())));
+        }
     }
 
 

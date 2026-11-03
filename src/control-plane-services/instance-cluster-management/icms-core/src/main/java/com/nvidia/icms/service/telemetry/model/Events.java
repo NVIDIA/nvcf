@@ -48,7 +48,6 @@ public enum Events {
 
     CANCEL_REQUEST_TASK("CancelRequestTask"),
 
-    BART_HEARTBEAT_EVENT("BartHeartBeatEvent"),
     NVCA_HEARTBEAT_EVENT("NvcaHeartBeatEvent"),
 
     CREATE_INSTANCES("CreateInstances"),
@@ -85,7 +84,6 @@ public enum Events {
 
     CLOSE_LIFETIME_EXPIRED_INSTANCE_REQUEST("CloseLifetimeExpiredInstanceRequest"),
 
-    BYOC_CLUSTER_REGISTERED("ByocClusterRegistered"),
 
     BYOC_CLUSTER_ABANDONED("ByocClusterAbandoned"),
 

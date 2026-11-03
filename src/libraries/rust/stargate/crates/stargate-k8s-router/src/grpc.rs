@@ -388,6 +388,7 @@ mod tests {
         watch_hits: Arc<AtomicUsize>,
         register_hits: Arc<AtomicUsize>,
         metadata: MetadataRecords,
+        registrations: Arc<Mutex<Vec<InferenceServerRegistration>>>,
         registration_errors: Arc<Mutex<Vec<(tonic::Code, String)>>>,
     }
 
@@ -499,7 +500,8 @@ mod tests {
             let stream = async_stream::stream! {
                 while let Some(message) = inbound.next().await {
                     match message {
-                        Ok(_registration) => {
+                        Ok(registration) => {
+                            recorder.registrations.lock().expect("registration lock poisoned").push(registration);
                             yield Ok(InferenceServerAck {
                                 reverse_tunnel_target: stargate_id.clone(),
                                 reverse_tunnel_pylon_dial_addr: String::new(),
@@ -814,7 +816,19 @@ mod tests {
         let router = start_router(snapshot(&[("stargate-1", fake_b.addr)])).await;
 
         let mut client = router.client("stargate-1.stargate.external");
-        let mut request = Request::new(tokio_stream::iter([registration()]));
+        let mut registration = registration();
+        registration.models.insert(
+            "model-a".into(),
+            stargate_proto::pb::InferenceServerModelRegistration {
+                stats: Some(stargate_proto::pb::ModelStats {
+                    last_mean_input_tps: 50.0,
+                    max_input_tps: Some(200.0),
+                    ..Default::default()
+                }),
+                status: stargate_proto::pb::InferenceServerStatus::Active as i32,
+            },
+        );
+        let mut request = Request::new(tokio_stream::iter([registration]));
         request.metadata_mut().insert(
             "authorization",
             "Bearer token".parse().expect("valid metadata"),
@@ -836,6 +850,18 @@ mod tests {
 
         assert_eq!(ack.reverse_tunnel_target, "stargate-1");
         assert_eq!(recorder_b.register_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            recorder_b
+                .registrations
+                .lock()
+                .expect("registration lock poisoned")[0]
+                .models["model-a"]
+                .stats
+                .as_ref()
+                .unwrap()
+                .max_input_tps,
+            Some(200.0)
+        );
         assert_eq!(
             recorder_b
                 .metadata

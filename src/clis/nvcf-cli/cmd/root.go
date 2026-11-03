@@ -273,6 +273,9 @@ func initConfig() {
 
 	// Host header overrides for hostname-based routing (self-hosted deployments)
 	viper.BindEnv("api_keys_host", "API_KEYS_HOST")
+	viper.BindEnv("event_ledger_url", "EVENT_LEDGER_URL")
+	viper.BindEnv("event_ledger_host", "EVENT_LEDGER_HOST")
+	viper.BindEnv("event_ledger_api_key", "EVENT_LEDGER_API_KEY")
 	viper.BindEnv("api_host", "API_HOST")
 	viper.BindEnv("invoke_host", "INVOKE_HOST")
 	viper.BindEnv("nvct_host", "NVCT_HOST")
@@ -285,6 +288,10 @@ func initConfig() {
 	// swapping --config files. The env name matches the historical
 	// NVCF_CLI_CLUSTER_VALIDATOR_IMAGE override.
 	viper.BindEnv("cluster_validator_image", "NVCF_CLI_CLUSTER_VALIDATOR_IMAGE")
+	viper.BindEnv("cluster_validator_registries", "NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES")
+	viper.BindEnv("cluster_validator_probe_image", "NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE")
+	viper.BindEnv("cluster_validator_tolerations", "NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS")
+	viper.BindEnv("cluster_validator_external_components", "NVCF_CLI_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS")
 
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil && viper.GetBool("debug") {

@@ -16,8 +16,10 @@
 package nvcaconfig
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +159,110 @@ workload:
 	assert.Equal(t, expCfg, gotDecodedCfg)
 }
 
+// TestConfig_DecodeSharedStorageCapacity verifies valid and invalid quantity decoding.
+func TestConfig_DecodeSharedStorageCapacity(t *testing.T) {
+	t.Run("valid quantity", func(t *testing.T) {
+		cfg, err := DecodeConfig([]byte(`agent:
+  sharedStorage:
+    taskData:
+      storageCapacity: 20Gi
+`))
+		require.NoError(t, err)
+		assert.Equal(t, resource.MustParse("20Gi"), cfg.Agent.SharedStorage.TaskData.StorageCapacity)
+	})
+
+	t.Run("invalid quantity", func(t *testing.T) {
+		_, err := DecodeConfig([]byte(`agent:
+  sharedStorage:
+    taskData:
+      storageCapacity: invalid
+`))
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "Agent.SharedStorage.TaskData.StorageCapacity")
+		assert.ErrorContains(t, err, "quantities must match the regular expression")
+	})
+}
+
+// TestConfig_EncodeSharedStorageCapacity verifies quantity string serialization and round-trip decoding.
+func TestConfig_EncodeSharedStorageCapacity(t *testing.T) {
+	want := resource.MustParse("20Gi")
+	cfg := Config{
+		Agent: AgentConfig{
+			SharedStorage: SharedStorageConfig{
+				TaskData: SharedStorageTaskDataConfig{
+					StorageCapacity: want,
+				},
+			},
+		},
+	}
+
+	encoded, err := EncodeConfig(cfg)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), "storageCapacity: 20Gi")
+	assert.NotContains(t, string(encoded), "format: BinarySI")
+
+	decoded, err := DecodeConfig(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, want, decoded.Agent.SharedStorage.TaskData.StorageCapacity)
+}
+
+// TestStringToResourceQuantityHookFunc_IgnoresUnsupportedTypes verifies hook type guards.
+func TestStringToResourceQuantityHookFunc_IgnoresUnsupportedTypes(t *testing.T) {
+	quantityType := reflect.TypeFor[resource.Quantity]()
+	tests := []struct {
+		name string
+		from reflect.Type
+		to   reflect.Type
+		data any
+	}{
+		{
+			name: "string for another destination type",
+			from: reflect.TypeFor[string](),
+			to:   reflect.TypeFor[string](),
+			data: "20Gi",
+		},
+		{
+			name: "string slice",
+			from: reflect.TypeFor[[]string](),
+			to:   quantityType,
+			data: []string{"20Gi"},
+		},
+		{
+			name: "interface slice",
+			from: reflect.TypeFor[[]any](),
+			to:   quantityType,
+			data: []any{"20Gi"},
+		},
+		{
+			name: "map",
+			from: reflect.TypeFor[map[string]any](),
+			to:   quantityType,
+			data: map[string]any{"value": "20Gi"},
+		},
+		{
+			name: "integer",
+			from: reflect.TypeFor[int](),
+			to:   quantityType,
+			data: 20,
+		},
+		{
+			name: "already parsed quantity",
+			from: quantityType,
+			to:   quantityType,
+			data: resource.MustParse("20Gi"),
+		},
+	}
+
+	hook := stringToResourceQuantityHookFunc()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := hook(tt.from, tt.to, tt.data)
+			require.NoError(t, err)
+			assert.Equal(t, tt.data, got)
+		})
+	}
+}
+
 func TestConfig_EncodeDecode_ServiceOAuthEndpoints(t *testing.T) {
 	cfg := Config{
 		Agent: AgentConfig{
@@ -221,10 +327,17 @@ agent:
       mode: hash_seed
       hashSeed: 1234
       failClosed: false
+    platformMetricsFederation:
+      enabled: false
+      target: vmsingle.monitoring.svc.cluster.local:8428
 `))
 	require.NoError(t, err)
 
 	completed := cfg.Complete()
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.PlatformMetricsFederation.Enabled)
+	assert.False(t, *completed.Agent.BYOOOTelCollector.PlatformMetricsFederation.Enabled)
+	assert.Equal(t, "vmsingle.monitoring.svc.cluster.local:8428",
+		completed.Agent.BYOOOTelCollector.PlatformMetricsFederation.Target)
 	assert.True(t, completed.Agent.BYOOLogChunking.Enabled)
 	assert.Equal(t, int64(262144), completed.Agent.BYOOLogChunking.MaxPayloadBytes)
 	assert.Equal(t, int64(131072), completed.Agent.BYOOLogChunking.MaxBodyBytes)
@@ -482,6 +595,16 @@ agent:
 		require.ErrorContains(t, err, "validate merged config: agent.byooOtelCollector: log sampling: samplingPercentage must be 0 or at least")
 	})
 
+	t.Run("rejects_invalid_byoo_federation_target", func(t *testing.T) {
+		_, err := DecodeConfig([]byte(`
+agent:
+  byooOtelCollector:
+    platformMetricsFederation:
+      target: http://prometheus.example.invalid:9090
+`))
+		require.ErrorContains(t, err, "validate merged config: agent.byooOtelCollector: platform metrics federation: target")
+	})
+
 	t.Run("rejects_bundle_transport_trust_with_quic_insecure", func(t *testing.T) {
 		_, err := DecodeConfig([]byte(`
 workload:
@@ -626,4 +749,47 @@ func TestNewViperDecoderConfig(t *testing.T) {
 	// Verify the decoder config is created without error
 	opt := NewViperDecoderConfig()
 	assert.NotNil(t, opt)
+}
+
+// TestDecodeConfig_AgentTimeoutDecodeFailure covers durations that match the
+// Helm schema pattern but cannot be parsed by time.ParseDuration, such as one
+// that overflows time.Duration. These fail while decoding, before
+// AgentTimeConfig.Validate(), and must be recoverable rather than fatal.
+func TestDecodeConfig_AgentTimeoutDecodeFailure(t *testing.T) {
+	tests := []struct {
+		name        string
+		yaml        string
+		wantTimeout bool
+	}{
+		{
+			name:        "overflowing heartbeat interval",
+			yaml:        "agent:\n  heartbeatInterval: 999999999999999999h\n",
+			wantTimeout: true,
+		},
+		{
+			name:        "several overflowing timeout fields",
+			yaml:        "agent:\n  heartbeatInterval: 999999999999999999h\n  syncQueueInterval: 999999999999999999h\n",
+			wantTimeout: true,
+		},
+		{
+			name: "unrelated duration field still fails normally",
+			yaml: "agent:\n  logLevel: [1]\n",
+		},
+		{
+			name: "timeout failure mixed with an unrelated failure stays unrecoverable",
+			yaml: "agent:\n  heartbeatInterval: 999999999999999999h\n  logLevel: [1]\n",
+		},
+		{
+			name: "timeout decode failure mixed with an unrelated validation failure stays unrecoverable",
+			yaml: "agent:\n  heartbeatInterval: 999999999999999999h\n  byooOtelCollector:\n    logSampling:\n      samplingPercentage: -1\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := DecodeConfig([]byte(tt.yaml))
+			require.Error(t, err)
+			var target *AgentTimeDecodeError
+			assert.Equal(t, tt.wantTimeout, errors.As(err, &target))
+		})
+	}
 }

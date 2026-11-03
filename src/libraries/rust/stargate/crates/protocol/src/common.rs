@@ -14,7 +14,17 @@
 // limitations under the License.
 
 use crate::ProtocolError;
-use http::{HeaderName, HeaderValue};
+use http::{HeaderMap, HeaderName, HeaderValue};
+use std::collections::HashSet;
+
+pub fn connection_header_names(headers: &HeaderMap) -> HashSet<HeaderName> {
+    headers
+        .get_all(http::header::CONNECTION)
+        .iter()
+        .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+        .filter_map(|name| HeaderName::from_bytes(name.trim_ascii()).ok())
+        .collect()
+}
 
 pub fn is_hop_by_hop_header(name: &HeaderName) -> bool {
     matches!(
@@ -124,6 +134,21 @@ pub fn valid_last_mean_input_tps(last_mean_input_tps: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_header_names_include_all_lines_and_normalize_case() {
+        let mut headers = HeaderMap::new();
+        for value in ["", " X-Hop-One, keep-alive", "x-HOP-two\t, , bad name"] {
+            headers.append(http::header::CONNECTION, HeaderValue::from_static(value));
+        }
+        assert_eq!(
+            connection_header_names(&headers),
+            ["x-hop-one", "keep-alive", "x-hop-two"]
+                .into_iter()
+                .map(HeaderName::from_static)
+                .collect()
+        );
+    }
 
     #[test]
     fn hop_by_hop_header_policy_is_case_insensitive() {

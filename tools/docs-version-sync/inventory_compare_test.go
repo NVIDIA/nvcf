@@ -118,3 +118,28 @@ func writeComparisonInventory(t *testing.T, directory, name string, inventory re
 		t.Fatal(err)
 	}
 }
+
+func TestCompareInventoryRetainsBothHelperVersions(t *testing.T) {
+	before, after := t.TempDir(), t.TempDir()
+	old := comparisonArtifact("k8s", "1.37.0", true)
+	added := comparisonArtifact("k8s", "1.33.1", true)
+	writeComparisonInventory(t, before, "old.json", comparisonInventory("1.0.0", []resolvedInventoryArtifact{old}))
+	writeComparisonInventory(t, after, "new.json", comparisonInventory("1.0.1", []resolvedInventoryArtifact{old, added}))
+	report, err := compareInventorySetDirectories(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report, "registry.example.test/k8s:1.33.1") || strings.Contains(report, "registry.example.test/k8s:1.37.0") {
+		t.Fatalf("comparison must report the added helper without removing the retained version:\n%s", report)
+	}
+	set, err := loadComparableInventorySet(after)
+	if err != nil || len(set.Artifacts) != 4 {
+		t.Fatalf("comparison artifacts = %+v, error = %v", set.Artifacts, err)
+	}
+	added.Repository = "registry.example.test/other/k8s"
+	added.Reference = added.Repository + ":" + added.Version
+	writeComparisonInventory(t, after, "new.json", comparisonInventory("1.0.1", []resolvedInventoryArtifact{old, added}))
+	if _, err := loadComparableInventorySet(after); err == nil || !strings.Contains(err.Error(), "artifact conflict") {
+		t.Fatalf("repository conflict error = %v", err)
+	}
+}

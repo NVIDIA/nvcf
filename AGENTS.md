@@ -17,6 +17,10 @@ Useful pointers:
 - `BAZEL.md` for the contributor-facing Bazel build path
 - `docs/AGENTS.md` for in-repo user and developer documentation
 - `tools/AGENTS.md` for repo tooling
+- `tests/bdd/AGENTS.md` for behavior-driven development (BDD) scenarios and
+  suite rules
+- `src/libraries/rust/stargate/AGENTS.md` for mandatory Stargate mock and performance
+  validation, including related chart, deployment, benchmark, and CI changes
 - `imports.yaml` for subtree ownership and commit pins
 - `.cursor/skills/documentation-style/SKILL.md` for docs style
 - `.cursor/skills/` for root dev-skill symlink fanout
@@ -217,36 +221,33 @@ public snapshot; still follow OSS Snapshot Hygiene manually before finishing.
 |-------|----------|---------|
 | `documentation-style` | `ai-tooling/dev/skills/` | Public docs, AGENTS, and skill-writing style |
 | `nvcf-explore-stack` | `ai-tooling/dev/skills/` | Navigate the self-hosted stack topology and dependency graph |
-| `nvca-chart-release` | `ai-tooling/dev/skills/` | Release NVCA Operator chart changes from monorepo source to the vendored Helm chart |
 | `nvca-self-managed-install` | `ai-tooling/dev/skills/` | Install or validate the NVCA Operator chart against a self-managed control plane |
 | `nvca-values-customization` | `ai-tooling/dev/skills/` | Customize NVCA Operator Helm chart values in the monorepo |
 | `nvcf-self-managed-cli` | `ai-tooling/user/skills/` | Install, operate, and manage self-managed NVCF through `nvcf-cli` |
 | `nvcf-self-managed-installation` | `ai-tooling/user/skills/` | Install and deploy the self-managed NVCF stack |
 | `nvcf-self-managed-prerequisite` | `ai-tooling/user/skills/` | Install cluster-level prerequisites such as KAI Scheduler and SMB CSI driver |
 
-## GitLab CI for native subprojects
+## CI and release routing for native subprojects
 
-The umbrella parent pipeline (`.gitlab-ci.yml`) is not where native service
-build, test, helm-lint, or release validation jobs go. `.gitlab-ci.yml` and
-`tools/ci/generated-release-jobs.yml` are internal GitLab CI config not
-present in this public snapshot.
+Public validation and source release automation live in `.github/workflows/`.
+Read `RELEASE.md` and `docs/dev/github-release-process.md` for current component
+versioning and maintenance behavior. Read `docs/dev/umbrella-releases.md` for
+candidate assembly and product publication.
 
-| Job kind | Where to declare it |
-|---|---|
-| `<id>-bazel`, Go checks, custom `checks:` | `tools/ci/subproject-validations.yaml` (runs in `subproject-validations` child pipeline) |
-| Image push, semantic-release, helm publish | `release:` in same YAML, output in `tools/ci/generated-release-jobs.yml` |
-| License scan, bazel-smoke, docs, OSS snapshot | root `.gitlab-ci.yml` only |
-
-Before adding or moving any CI job for a path under `src/`, `deploy/helm/`, or
-`migrations/`, read this section in full.
-Do not add per-service jobs to root `.gitlab-ci.yml` and do not recreate
-`src/**/.gitlab-ci.yml`, `deploy/helm/**/.gitlab-ci.yml`, or
-`migrations/**/.gitlab-ci.yml` for native subprojects. Helm CI-only values
-belong in `tools/ci/helm-validate-values/`, not under chart `ci/` dirs.
+The former generated GitLab umbrella release jobs are retired for native
+public components. Do not recreate `src/**/.gitlab-ci.yml`,
+`deploy/helm/**/.gitlab-ci.yml` or `migrations/**/.gitlab-ci.yml` to add a lane.
+Keep private credentials, destinations and publication instructions outside
+this public source tree. Inspect the affected workflow and owning build
+configuration before adding validation.
 
 ## Commit Messages
 
 Use Conventional Commits v1.0.0. Include issue references in the footer when required by the change type. For GitHub PR work, use a public `NVIDIA/nvcf` issue reference.
+
+Sign off every commit with `git commit -s` (Developer Certificate of Origin,
+see `CONTRIBUTING.md`). The DCO check rejects pull requests with unsigned
+commits, including commits made by agents.
 
 Format:
 
@@ -356,6 +357,30 @@ in the Pull Request description (for example: pure documentation, CI-only
 change, or refactor with full existing coverage).
 
 Prefer the repo-native test runner (`make test`, `go test`, `cargo test`, etc.). Run tests before committing. Check coverage requirements in the subtree `AGENTS.md` or CI config.
+
+### BDD scenarios
+
+When changing self-managed installation, CLI workflows, or function/task
+lifecycle behavior, add or update the relevant Gherkin scenarios in
+`tests/bdd/features/`. Read `tests/bdd/AGENTS.md` and the step catalog in
+`tests/bdd/PLAN.md` first. Reuse existing steps to express operator actions
+and observable results.
+
+Run the non-live checks from the BDD module:
+
+```sh
+cd tests/bdd
+go test -short ./...
+golangci-lint run --config .golangci.yml ./...
+```
+
+Before pushing changes to behavior covered by BDD, run the relevant live
+suites. Use `tests/bdd/README.md` to select suites and prerequisites, and
+follow the local QA safety rules before running them. If a required run fails
+or is blocked, stop before pushing and report the failure or blocker and
+unvalidated behavior. Anchor live test names with `^...$` to exclude similarly
+named wiring tests. Report fake-runner wiring checks separately from live
+results; wiring checks do not validate a deployment.
 
 ### Version-pin assertions
 

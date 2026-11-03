@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt, TryStreamExt};
 use stargate_protocol::common::valid_last_mean_input_tps;
+use uuid::Uuid;
 
 use crate::generated_request_id::GeneratedRequestKind;
 use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
@@ -191,26 +192,28 @@ pub(super) async fn send_calibration_batch(
         request_count,
         concurrency,
     } = batch;
-    let request = serde_json::json!({
-        "model": generation.model_id(),
-        "messages": [{"role": "user", "content": "1".repeat(prompt_units)}],
-        "max_tokens": 1,
-        "seed": 33,
-        "temperature": 0.7,
-        "top_p": 1.0,
-        "stream": false,
-    });
-
     let step = stream::iter((0..request_count).map(|_| {
-        send_completion_request(
-            http_client,
-            upstream_http_base_url,
-            None,
-            &request,
-            GeneratedRequestKind::Calibration,
-            generation,
-            Some(runtime_state),
-        )
+        let request = serde_json::json!({
+            "model": generation.model_id(),
+            "messages": [{"role": "user", "content": calibration_prompt(prompt_units)}],
+            "max_tokens": 1,
+            "seed": 33,
+            "temperature": 0.7,
+            "top_p": 1.0,
+            "stream": false,
+        });
+        async move {
+            send_completion_request(
+                http_client,
+                upstream_http_base_url,
+                None,
+                &request,
+                GeneratedRequestKind::Calibration,
+                generation,
+                Some(runtime_state),
+            )
+            .await
+        }
     }))
     .buffer_unordered(concurrency.min(request_count))
     .try_for_each(|_| async { Ok(()) });
@@ -218,4 +221,16 @@ pub(super) async fn send_calibration_batch(
         Ok(outcome) => outcome.map(|()| CalibrationStepOutcome::Completed),
         Err(_) => Ok(CalibrationStepOutcome::Saturated),
     }
+}
+
+/// Builds a `prompt_units`-character calibration prompt that starts with a
+/// random per-request prefix. Engines with prefix caching would otherwise
+/// serve repeated or extended prompts from cache, so calibration would report
+/// cache-hit throughput instead of uncached prefill throughput.
+pub(super) fn calibration_prompt(prompt_units: usize) -> String {
+    let mut prompt = format!("{} ", Uuid::new_v4().simple());
+    prompt.truncate(prompt_units);
+    let filler = prompt_units - prompt.len();
+    prompt.extend(std::iter::repeat_n('1', filler));
+    prompt
 }

@@ -8,8 +8,8 @@
 #
 # Environment variables override config file values.
 # Config keys automatically map to environment variables:
-#   - Config: base_http_url → Env: NVCF_BASE_HTTP_URL
-#   - Config: client_id → Env: NVCF_CLIENT_ID
+#   - Config: base_http_url -> Env: NVCF_BASE_HTTP_URL
+#   - Config: client_id -> Env: NVCF_CLIENT_ID
 #   - etc.
 
 # ==============================================================================
@@ -112,9 +112,9 @@ api_keys_owner_id: svc@nvcf-api.local
 # set these Host headers to route requests correctly without requiring DNS setup.
 #
 # The gateway routes requests based on the Host header:
-#   - api-keys.{domain} → API Keys service
-#   - api.{domain} → NVCF API service
-#   - *.invocation.{domain} → Invocation service
+#   - api-keys.{domain} -> API Keys service
+#   - api.{domain} -> NVCF API service
+#   - *.invocation.{domain} -> Invocation service
 #
 # Example: If your gateway domain is "nvcf.example.com":
 #   api_keys_host: api-keys.nvcf.example.com
@@ -142,19 +142,89 @@ api_keys_owner_id: svc@nvcf-api.local
 
 # Image reference for the cluster-validator pod used by
 # `nvcf-cli self-hosted check`. The CLI runs this image as a Job in the
-# compute-plane cluster to verify NVCA prerequisites before install.
+# cluster being checked to verify prerequisites before install. One image
+# serves both roles; the Job environment selects the check set. The
+# control-plane checks need an image from an NVCA release that supports
+# validator roles. An older image runs the compute-plane checks instead; the
+# CLI reports that as a warning only when GPU Resources is the one critical
+# check that failed, and as a failure otherwise.
+#
+# The Job needs a ServiceAccount, ClusterRole, and ClusterRoleBinding, plus a
+# Role and RoleBinding in default that let it read its own ConfigMap, which
+# the CLI creates and removes per run. The kubeconfig context therefore needs
+# permission to manage those objects; without it the validator cannot run and
+# the check fails. Pass --skip-cluster-validation to run without it.
 #
 # Config key: cluster_validator_image
 # Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_IMAGE
 # Command-line flag: --cluster-validator-image
 #
 # When the value has no tag, the latest tag is discovered from the
-# registry (preferring stable releases over rc). If unset everywhere,
-# the validator probe is skipped with a warning.
+# registry (preferring stable releases over rc). If discovery fails, the
+# validator does not run, rather than pull :latest, and its row fails the
+# check; pin a tag to avoid depending on discovery. If unset everywhere, the
+# validator does not run and its row is a warning.
+#
+# The Job pulls with a matching pull Secret from the cluster, or one created
+# for the run from this machine's credential for the image's registry: the
+# docker login, or NGC_API_KEY for nvcr.io only.
 #
 # Staging: stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator
 # Prod:    nvcr.io/nvidia/nvcf-byoc/cluster-validator
 # cluster_validator_image: nvcr.io/nvidia/nvcf-byoc/cluster-validator
+
+# Extra container registries to check, as host[:port][/path]: their
+# credentials from this machine, and their reachability from a pod of the
+# control-plane validator, as warnings only. A path scopes the credential
+# check. The registries the install pulls from are checked already: the
+# validator image's registry, the stack's global.image.registry, and quay.io
+# for the cert-manager ACME solver. List only registries beyond those. A
+# malformed entry fails the command.
+#
+# Config key: cluster_validator_registries (list of strings)
+# Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES (comma-separated)
+# Command-line flag: --cluster-validator-registries (repeatable or comma-separated)
+#
+# cluster_validator_registries:
+#   - harbor.example.com:443
+#   - ghcr.io:443
+
+# Image for the node inotify probe and the control-plane validator's
+# node-to-node overlay probe, which needs sh and a busybox-style nc. Defaults
+# to NVCF_N2N_PROBE_IMAGE, then busybox:1.36 from Docker Hub. Set a mirror for
+# air-gapped clusters. The probe pods get no imagePullSecrets, so the image
+# must be pullable anonymously or through node-level registry credentials.
+#
+# Config key: cluster_validator_probe_image
+# Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE
+# Command-line flag: --cluster-validator-probe-image
+#
+# cluster_validator_probe_image: harbor.example.com/library/busybox:1.36
+
+# Tolerations added to the validator Job, beside the control-plane ones it
+# always carries, for clusters whose nodes use other taints. Each entry is
+# key[=value][:effect], with effect NoSchedule, PreferNoSchedule or NoExecute.
+#
+# Config key: cluster_validator_tolerations (list of strings, not Kubernetes
+# toleration objects; any other entry fails the command)
+# Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS (comma-separated)
+# Command-line flag: --cluster-validator-tolerations
+#
+# cluster_validator_tolerations:
+#   - dedicated=infra:NoSchedule
+
+# Stack dependencies that run outside the stack, or not at all, so the
+# validator does not look for them in the cluster: a subset of nats, openbao
+# and cassandra. When unset, NVCF_EXTERNAL_COMPONENTS is used, then the
+# components whose <name>.enabled the stack's environment file sets to
+# anything but true.
+#
+# Config key: cluster_validator_external_components (list of names)
+# Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS (comma-separated)
+# Command-line flag: --cluster-validator-external-components
+#
+# cluster_validator_external_components:
+#   - cassandra
 
 # ==============================================================================
 # General Settings
@@ -206,7 +276,7 @@ api_keys_owner_id: svc@nvcf-api.local
 #
 # 2. Environment Variable Mapping:
 #    - Config keys automatically map to NVCF_* environment variables
-#    - Example: base_http_url → NVCF_BASE_HTTP_URL
+#    - Example: base_http_url -> NVCF_BASE_HTTP_URL
 #    - Exception: API Keys service uses unprefixed vars (API_KEYS_*)
 #
 # 3. Token Generation (Simplified!):

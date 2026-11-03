@@ -30,6 +30,7 @@ import (
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 )
 
 const (
@@ -48,6 +49,23 @@ const (
 
 func IsSelfHosted(nb *nvidiaiov1.NVCFBackend) bool {
 	return nb.Spec.ClusterSource == nvcaoptypes.ClusterSourceSelfHosted
+}
+
+// applySelfManagedBYOODefaults disables BYOO platform metrics federation on
+// self-hosted clusters that do not configure it. The collector otherwise
+// federates from the Prometheus that managed clusters run, which no
+// self-managed stack deploys, so every BYOO collector would fail those scrapes
+// and export up=0 series to the tenant. Setting enabled or target keeps the
+// configured value.
+func applySelfManagedBYOODefaults(nb *nvidiaiov1.NVCFBackend, mergeCfg nvcaconfig.Config) nvcaconfig.Config {
+	if !IsSelfHosted(nb) {
+		return mergeCfg
+	}
+	federation := &mergeCfg.Agent.BYOOOTelCollector.PlatformMetricsFederation
+	if federation.IsZero() {
+		federation.Enabled = ptr.To(false)
+	}
+	return mergeCfg
 }
 
 // detectIdentitySource resolves the identity source for self-hosted clusters.
@@ -144,8 +162,10 @@ const (
 )
 
 // applyPSATIdentity adds the projected ServiceAccount token volume for PSAT identity.
-// The agent container reads the token from /var/run/secrets/tokens/token; audience
-// is "nvcf-icms:{clusterID}" so ICMS can resolve the cluster by audience at verify time.
+// The agent and OTel collector containers read the token from
+// /var/run/secrets/tokens/token; audience is "nvcf-icms:{clusterID}" so ICMS can
+// resolve the cluster by audience at verify time, and Event Ledger can verify the
+// collector's token through SIS introspection.
 func applyPSATIdentity(ctx context.Context, nvcaDeployment *appsv1.Deployment, clusterID string) {
 	core.GetLogger(ctx).Debugf("Adding projected SA token volume for PSAT identity")
 
@@ -168,16 +188,22 @@ func applyPSATIdentity(ctx context.Context, nvcaDeployment *appsv1.Deployment, c
 		},
 	)
 
+	tokenMount := corev1.VolumeMount{
+		Name:      "nvca-token",
+		MountPath: clusterIssuedTokenDir,
+		ReadOnly:  true,
+	}
 	containers := nvcaDeployment.Spec.Template.Spec.Containers
 	for i := range containers {
 		if containers[i].Name == "agent" {
-			containers[i].VolumeMounts = append(containers[i].VolumeMounts,
-				corev1.VolumeMount{
-					Name:      "nvca-token",
-					MountPath: clusterIssuedTokenDir,
-					ReadOnly:  true,
-				},
-			)
+			containers[i].VolumeMounts = append(containers[i].VolumeMounts, tokenMount)
+		}
+	}
+	// The collector runs as a restartable init container when enabled.
+	initContainers := nvcaDeployment.Spec.Template.Spec.InitContainers
+	for i := range initContainers {
+		if initContainers[i].Name == NVCAOTelCollectorContainerName {
+			initContainers[i].VolumeMounts = append(initContainers[i].VolumeMounts, tokenMount)
 		}
 	}
 }

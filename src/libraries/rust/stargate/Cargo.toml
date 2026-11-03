@@ -26,7 +26,9 @@ members = [
   "crates/stargate",
   "crates/stargate-k8s-router",
   "crates/mock-dynamo",
+  "crates/mock-engine",
   "crates/stargate-bench",
+  "crates/stargate-routing-sim",
   "crates/pylon",
 ]
 resolver = "3"
@@ -53,6 +55,7 @@ h3-quinn = "=0.0.10"
 hickory-resolver = "=0.24.4"
 hyper = "=1.10.1"
 memchr = "=2.8.3"
+moka = { version = "=0.12.15", default-features = false, features = ["sync"] }
 parking_lot = "=0.12.5"
 prost = "=0.14.4"
 rand = "=0.9.3"
@@ -61,7 +64,9 @@ scc = "=3.7.1"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
 serde_yaml_ng = "=0.10.0"
+sfv = { version = "=0.15.0", default-features = false, features = ["parsed-types"] }
 sonic-rs = "=0.5.8"
+sse-core = { version = "=0.2.3", default-features = false, features = ["std"] }
 thiserror = "=2.0.18"
 tokio = { version = "=1.52.3", features = ["full"] }
 tokio-stream = "=0.1.18"
@@ -109,6 +114,7 @@ stargate-tls = { path = "crates/stargate-tls" }
 stargate = { path = "crates/stargate" }
 stargate-proto = { path = "crates/proto" }
 stargate-protocol = { path = "crates/protocol" }
+mock-engine = { path = "crates/mock-engine" }
 pylon-lib = { path = "crates/pylon-lib" }
 
 [profile.integration]

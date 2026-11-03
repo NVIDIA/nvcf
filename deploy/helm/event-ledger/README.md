@@ -41,7 +41,7 @@ eventLedger:
 
 ## Namespace and service name
 
-`eventLedger.fullnameOverride` defaults to `event-ledger`. This fixes the in-cluster DNS name to `event-ledger.<namespace>.svc.cluster.local:8080` regardless of the Helm release name, matching the service contract defined in the SADD (section 3.1). Do not change this unless the rest of the stack is updated to match.
+`eventLedger.fullnameOverride` defaults to `event-ledger`. This fixes the in-cluster DNS name to `event-ledger.<namespace>.svc.cluster.local:8080` regardless of the Helm release name, which is the address the rest of the stack uses. Do not change this unless the rest of the stack is updated to match.
 
 The namespace defaults to the Helm release namespace. Set `eventLedger.namespace` to override.
 
@@ -52,6 +52,9 @@ The namespace defaults to the Helm release namespace. Set `eventLedger.namespace
 - `eventLedger.resources`: defaults are conservative; tune for your environment
 - `eventLedger.config.database.cassandra.hosts`: defaults to `cassandra.cassandra-system.svc.cluster.local`
 - `eventLedger.config.auth.policy.policy-evaluator-addr`: set to the api-keys-api address in your stack
+- `eventLedger.config.cache.enabled`: defaults to `false`. Reserved for the local stats write cache. It has no effect until the cache is applied to writes.
+- `eventLedger.config.cache.max-size`: defaults to `100000`. A value of 0 or less uses the default.
+- `eventLedger.config.cache.flush-interval-seconds`: defaults to `60`. A value of 0 or less uses the default.
 
 ## API Keys policy evaluator
 

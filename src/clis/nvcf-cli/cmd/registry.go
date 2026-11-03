@@ -21,6 +21,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -98,9 +100,10 @@ var registryAddCmd = &cobra.Command{
 	Short: "Add a new registry credential",
 	Long: `Add a new registry credential to access private registries.
 
-You can provide credentials in two ways:
+You can provide credentials in three ways:
 1. Separate username and password (CLI will encode them automatically)
-2. Pre-encoded base64 secret in 'username:password' format
+2. Pre-encoded base64 secret in 'username:password' format via --secret
+3. Pre-encoded base64 secret from a file or standard input via --secret-file (recommended to avoid exposing secrets in process arguments)
 
 You must specify at least one artifact type that this credential can access.
 
@@ -116,6 +119,9 @@ Authentication (choose one):
   Option 2 - Pre-encoded secret:
     --secret         Base64 encoded 'username:password' string
 
+  Option 3 - Secret from file or stdin (recommended):
+    --secret-file    File containing base64 encoded 'username:password' string, or '-' for standard input
+
 Optional flags:
   --description      Description of the credential
   --tag              Tags for the credential - can be specified multiple times
@@ -129,7 +135,21 @@ Examples:
     --artifact-type CONTAINER \
     --description "My private Docker registry"
 
-  # Add credentials using pre-encoded secret
+  # Add credentials using a secret file (recommended for security)
+  nvcf-cli registry-credential add \
+    --hostname nvcr.io \
+    --secret-file /path/to/secret.b64 \
+    --artifact-type CONTAINER \
+    --description "NVIDIA Container Registry"
+
+  # Add credentials via standard input
+  echo -n "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 | nvcf-cli registry-credential add \
+    --hostname public.ecr.aws \
+    --secret-file - \
+    --artifact-type CONTAINER \
+    --description "ECR Public Registry"
+
+  # Add credentials using pre-encoded secret flag
   nvcf-cli registry-credential add \
     --hostname nvcr.io \
     --secret "JG9hdXRodG9rZW46ZjRvYm5lbjVrcGhpamZvcTI5NHFnY3Rna3Y6YmQ4YWM0OTEtZDllMi00YWJiLWJmOTQtMTNhMjk2ZTgxYzUw" \
@@ -139,8 +159,7 @@ Examples:
   # Add credentials for multiple artifact types with tags
   nvcf-cli registry-credential add \
     --hostname myregistry.example.com \
-    --username myuser \
-    --password mypass \
+    --secret-file /path/to/secret.b64 \
     --artifact-type CONTAINER \
     --artifact-type MODEL \
     --tag "environment:prod" \
@@ -241,6 +260,7 @@ func init() {
 	registryAddCmd.Flags().String("username", "", "Registry username (use with --password)")
 	registryAddCmd.Flags().String("password", "", "Registry password (use with --username)")
 	registryAddCmd.Flags().String("secret", "", "Base64 encoded 'username:password' string (alternative to --username/--password)")
+	registryAddCmd.Flags().String("secret-file", "", "File containing base64 encoded 'username:password' string, or '-' for standard input")
 	registryAddCmd.Flags().StringSlice("artifact-type", []string{}, "Artifact types (CONTAINER, HELM, MODEL, RESOURCE) - required, can be specified multiple times")
 	registryAddCmd.Flags().String("description", "", "Description of the credential")
 	registryAddCmd.Flags().StringSlice("tag", []string{}, "Tags for the credential - can be specified multiple times")
@@ -362,6 +382,7 @@ func runListRegistryCredentials(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// runAddRegistryCredential executes the 'registry-credential add' subcommand.
 func runAddRegistryCredential(cmd *cobra.Command, args []string) error {
 	// Load configuration
 	config, err := client.LoadConfig()
@@ -380,16 +401,23 @@ func runAddRegistryCredential(cmd *cobra.Command, args []string) error {
 	username, _ := cmd.Flags().GetString("username")
 	password, _ := cmd.Flags().GetString("password")
 	secret, _ := cmd.Flags().GetString("secret")
+	secretFile, _ := cmd.Flags().GetString("secret-file")
 	artifactTypeStrs, _ := cmd.Flags().GetStringSlice("artifact-type")
 	description, _ := cmd.Flags().GetString("description")
 	tags, _ := cmd.Flags().GetStringSlice("tag")
 
-	encodedCredentials, err := validateAndEncodeCredentials(secret, username, password)
+	encodedCredentials, err := resolveAndValidateCredentials(secret, secretFile, username, password, cmd.InOrStdin())
 	if err != nil {
 		return err
 	}
 	if config.Debug {
-		if secret != "" {
+		if secretFile != "" {
+			if secretFile == "-" {
+				logging.Debug("Using secret from standard input (length: %d chars)", len(encodedCredentials))
+			} else {
+				logging.Debug("Using secret from file '%s' (length: %d chars)", secretFile, len(encodedCredentials))
+			}
+		} else if secret != "" {
 			logging.Debug("Using pre-encoded secret (length: %d chars)", len(secret))
 		} else {
 			logging.Debug("Encoding username:password to base64 (length: %d chars)", len(encodedCredentials))
@@ -699,24 +727,111 @@ func runListRecognizedRegistries(cmd *cobra.Command, args []string) error {
 
 // Helper functions
 
-// validateAndEncodeCredentials validates the mutually-exclusive auth flag combinations
+// trimTrailingLineEnding removes only a single trailing line ending (\r\n, \n, or \r)
+// from the string, preserving any other whitespace.
+func trimTrailingLineEnding(s string) string {
+	if strings.HasSuffix(s, "\r\n") {
+		return strings.TrimSuffix(s, "\r\n")
+	}
+	if strings.HasSuffix(s, "\n") {
+		return strings.TrimSuffix(s, "\n")
+	}
+	if strings.HasSuffix(s, "\r") {
+		return strings.TrimSuffix(s, "\r")
+	}
+	return s
+}
+
+// validateBase64Secret verifies that the secret is non-empty and decodes as valid base64.
+// Both standard padded base64 and unpadded base64 are accepted.
+func validateBase64Secret(secret string) error {
+	if secret == "" {
+		return fmt.Errorf("secret cannot be empty")
+	}
+	if _, err := base64.StdEncoding.DecodeString(secret); err == nil {
+		return nil
+	}
+	if _, err := base64.RawStdEncoding.DecodeString(secret); err == nil {
+		return nil
+	}
+	return fmt.Errorf("invalid base64 credential: must be valid base64 encoded string")
+}
+
+// resolveAndValidateCredentials validates the mutually-exclusive auth flag combinations
 // for the add command and returns the base64-encoded `username:password` value to send
 // to the NVCF API. Callers must choose exactly one authentication method:
 //
-//   - --secret with a pre-encoded base64 string, OR
+//   - --secret with an inline pre-encoded base64 string, OR
+//   - --secret-file with a file path or '-' for standard input, OR
 //   - both --username and --password (this function encodes them).
-func validateAndEncodeCredentials(secret, username, password string) (string, error) {
-	if secret != "" {
-		if username != "" || password != "" {
-			return "", fmt.Errorf("cannot use --secret with --username/--password. Choose one authentication method")
+func resolveAndValidateCredentials(secret, secretFile, username, password string, stdin io.Reader) (string, error) {
+	hasSecret := secret != ""
+	hasSecretFile := secretFile != ""
+	hasUserOrPass := username != "" || password != ""
+
+	// Check conflicting authentication flags
+	if hasSecretFile && hasSecret {
+		return "", fmt.Errorf("cannot use both --secret and --secret-file. Choose one authentication method")
+	}
+	if hasSecretFile && hasUserOrPass {
+		return "", fmt.Errorf("cannot use --secret-file with --username/--password. Choose one authentication method")
+	}
+	if hasSecret && hasUserOrPass {
+		return "", fmt.Errorf("cannot use --secret with --username/--password. Choose one authentication method")
+	}
+
+	if !hasSecret && !hasSecretFile && !hasUserOrPass {
+		return "", fmt.Errorf("must provide either --secret, --secret-file, OR both --username and --password")
+	}
+
+	if hasSecret {
+		if err := validateBase64Secret(secret); err != nil {
+			return "", err
 		}
 		return secret, nil
 	}
-	if username == "" || password == "" {
-		return "", fmt.Errorf("must provide either --secret OR both --username and --password")
+
+	if hasSecretFile {
+		var raw []byte
+		if secretFile == "-" {
+			if stdin == nil {
+				stdin = os.Stdin
+			}
+			var err error
+			raw, err = io.ReadAll(stdin)
+			if err != nil {
+				return "", fmt.Errorf("failed to read secret from stdin: %w", err)
+			}
+		} else {
+			var err error
+			raw, err = os.ReadFile(secretFile)
+			if err != nil {
+				return "", fmt.Errorf("failed to read secret file '%s': %w", secretFile, err)
+			}
+		}
+
+		trimmed := trimTrailingLineEnding(string(raw))
+		if err := validateBase64Secret(trimmed); err != nil {
+			if secretFile == "-" {
+				return "", fmt.Errorf("invalid secret from stdin: %w", err)
+			}
+			return "", fmt.Errorf("invalid secret from file '%s': %w", secretFile, err)
+		}
+		return trimmed, nil
 	}
+
+	if username == "" || password == "" {
+		return "", fmt.Errorf("must provide either --secret, --secret-file, OR both --username and --password")
+	}
+
 	credentials := username + ":" + password
 	return base64.StdEncoding.EncodeToString([]byte(credentials)), nil
+}
+
+// validateAndEncodeCredentials validates authentication flags and returns the base64-encoded
+// credential. It is maintained for backwards compatibility with tests and callers that pass inline flags.
+func validateAndEncodeCredentials(secret, username, password string) (string, error) {
+	return resolveAndValidateCredentials(secret, "", username, password, nil)
 }
 
 // parseAndValidateArtifactTypes converts user-supplied artifact type strings into

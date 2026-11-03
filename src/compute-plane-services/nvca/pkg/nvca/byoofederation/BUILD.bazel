@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "byoofederation",
+    srcs = ["byoofederation.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/byoofederation",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/metrics",
+        "//src/compute-plane-services/nvca/pkg/nvca/health",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":byoofederation",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "byoofederation_test",
+    srcs = ["byoofederation_test.go"],
+    embed = [":byoofederation"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/metrics",
+        "//src/compute-plane-services/nvca/pkg/nvca/health",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/utils/ptr",
+    ],
+)

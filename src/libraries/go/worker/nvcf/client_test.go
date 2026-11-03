@@ -23,15 +23,85 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"golang.org/x/oauth2"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/auth"
 )
+
+func TestNatsConnectionLogging(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	t.Cleanup(zap.ReplaceGlobals(zap.New(core)))
+	tp := auth.NewSettableTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"}))
+	conn, err := newNatsConnection(startEmbeddedNats(t), nil, "", tp, "inst-1", "fnv-1")
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+	opts := conn.Opts
+
+	t.Run("clean shutdown", func(t *testing.T) {
+		conn.Close()
+		require.Eventually(t, func() bool {
+			return logs.FilterMessage("nats connection closed.").Len() == 1
+		}, 5*time.Second, time.Millisecond)
+		entry := logs.FilterMessage("nats connection closed.").All()[0]
+		assert.Equal(t, zap.InfoLevel, entry.Level)
+		assert.Equal(t, "fnv-1", entry.ContextMap()["function version id"])
+		assert.Equal(t, "inst-1", entry.ContextMap()["instance id"])
+		assert.NotContains(t, entry.ContextMap(), "error")
+		assert.Zero(t, logs.FilterLevelExact(zap.ErrorLevel).Len())
+	})
+
+	t.Run("reconnect delay", func(t *testing.T) {
+		delay := opts.CustomReconnectDelayCB(2)
+		require.Positive(t, delay)
+		entries := logs.FilterMessage("waiting to reconnect to nats").All()
+		require.Len(t, entries, 1)
+		assert.Equal(t, zap.WarnLevel, entries[0].Level)
+		assert.Equal(t, int64(2), entries[0].ContextMap()["reconnect_round"])
+		assert.Equal(t, delay, entries[0].ContextMap()["delay"])
+	})
+
+	t.Run("reconnect failure and terminal closure", func(t *testing.T) {
+		closed := make(chan struct{})
+		closedCB := opts.ClosedCB
+		opts.ClosedCB = func(conn *nats.Conn) {
+			closedCB(conn)
+			close(closed)
+		}
+		opts.Url = "nats://127.0.0.1:0"
+		opts.Servers = nil
+		opts.MaxReconnect = 1
+		opts.CustomReconnectDelayCB = func(int) time.Duration { return 0 }
+		failedConn, err := opts.Connect()
+		require.NoError(t, err)
+		t.Cleanup(failedConn.Close)
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("NATS connection did not close after exhausting reconnects")
+		}
+		failures := logs.FilterMessage("nats reconnect attempt failed").All()
+		require.NotEmpty(t, failures)
+		for _, failure := range failures {
+			assert.Equal(t, zap.WarnLevel, failure.Level)
+			assert.NotEmpty(t, failure.ContextMap()["error"])
+			assert.Equal(t, "fnv-1", failure.ContextMap()["function version id"])
+			assert.Equal(t, "inst-1", failure.ContextMap()["instance id"])
+		}
+		entries := logs.FilterMessage("nats connection permanently closed").All()
+		require.Len(t, entries, 1)
+		assert.Equal(t, zap.ErrorLevel, entries[0].Level)
+		require.Error(t, failedConn.LastError())
+		assert.Equal(t, failedConn.LastError().Error(), entries[0].ContextMap()["error"])
+	})
+}
 
 // mockTokenSource is a mock implementation of oauth2.TokenSource
 type mockTokenSource struct {
@@ -96,7 +166,7 @@ func TestNatsAuthOption_WithTokenHandler(t *testing.T) {
 			tokenProvider := auth.NewSettableTokenSource(mockSource)
 
 			// Call function with nil nkeySeed to trigger token handler path
-			option, err := natsAuthOption(nil, tokenProvider)
+			option, err := natsAuthOption(nil, "", tokenProvider)
 
 			// Should not return error for token handler path
 			assert.NoError(t, err)
@@ -185,7 +255,7 @@ func TestNatsAuthOption_WithNKey(t *testing.T) {
 				token: &oauth2.Token{AccessToken: "dummy"},
 			})
 
-			option, err := natsAuthOption(&tt.nkeySeed, tokenProvider)
+			option, err := natsAuthOption(&tt.nkeySeed, "", tokenProvider)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -237,7 +307,7 @@ func TestNatsAuthOption_TokenHandlerWithSpecialCases(t *testing.T) {
 		}
 
 		tokenProvider := auth.NewSettableTokenSource(mockSource)
-		option, err := natsAuthOption(nil, tokenProvider)
+		option, err := natsAuthOption(nil, "", tokenProvider)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, option)
@@ -279,7 +349,7 @@ func TestNatsAuthOption_TokenHandlerWithSpecialCases(t *testing.T) {
 		}
 
 		tokenProvider := auth.NewSettableTokenSource(mockSource)
-		option, err := natsAuthOption(nil, tokenProvider)
+		option, err := natsAuthOption(nil, "", tokenProvider)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, option)
@@ -300,6 +370,53 @@ func TestNatsAuthOption_TokenHandlerWithSpecialCases(t *testing.T) {
 	})
 }
 
+func TestNatsAuthOption_TokenNamesTheAccount(t *testing.T) {
+	tests := []struct {
+		name    string
+		account string
+		want    string
+	}{
+		{name: "named account", account: "APP", want: "APP"},
+		{name: "no account named", account: "", want: DefaultNatsAccount},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokenProvider := auth.NewSettableTokenSource(&mockTokenSource{token: &oauth2.Token{AccessToken: "worker-token"}})
+			option, err := natsAuthOption(nil, tt.account, tokenProvider)
+			require.NoError(t, err)
+
+			opts := &nats.Options{}
+			require.NoError(t, option(opts))
+
+			decodedJSON, err := base64.RawURLEncoding.DecodeString(opts.TokenHandler())
+			require.NoError(t, err)
+			var tokenData struct {
+				Account    string `json:"account"`
+				PluginName string `json:"pluginName"`
+				Payload    string `json:"payload"`
+			}
+			require.NoError(t, json.Unmarshal(decodedJSON, &tokenData))
+			assert.Equal(t, tt.want, tokenData.Account)
+			assert.Equal(t, "webhook", tokenData.PluginName)
+			assert.Equal(t, "worker-token", tokenData.Payload)
+		})
+	}
+}
+
+func TestNatsAuthOption_NkeyIgnoresTheAccount(t *testing.T) {
+	tokenProvider := auth.NewSettableTokenSource(&mockTokenSource{token: &oauth2.Token{AccessToken: "worker-token"}})
+	nkeySeed := generateValidUserNKeySeed(t)
+
+	option, err := natsAuthOption(&nkeySeed, "APP", tokenProvider)
+	require.NoError(t, err)
+
+	opts := &nats.Options{}
+	require.NoError(t, option(opts))
+	assert.NotEmpty(t, opts.Nkey)
+	assert.Nil(t, opts.TokenHandler)
+}
+
 func TestNatsAuthOption_BothPathsComparison(t *testing.T) {
 	// Test that both paths produce different but valid options
 	token := &oauth2.Token{AccessToken: "test-token"}
@@ -307,7 +424,7 @@ func TestNatsAuthOption_BothPathsComparison(t *testing.T) {
 	tokenProvider := auth.NewSettableTokenSource(mockSource)
 
 	// Test token handler path
-	tokenOption, err := natsAuthOption(nil, tokenProvider)
+	tokenOption, err := natsAuthOption(nil, "", tokenProvider)
 	assert.NoError(t, err)
 	assert.NotNil(t, tokenOption)
 
@@ -319,7 +436,7 @@ func TestNatsAuthOption_BothPathsComparison(t *testing.T) {
 
 	// Test nkey path
 	nkeySeed := generateValidUserNKeySeed(t)
-	nkeyOption, err := natsAuthOption(&nkeySeed, tokenProvider)
+	nkeyOption, err := natsAuthOption(&nkeySeed, "", tokenProvider)
 	assert.NoError(t, err)
 	assert.NotNil(t, nkeyOption)
 

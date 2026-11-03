@@ -22,6 +22,10 @@ metadata:
     {{- include "nvcf-api.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.api.replicaCount }}
+  {{- with .Values.api.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "nvcf-api.selectorLabels" . | nindent 6 }}
@@ -35,7 +39,7 @@ spec:
         {{- if .Values.api.env }}
         checksum/config-env: {{ toYaml .Values.api.env | sha256sum }}
         {{- end }}
-        checksum/vault-agent-template: {{ .Files.Get "vault-agent-templates/secrets.json.tmpl" | sha256sum }}
+        checksum/vault-agent-template: {{ include "nvcf-api.vaultAgentTemplate" . | sha256sum }}
       labels:
         {{- include "nvcf-api.selectorLabels" . | nindent 8 }}
     spec:
@@ -121,6 +125,10 @@ spec:
       {{- end }}
       {{- with .Values.api.affinity }}
       affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.api.tolerations }}

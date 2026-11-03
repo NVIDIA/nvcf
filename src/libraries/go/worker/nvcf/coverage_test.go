@@ -19,6 +19,8 @@ package nvcf
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -809,7 +811,7 @@ func TestSetConnectedPrimaryRegionsMetric(t *testing.T) {
 
 func TestNatsAuthOption_NilNkeyUsesTokenHandler(t *testing.T) {
 	tp := auth.NewSettableTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "t"}))
-	opt, err := natsAuthOption(nil, tp)
+	opt, err := natsAuthOption(nil, "", tp)
 	require.NoError(t, err)
 	require.NotNil(t, opt)
 }
@@ -841,7 +843,7 @@ func TestNewNatsConnection_Success(t *testing.T) {
 	url := startEmbeddedNats(t)
 	tp := auth.NewSettableTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "tok"}))
 
-	nc, err := newNatsConnection(url, nil, tp, "inst-1", "fnv-1")
+	nc, err := newNatsConnection(url, nil, "", tp, "inst-1", "fnv-1")
 	require.NoError(t, err)
 	require.NotNil(t, nc)
 
@@ -864,6 +866,47 @@ func TestCreateClient_WithNats(t *testing.T) {
 	client.Close()
 }
 
+func TestCreateClient_WithNatsAccount(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []ClientOption
+		want string
+	}{
+		{name: "named account", opts: []ClientOption{WithNatsAccount("APP")}, want: "APP"},
+		{name: "empty account", opts: []ClientOption{WithNatsAccount("")}, want: DefaultNatsAccount},
+		{name: "no option", want: DefaultNatsAccount},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fqdn := startMockServer(t, &mockWorkerServer{})
+			natsURL, logins := startEmbeddedNatsRecordingLogins(t)
+
+			client, err := CreateClient(fqdn, &natsURL, "env-token", nil, "nca", "inst", "fn", "fnv", t.TempDir(), DefaultNvcfClientTimeout, tt.opts...)
+			require.NoError(t, err)
+			defer client.Close()
+
+			var token string
+			select {
+			case token = <-logins:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the NATS server saw no login")
+			}
+			raw, err := base64.RawURLEncoding.DecodeString(token)
+			require.NoError(t, err)
+			var login struct {
+				Account    string `json:"account"`
+				PluginName string `json:"pluginName"`
+				Payload    string `json:"payload"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &login))
+			assert.Equal(t, tt.want, login.Account)
+			assert.Equal(t, "webhook", login.PluginName)
+			assert.Equal(t, "env-token", login.Payload)
+		})
+	}
+}
+
 func TestCreateClient_NatsConnectError(t *testing.T) {
 	fqdn := startMockServer(t, &mockWorkerServer{})
 	// Invalid nkey seed makes natsAuthOption (inside newNatsConnection) fail.
@@ -878,7 +921,7 @@ func ptr(s string) *string { return &s }
 func TestNewNatsConnection_InvalidNkey(t *testing.T) {
 	tp := auth.NewSettableTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "tok"}))
 	bad := "not-a-valid-seed"
-	_, err := newNatsConnection("nats://127.0.0.1:4222", &bad, tp, "inst", "fnv")
+	_, err := newNatsConnection("nats://127.0.0.1:4222", &bad, "", tp, "inst", "fnv")
 	require.Error(t, err)
 }
 
@@ -909,4 +952,34 @@ func TestKeepAliveInvokeFunctionRequest_ReturnsOnCancelWithFailingMsg(t *testing
 	case <-time.After(5 * time.Second):
 		t.Fatal("did not return on cancelled context")
 	}
+}
+
+// loginRecorder accepts every NATS client and records the token it logged in with.
+type loginRecorder struct {
+	tokens chan string
+}
+
+func (r *loginRecorder) Check(c natsserver.ClientAuthentication) bool {
+	select {
+	case r.tokens <- c.GetOpts().Token:
+	default:
+	}
+	return true
+}
+
+func startEmbeddedNatsRecordingLogins(t *testing.T) (string, <-chan string) {
+	t.Helper()
+	recorder := &loginRecorder{tokens: make(chan string, 1)}
+	srv, err := natsserver.NewServer(&natsserver.Options{
+		Host:                       "127.0.0.1",
+		Port:                       -1,
+		CustomClientAuthentication: recorder,
+	})
+	require.NoError(t, err)
+	go srv.Start()
+	if !srv.ReadyForConnections(5 * time.Second) {
+		t.Fatal("embedded nats server not ready")
+	}
+	t.Cleanup(srv.Shutdown)
+	return srv.ClientURL(), recorder.tokens
 }

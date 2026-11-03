@@ -70,6 +70,18 @@ type MiniserviceMetadata struct {
 	// injected into the ephemeral model-cache-init container by the webhook.
 	// Set only when the ephemeral model-cache backend is selected.
 	ModelCacheInitEnv map[string]string `json:"modelCacheInitEnv,omitempty"`
+
+	// WorkloadFeatureFlags is the featureFlags map decoded from the nvcf-workload-config
+	// ConfigMap for this MiniService, carried through so the admission webhook can read
+	// workload-level feature flags (e.g. featureflag.DisableNVLinkComputeDomain) without new
+	// plumbing for each new flag. Only the feature flags are carried, not the rest of
+	// WorkloadConfig (e.g. BYOOResources), which the webhook has no use for.
+	WorkloadFeatureFlags map[string]bool `json:"workloadFeatureFlags,omitempty"`
+}
+
+// IsWorkloadFeatureFlagEnabled reports whether the named workload feature flag is enabled.
+func (m MiniserviceMetadata) IsWorkloadFeatureFlagEnabled(key string) bool {
+	return m.WorkloadFeatureFlags[key]
 }
 
 // ToConfigMapData serializes m into ConfigMap-compatible flat string data.

@@ -728,6 +728,92 @@ func TestBackendK8sCacheStartRemovesLegacyIntraNamespaceEgressPolicy(t *testing.
 	assert.True(t, apierrors.IsNotFound(err))
 }
 
+// objectMetaWithManagedFields returns object metadata with managedFields
+// entries from two field managers.
+func objectMetaWithManagedFields(namespace, name string, objLabels map[string]string) metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Namespace: namespace,
+		Name:      name,
+		Labels:    objLabels,
+		ManagedFields: []metav1.ManagedFieldsEntry{
+			{Manager: "creator", Operation: metav1.ManagedFieldsOperationUpdate},
+			{Manager: "status-writer", Operation: metav1.ManagedFieldsOperationUpdate, Subresource: "status"},
+		},
+	}
+}
+
+func TestBackendK8sCacheStartStripsManagedFields(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	pod := &v1.Pod{ObjectMeta: objectMetaWithManagedFields(RequestsNamespace, "pod-1", nil)}
+	node := &v1.Node{ObjectMeta: objectMetaWithManagedFields("", "node-1", map[string]string{
+		"nvidia.com/gpu.present": "true",
+	})}
+	instanceNamespace := &v1.Namespace{ObjectMeta: objectMetaWithManagedFields("", "instance-ns", map[string]string{
+		nvcatypes.WorkloadInstanceTypeLabel: nvcatypes.WorkloadInstanceTypeValueMiniService,
+	})}
+	icmsRequest := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: objectMetaWithManagedFields(RequestsNamespace, "request-1", nil),
+	}
+	storageRequest := &nvcav2beta1.StorageRequest{
+		ObjectMeta: objectMetaWithManagedFields(RequestsNamespace, "storage-1", nil),
+	}
+
+	clients := mockKubeClients(pod, node, instanceNamespace)
+	clients.BART = fakebartclient.NewSimpleClientset(icmsRequest, storageRequest)
+	bc, _, err := NewBackendk8sCacheBuilder().
+		WithNamespaceLabels(labels.Set{"foo": "bar"}).
+		WithClients(clients).
+		Start(ctx)
+	require.NoError(t, err)
+
+	listers := []struct {
+		name string
+		get  func() (metav1.Object, error)
+	}{
+		{"pod", func() (metav1.Object, error) { return bc.podLister.Pods(pod.Namespace).Get(pod.Name) }},
+		{"node", func() (metav1.Object, error) { return bc.nodeLister.Get(node.Name) }},
+		{"instance namespace", func() (metav1.Object, error) {
+			return bc.instanceNamespaceLister.Get(instanceNamespace.Name)
+		}},
+		{"ICMS request", func() (metav1.Object, error) {
+			return bc.icmsRequestLister.ICMSRequests(icmsRequest.Namespace).Get(icmsRequest.Name)
+		}},
+		{"storage request", func() (metav1.Object, error) {
+			return bc.storageRequestLister.StorageRequests(storageRequest.Namespace).Get(storageRequest.Name)
+		}},
+	}
+	for _, l := range listers {
+		cached, err := l.get()
+		require.NoError(t, err, l.name)
+		assert.Nil(t, cached.GetManagedFields(), "cached %s", l.name)
+	}
+}
+
+func TestStartSecretMirroringInformerStripsManagedFields(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	secret := &v1.Secret{ObjectMeta: objectMetaWithManagedFields("mirror-source", "secret-1", map[string]string{
+		"mirror": "true",
+	})}
+	c := &BackendK8sCache{
+		clients:                     &kubeclients.KubeClients{K8s: fakek8sclient.NewSimpleClientset(secret)},
+		secretMirrorSourceNamespace: secret.Namespace,
+		secretMirrorLabelSelector:   "mirror=true",
+		resyncPeriod:                ResyncInterval,
+	}
+	require.NoError(t, c.startSecretMirroringInformer(ctx))
+	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer syncCancel()
+	require.True(t, cache.WaitForCacheSync(syncCtx.Done(), c.syncedFuncs...))
+
+	cached, err := c.secretLister.Secrets(secret.Namespace).Get(secret.Name)
+	require.NoError(t, err)
+	assert.Nil(t, cached.ManagedFields)
+}
+
 func TestCleanupFailedButNoInstances(t *testing.T) {
 	origUUID := GetUseUUIDForRequestObjName()
 	SetUseUUIDForRequestObjName(false)
@@ -1673,8 +1759,11 @@ func TestCreateICMSRequestLaunchSpec(t *testing.T) {
 	// Container function.
 	containerFuncMsgBYOO := decodeCM(t, creationgMsgFunctionContainerLaunchSpecBYOO)
 
-	_, err = bc.CreateICMSCreationMessageRequest(ctx, containerFuncMsgBYOO, "mrecpt", "msg", "")
-	require.EqualError(t, err, "telemetries is set but required features are disabled: BYOObservability, UseFunctionTranslator")
+	rejectedSR, err := bc.CreateICMSCreationMessageRequest(ctx, containerFuncMsgBYOO, "mrecpt", "msg", "")
+	require.NoError(t, err)
+	assert.Contains(t, GetCreationRejectionReason(rejectedSR), "BYOObservability, UseFunctionTranslator")
+	err = clients.BART.NvcaV2beta1().ICMSRequests(bc.requestsNamespace).Delete(ctx, rejectedSR.Name, metav1.DeleteOptions{})
+	require.NoError(t, err)
 
 	fff.EnabledFFs = append(fff.EnabledFFs,
 		featureflag.BYOObservability,
@@ -1691,8 +1780,11 @@ func TestCreateICMSRequestLaunchSpec(t *testing.T) {
 	fff.EnabledFFs = nil
 	helmFuncMsgBYOO := decodeCM(t, creationgMsgFunctionHelmLaunchSpecBYOO)
 
-	_, err = bc.CreateICMSCreationMessageRequest(ctx, helmFuncMsgBYOO, "mrecpt", "msg", "")
-	require.EqualError(t, err, "telemetries is set but required features are disabled: BYOObservability, UseFunctionTranslator")
+	rejectedSR, err = bc.CreateICMSCreationMessageRequest(ctx, helmFuncMsgBYOO, "mrecpt", "msg", "")
+	require.NoError(t, err)
+	assert.Contains(t, GetCreationRejectionReason(rejectedSR), "BYOObservability, UseFunctionTranslator")
+	err = clients.BART.NvcaV2beta1().ICMSRequests(bc.requestsNamespace).Delete(ctx, rejectedSR.Name, metav1.DeleteOptions{})
+	require.NoError(t, err)
 
 	fff.EnabledFFs = append(fff.EnabledFFs,
 		featureflag.BYOObservability,
@@ -4083,6 +4175,18 @@ func TestGetCurrentK8sVersion(t *testing.T) {
 	}
 }
 
+func TestResolveK8sVersion(t *testing.T) {
+	client := &fakeServerVersionClient{serverVersion: &version.Info{GitVersion: "v1.34.0"}}
+
+	discovered, err := resolveK8sVersion(context.Background(), "", client)
+	require.NoError(t, err)
+	assert.Equal(t, "v1.34.0", discovered)
+
+	override, err := resolveK8sVersion(context.Background(), "v1.32.1", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "v1.32.1", override)
+}
+
 type fakeServerVersionClient struct {
 	serverVersion *version.Info
 }
@@ -5169,6 +5273,118 @@ func TestProcessICMSRequestWorkDoesNotRateLimitDeletingRequestRetainingFinalizer
 	assert.Zero(t, bc.icmsRequestWQ.NumRequeues(key))
 }
 
+func TestEnqueueNotFoundInstancesOnDeleteEnqueuesEachInstance(t *testing.T) {
+	ctx := newTestContext()
+	req := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr-deleted", Namespace: RequestsNamespace},
+		Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "req-1"},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			Instances: map[string]nvcav2beta1.InstanceStatus{
+				"instance-a": {ID: "instance-a"},
+				"instance-b": {ID: "instance-b"},
+			},
+		},
+	}
+
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ:       workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter: func(context.Context, string, string) error { return nil },
+	}
+	bc.enqueueNotFoundInstancesOnDelete(ctx, req)
+
+	assert.Equal(t, 2, bc.notFoundInstanceWQ.Len())
+}
+
+func TestEnqueueNotFoundInstancesOnDeleteNoopsWithoutReporter(t *testing.T) {
+	ctx := newTestContext()
+	req := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr-deleted", Namespace: RequestsNamespace},
+		Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "req-1"},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			Instances: map[string]nvcav2beta1.InstanceStatus{"instance-a": {ID: "instance-a"}},
+		},
+	}
+
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+	}
+	bc.enqueueNotFoundInstancesOnDelete(ctx, req)
+
+	assert.Zero(t, bc.notFoundInstanceWQ.Len())
+}
+
+func TestEnqueueNotFoundInstancesOnDeleteSkipsTombstoneWithoutPanicking(t *testing.T) {
+	ctx := newTestContext()
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ:       workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter: func(context.Context, string, string) error { return nil },
+	}
+
+	bc.enqueueNotFoundInstancesOnDelete(ctx, cache.DeletedFinalStateUnknown{Key: "nvcf-backend/sr-deleted"})
+
+	assert.Zero(t, bc.notFoundInstanceWQ.Len())
+}
+
+func TestEnqueueNotFoundInstancesOnDeleteReadsTombstoneObj(t *testing.T) {
+	ctx := newTestContext()
+	req := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr-deleted", Namespace: RequestsNamespace},
+		Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "req-1"},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			Instances: map[string]nvcav2beta1.InstanceStatus{"instance-a": {ID: "instance-a"}},
+		},
+	}
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ:       workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter: func(context.Context, string, string) error { return nil },
+	}
+
+	bc.enqueueNotFoundInstancesOnDelete(ctx, cache.DeletedFinalStateUnknown{
+		Key: "nvcf-backend/sr-deleted",
+		Obj: req,
+	})
+
+	assert.Equal(t, 1, bc.notFoundInstanceWQ.Len())
+}
+
+func TestProcessNotFoundInstanceWorkReportsAndForgets(t *testing.T) {
+	ctx := newTestContext()
+	key := notFoundInstanceKey{RequestID: "req-1", InstanceID: "instance-a"}
+
+	var gotReqID, gotInstanceID string
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter: func(_ context.Context, reqID, instanceID string) error {
+			gotReqID, gotInstanceID = reqID, instanceID
+			return nil
+		},
+		tracer: noop.NewTracerProvider().Tracer("test"),
+	}
+	bc.notFoundInstanceWQ.Add(key)
+
+	require.True(t, bc.processNotFoundInstanceWork(ctx))
+	assert.Equal(t, "req-1", gotReqID)
+	assert.Equal(t, "instance-a", gotInstanceID)
+	assert.Zero(t, bc.notFoundInstanceWQ.NumRequeues(key))
+}
+
+func TestProcessNotFoundInstanceWorkRequeuesOnReporterError(t *testing.T) {
+	ctx := newTestContext()
+	key := notFoundInstanceKey{RequestID: "req-1", InstanceID: "instance-a"}
+
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter: func(_ context.Context, _, _ string) error {
+			return errors.New("icms unavailable")
+		},
+		tracer: noop.NewTracerProvider().Tracer("test"),
+	}
+	bc.notFoundInstanceWQ.Add(key)
+
+	require.True(t, bc.processNotFoundInstanceWork(ctx))
+	assert.Positive(t, bc.notFoundInstanceWQ.NumRequeues(key))
+}
+
 func TestUpdateSchedulerWorkloadMetrics(t *testing.T) {
 	makeReq := func(requestID string, action common.MessageAction) *nvcav2beta1.ICMSRequest {
 		return &nvcav2beta1.ICMSRequest{
@@ -5584,6 +5800,44 @@ func TestEnsureModelCacheNamespaceLabel_Envtest(t *testing.T) {
 					}
 				}
 			}
+		})
+	}
+}
+
+func TestCreateICMSRequestsReusedMessageID(t *testing.T) {
+	for _, termination := range []bool{false, true} {
+		t.Run(fmt.Sprintf("termination=%t", termination), func(t *testing.T) {
+			ctx := newTestContext()
+			clients := mockKubeClients()
+			bc := &BackendK8sCache{clients: clients, requestsNamespace: RequestsNamespace, featureFlagFetcher: featureflag.DefaultFetcher}
+			old := &nvcav2beta1.ICMSRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "original", Namespace: RequestsNamespace, Labels: map[string]string{SQSMessageIDKey: "reused-message-id"}},
+				Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "old-request"},
+			}
+			_, err := clients.BART.NvcaV2beta1().ICMSRequests(RequestsNamespace).Create(ctx, old, metav1.CreateOptions{})
+			require.NoError(t, err)
+			for attempt := 0; attempt < 2; attempt++ {
+				if termination {
+					err = bc.CreateICMSTerminationMessageRequest(ctx, types.ICMSTerminationMessage{RequestID: "new-request", NCAId: "test-org"}, "new-receipt", "reused-message-id")
+					require.NoError(t, err)
+				} else {
+					var payload map[string]any
+					require.NoError(t, json.Unmarshal([]byte(goodCM), &payload))
+					payload["requestId"] = "new-request"
+					body, err := json.Marshal(payload)
+					require.NoError(t, err)
+					created, err := bc.CreateICMSCreationMessageRequest(ctx, decodeCM(t, string(body)), "new-receipt", "reused-message-id", "creation")
+					require.NoError(t, err)
+					if attempt == 0 {
+						require.NotNil(t, created)
+					} else {
+						require.Nil(t, created, "redelivery must remain idempotent")
+					}
+				}
+			}
+			requests, err := clients.BART.NvcaV2beta1().ICMSRequests(RequestsNamespace).List(ctx, metav1.ListOptions{})
+			require.NoError(t, err)
+			require.Len(t, requests.Items, 2)
 		})
 	}
 }

@@ -104,7 +104,7 @@ func (p *passDBHandlerV2) UpsertStatsV3(ctx context.Context, namespace, eventCon
 	return nil
 }
 
-func (p *passDBHandlerV2) UpsertFilteredStatsV3(ctx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error {
+func (p *passDBHandlerV2) UpsertFilteredStatsV3(ctx context.Context, namespace, eventContext, eventName string, timestamp time.Time, ncaID, functionID string) error {
 	return nil
 }
 
@@ -126,6 +126,14 @@ func (p *passDBHandlerV2) GetFilteredStatsV3(ctx context.Context, namespace stri
 
 func (p *passDBHandlerV2) GetEventsV3(ctx context.Context, namespace, eventContext string) ([]data_access.EventV3Record, error) {
 	return []data_access.EventV3Record{}, nil
+}
+
+func (p *passDBHandlerV2) GetAccountEventsV3(ctx context.Context, namespace, eventContext, ncaID, functionID string) ([]data_access.EventV3Record, error) {
+	return []data_access.EventV3Record{}, nil
+}
+
+func (p *passDBHandlerV2) GetAccountStatsV3(ctx context.Context, namespace, ncaID, functionID string) ([]data_access.StatsV3Record, error) {
+	return []data_access.StatsV3Record{}, nil
 }
 
 func (p *passDBHandlerV2) Close() error { return nil }
@@ -178,7 +186,7 @@ func (p *failDBHandlerV2) UpsertStatsV3(ctx context.Context, namespace, eventCon
 	return fmt.Errorf("v2 upsert stats fail")
 }
 
-func (p *failDBHandlerV2) UpsertFilteredStatsV3(ctx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error {
+func (p *failDBHandlerV2) UpsertFilteredStatsV3(ctx context.Context, namespace, eventContext, eventName string, timestamp time.Time, ncaID, functionID string) error {
 	return fmt.Errorf("v2 upsert filtered stats fail")
 }
 
@@ -200,6 +208,14 @@ func (p *failDBHandlerV2) GetFilteredStatsV3(ctx context.Context, namespace stri
 
 func (p *failDBHandlerV2) GetEventsV3(ctx context.Context, namespace, eventContext string) ([]data_access.EventV3Record, error) {
 	return nil, fmt.Errorf("v2 get events fail")
+}
+
+func (p *failDBHandlerV2) GetAccountEventsV3(ctx context.Context, namespace, eventContext, ncaID, functionID string) ([]data_access.EventV3Record, error) {
+	return nil, fmt.Errorf("v2 get account events fail")
+}
+
+func (p *failDBHandlerV2) GetAccountStatsV3(ctx context.Context, namespace, ncaID, functionID string) ([]data_access.StatsV3Record, error) {
+	return nil, fmt.Errorf("v2 get account stats fail")
 }
 
 func (p *failDBHandlerV2) Close() error { return fmt.Errorf("v2 close fail") } // Add Close method

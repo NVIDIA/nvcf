@@ -4,6 +4,25 @@
 {{- $metricsEnabled := dig "metrics" "enabled" false .Values.llmRequestRouter }}
 {{- $serviceMonitorEnabled := dig "metrics" "serviceMonitor" "enabled" false .Values.llmRequestRouter }}
 {{- if and (eq (include "llm-request-router.backendRouterEnabled" .) "true") $metricsEnabled $serviceMonitorEnabled }}
+{{- if eq .Values.llmRequestRouter.backendRouter.service.type "LoadBalancer" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llm-request-router.backendRouterName" . }}-metrics
+  namespace: {{ include "llm-request-router.namespace" . }}
+  labels:
+    {{- include "llm-request-router.backendRouterLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "llm-request-router.backendRouterSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: health
+      port: {{ .Values.llmRequestRouter.backendRouter.service.healthPort }}
+      targetPort: health
+      protocol: TCP
+---
+{{- end }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

@@ -16,6 +16,8 @@
  */
 package com.nvidia.icms.configuration.nats;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import java.time.Duration;
 import java.util.Optional;
 import lombok.Data;
@@ -23,10 +25,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.validation.annotation.Validated;
 
 @RefreshScope
 @Configuration
 @ConfigurationProperties(prefix = "icms.nats")
+@Validated
 @Data
 @Slf4j
 public class NatsConfigurationProperties {
@@ -35,6 +39,9 @@ public class NatsConfigurationProperties {
     private String natsUrl;
     private int maxPoolSize = 8;
     private boolean createNatsStreams;
+    @Min(1)
+    @Max(5)
+    private int replicas = 1;
     private Duration connectionTimeout = Duration.ZERO;
     private Duration pingInterval = Duration.ZERO;
     private Duration reconnectWait = Duration.ZERO;

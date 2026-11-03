@@ -18,7 +18,7 @@ reval:
   image:
     registry: ""
     repository: ""
-    tag: "0.20.2"
+    tag: "0.20.4"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -83,6 +83,10 @@ reval:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+  # HA hooks; set by the HA value layer, off by default.
+  topologySpreadConstraints: []
+  strategy: {}
 
   jaeger:
     enabled: false

@@ -16,6 +16,7 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
+use super::LastClusterHint;
 use crate::routing_state::RoutingTargetKey;
 
 #[derive(Clone, Debug)]
@@ -27,6 +28,8 @@ pub struct LoadBalancerRequest<'a> {
     pub received_at: Instant,
     pub request_slo: Option<Duration>,
     pub excluded_cluster_ids: Option<&'a HashSet<String>>,
+    /// Last-cluster hint for session-aware affinity. `None` outside the proxy.
+    pub last_cluster: Option<&'a LastClusterHint>,
 }
 
 impl LoadBalancerRequest<'_> {

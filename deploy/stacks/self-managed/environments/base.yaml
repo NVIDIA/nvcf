@@ -75,12 +75,17 @@ global:
     nvctServiceURL: ""
     # NVCT task worker env: NVCT_FQDN_GRPC
     nvctGrpcServiceURL: ""
-    # Invocation service worker stream address.
+    # Invocation service worker stream address. Empty advertises each pod's
+    # own address. Every replica advertises a set value, so invocation-service
+    # stays at one replica under HA when it is set.
     invocationServiceURL: ""
-    # gRPC proxy worker CONNECT endpoint advertised by the proxy.
+    # gRPC proxy worker CONNECT endpoint advertised by the proxy. Empty
+    # advertises each pod's IP. Every replica advertises a set value, so
+    # grpc-proxy stays at one replica under HA when it is set.
     grpcProxyWorkerConnectURL: ""
-    # Optional LLM request-router address override advertised to LLM worker
-    # sidecars. Empty uses llm-request-router.nvcf.svc.cluster.local:50071.
+    # Pylon discovery endpoint. Empty uses
+    # llm-request-router-backend-router.nvcf.svc.cluster.local:50071 when backend
+    # routing is enabled, otherwise llm-request-router.nvcf.svc.cluster.local:50071.
     llmRequestRouterAddress: ""
 
   nodeSelectors:
@@ -177,8 +182,9 @@ functionAutoscaler:
 # API environment entries are merged over the stack defaults. Remote config is
 # passed to the API chart and overrides its packaged application profile. When
 # the LLM addon is enabled, the stack defaults the Pylon image from
-# global.sidecars (or global.image) at version 0.18.0.
+# global.sidecars (or global.image) at version 0.25.0.
 api:
+  podAnnotations: {}
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
   # global.workerEndpoints.essServiceURL. In split-plane deployments that value
@@ -192,8 +198,13 @@ api:
 
 # NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
+# Remote config is passed to the NVCT API chart and overrides its packaged
+# application profile, mirroring api.remoteConfig.
 nvctApi:
+  podAnnotations: {}
   essBaseURL: ""
+  remoteConfig:
+    configData: {}
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog. The API chart defaults to
@@ -206,6 +217,15 @@ nvctApi:
 #       repository: <your-repository>/alpine-k8s
 #       tag: "1.37.0"
 
+# The bundled upgrade receipt uses its chart's public upstream helper image.
+# Global NVCF image settings do not select this third-party image. To use a
+# mirror, set upgradeReceipt.image.registry and repository together. A tag
+# override is optional and must be qualified for the cluster's Kubernetes version.
+#   upgradeReceipt:
+#     image:
+#       registry: <your-registry>
+#       repository: <your-repository>/alpine-k8s
+
 accounts:
   limits:
     maxFunctions: 10
@@ -216,6 +236,23 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  podAnnotations: {}
+  # How workers authenticate to NATS.
+  #   nkey: the NVCF API gives every worker the control plane's shared NATS
+  #     NKey as NKEY_SEED. The default.
+  #   token: each worker authenticates with its own worker token, into APP. The
+  #     NATS auth callout passes it to the NVCF API, which returns that function
+  #     version's permissions, and the API stops sending NKEY_SEED. Needs an NVCF
+  #     API and worker-utils that support NVCF_NATS_ACCOUNT. Use it when workers
+  #     run outside the control-plane cluster.
+  # Switching an existing install: see "Worker NATS Authentication" in
+  # docs/self-managed/control-plane-operations.md.
+  workerAuth: nkey
+  authCallout:
+    workerTokenAuth:
+      # token mode: the NVCF API endpoint the NATS auth callout sends worker
+      # tokens to. Changing it restarts the auth callout.
+      webhookUrl: http://api.nvcf.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth
   # The control plane places request-queue streams by its logical NCP region.
   # Keep both tags so NATS can host shared and region-scoped streams.
   config:
@@ -246,6 +283,21 @@ nats:
     #   tls:
     #     enabled: true
     #     secretName: nats-server-tls   # cert-manager-issued; SAN = external NATS hostname
+  # CPU and memory for each NATS server container. The chart sets none, so the
+  # servers run as BestEffort and nats-server sizes its Go runtime to every
+  # core on the node. Set a CPU limit so the runtime sizes itself to it, and
+  # set requests so NATS keeps its CPU share when the node is full. Size both
+  # from your own load test. No memory limit is shown because the
+  # request-queue streams are memory-backed and a memory limit can end the
+  # server under a backlog.
+  # container:
+  #   merge:
+  #     resources:
+  #       requests:
+  #         cpu: <cores>
+  #         memory: <memory>
+  #       limits:
+  #         cpu: <cores>
   # Image overrides for the NATS config reloader. The reloader is not
   # republished under the public nvidia/nvcf catalog, so it defaults to its
   # upstream source, docker.io/natsio/nats-server-config-reloader:0.24.0.
@@ -256,6 +308,13 @@ nats:
   #     registry: <your-registry>
   #     repository: <your-repository>/nats-server-config-reloader
   #     tag: "0.24.0"
+  # NATS box also defaults to its public upstream image, independently of
+  # global.image. Set registry and repository together for a private mirror.
+  # natsBox:
+  #   container:
+  #     image:
+  #       registry: <your-registry>
+  #       repository: <your-repository>/nats-box
   # PDB: the upstream NATS chart enables a disruption budget by default.
   # Override here to disable it or adjust the minAvailable threshold.
   podDisruptionBudget:
@@ -303,7 +362,8 @@ cassandra:
 certManager:
   # cert-manager controller required to reconcile Certificate resources for
   # the self-managed PKI stack. Enabling addons.llm.pki with the managed
-  # issuer creates ClusterIssuer/nvcf-openbao-pki, which is cluster-scoped
+  # issuer, or workerCallbackProxy, provisions the OpenBao service PKI and
+  # creates ClusterIssuer/nvcf-openbao-pki, which is cluster-scoped
   # and has no namespace. The nvcf-pki Helm release that creates it and the
   # cert-manager ServiceAccount it authenticates as both live in the
   # cert-manager namespace. The bundled helm-nvcf-cert-manager chart ships
@@ -311,6 +371,12 @@ certManager:
   # installed outside this stack; that external installation must still
   # provide ServiceAccount/cert-manager in the cert-manager namespace.
   enabled: true
+  # The ACME solver defaults to quay.io/jetstack/cert-manager-acmesolver.
+  # Set acmesolver.image.repository when the deployment uses a private mirror.
+  # acmesolver:
+  #   image:
+  #     repository: nvcr.io/YOUR_ORG/YOUR_TEAM/cert-manager-acmesolver
+  #     tag: "v1.20.2"
 
 openbao:
   enabled: true
@@ -344,6 +410,7 @@ openbao:
     podDisruptionBudget:
       minAvailable: 1
   server:
+    annotations: {}
     ha:
       # PDB for the HA Raft StatefulSet. The upstream chart enables this by
       # default with maxUnavailable derived from replica count.
@@ -395,6 +462,8 @@ addons:
         # enabled: defaults to addons.llm.enabled
         # replicaCount defaults to the request-router chart value.
         # replicaCount: 2
+        # service:
+        #   grpcPort: 50071
         # Addresses workers dial to reach the router. Both default to the
         # backend-router Service in-cluster, which is correct when workers run
         # alongside the control plane. Set both to externally reachable
@@ -468,17 +537,14 @@ addons:
       # manage a custom ClusterIssuer. Leave it false for an external issuer.
       # clusterIssuer:
       #   enabled: true
-      # namespace: vault-system
       # mountPath: /etc/stargate/tls
       # certPath: /etc/stargate/tls/tls.crt
       # keyPath: /etc/stargate/tls/tls.key
-      # Image defaults to ${global.image.registry}/${global.image.repository}/nvcf-openbao-migrations.
-      # tag falls back to openbao.migrations.image.tag and then 0.19.5 if
-      # neither location is set.
-      # image:
-      #   registry: ""
-      #   repository: ""
-      #   tag: ""
+
+  # Event Ledger addon: records deployment stage events from NVCA and SIS.
+  # When enabled, deploys the event-ledger service backed by Cassandra.
+  eventLedger:
+    enabled: true
 
   # Vanity Gateway addon for optional vanity and OpenAI-compatible invocation routes.
   # Disabled by default; enabling this deploys the vanity-gateway service and its
@@ -551,6 +617,7 @@ icms:
 # Set enabled: true for any service running more than one replica.
 
 apikeys:
+  podAnnotations: {}
   # Operator-set api-keys service env, deep-merged over the chart defaults
   # (AWS_REGION / SPRING_PROFILES_ACTIVE). Set NVCF_NCA_ID to the NCA the
   # api-keys service authorizes keys against. Leave unset to keep the chart
@@ -563,11 +630,13 @@ apikeys:
     maxUnavailable: 1
 
 ess:
+  podAnnotations: {}
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
 
 invocation:
+  podAnnotations: {}
   env:
     # Keep request subjects aligned with the API and worker consumers.
     NATS_PROPERTIES__REGION: ncp
@@ -576,6 +645,26 @@ invocation:
     maxUnavailable: 1
 
 adminIssuerProxy:
+  # Mints admin JWTs for `nvcf-cli init` without authenticating the caller.
+  # Defaults to true so existing installs are unchanged.
+  #
+  # false drops the release, its Gateway route, its NVCF UI health entry, and
+  # the OpenBao role that lets it sign admin-scoped tokens. `nvcf-cli init` and
+  # `nvcf-cli refresh` both call POST /v1/admin/keys, so both stop working
+  # against this stack; obtain the admin token from your own identity provider
+  # and set NVCF_TOKEN instead.
+  #
+  # On a stack where it is already installed this uninstalls nothing: the
+  # release and the OpenBao role both already exist and stay. Until the role is
+  # removed, any pod running as the admin-issuer-proxy service account in the
+  # api-keys namespace can still sign those tokens. For the removal steps see
+  # "Disabling Admin Issuer Proxy" in docs/self-managed/control-plane-operations.md.
+  enabled: true
+  # The api-keys.<domain>/v1/admin/keys route; false keeps it in-cluster only.
+  # Only meaningful with enabled: true -- disabling the release removes the
+  # route with it.
+  gateway:
+    enabled: true
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
@@ -696,7 +785,9 @@ ingress:
         # listenerName defaults to llm-quic in the gateway-routes chart.
 
 grpcproxy:
-  # PDB: disabled by default. Enable when running multiple grpc-proxy replicas.
+  podAnnotations: {}
+  # PDB: disabled by default. highAvailability.mode replaces it with the HA PDB
+  # when it scales grpc-proxy.
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
@@ -711,3 +802,16 @@ grpcproxy:
   # an external compute-worker endpoint.
   natsServiceURL: ""
   workerConnectBaseURL: ""
+
+# Control-plane high availability.
+# global.yaml.gotmpl maps mode onto chart values (replicaCount, affinity, zone
+# spread, PDB, update strategy).
+#   none      keep chart/env defaults (single-node, local, CI).
+#   preferred HA sizing; soft placement (schedules even if capacity is short).
+#   enforced  HA sizing; hard placement (Pending rather than co-locating).
+# preferred/enforced need >= 3 nodes (>= 3 zones for zone spread).
+# Optional overrides: global.affinity / global.topologySpreadConstraints.
+# Default preferred (real multi-node); set none for single-node / local / CI.
+# JetStream stream replicas follow the NATS server count (capped at 3).
+highAvailability:
+  mode: preferred

@@ -43,13 +43,30 @@ import (
 // or an explicit "the command exit code should be 0" assertion uses it to seed
 // the suite-level CommandCache so a subsequent "Given command has succeeded:"
 // for the same resolved text hits the cache instead of rerunning a destructive
-// command.
+// command. Manifests holds the raw docstrings declared by "Kubernetes
+// manifest ... is:" keyed by their visible name; ${VAR} interpolation is
+// deferred to the apply step so a manifest may reference values exported
+// later in the scenario.
 type ScenarioContext struct {
 	Suite         *harness.Suite
 	LastResult    harness.Result
 	LastErr       error
 	LastCommand   string
 	NVCFCLIConfig string
+	Manifests     map[string]string
+	HTTPHeaders   map[string]string
+	LastHTTP      *harness.HTTPResponse
+
+	// FunctionUndeployed is set once the scenario has undeployed the selected
+	// function, so the teardown does not undeploy it again.
+	FunctionUndeployed bool
+	teardown           []teardownAction
+}
+
+// teardownAction is cleanup queued for the end of the scenario.
+type teardownAction struct {
+	description string
+	run         func(context.Context) error
 }
 
 // NewScenarioContext wraps suite in a fresh per-scenario state. The
@@ -67,7 +84,17 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 		sc.LastErr = nil
 		sc.LastCommand = ""
 		sc.NVCFCLIConfig = ""
+		sc.Manifests = nil
+		sc.HTTPHeaders = nil
+		sc.LastHTTP = nil
+		sc.FunctionUndeployed = false
+		sc.teardown = nil
 		return c, nil
+	})
+	// Godog runs After hooks for failed scenarios too, which is what lets
+	// cleanup survive the live runner stopping at the first failed step.
+	ctx.After(func(c context.Context, _ *godog.Scenario, _ error) (context.Context, error) {
+		return c, sc.runTeardown(c)
 	})
 	// Godog's default pretty formatter buffers the scenario block until
 	// every step finishes, which makes hangs invisible during a live
@@ -75,12 +102,32 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	// operator can see which command is currently executing.
 	ctx.StepContext().Before(func(c context.Context, st *godog.Step) (context.Context, error) {
 		fmt.Fprintf(os.Stderr, ">>> %s\n", st.Text)
+		if arg := st.Argument; arg != nil {
+			if dt := arg.DataTable; dt != nil {
+				for _, row := range dt.Rows {
+					cells := make([]string, len(row.Cells))
+					for i, c := range row.Cells {
+						cells[i] = c.Value
+					}
+					fmt.Fprintf(os.Stderr, ">>>   | %s |\n", strings.Join(cells, " | "))
+				}
+			}
+			if ds := arg.DocString; ds != nil {
+				for _, line := range strings.Split(ds.Content, "\n") {
+					fmt.Fprintf(os.Stderr, ">>>   %s\n", line)
+				}
+			}
+		}
 		return c, nil
 	})
 	registerFileSteps(ctx, sc)
+	registerManifestSteps(ctx, sc)
 	registerCommandSteps(ctx, sc)
+	registerHTTPSteps(ctx, sc)
+	registerTeardownSteps(ctx, sc)
 	registerNVCFCLISteps(ctx, sc)
 	registerRegistrationSteps(ctx, sc)
+	registerMetricsSteps(ctx, sc)
 	registerAssertionSteps(ctx, sc)
 	registerInfraSteps(ctx, sc)
 }

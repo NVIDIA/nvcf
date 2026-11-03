@@ -43,6 +43,7 @@ import (
 	"nvcf-grpc-proxy/nvcf/pb"
 	"nvcf-grpc-proxy/proxy/consts"
 	"nvcf-grpc-proxy/proxy/credentials"
+	"nvcf-grpc-proxy/proxy/eventledger"
 	"nvcf-grpc-proxy/proxy/geo"
 	"nvcf-grpc-proxy/proxy/hacks"
 	"nvcf-grpc-proxy/proxy/invocation"
@@ -59,7 +60,7 @@ type Config struct {
 	NatsPrivateNKey          string `mapstructure:"NATS_PRIVATE_NKEY"`
 	NVCFFqdn                 string `mapstructure:"NVCF_FQDN_GRPC"`
 	NatsFqdn                 string `mapstructure:"NATS_FQDN"`
-	SSAFqdn                  string `mapstructure:"SSA_FQDN"`
+	OAuth2Fqdn               string `mapstructure:"OAUTH2_FQDN"`
 	SelfWorkerFqdn           string `mapstructure:"SELF_WORKER_FQDN"`
 	SecretsPath              string `mapstructure:"SECRETS_PATH"`
 	PublicCertPath           string `mapstructure:"PUBLIC_CERT_PATH"`
@@ -68,7 +69,7 @@ type Config struct {
 	AWSRegion                string `mapstructure:"AWS_REGION"`
 	LocalTest                bool   `mapstructure:"LOCAL_TEST"`
 	GeoDisabled              bool   `mapstructure:"GEO_DISABLED"`
-	GeoSsaAddr               string `mapstructure:"GEO_SSA_ADDR"`
+	GeoOAuth2Addr            string `mapstructure:"GEO_OAUTH2_ADDR"`
 	GeoGlpsAddr              string `mapstructure:"GEO_GLPS_ADDR"`
 	GeoTableS3Region         string `mapstructure:"GEO_TABLE_S3_REGION"`
 	GeoTableS3BucketName     string `mapstructure:"GEO_TABLE_S3_BUCKET_NAME"`
@@ -79,12 +80,14 @@ type Config struct {
 	EnableHTTP3Connect       bool   `mapstructure:"ENABLE_HTTP3_CONNECT"`
 	ClusterName              string `mapstructure:"CLUSTER_NAME"`
 	JetstreamPlacementTag    string `mapstructure:"JETSTREAM_PLACEMENT_TAG"`
+	EventLedgerAddr          string `mapstructure:"EVENT_LEDGER_ADDR"`
 }
 
 type NVCFProxy struct {
 	servers.Server
 	director    *StreamDirector
 	http3Server *http3.Server
+	eventLedger *eventledger.Publisher
 }
 
 func (n *NVCFProxy) Close() error {
@@ -97,7 +100,10 @@ func (n *NVCFProxy) Close() error {
 	if err := n.http3Server.Close(); err != nil {
 		zap.L().Warn("http3 close failed", zap.Error(err))
 	}
-	return n.director.Close()
+	err := n.director.Close()
+	// Closed after the director so events emitted while it drains are sent.
+	n.eventLedger.Close()
+	return err
 }
 
 type rateLimiter interface {
@@ -151,7 +157,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	nc, err := invocation.NewNatsConnection(config.NatsFqdn, config.NatsPrivateNKey, serviceName, config.SSAFqdn, config.SecretsPath)
+	nc, err := invocation.NewNatsConnection(config.NatsFqdn, config.NatsPrivateNKey, serviceName, config.OAuth2Fqdn, config.SecretsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +166,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 		LookupRegions(ctx context.Context, clientIP net.IP) []string
 	}
 	if !config.GeoDisabled {
-		geoLookup, err = geo.NewGeoIPLookupService(ctx, config.GeoSsaAddr, config.GeoGlpsAddr, config.GeoTableS3Region, config.GeoTableS3BucketName, config.SecretsPath, config.RoutingTableValidityDays)
+		geoLookup, err = geo.NewGeoIPLookupService(ctx, config.GeoOAuth2Addr, config.GeoGlpsAddr, config.GeoTableS3Region, config.GeoTableS3BucketName, config.SecretsPath, config.RoutingTableValidityDays)
 		if err != nil {
 			return nil, err
 		}
@@ -170,7 +176,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 
 	var rateLimit rateLimiter
 	if config.RateLimitEnabled {
-		rateLimitClient, err := ratelimit.NewRateLimitClient(config.SSAFqdn, config.SecretsPath, config.RateLimitAddr)
+		rateLimitClient, err := ratelimit.NewRateLimitClient(config.OAuth2Fqdn, config.SecretsPath, config.RateLimitAddr)
 		if err != nil {
 			return nil, err
 		}
@@ -233,6 +239,14 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 		return nil, err
 	}
 
+	var eventLedger *eventledger.Publisher
+	if config.EventLedgerAddr != "" {
+		eventLedger, err = eventledger.New(config.EventLedgerAddr, config.SecretsPath, config.OAuth2Fqdn)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	http2Server := createHttp2Server(director, "0.0.0.0:10081", healthManager)
 	http2ServerPair := servers.ServerFuncPair{
 		Execute: func() error {
@@ -256,6 +270,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 	return &NVCFProxy{
 		director:    director,
 		http3Server: http3Server,
+		eventLedger: eventLedger,
 		Server: servers.NewGRPCServer(&servers.GRPCConfig{
 			HTTPAddr:  "0.0.0.0:10080",
 			GRPCAddr:  "0.0.0.0:10085",
@@ -426,7 +441,7 @@ func NewNVCFClient(config Config) (pb.ProxyClient, error) {
 		// Configure OAuth2
 		clientConfig.BaseClientConfig.AuthnCfg = &auth.AuthnConfig{
 			OIDCConfig: &auth.ProviderConfig{
-				Host:            config.SSAFqdn,
+				Host:            config.OAuth2Fqdn,
 				CredentialsFile: config.SecretsPath,
 				Scopes:          []string{"proxy:invoke_function"},
 			},

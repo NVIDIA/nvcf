@@ -107,6 +107,8 @@ pub(crate) struct PylonStartupPlan {
     queue_mismatch_retry: PylonQueueMismatchRetryConfig,
     upstream_backend: UpstreamBackend,
     priority_ceiling: u32,
+    first_output_timeout: Duration,
+    output_chunk_timeout: Duration,
     model_initialization: ModelInitialization,
     bringup: BringupConfig,
     request_quality_monitor: RequestQualityMonitorConfig,
@@ -159,6 +161,8 @@ impl PylonStartupPlan {
             queue_mismatch_retry: pylon_queue_mismatch_retry_config_from_args(args)?,
             upstream_backend: args.pylon_upstream_backend,
             priority_ceiling: args.pylon_priority_ceiling,
+            first_output_timeout: Duration::from_millis(args.pylon_first_output_timeout_ms),
+            output_chunk_timeout: Duration::from_millis(args.pylon_output_chunk_timeout_ms),
             model_initialization,
             bringup: BringupConfig {
                 enabled: !args.disable_bringup,
@@ -552,6 +556,7 @@ fn registration_config_from_plan(
         cluster_id: plan.cluster_id.clone(),
         inference_server_url,
         min_update_interval: Duration::from_millis(args.min_update_interval_ms),
+        stats_update_coalesce: Duration::from_millis(args.stats_update_coalesce_ms),
         reverse_tunnel: plan.backend_tunnel.is_reverse(),
         tls_cert_pem,
         grpc_tls_ca_cert_pem,
@@ -611,6 +616,8 @@ fn tunnel_forwarding_config_from_plan(
         queue_mismatch_retry: plan.queue_mismatch_retry.clone(),
         upstream_backend: plan.upstream_backend,
         priority_ceiling: plan.priority_ceiling,
+        first_output_timeout: plan.first_output_timeout,
+        output_chunk_timeout: plan.output_chunk_timeout,
         upstream_health_paths: plan.health_paths.clone(),
         ..Default::default()
     }
@@ -1272,6 +1279,30 @@ mod tests {
         let forwarding = test_forwarding(&passthrough_plan);
         assert_eq!(forwarding.upstream_backend, UpstreamBackend::Passthrough);
         assert_eq!(forwarding.priority_ceiling, 600);
+    }
+
+    #[test]
+    fn stream_timeouts_flow_from_args_to_forwarding_config() {
+        let (_, default_plan) = startup(&[]);
+        let forwarding = test_forwarding(&default_plan);
+        assert_eq!(
+            forwarding.first_output_timeout,
+            pylon_lib::DEFAULT_FIRST_OUTPUT_TIMEOUT
+        );
+        assert_eq!(
+            forwarding.output_chunk_timeout,
+            pylon_lib::DEFAULT_OUTPUT_CHUNK_TIMEOUT
+        );
+
+        let (_, custom_plan) = startup(&[
+            "--pylon-first-output-timeout-ms",
+            "45000",
+            "--pylon-output-chunk-timeout-ms",
+            "7000",
+        ]);
+        let forwarding = test_forwarding(&custom_plan);
+        assert_eq!(forwarding.first_output_timeout, Duration::from_secs(45));
+        assert_eq!(forwarding.output_chunk_timeout, Duration::from_secs(7));
     }
 
     #[test]

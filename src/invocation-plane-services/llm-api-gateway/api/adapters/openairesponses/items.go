@@ -27,6 +27,7 @@ import (
 const (
 	ContentTypeInputText  = "input_text"
 	ContentTypeInputImage = "input_image"
+	ContentTypeInputAudio = "input_audio"
 	ContentTypeInputFile  = "input_file"
 )
 
@@ -81,10 +82,37 @@ type InputItem struct {
 	Status         *string        `json:"status,omitempty"`
 	MessageContent []InputContent `json:"content"`
 	ToolCallData   any            `json:"-"`
+	// Raw holds an item that the gateway does not model or that fails to
+	// decode. It is forwarded as is, and the backend validates it.
+	Raw json.RawMessage `json:"-"`
 }
 
-// UnmarshalJSON implements custom unmarshaling for InputItem
+// UnmarshalJSON decodes a known item type. Any other item is kept raw, with
+// its type and role when they are strings.
 func (item *InputItem) UnmarshalJSON(data []byte) error {
+	var decoded InputItem
+	if err := decoded.decode(data); err != nil {
+		var envelope struct {
+			Type string `json:"type"`
+			Role string `json:"role"`
+		}
+		_ = json.Unmarshal(data, &envelope) // members that are not strings stay empty
+		*item = InputItem{Type: envelope.Type, Role: envelope.Role, Raw: append(json.RawMessage(nil), data...)}
+		return nil
+	}
+	*item = decoded
+	return nil
+}
+
+func (item InputItem) MarshalJSON() ([]byte, error) {
+	if item.Raw != nil {
+		return item.Raw, nil
+	}
+	type alias InputItem
+	return json.Marshal(alias(item))
+}
+
+func (item *InputItem) decode(data []byte) error {
 	// First unmarshal into a temporary struct to get the type
 	var temp struct {
 		Type string `json:"type"`
@@ -203,6 +231,8 @@ func (item *InputItem) unmarshalTypedItem(data []byte) error {
 		return item.unmarshalMCPApprovalRequest(data)
 	case ItemTypeMCPApprovalResponse:
 		return item.unmarshalMCPApprovalResponse(data)
+	case ItemTypeCustomToolCall:
+		return item.unmarshalCustomToolCallInput(data)
 	case ItemTypeCustomToolCallOutput:
 		return item.unmarshalCustomToolCallOutput(data)
 	default:
@@ -325,6 +355,15 @@ func (item *InputItem) unmarshalMCPListTools(data []byte) error {
 		Tools:       tools,
 		Error:       lt.Error,
 	}
+	return nil
+}
+
+func (item *InputItem) unmarshalCustomToolCallInput(data []byte) error {
+	var call CustomToolCall
+	if err := json.Unmarshal(data, &call); err != nil {
+		return err
+	}
+	item.ToolCallData = call
 	return nil
 }
 
@@ -599,6 +638,18 @@ func (c *InputImageContent) inputContentDiscriminator() string {
 	return c.Type
 }
 
+type InputAudioContent struct {
+	Type       string `json:"type"`
+	InputAudio struct {
+		Data   string `json:"data"`
+		Format string `json:"format"`
+	} `json:"input_audio"`
+}
+
+func (c *InputAudioContent) inputContentDiscriminator() string {
+	return c.Type
+}
+
 // InputFileContent represents file input content
 type InputFileContent struct {
 	Type     string  `json:"type"`
@@ -616,6 +667,9 @@ func (c *InputFileContent) inputContentDiscriminator() string {
 type InputContent struct {
 	Type string           `json:"type"`
 	Data inputContentData `json:"-"`
+	// Raw holds a part that the gateway does not model or that fails to
+	// decode. It is forwarded as is, and the backend validates it.
+	Raw json.RawMessage `json:"-"`
 }
 
 type inputContentData interface {
@@ -668,8 +722,22 @@ func NewInputFileContent(
 	}
 }
 
-// UnmarshalJSON implements custom unmarshaling for InputContent using the registry
+// UnmarshalJSON decodes a known content type. Any other part is kept raw.
 func (ic *InputContent) UnmarshalJSON(data []byte) error {
+	var decoded InputContent
+	if err := decoded.decode(data); err != nil {
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal(data, &envelope) // a type that is not a string stays empty
+		*ic = InputContent{Type: envelope.Type, Raw: append(json.RawMessage(nil), data...)}
+		return nil
+	}
+	*ic = decoded
+	return nil
+}
+
+func (ic *InputContent) decode(data []byte) error {
 	var envelope struct {
 		Type string `json:"type"`
 	}
@@ -704,6 +772,15 @@ func (ic *InputContent) UnmarshalJSON(data []byte) error {
 		}
 		image.Type = ContentTypeInputImage
 		ic.Data = &image
+	case ContentTypeInputAudio:
+		var audio InputAudioContent
+		if err := json.Unmarshal(data, &audio); err != nil {
+			return err
+		}
+		if audio.InputAudio.Data == "" || audio.InputAudio.Format == "" {
+			return &UnmarshalError{Field: "input_audio", Msg: "data and format are required"}
+		}
+		ic.Data = &audio
 	case ContentTypeInputFile:
 		var file InputFileContent
 		if err := json.Unmarshal(data, &file); err != nil {
@@ -735,6 +812,9 @@ func (ic *InputContent) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements custom marshaling for InputContent
 func (ic InputContent) MarshalJSON() ([]byte, error) {
+	if ic.Raw != nil {
+		return ic.Raw, nil
+	}
 	if ic.Data == nil {
 		return json.Marshal(struct {
 			Type string `json:"type"`
@@ -768,6 +848,11 @@ func (ic *InputContent) GetImageContent() (*InputImageContent, bool) {
 		return image, true
 	}
 	return nil, false
+}
+
+func (ic *InputContent) GetAudioContent() (*InputAudioContent, bool) {
+	audio, ok := ic.Data.(*InputAudioContent)
+	return audio, ok
 }
 
 // GetFileContent returns the file content data if this is a file content item
@@ -861,9 +946,10 @@ type outputItemMessage struct {
 type outputItemFunctionCall struct {
 	outputItemBase
 
-	CallID    string `json:"call_id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	CallID    string  `json:"call_id"`
+	Namespace *string `json:"namespace,omitempty"`
+	Name      string  `json:"name"`
+	Arguments string  `json:"arguments"`
 }
 
 // outputItemWebSearchCall represents a web search call output item for JSON marshaling
@@ -923,8 +1009,10 @@ type outputItemMCPApprovalRequest struct {
 type outputItemCustomToolCall struct {
 	outputItemBase
 
-	Name  string `json:"name"`
-	Input string `json:"input"`
+	CallID    string  `json:"call_id,omitempty"`
+	Namespace *string `json:"namespace,omitempty"`
+	Name      string  `json:"name"`
+	Input     string  `json:"input"`
 }
 
 func (item *OutputItem) MarshalJSON() ([]byte, error) {
@@ -951,6 +1039,7 @@ func (item *OutputItem) MarshalJSON() ([]byte, error) {
 			return json.Marshal(outputItemFunctionCall{
 				outputItemBase: base,
 				CallID:         call.CallID,
+				Namespace:      call.Namespace,
 				Name:           call.Name,
 				Arguments:      call.Arguments,
 			})
@@ -1034,6 +1123,8 @@ func (item *OutputItem) MarshalJSON() ([]byte, error) {
 		if customCall, ok := item.ToolCallData.(CustomToolCall); ok {
 			return json.Marshal(outputItemCustomToolCall{
 				outputItemBase: base,
+				CallID:         customCall.CallID,
+				Namespace:      customCall.Namespace,
 				Name:           customCall.Name,
 				Input:          customCall.Input,
 			})
@@ -1094,18 +1185,20 @@ type MCPApprovalResponse struct {
 
 // CustomToolCall represents a custom tool call
 type CustomToolCall struct {
-	Type   string  `json:"type"` // Always "custom_tool_call"
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Input  string  `json:"input"`
-	Status *string `json:"status,omitempty"`
+	Type      string  `json:"type"` // Always "custom_tool_call"
+	ID        string  `json:"id"`
+	CallID    string  `json:"call_id,omitempty"`
+	Namespace *string `json:"namespace,omitempty"`
+	Name      string  `json:"name"`
+	Input     string  `json:"input"`
+	Status    *string `json:"status,omitempty"`
 }
 
 // CustomToolCallOutput represents output from a custom tool call
 type CustomToolCallOutput struct {
-	Type   string  `json:"type"` // Always "custom_tool_call_output"
-	ID     string  `json:"id"`
-	CallID string  `json:"call_id"`
-	Output string  `json:"output"`
-	Status *string `json:"status,omitempty"`
+	Type   string     `json:"type"` // Always "custom_tool_call_output"
+	ID     string     `json:"id"`
+	CallID string     `json:"call_id"`
+	Output ToolOutput `json:"output"`
+	Status *string    `json:"status,omitempty"`
 }

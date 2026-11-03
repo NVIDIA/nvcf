@@ -20,10 +20,12 @@ package progress
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,7 +84,7 @@ func TestRenderJSONL_PhaseFailed(t *testing.T) {
 			ErrCategory: "helm_apply", ErrMessage: "helm install api-keys: timed out",
 			RetryClass: "backoff", RetryAfterSec: 60,
 			Remediation: []string{"kubectl describe pod -n cassandra-system cassandra-0", "Re-run with --debug"},
-			Raw: RawFailure{Subprocess: "helmfile", ExitCode: 1, StderrTail: "Error: timeout reached", KubernetesReason: "FailedScheduling"},
+			Raw:         RawFailure{Subprocess: "helmfile", ExitCode: 1, StderrTail: "Error: timeout reached", KubernetesReason: "FailedScheduling"},
 		},
 	}
 	got := runEmit(t, clock, events)
@@ -286,7 +288,7 @@ func TestRenderJSONL_CheckStream(t *testing.T) {
 		CheckStarted{Category: "pre-kubernetes-setup", ID: "gateway-api"},
 		CheckCompleted{Category: "pre-kubernetes-setup", ID: "gateway-api", Passed: false, Severity: "error", Message: "Gateway API CRDs not installed", HintURL: "https://docs.nvidia.com/nvcf/self-hosted/gateway-api"},
 		CategoryCompleted{Category: "pre-kubernetes-setup", PassedCount: 13, FailedCount: 1, DurationSec: 2.4},
-		Final{Success: false, Verdict: "failed", TotalChecks: 14, PassedCount: 13, FailedCount: 1},
+		Final{Success: false, Verdict: "failed", TotalChecks: 15, PassedCount: 13, FailedCount: 1, WarningCount: 1},
 	}
 
 	got := runEmit(t, clock, events)
@@ -460,4 +462,37 @@ func TestRenderJSONL_Uninstall(t *testing.T) {
 
 	got := runEmitWithTotalPhases(t, clock, events, 3)
 	assertGolden(t, "testdata/jsonl_uninstall.golden", got)
+}
+
+// A warning --wait polls on is marked transient on the wire, and a check the
+// time budget stopped is marked cutShort, so a consumer of the stream can tell
+// either from a finding without parsing the message. Each field is left out
+// otherwise. A run that timed out ends with success false.
+func TestRenderJSONL_CheckTransientAndTimeout(t *testing.T) {
+	clock := &fakeClock{times: []time.Time{ts("2026-04-29T03:45:01Z")}}
+	got := runEmit(t, clock, []Event{
+		CheckCompleted{Category: "control-plane-cluster", ID: "cluster-validator", Severity: "warning",
+			Message: "rollout in progress", Transient: true},
+		CheckCompleted{Category: "control-plane-cluster", ID: "stale-namespaces", Severity: "warning",
+			Message: "1 stale namespace"},
+		CheckCompleted{Category: "registry-credentials", ID: "registry-cred-a.example", Severity: "warning",
+			Message: "cut short: the check's time budget ran out before it finished", CutShort: true},
+		Final{Success: false, Verdict: "timeout", TotalChecks: 3, PassedCount: 0, FailedCount: 0},
+	})
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	var events []map[string]any
+	for _, l := range lines {
+		var m map[string]any
+		require.NoError(t, json.Unmarshal([]byte(l), &m), l)
+		if m["event"] != "schemaVersion" {
+			events = append(events, m)
+		}
+	}
+	require.Len(t, events, 4)
+	assert.Equal(t, true, events[0]["transient"])
+	assert.NotContains(t, events[1], "transient")
+	assert.NotContains(t, events[1], "cutShort")
+	assert.Equal(t, true, events[2]["cutShort"])
+	assert.Equal(t, false, events[3]["success"])
+	assert.Equal(t, "timeout", events[3]["verdict"])
 }

@@ -78,6 +78,7 @@ public class InstanceV2Repository {
         if (entity.getCreateTimeuuid() == null) {
             entity.setCreateTimeuuid(TimeUtils.getTimeUuidNow());
         }
+        populateCreationBucket(entity);
 
         try {
             if (!instanceV2Repo.isInserted(entity) ||
@@ -189,10 +190,10 @@ public class InstanceV2Repository {
 
     @Observed
     public void restore(@NotNull InstanceV2Entity entity) {
+        populateCreationBucket(entity);
         instanceByDayRepo.update(InstanceConverter.toInstanceByDayEntity(entity));
         instanceV2Repo.update(entity);
     }
-
 
     // Find instances by instance ID
     @Observed
@@ -441,13 +442,25 @@ public class InstanceV2Repository {
 
         List<String> allInstanceIds = new ArrayList<>();
 
+        boolean creationBucketReadsEnabled =
+                icmsConfigurationProperties.isCreationBucketReadsEnabled();
+
         while (currentDate.isBefore(periodDateEnd)) {
-            List<InstanceByDayEntity> instancesByDay = instanceByDayRepo.findAllByKeyTruncatedTsByDay(currentDate);
-            instancesByDay.forEach(r -> {
-                if (!r.isMarkedAsDeleted()) {
-                    allInstanceIds.add(r.getKey().getInstanceId());
-                }
-            });
+            if (creationBucketReadsEnabled) {
+                // Deleted instances are removed from the instances table,
+                // so there are no tombstones to filter out.
+                instanceV2Repo.findInstanceIdsByCreationBucket(currentDate)
+                        .forEach(row -> allInstanceIds.add(
+                                row.getString(InstanceV2Entity.COLUMN_INSTANCE_ID)));
+            } else {
+                List<InstanceByDayEntity> instancesByDay =
+                        instanceByDayRepo.findAllByKeyTruncatedTsByDay(currentDate);
+                instancesByDay.forEach(r -> {
+                    if (!r.isMarkedAsDeleted()) {
+                        allInstanceIds.add(r.getKey().getInstanceId());
+                    }
+                });
+            }
             currentDate = currentDate.plus(1, ChronoUnit.DAYS);
         }
 
@@ -499,10 +512,10 @@ public class InstanceV2Repository {
         }
 
         instanceV2Repo.applyActions(instanceV2Repo::findAll,
-                                        action,
-                                        icmsConfigurationProperties.getDatabaseReadPageSize(),
-                                        pauseBetweenPagesInMs,
-                                        0); //TODO Yury do we need a pause here
+                                         action,
+                                         icmsConfigurationProperties.getDatabaseReadPageSize(),
+                                         pauseBetweenPagesInMs,
+                                         0);
     }
 
 
@@ -652,6 +665,13 @@ public class InstanceV2Repository {
                       entity.getInstanceId());
             throw new IcmsConflictException(String.format("Instance with %s id already exists",
                                                          entity.getInstanceId()));
+        }
+    }
+
+    private void populateCreationBucket(InstanceV2Entity entity) {
+        if (entity.getCreationBucket() == null && entity.getCreateTimeuuid() != null) {
+            entity.setCreationBucket(TimeUtils.getDateFromInstant(
+                    TimeUtils.getInstantFromUuid(entity.getCreateTimeuuid())));
         }
     }
 

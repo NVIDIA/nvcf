@@ -20,6 +20,11 @@ if [[ -z "${config_rel_path}" || ! -f "${outer_dir}/${config_rel_path}" ]]; then
   exit 1
 fi
 
+if ! grep -Eq '"User"[[:space:]]*:[[:space:]]*"1000:1000"' "${outer_dir}/${config_rel_path}"; then
+  echo "worker-init image must declare OCI user 1000:1000" >&2
+  exit 1
+fi
+
 entrypoint="$(sed -n '/"Entrypoint"/,/\]/p' "${outer_dir}/${config_rel_path}" | tr -d '[:space:]')"
 case "${entrypoint}" in
   '"Entrypoint":["/worker-init"],'|'"Entrypoint":["/worker-init"]') ;;

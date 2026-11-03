@@ -98,6 +98,8 @@ import reactor.util.function.Tuple3;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class KeyReencryptionScheduledServiceIT {
 
+    private static final int READBACK_CONCURRENCY = 8;
+
     private KeyReencryptionScheduledService keyReencryptionScheduledService;
 
     @MockitoSpyBean
@@ -352,6 +354,7 @@ class KeyReencryptionScheduledServiceIT {
         Assertions.assertEquals(reencryptedCount, totalCount.get());
         Assertions.assertEquals(1100 + totalCount.get(), keysAdded);
 
+        // Bound cache-cold reads against the single-node Cassandra test fixture.
         Flux<Tuple3<Set<OctetSequenceKey>, OctetSequenceKey, Set<OctetSequenceKey>>>
                 encryptionAndDecryptionKeys = Flux.fromIterable(namespaceToOldKeyMap.entrySet())
                 .flatMap(pair -> Mono.zip(Mono.just(
@@ -360,7 +363,8 @@ class KeyReencryptionScheduledServiceIT {
                         Flux.fromIterable(pair.getValue())
                                 .flatMap(octetSequenceKey -> baseEncryptionKeyService().getDecryptionKey(
                                         pair.getKey(), octetSequenceKey.getKeyID()))
-                                .collect(Collectors.toSet()))
+                                .collect(Collectors.toSet())),
+                        READBACK_CONCURRENCY
                 );
 
 

@@ -51,6 +51,7 @@ go_oci_multi_binary_image(
         "//src/compute-plane-services/worker-init/cmd/nvcf-trust-bundle-install:nvcf-trust-bundle-install": "/usr/bin/nvcf-trust-bundle-install",
     },
     entrypoint = ["/worker-init"],
+    user = "1000:1000",
     # SetupEssAgent reads these files when a function uses secrets.
     extra_layers = ["//src/compute-plane-services/worker-init/pkg/ess:ess_config_layer"],
     tags = ["nvcf-worker-init"],

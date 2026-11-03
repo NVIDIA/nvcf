@@ -20,12 +20,14 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span};
+use tracing::{Instrument, Span, info};
 
-use crate::load_balancer::LoadBalancerRouter;
+use crate::load_balancer::dynamic_config::{DynamicConfigCache, Outcome};
+use crate::load_balancer::expression::{RejectionError, RoutingExpression};
+use crate::load_balancer::{LoadBalancerAlgorithmResolution, LoadBalancerRouter};
 use crate::metrics::StargateMetrics;
 use crate::routing_state::StargateState;
 use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
@@ -33,10 +35,15 @@ use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 mod attempt;
 mod diagnostics;
 mod request;
+#[cfg(test)]
+mod reservation_tests;
 mod retry;
 mod routing;
+#[cfg(test)]
+mod routing_method_drift_tests;
 mod run;
 mod trace;
+mod unread_body;
 mod upstream;
 pub(crate) use diagnostics::DebugConfig;
 use diagnostics::{debug_state, http_list_models};
@@ -48,6 +55,7 @@ pub use retry::ProxyRetryConfig;
 use retry::{ReplayableRequestBody, retry_budget_deadline};
 use run::{PreparedProxyRequest, ProxyRequestRun};
 use trace::{RequestTraceFields, proxy_openai_request_span, record_request_to_span};
+use unread_body::track_unread_body;
 use upstream::prepare_forwarded_headers;
 
 const HEADER_ROUTING_METHOD: &str = "x-routing-method";
@@ -55,6 +63,31 @@ const HEADER_MAX_WAIT_MS: &str = "x-max-wait-ms";
 const HEADER_REQUEST_SLO_MS: &str = "x-request-slo-ms";
 const HEADER_CACHE_AFFINITY_KEY: &str = "x-cache-affinity-key";
 const HEADER_STARGATE_ERROR_CODE: &str = "x-stargate-error-code";
+
+#[derive(Debug, PartialEq, Eq)]
+enum ProxyRequestError {
+    Status(StatusCode),
+    Routing(RejectionError),
+}
+
+impl From<StatusCode> for ProxyRequestError {
+    fn from(status: StatusCode) -> Self {
+        Self::Status(status)
+    }
+}
+
+impl IntoResponse for ProxyRequestError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Status(status) => status.into_response(),
+            Self::Routing(error) => routing::json_error_response(
+                StatusCode::BAD_REQUEST,
+                error.class,
+                serde_json::json!({"error": error.message, "code": error.class}).to_string(),
+            ),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct OpenAiProxyEndpoint {
@@ -70,6 +103,10 @@ impl OpenAiProxyEndpoint {
     const RESPONSES: Self = Self {
         path: "/v1/responses",
         name: "responses",
+    };
+    const MESSAGES: Self = Self {
+        path: "/v1/messages",
+        name: "messages",
     };
     const EMBEDDINGS: Self = Self {
         path: "/v1/embeddings",
@@ -119,7 +156,10 @@ pub struct ProxyAppState {
     pub traffic: ProxyTrafficState,
     pub readiness: ReadinessState,
     pub lb_router: Arc<LoadBalancerRouter>,
+    pub(crate) dynamic_config: Arc<DynamicConfigCache>,
     pub metrics: Arc<StargateMetrics>,
+    pub routing_reservation_ttl_min: std::time::Duration,
+    pub routing_reservation_ttl_max: std::time::Duration,
     pub retry: ProxyRetryConfig,
     pub debug_config: DebugConfig,
 }
@@ -144,6 +184,10 @@ pub fn make_router(app: ProxyAppState) -> Router {
             OpenAiProxyEndpoint::EMBEDDINGS.path,
             post(|State(app), req| proxy_openai_request(app, req, OpenAiProxyEndpoint::EMBEDDINGS)),
         )
+        .route(
+            OpenAiProxyEndpoint::MESSAGES.path,
+            post(|State(app), req| proxy_openai_request(app, req, OpenAiProxyEndpoint::MESSAGES)),
+        )
         .with_state(app)
 }
 
@@ -151,13 +195,22 @@ async fn proxy_openai_request(
     app: ProxyAppState,
     req: Request,
     endpoint: OpenAiProxyEndpoint,
-) -> Result<Response<Body>, StatusCode> {
+) -> Response<Body> {
     let request_start = Instant::now();
     let (parts, body) = req.into_parts();
+    let (body, unread_body) = track_unread_body(body);
     let span = proxy_openai_request_span(&parts.headers);
     async move {
-        let request = prepare_proxy_request(&app, parts, body, endpoint, request_start)?;
-        ProxyRequestRun::new(&app, request).execute().await
+        let result = match prepare_proxy_request(&app, parts, body, endpoint, request_start) {
+            Ok(request) => ProxyRequestRun::new(&app, request)
+                .execute()
+                .await
+                .map_err(ProxyRequestError::from),
+            Err(error) => Err(error),
+        };
+        let mut response = result.unwrap_or_else(IntoResponse::into_response);
+        unread_body.close_if_unread(&mut response);
+        response
     }
     .instrument(span)
     .await
@@ -169,7 +222,7 @@ fn prepare_proxy_request(
     body: Body,
     endpoint: OpenAiProxyEndpoint,
     request_start: Instant,
-) -> Result<PreparedProxyRequest, StatusCode> {
+) -> Result<PreparedProxyRequest, ProxyRequestError> {
     let request_path = parts.uri.path();
     let path_and_query = parts
         .uri
@@ -195,14 +248,54 @@ fn prepare_proxy_request(
         },
     );
 
-    let lb_resolution = app
-        .lb_router
-        .resolve_algorithm_override(model_id, request_inputs.routing_algorithm_override.as_ref())
-        .map_err(|error| reject_invalid_routing_algorithm(target, &error))?;
+    // Counted only once every request check below has passed.
+    let mut accepted_expression = None;
+    let lb_resolution = if let Some(raw) = &request_inputs.routing_expression {
+        let (definition, outcome) = app
+            .dynamic_config
+            .resolve(target, raw, || {
+                RoutingExpression::parse(raw)?.compile(&app.lb_router, model_id)
+            })
+            .map_err(|error| reject_invalid_routing_algorithm(target, &error))?;
+        accepted_expression = Some((definition.config().algorithm(), outcome));
+        if outcome != Outcome::Hit {
+            info!(
+                routing_key = ?target.routing_key,
+                model_id = %model_id,
+                algorithm = %definition.config().algorithm(),
+                outcome = outcome.as_str(),
+                expression = %raw,
+                effective = %definition.effective_config(),
+                "routing expression configuration built"
+            );
+        }
+        LoadBalancerAlgorithmResolution {
+            definition,
+            requested_algorithm: Some(raw.clone()),
+        }
+    } else {
+        app.lb_router
+            .resolve_algorithm_override(
+                model_id,
+                request_inputs.routing_algorithm_override.as_ref(),
+            )
+            .map_err(|error| {
+                let requested = error.requested_algorithm().to_owned();
+                reject_invalid_routing_algorithm(
+                    target,
+                    &RejectionError::algorithm(error, &requested),
+                )
+            })?
+    };
     validate_load_balancer_request_requirements(lb_resolution.config(), &request_inputs)?;
     let retry_deadline = retry_budget_deadline(&parts.headers, &app.retry, request_start)?;
     let replay_body =
         ReplayableRequestBody::new(&parts.headers, body, app.retry.max_replay_body_bytes)?;
+    if let Some((algorithm, outcome)) = accepted_expression {
+        app.metrics
+            .routing_expressions_total(&algorithm.to_string(), outcome.as_str())
+            .inc();
+    }
 
     Ok(PreparedProxyRequest {
         request_inputs,
@@ -247,7 +340,9 @@ mod test_support {
     use crate::routing_state::StargateState;
     use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 
-    use super::{DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, ReadinessState, readyz};
+    use super::{
+        DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, ReadinessState, readyz,
+    };
 
     pub(super) fn test_proxy_app_state() -> ProxyAppState {
         test_proxy_app_state_with_lb_config(LoadBalancerConfig::default())
@@ -258,8 +353,14 @@ mod test_support {
     ) -> ProxyAppState {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let metrics = StargateMetrics::new().expect("metrics should initialize");
+        let state = Arc::new(StargateState::new());
         ProxyAppState {
-            state: Arc::new(StargateState::new()),
+            dynamic_config: Arc::new(super::DynamicConfigCache::new(
+                state.clone(),
+                crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_IDLE_EXPIRY,
+                crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_MAX_ENTRIES,
+            )),
+            state,
             quic_proxy: Arc::new(
                 QuicHttpProxy::new(
                     QuicTunnelConfig {
@@ -286,9 +387,171 @@ mod test_support {
                     .expect("load balancer should initialize"),
             ),
             metrics,
+            routing_reservation_ttl_min: std::time::Duration::from_millis(1),
+            routing_reservation_ttl_max: std::time::Duration::from_millis(1000),
             retry: ProxyRetryConfig::default(),
             debug_config: DebugConfig::default(),
         }
+    }
+
+    fn prepare_with_routing_method(
+        app: &ProxyAppState,
+        header: &str,
+    ) -> super::PreparedProxyRequest {
+        try_prepare_with_routing_method(app, header).unwrap()
+    }
+
+    fn try_prepare_with_routing_method(
+        app: &ProxyAppState,
+        header: &str,
+    ) -> Result<super::PreparedProxyRequest, super::ProxyRequestError> {
+        let request = axum::http::Request::builder()
+            .uri("/v1/chat/completions")
+            .header("x-model", "model")
+            .header("x-request-id", "routing-method")
+            .header("x-input-tokens", "1")
+            .header("x-routing-method", header)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let (parts, body) = request.into_parts();
+        super::prepare_proxy_request(
+            app,
+            parts,
+            body,
+            super::OpenAiProxyEndpoint::CHAT_COMPLETIONS,
+            std::time::Instant::now(),
+        )
+    }
+
+    // (algorithm, cache, count) for every exported routing expression series.
+    fn routing_expression_series(app: &ProxyAppState) -> Vec<(String, String, u64)> {
+        let mut series = app
+            .metrics
+            .registry()
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "stargate_routing_expressions_total")
+            .flat_map(|family| family.get_metric())
+            .map(|metric| {
+                let label = |name: &str| {
+                    metric
+                        .get_label()
+                        .iter()
+                        .find(|label| label.name() == name)
+                        .map_or_else(String::new, |label| label.value().to_owned())
+                };
+                (
+                    label("algorithm"),
+                    label("cache"),
+                    metric.get_counter().value() as u64,
+                )
+            })
+            .collect::<Vec<_>>();
+        series.sort();
+        series
+    }
+
+    #[tokio::test]
+    async fn routing_expression_metrics_count_accepted_values_with_bounded_labels() {
+        let app = test_proxy_app_state_with_lb_config(LoadBalancerConfig::permissive_default());
+        let long_seed = format!("pulsar;seed=\"{}\"", "owner".repeat(150));
+        for header in [
+            "pulsar;seed=stable-a",
+            "pulsar;seed=stable-a",
+            "pulsar;seed=stable-b",
+            r#"pulsar;seed="free text from an owner""#,
+            long_seed.as_str(),
+            "wait-and-widen;n=2",
+            // Rejections are logged, not counted.
+            "pulsar;widen=2",
+            "pulsar;seed",
+            "fastest;seed=x",
+        ] {
+            let _ = try_prepare_with_routing_method(&app, header);
+        }
+        // Compiles, then fails request validation without an affinity key: not counted.
+        assert!(
+            try_prepare_with_routing_method(&app, "pulsar;require_cache_affinity_key=true")
+                .is_err()
+        );
+
+        let series = routing_expression_series(&app);
+        let counted = series
+            .iter()
+            .filter(|(_, _, count)| *count > 0)
+            .map(|(algorithm, cache, count)| (algorithm.as_str(), cache.as_str(), *count))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            counted,
+            [
+                ("pulsar", "build", 1),
+                ("pulsar", "hit", 1),
+                ("pulsar", "rebuild", 3),
+                // One target, so a new algorithm replaces the entry.
+                ("wait-and-widen", "rebuild", 1),
+            ]
+        );
+
+        let algorithms = crate::load_balancer::routing_methods::routing_methods().names();
+        let caches = ["hit", "build", "rebuild"];
+        for (algorithm, cache, _) in &series {
+            assert!(algorithms.contains(&algorithm.as_str()), "{algorithm}");
+            assert!(caches.contains(&cache.as_str()), "{cache}");
+        }
+    }
+
+    #[tokio::test]
+    async fn method_only_requests_use_static_definitions_without_caching() {
+        use crate::load_balancer::LoadBalancerAlgorithmOverride;
+
+        let app = test_proxy_app_state_with_lb_config(LoadBalancerConfig::permissive_default());
+        for header in ["round-robin", " RANDOM ", "PULSAR_WAIT_AND_WIDEN"] {
+            let prepared = prepare_with_routing_method(&app, header);
+            let expected = app
+                .lb_router
+                .resolve_algorithm_override(
+                    "model",
+                    Some(&LoadBalancerAlgorithmOverride::parse(header).unwrap()),
+                )
+                .unwrap();
+            assert_eq!(
+                prepared.lb_resolution.definition, expected.definition,
+                "{header}"
+            );
+            assert_eq!(
+                prepared.lb_resolution.requested_algorithm.as_deref(),
+                Some(header.trim()),
+                "{header}"
+            );
+            let marker = super::RejectionError::new("invalid_value", "cache miss", header);
+            assert_eq!(
+                app.dynamic_config
+                    .resolve(&prepared.request_inputs.target, header, || Err(
+                        marker.clone()
+                    )),
+                Err(marker),
+                "method-only header populated the cache: {header}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn expression_updates_apply_on_next_request_without_reload() {
+        let app = test_proxy_app_state_with_lb_config(LoadBalancerConfig::permissive_default());
+        let prepare = |header: &str| prepare_with_routing_method(&app, header).lb_resolution;
+
+        let first = prepare("round-robin;max_input_work_seconds=1");
+        assert_eq!(first.config().max_input_work_seconds, Some(1.0));
+        let reused = prepare("round-robin;max_input_work_seconds=1");
+        assert_eq!(reused.definition, first.definition);
+
+        let updated = prepare("round-robin;max_input_work_seconds=2");
+        assert_eq!(updated.config().max_input_work_seconds, Some(2.0));
+        assert_ne!(updated.definition, first.definition);
+        assert_eq!(
+            updated.requested_algorithm.as_deref(),
+            Some("round-robin;max_input_work_seconds=2")
+        );
     }
 
     #[tokio::test]
@@ -308,7 +571,10 @@ mod test_support {
         let ready_token = CancellationToken::new();
         app.readiness = ReadinessState::warming_up(ready_token.clone());
 
-        assert_eq!(readyz(State(app.clone())).await, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            readyz(State(app.clone())).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
 
         ready_token.cancel();
 

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
  *
  * Copyright 2018 gRPC authors.
@@ -22,4 +19,4 @@
 package grpc
 
 // Version is the current grpc version.
-const Version = "1.79.3"
+const Version = "1.83.1"

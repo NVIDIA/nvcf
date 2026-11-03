@@ -35,7 +35,7 @@ pub mod nvcf_proto {
 
 use nvcf_proto::{
     autoscaler_client::AutoscalerClient, AutoscalingConfiguration, DeploymentConfigurationRequest,
-    DeploymentConfigurationResponse,
+    DeploymentConfigurationResponse, StickinessWindow,
 };
 
 /// gRPC client for fetching custom scaling policies.
@@ -248,33 +248,11 @@ fn parse_policy(
     // Extract stickiness windows (optional)
     let scale_up_stickiness = scale_up
         .and_then(|details| details.stickiness.as_ref())
-        .and_then(|s| {
-            let window = s.size.as_ref()?.seconds as u32 / 60;
-            let required = s.threshold.as_ref()?.seconds as u32 / 60;
-            if window > 0 && required > 0 {
-                Some(Stickiness {
-                    window_minutes: window,
-                    required_minutes: required,
-                })
-            } else {
-                None
-            }
-        });
+        .and_then(parse_stickiness);
 
     let scale_down_stickiness = scale_down
         .and_then(|details| details.stickiness.as_ref())
-        .and_then(|s| {
-            let window = s.size.as_ref()?.seconds as u32 / 60;
-            let required = s.threshold.as_ref()?.seconds as u32 / 60;
-            if window > 0 && required > 0 {
-                Some(Stickiness {
-                    window_minutes: window,
-                    required_minutes: required,
-                })
-            } else {
-                None
-            }
-        });
+        .and_then(parse_stickiness);
 
     tracing::info!(
             "Fetched NVCF policy for function_version_id {}: thresholds=[up:{}, down:{}], factors=[up:{}, down:{}], stickiness_up={:?}, stickiness_down={:?}",
@@ -295,6 +273,29 @@ fn parse_policy(
         scale_down_stickiness,
         fetched_at: Utc::now(),
     })
+}
+
+fn parse_stickiness(stickiness: &StickinessWindow) -> Option<Stickiness> {
+    let window = duration_to_sample_minutes(stickiness.size.as_ref()?);
+    let required = duration_to_sample_minutes(stickiness.threshold.as_ref()?);
+    if window > 0 && required > 0 {
+        Some(Stickiness {
+            window_minutes: window,
+            required_minutes: required,
+        })
+    } else {
+        None
+    }
+}
+
+/// Utilization is sampled once per minute, so round to the nearest minute as
+/// the API documents. A positive duration keeps at least one sample instead of
+/// rounding to zero and silently dropping the window.
+fn duration_to_sample_minutes(duration: &prost_types::Duration) -> u32 {
+    if duration.seconds < 0 || (duration.seconds == 0 && duration.nanos <= 0) {
+        return 0;
+    }
+    ((duration.seconds + 30) / 60).clamp(1, i64::from(u32::MAX)) as u32
 }
 
 #[cfg(test)]
@@ -415,6 +416,72 @@ mod tests {
         assert_eq!(result.scaling_factors.scale_up_factor, 1.2);
         assert_eq!(result.scaling_thresholds.scale_down_threshold, 25.0);
         assert_eq!(result.scaling_factors.scale_down_factor, 0.5);
+    }
+
+    fn stickiness_window(size_seconds: i64, threshold_seconds: i64) -> Option<StickinessWindow> {
+        Some(StickinessWindow {
+            size: Some(prost_types::Duration {
+                seconds: size_seconds,
+                nanos: 0,
+            }),
+            threshold: Some(prost_types::Duration {
+                seconds: threshold_seconds,
+                nanos: 0,
+            }),
+        })
+    }
+
+    fn resolve_stickiness(
+        size_seconds: i64,
+        threshold_seconds: i64,
+    ) -> (Option<Stickiness>, Option<Stickiness>) {
+        let mut custom = config(75, 25);
+        for details in [&mut custom.scale_up_details, &mut custom.scale_down_details] {
+            details.as_mut().unwrap().stickiness =
+                stickiness_window(size_seconds, threshold_seconds);
+        }
+        let configs = HashMap::from([("gpu-spec-1".to_string(), custom)]);
+        let result = resolve(configs).unwrap().unwrap();
+        (result.scale_up_stickiness, result.scale_down_stickiness)
+    }
+
+    fn minutes(window_minutes: u32, required_minutes: u32) -> Option<Stickiness> {
+        Some(Stickiness {
+            window_minutes,
+            required_minutes,
+        })
+    }
+
+    #[test]
+    fn stickiness_whole_minutes_are_preserved() {
+        assert_eq!(resolve_stickiness(30 * 60, 15 * 60).0, minutes(30, 15));
+        assert_eq!(resolve_stickiness(60 * 60, 45 * 60).0, minutes(60, 45));
+    }
+
+    #[test]
+    fn stickiness_rounds_to_nearest_minute() {
+        assert_eq!(resolve_stickiness(90, 30).0, minutes(2, 1));
+        assert_eq!(
+            resolve_stickiness(10 * 60 + 29, 3 * 60 + 30).0,
+            minutes(10, 4)
+        );
+    }
+
+    #[test]
+    fn stickiness_sub_minute_keeps_one_sample() {
+        assert_eq!(resolve_stickiness(30, 20).0, minutes(1, 1));
+        assert_eq!(resolve_stickiness(60, 59).0, minutes(1, 1));
+        assert_eq!(resolve_stickiness(5 * 60, 10).0, minutes(5, 1));
+    }
+
+    #[test]
+    fn stickiness_applies_to_scale_down() {
+        assert_eq!(resolve_stickiness(90, 30).1, minutes(2, 1));
+    }
+
+    #[test]
+    fn stickiness_zero_threshold_is_ignored() {
+        assert_eq!(resolve_stickiness(30 * 60, 0), (None, None));
     }
 
     #[tokio::test]

@@ -16,69 +16,45 @@
  */
 package com.nvidia.nvcf.configuration;
 
+import static com.nvidia.nvcf.configuration.exceptions.ExceptionTracingExceptionHandler.STORAGE_UNAVAILABLE;
 import static com.nvidia.nvcf.util.NvcfConstants.TAG_NCA_ID;
 
 import com.nvidia.boot.exceptions.ForbiddenException;
+import com.nvidia.boot.exceptions.ServiceUnavailableException;
 import com.nvidia.boot.exceptions.UnauthorizedException;
 import com.nvidia.nvcf.configuration.exceptions.InvalidInvocationException;
 import io.grpc.Metadata;
 import io.grpc.Status;
 import io.grpc.Status.Code;
-import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
-import io.micrometer.core.instrument.binder.grpc.ObservationGrpcServerInterceptor;
-import io.micrometer.observation.ObservationRegistry;
-import net.devh.boot.grpc.server.advice.GrpcAdvice;
-import net.devh.boot.grpc.server.advice.GrpcExceptionHandler;
-import net.devh.boot.grpc.server.interceptor.GrpcGlobalServerInterceptor;
-import net.devh.boot.grpc.server.security.authentication.BearerAuthenticationReader;
-import net.devh.boot.grpc.server.security.authentication.GrpcAuthenticationReader;
-import net.devh.boot.grpc.server.security.interceptors.DefaultAuthenticatingServerInterceptor;
-import net.devh.boot.grpc.server.security.interceptors.ExceptionTranslatingServerInterceptor;
-import net.devh.boot.grpc.server.serverfactory.GrpcServerConfigurer;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.data.cassandra.CassandraConnectionFailureException;
+import org.springframework.data.cassandra.CassandraInsufficientReplicasAvailableException;
+import org.springframework.data.cassandra.CassandraReadTimeoutException;
+import org.springframework.grpc.server.GlobalServerInterceptor;
+import org.springframework.grpc.server.advice.GrpcAdvice;
+import org.springframework.grpc.server.advice.GrpcExceptionHandler;
+import org.springframework.grpc.server.security.AuthenticationProcessInterceptor;
+import org.springframework.grpc.server.security.BearerTokenAuthenticationExtractor;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.core.AuthenticationException;
-import org.springframework.security.oauth2.server.resource.authentication.BearerTokenAuthenticationToken;
 import org.springframework.web.ErrorResponseException;
 
 @Configuration(proxyBeanMethods = false)
 @GrpcAdvice
 public class GrpcConfiguration {
 
-    @GrpcGlobalServerInterceptor
-    @ConditionalOnMissingBean(ObservationGrpcServerInterceptor.class)
-    public ObservationGrpcServerInterceptor observationGrpcServerInterceptor(
-            ObservationRegistry observationRegistry) {
-        return new ObservationGrpcServerInterceptor(observationRegistry);
-    }
-
     @Bean
-    public GrpcAuthenticationReader authenticationReader() {
-        return new BearerAuthenticationReader(BearerTokenAuthenticationToken::new);
-    }
-
-    @Bean
-    public ExceptionTranslatingServerInterceptor exceptionTranslatingServerInterceptor() {
-        return new ExceptionTranslatingServerInterceptor();
-    }
-
-    @Bean
-    public DefaultAuthenticatingServerInterceptor authenticatingServerInterceptor(
-            final GrpcAuthenticationReader authenticationReader) {
-        // pass-through auth manager, since we need to auth in a non-blocking context
-        return new DefaultAuthenticatingServerInterceptor(authentication -> authentication,
-                                                          authenticationReader);
-    }
-
-    @Bean
-    public GrpcServerConfigurer keepAliveServerConfigurer() {
-        return serverBuilder -> {
-            if (serverBuilder instanceof NettyServerBuilder sb) {
-                sb.permitKeepAliveWithoutCalls(true);
-            }
-        };
+    @GlobalServerInterceptor
+    public AuthenticationProcessInterceptor bearerTokenServerInterceptor() {
+        // pass-through auth manager and permit-all authorization, since the services
+        // validate the bearer token themselves in a non-blocking context
+        return new AuthenticationProcessInterceptor(authentication -> authentication,
+                                                    new BearerTokenAuthenticationExtractor(),
+                                                    (authentication, call) -> new AuthorizationDecision(true));
     }
 
     public static final Metadata.Key<String> NCA_ID_METADATA_KEY =
@@ -112,6 +88,17 @@ public class GrpcConfiguration {
         return status.asRuntimeException(metadata);
     }
 
+    // Keep in sync with ExceptionTracingExceptionHandler, which explains the choice.
+    @GrpcExceptionHandler({
+            CassandraReadTimeoutException.class,
+            CassandraInsufficientReplicasAvailableException.class,
+            TransientDataAccessResourceException.class,
+            CassandraConnectionFailureException.class
+    })
+    public Status handleStorageUnavailable(DataAccessException e) {
+        return toGrpcStatus(new ServiceUnavailableException(STORAGE_UNAVAILABLE, e));
+    }
+
     @GrpcExceptionHandler
     public Status handleException(AccessDeniedException e) {
         return handleErrorResponseException(new ForbiddenException(e.getMessage(), e.getCause()));
@@ -121,5 +108,12 @@ public class GrpcConfiguration {
     public Status handleException(AuthenticationException e) {
         return handleErrorResponseException(
                 new UnauthorizedException(e.getMessage(), e.getCause()));
+    }
+
+    @GrpcExceptionHandler
+    public Status handleUnmappedException(Exception e) {
+        // Preserve the INTERNAL status expected by workers for unmapped exceptions.
+        return Status.INTERNAL.withDescription("There was a server error trying to handle an exception")
+                .withCause(e);
     }
 }

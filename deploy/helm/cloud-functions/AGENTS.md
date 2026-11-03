@@ -46,6 +46,10 @@ A `chore` commit skips tag creation entirely.
 
 - `src/control-plane-services/cloud-functions` builds the image this chart deploys.
 - Sidecar image references in `api.remoteConfig.configData.nvcf.sidecars` use
-  Spring placeholders resolved at runtime. `tests/sidecar_release_artifacts_test.sh`
-  guards the `release-artifact-*-image` annotations that surface them to stack
-  release tooling, so run it after changing any sidecar entry.
+  Spring placeholders resolved at runtime. The worker references are composed
+  from `api.remoteConfig.workerImageTags`, which the `deploys` entries in
+  `tools/ci/github-release-subprojects.json` let `tools/chart-version-bumper`
+  move on each worker release. `tests/sidecar_release_artifacts_test.sh`
+  guards the composed references and the `release-artifact-*-image`
+  annotations that surface them to stack release tooling, so run it after
+  changing any sidecar entry or worker tag.

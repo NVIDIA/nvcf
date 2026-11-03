@@ -752,6 +752,7 @@ async fn start_queue_mismatch_test_tunnel(
     config.tunnel_protocol = tunnel_protocol;
     config.inference_server_id = Some("inst-a".to_string());
     config.forwarding.metrics = Some(metrics.clone());
+    config.forwarding.queue_mismatch_retry = crate::PylonQueueMismatchRetryConfig::strict();
     config.forwarding.queue_mismatch_retry.enabled = enabled;
     config.forwarding.queue_mismatch_retry.retry_after_ms = Some(125);
     assert!(
@@ -2327,6 +2328,36 @@ async fn quic_tunnel_counts_terminal_only_usage_tokens() {
     assert_eq!(facts.exact_output_tokens_baseline, Some(7));
     assert!(!facts.calibration_ineligible);
     assert_eq!(facts.reasoning_tokens, None);
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_preserves_cached_prompt_usage_for_fallback_stats() {
+    let app = sse_app(
+        "/v1/chat/completions",
+        &[
+            r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"}}],"usage":null}"#,
+            r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":13,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":8}}}"#,
+            "[DONE]",
+        ],
+    );
+    let (mut tunnel, rx) = observed_tunnel_for(app).await;
+    let headers = tunnel_request_headers(
+        "/v1/chat/completions",
+        "model-terminal-usage",
+        "req-cached-usage",
+        "13",
+    );
+    let body = br#"{"messages":[],"stream":true,"stream_options":{"include_usage":true}}"#;
+    tunnel.send(headers, body).await;
+    tunnel.response_head(StatusCode::OK).await;
+    tunnel.drain().await;
+
+    let event = recv_terminal_event(&rx).await;
+    assert_eq!(event.observation().input_tokens, 13);
+    assert_eq!(event.cached_input_tokens(), Some(8));
+    assert!(event.input_usage_expected());
 
     tunnel.shutdown().await;
 }

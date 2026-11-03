@@ -51,7 +51,7 @@ public class WebhookController {
     @PostMapping(value = "/v2/nvcf/webhook/nats-auth", consumes = APPLICATION_JSON_VALUE)
     @Operation(summary = "Authenticate Webhook Plugin", description = """
             Authenticates a webhook plugin request and returns appropriate permissions.
-            Only supports webhook plugin for Worker account.
+            Only supports webhook plugin for the configured worker account.
             """)
     public WebhookResponse authenticateWebhookPlugin(
             @Valid @RequestBody WebhookRequest request) {

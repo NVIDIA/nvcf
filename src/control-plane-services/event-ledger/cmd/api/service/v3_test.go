@@ -40,6 +40,8 @@ import (
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
 	logsv1 "go.opentelemetry.io/proto/otlp/logs/v1"
 
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware"
+
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
@@ -51,10 +53,12 @@ import (
 
 // statsUpsertCall records an UpsertStatsV3 / UpsertFilteredStatsV3 invocation for assertions.
 type statsUpsertCall struct {
-	namespace string
-	context   string
-	eventName string
-	timestamp time.Time
+	namespace  string
+	context    string
+	eventName  string
+	timestamp  time.Time
+	ncaID      string
+	functionID string
 }
 
 // Mock DBHandlerV2 for V3 tests
@@ -72,6 +76,7 @@ type mockDBHandlerV3 struct {
 	getStatsCalls            int
 	getFilteredStatsCalls    int
 	storedStatsEvents        []data_access.EventV3UpsertRecord
+	storedBulkRecords        []data_access.EventV3UpsertRecord
 	upsertEventCalls         int
 	bulkUpsertEventsCalls    int
 	bulkUpsertStatsCalls     int
@@ -94,12 +99,12 @@ func (m *mockDBHandlerV3) UpsertEventV3(ctx context.Context, namespace, eventCon
 }
 
 func (m *mockDBHandlerV3) UpsertStatsV3(ctx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error {
-	m.upsertStatsCalls = append(m.upsertStatsCalls, statsUpsertCall{namespace, eventContext, eventName, timestamp})
+	m.upsertStatsCalls = append(m.upsertStatsCalls, statsUpsertCall{namespace, eventContext, eventName, timestamp, "", ""})
 	return nil
 }
 
-func (m *mockDBHandlerV3) UpsertFilteredStatsV3(ctx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error {
-	m.upsertFilteredStatsCalls = append(m.upsertFilteredStatsCalls, statsUpsertCall{namespace, eventContext, eventName, timestamp})
+func (m *mockDBHandlerV3) UpsertFilteredStatsV3(ctx context.Context, namespace, eventContext, eventName string, timestamp time.Time, ncaID, functionID string) error {
+	m.upsertFilteredStatsCalls = append(m.upsertFilteredStatsCalls, statsUpsertCall{namespace, eventContext, eventName, timestamp, ncaID, functionID})
 	return nil
 }
 
@@ -108,6 +113,7 @@ func (m *mockDBHandlerV3) BulkUpsertEventsV3(ctx context.Context, events []data_
 	if m.bulkUpsertEventsErr != nil {
 		return m.bulkUpsertEventsErr
 	}
+	m.storedBulkRecords = append(m.storedBulkRecords, events...)
 	for _, e := range events {
 		m.storedEvents = append(m.storedEvents, struct {
 			namespace string
@@ -215,6 +221,14 @@ func (m *mockDBHandlerV3) ReadDeploymentDeploymentStats(context.Context, uuid.UU
 func (m *mockDBHandlerV3) ListDeploymentInstancesPaginated(ctx context.Context, functionVersionId, deploymentId uuid.UUID, paginationParams data_access.PaginationParams) (data_access.PaginatedInstancesResponse, error) {
 	return data_access.PaginatedInstancesResponse{}, nil
 }
+func (m *mockDBHandlerV3) GetAccountEventsV3(ctx context.Context, namespace, eventContext, ncaID, functionID string) ([]data_access.EventV3Record, error) {
+	return []data_access.EventV3Record{}, nil
+}
+
+func (m *mockDBHandlerV3) GetAccountStatsV3(ctx context.Context, namespace, ncaID, functionID string) ([]data_access.StatsV3Record, error) {
+	return []data_access.StatsV3Record{}, nil
+}
+
 func (m *mockDBHandlerV3) Close() error {
 	return nil
 }
@@ -605,13 +619,41 @@ func TestPostK8sEventV3_StatsFailureAllFail(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "stats down")
 }
 
+func TestPostK8sEventV3_ClusterAuthorizationMismatchAbortsBatch(t *testing.T) {
+	mockDB := &mockDBHandlerV3{}
+	server := newServerWithMock(t, mockDB)
+
+	req := newOTLPRequest(
+		createOTLPLogRecord("pod.ready", "ns", "src", "pod-1", nil),
+		createOTLPLogRecord("pod.ready", "ns", "src", "pod-2", map[string]string{"cluster_id": "cluster-b"}),
+	)
+	body, err := proto.Marshal(req)
+	require.NoError(t, err)
+
+	logger := testutils.InitTestLogger(t)
+	httpReq := httptest.NewRequest("POST", "/v3/ledger/k8s-events", bytes.NewReader(body))
+	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	ctx := context.WithValue(httpReq.Context(), logging.LoggerKey, logging.NewTraceLogger(httpReq.Context(), logger))
+	ctx = middleware.WithNVCAIdentity(ctx, middleware.NVCAIdentity{
+		Subject:   "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	})
+	httpReq = httpReq.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+	server.PostK8sEventV3(w, httpReq)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Empty(t, mockDB.storedEvents, "a cluster-authorization failure must abort the batch before any DB write")
+}
+
 // Test extractK8sEvent
 func TestExtractK8sEvent(t *testing.T) {
 	lr := createOTLPLogRecord("pod.ready", "tenant-123", "kubernetes", "pod-456", map[string]string{
 		"extra_field": "extra_value",
 	})
 
-	event, err := extractK8sEvent(lr)
+	event, err := extractK8sEvent(context.Background(), lr)
 	require.NoError(t, err)
 
 	// Check struct fields
@@ -680,11 +722,55 @@ func TestExtractK8sEvent_ResourceID(t *testing.T) {
 		"resource_id": "icms-abc",
 	})
 
-	event, err := extractK8sEvent(lr)
+	event, err := extractK8sEvent(context.Background(), lr)
 	require.NoError(t, err)
 
 	// resource_id participates in the context (sorted last), keeping the row unique.
 	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-abc", event.Context)
+}
+
+// TestExtractK8sEvent_NVCAClusterBinding verifies that an SIS-verified NVCA
+// cluster identity is authoritative over the payload: a matching cluster_id
+// is accepted, a missing one is populated, and a mismatched one is rejected
+// so a PSAT valid for one cluster cannot write events for another.
+func TestExtractK8sEvent_NVCAClusterBinding(t *testing.T) {
+	nvcaCtx := middleware.WithNVCAIdentity(context.Background(), middleware.NVCAIdentity{
+		Subject:   "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	})
+
+	t.Run("matching payload cluster_id is accepted", func(t *testing.T) {
+		lr := createOTLPLogRecord("pod.ready", "tenant-123", "nvca", "pod-1", map[string]string{
+			"cluster_id": "cluster-a",
+		})
+		event, err := extractK8sEvent(nvcaCtx, lr)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
+
+	t.Run("missing payload cluster_id is populated from the verified identity", func(t *testing.T) {
+		lr := createOTLPLogRecord("pod.ready", "tenant-123", "nvca", "pod-1", nil)
+		event, err := extractK8sEvent(nvcaCtx, lr)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
+
+	t.Run("mismatched payload cluster_id is rejected", func(t *testing.T) {
+		lr := createOTLPLogRecord("pod.ready", "tenant-123", "nvca", "pod-1", map[string]string{
+			"cluster_id": "cluster-b",
+		})
+		_, err := extractK8sEvent(nvcaCtx, lr)
+		assert.Error(t, err)
+	})
+
+	t.Run("no NVCA identity leaves the payload cluster_id untouched", func(t *testing.T) {
+		lr := createOTLPLogRecord("pod.ready", "tenant-123", "sis", "pod-1", map[string]string{
+			"cluster_id": "cluster-a",
+		})
+		event, err := extractK8sEvent(context.Background(), lr)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
 }
 
 // TestExtractK8sEvent_DistinctResourceIDsDoNotCollide verifies two resources with
@@ -695,7 +781,7 @@ func TestExtractK8sEvent_DistinctResourceIDsDoNotCollide(t *testing.T) {
 			"cluster_id":  "clus-1",
 			"resource_id": resourceID,
 		})
-		event, err := extractK8sEvent(lr)
+		event, err := extractK8sEvent(context.Background(), lr)
 		require.NoError(t, err)
 		return event.Context
 	}
@@ -712,7 +798,7 @@ func TestExtractK8sEvent_PodKeepsUnmappedAttrsInDetails(t *testing.T) {
 		"icms_request_id": "icms-xyz",
 	})
 
-	event, err := extractK8sEvent(lr)
+	event, err := extractK8sEvent(context.Background(), lr)
 	require.NoError(t, err)
 
 	// Pod context stays the original shape and excludes the unmapped attribute.
@@ -733,7 +819,7 @@ func TestExtractCloudEvent_SourceRequired(t *testing.T) {
 	ce.SetSource("") // Empty source
 	ce.SetExtension("namespace", "test-namespace")
 
-	_, err := extractCloudEvent(&ce)
+	_, err := extractCloudEvent(context.Background(), &ce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required field: source")
 }
@@ -746,7 +832,7 @@ func TestExtractCloudEvent_TypeRequired(t *testing.T) {
 	ce.SetSource("/test")
 	ce.SetExtension("namespace", "test-namespace")
 
-	_, err := extractCloudEvent(&ce)
+	_, err := extractCloudEvent(context.Background(), &ce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required field: type")
 }
@@ -759,7 +845,7 @@ func TestExtractCloudEvent_IdRequired(t *testing.T) {
 	ce.SetSource("/test")
 	ce.SetExtension("namespace", "test-namespace")
 
-	_, err := extractCloudEvent(&ce)
+	_, err := extractCloudEvent(context.Background(), &ce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required field: id")
 }
@@ -775,9 +861,101 @@ func TestExtractCloudEvent_ResourceID(t *testing.T) {
 	ce.SetExtension("clusterId", "clus-1")
 	ce.SetExtension("resourceId", "icms-1")
 
-	event, err := extractCloudEvent(&ce)
+	event, err := extractCloudEvent(context.Background(), &ce)
 	require.NoError(t, err)
 	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-1", event.Context)
+}
+
+// TestExtractCloudEvent_FunctionVersionIDNamespace verifies functionVersionId
+// is accepted in place of namespace and stored as the namespace.
+func TestExtractCloudEvent_FunctionVersionIDNamespace(t *testing.T) {
+	const versionID = "0f230d58-275f-444e-b30e-9c363a076702"
+	tests := []struct {
+		name       string
+		extensions map[string]string
+		want       string
+		wantErr    string
+	}{
+		{name: "namespace only", extensions: map[string]string{"namespace": versionID}, want: versionID},
+		{name: "functionVersionId only", extensions: map[string]string{"functionversionid": versionID}, want: versionID},
+		{name: "both matching", extensions: map[string]string{"namespace": versionID, "functionversionid": versionID}, want: versionID},
+		{name: "both differing", extensions: map[string]string{"namespace": "other", "functionversionid": versionID}, wantErr: "must match"},
+		{name: "neither", extensions: map[string]string{}, wantErr: ErrMissingNamespace.Error()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ce := cloudevents.NewEvent()
+			ce.SetID("test-id")
+			ce.SetType("test.event")
+			ce.SetSource("/test")
+			for name, value := range tc.extensions {
+				ce.SetExtension(name, value)
+			}
+
+			event, err := extractCloudEvent(context.Background(), &ce)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, event.Namespace)
+
+			var details map[string]any
+			require.NoError(t, json.Unmarshal(event.DetailsJSON, &details))
+			attrs, _ := details["attributes"].(map[string]any)
+			assert.NotContains(t, attrs, "functionversionid")
+		})
+	}
+}
+
+// TestExtractCloudEvent_NVCAClusterBinding mirrors
+// TestExtractK8sEvent_NVCAClusterBinding: bindNVCAClusterID is wired into
+// both extractK8sEvent and extractCloudEvent, so both need the same
+// match/populate/reject/no-identity coverage.
+func TestExtractCloudEvent_NVCAClusterBinding(t *testing.T) {
+	nvcaCtx := middleware.WithNVCAIdentity(context.Background(), middleware.NVCAIdentity{
+		Subject:   "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	})
+
+	newEvent := func(clusterID string) cloudevents.Event {
+		ce := cloudevents.NewEvent()
+		ce.SetID("test-id")
+		ce.SetType("test.event")
+		ce.SetSource("/test")
+		ce.SetExtension("namespace", "tenant-123")
+		if clusterID != "" {
+			ce.SetExtension("clusterId", clusterID)
+		}
+		return ce
+	}
+
+	t.Run("matching payload cluster_id is accepted", func(t *testing.T) {
+		ce := newEvent("cluster-a")
+		event, err := extractCloudEvent(nvcaCtx, &ce)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
+
+	t.Run("missing payload cluster_id is populated from the verified identity", func(t *testing.T) {
+		ce := newEvent("")
+		event, err := extractCloudEvent(nvcaCtx, &ce)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
+
+	t.Run("mismatched payload cluster_id is rejected", func(t *testing.T) {
+		ce := newEvent("cluster-b")
+		_, err := extractCloudEvent(nvcaCtx, &ce)
+		assert.Error(t, err)
+	})
+
+	t.Run("no NVCA identity leaves the payload cluster_id untouched", func(t *testing.T) {
+		ce := newEvent("cluster-a")
+		event, err := extractCloudEvent(context.Background(), &ce)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
 }
 
 // ======================
@@ -841,6 +1019,53 @@ func TestPostCloudEventV3_BatchMissingSpecversion(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "specversion")
+}
+
+func TestPostCloudEventV3_ClusterAuthorizationMismatchAbortsBatch(t *testing.T) {
+	body := []byte(`[
+		{
+			"specversion": "1.0",
+			"type": "pod.ready",
+			"source": "/test",
+			"id": "event-1",
+			"namespace": "ns"
+		},
+		{
+			"specversion": "1.0",
+			"type": "pod.ready",
+			"source": "/test",
+			"id": "event-2",
+			"namespace": "ns",
+			"clusterid": "cluster-b"
+		}
+	]`)
+
+	mockDB := &mockDBHandlerV3{}
+	logger := testutils.InitTestLogger(t)
+	server := NewServer(
+		Connections{DbHandlerV2: mockDB},
+		logger,
+		nil,
+		"test",
+		&config.HTTPClientConfig{},
+		config.PaginationConfig{},
+		config.StatsConfig{},
+	)
+
+	req := httptest.NewRequest("POST", "/v3/ledger/cloudevents", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/cloudevents-batch+json")
+	ctx := context.WithValue(req.Context(), logging.LoggerKey, logging.NewTraceLogger(req.Context(), logger))
+	ctx = middleware.WithNVCAIdentity(ctx, middleware.NVCAIdentity{
+		Subject:   "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	})
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+	server.PostCloudEventV3(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Empty(t, mockDB.storedEvents, "a cluster-authorization failure must abort the batch before any DB write")
 }
 
 func TestPostCloudEventV3_BatchRejectsNullEvent(t *testing.T) {

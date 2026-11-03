@@ -59,6 +59,7 @@ class ByocSqsMessageModelTest {
                         .cloudProvider("test")
                         .deploymentId(UUID.randomUUID())
                         .gpuSpecificationId(UUID.randomUUID())
+                        .maxRequestConcurrency(37)
                         .build())
                 .accountName("test-account-name")
                 .functionDetails(FunctionDetails.builder()
@@ -101,6 +102,7 @@ class ByocSqsMessageModelTest {
         assertEquals("test", launchSpecNode.get("cloudProvider").asString());
         assertNotNull(launchSpecNode.get("deploymentId"));
         assertNotNull(launchSpecNode.get("gpuSpecificationId"));
+        assertEquals(37, launchSpecNode.get("maxRequestConcurrency").asInt());
 
         // Validate functionDetails object
         JsonNode functionDetailsNode = jsonNode.get("functionDetails");

@@ -45,6 +45,32 @@ const (
 	MatchSubset
 )
 
+// RenderYAMLFromKeys builds a YAML document from the supplied
+// dotted-path/value pairs and returns its serialized bytes. It is the
+// pure counterpart of UpdateYAMLKeys for a file that does not exist
+// yet: the caller owns the destination path, the existence check, and
+// the write. Path syntax matches UpdateYAMLKeys. Value cells run
+// through Interpolate and then decodeTypedValue so booleans and
+// collection literals reach Helm as native YAML types rather than
+// quoted strings.
+func RenderYAMLFromKeys(keys [][2]string) ([]byte, error) {
+	rootMap := map[string]any{}
+	for _, kv := range keys {
+		segments, err := parsePath(kv[0])
+		if err != nil {
+			return nil, fmt.Errorf("render yaml: %w", err)
+		}
+		if err := setNested(rootMap, segments, decodeTypedValue(Interpolate(kv[1]))); err != nil {
+			return nil, fmt.Errorf("render yaml: %w", err)
+		}
+	}
+	body, err := yaml.Marshal(rootMap)
+	if err != nil {
+		return nil, fmt.Errorf("render yaml: marshal: %w", err)
+	}
+	return body, nil
+}
+
 // UpdateYAMLKeys reads the YAML file at path, applies each (dotted-path,
 // value) pair as an upsert, and writes the file back. Path syntax uses
 // "." between segments and "[n]" for list indices; missing intermediate
@@ -208,6 +234,30 @@ func SubstituteFileBlock(path, spec string) error {
 		return fmt.Errorf("%s: substitution old block is not present", path)
 	}
 	return SubstituteFile(path, oldBlock, newBlock)
+}
+
+// decodeTypedValue converts the YAML-significant literals that Helm
+// evaluates differently when quoted. Booleans are decoded because
+// Go templates treat the string "false" as truthy. Collection
+// literals like "[]" are decoded so Helm sees an empty list instead
+// of a non-empty string. Numbers are left as strings: Helm coerces
+// them in template expressions, and eagerly parsing "1.0" as a float
+// would lose the trailing zero on round-trip.
+func decodeTypedValue(s string) any {
+	switch s {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	var decoded any
+	if err := yaml.Unmarshal([]byte(s), &decoded); err == nil {
+		switch decoded.(type) {
+		case []any, map[string]any:
+			return decoded
+		}
+	}
+	return s
 }
 
 // readYAMLAny reads path and unmarshals into a generic any value.
@@ -505,4 +555,35 @@ func displayPath(path string) string {
 		return "<root>"
 	}
 	return path
+}
+
+// SetYAMLKey replaces the subtree at the dotted path with the parsed YAML
+// document, keeping its types. Missing parents are created as in
+// UpdateYAMLKeys. The document runs through Interpolate before parsing.
+func SetYAMLKey(path, dottedKey, document string) error {
+	if strings.TrimSpace(dottedKey) == "" {
+		return fmt.Errorf("set yaml %s: key must be non-empty", path)
+	}
+	segments, err := parsePath(dottedKey)
+	if err != nil {
+		return fmt.Errorf("set yaml %s: %w", path, err)
+	}
+	var value any
+	if err := yaml.Unmarshal([]byte(Interpolate(document)), &value); err != nil {
+		return fmt.Errorf("set yaml %s key %s: parse document: %w", path, dottedKey, err)
+	}
+	root, err := readYAMLAny(path)
+	if err != nil {
+		return err
+	}
+	rootMap, ok := root.(map[string]any)
+	if root == nil {
+		rootMap = map[string]any{}
+	} else if !ok {
+		return fmt.Errorf("set yaml %s: top-level value is not a map", path)
+	}
+	if err := setNested(rootMap, segments, value); err != nil {
+		return fmt.Errorf("set yaml %s: %w", path, err)
+	}
+	return writeYAML(path, rootMap)
 }

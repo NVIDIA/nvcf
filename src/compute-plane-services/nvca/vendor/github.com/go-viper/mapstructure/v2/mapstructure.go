@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package mapstructure exposes functionality to convert one arbitrary
 // Go type into another, typically to convert a map[string]any
 // into a native Go structure.

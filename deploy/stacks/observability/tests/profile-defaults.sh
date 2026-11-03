@@ -49,6 +49,17 @@ profile_release_json() {
   cat "$output_file"
 }
 
+profile_build() {
+  local profile="$1"
+  shift
+
+  HELMFILE_ENV=local helmfile \
+    "${helmfile_args[@]}" \
+    --state-values-set "observability.profile=$profile" \
+    "$@" \
+    build
+}
+
 profile_releases_csv() {
   local profile="$1"
   shift
@@ -147,6 +158,34 @@ assert_yaml_value() {
   assert_equal "$actual" "$expected" "$description"
 }
 
+assert_release_chart() {
+  local releases_file="$1"
+  local release="$2"
+  local expected_chart="$3"
+  local expected_version="$4"
+  local actual
+
+  actual="$(NVCF_RELEASE_NAME="$release" yq -p=json -r \
+    '.[] | select(.name == strenv(NVCF_RELEASE_NAME)) | .chart + "|" + .version' \
+    "$releases_file")"
+  assert_equal "$actual" "$expected_chart|$expected_version" \
+    "$release upstream chart"
+}
+
+assert_repository_source() {
+  local state_file="$1"
+  local repository="$2"
+  local expected_url="$3"
+  local expected_oci="$4"
+  local actual
+
+  actual="$(NVCF_REPOSITORY_NAME="$repository" yq -r \
+    '.repositories[] | select(.name == strenv(NVCF_REPOSITORY_NAME)) | .url + "|" + ((.oci // false) | tostring)' \
+    "$state_file")"
+  assert_equal "$actual" "$expected_url|$expected_oci" \
+    "$repository chart repository"
+}
+
 assert_release_needs() {
   local case_name="$1"
   local profile="$2"
@@ -203,6 +242,42 @@ fi
 fixture_profiles="$(awk -F'|' '!/^#/ {print $1}' "$golden_file" | paste -sd, -)"
 assert_equal "$fixture_profiles" "disabled,control,compute,all" \
   "golden profile rows"
+
+upstream_releases="$work_dir/upstream-releases.json"
+profile_release_json all >"$upstream_releases"
+assert_release_chart "$upstream_releases" prometheus-operator-crds \
+  prometheus-community/prometheus-operator-crds 31.0.1
+assert_release_chart "$upstream_releases" opentelemetry-operator \
+  open-telemetry/opentelemetry-operator 0.122.0
+assert_release_chart "$upstream_releases" victoria-metrics \
+  victoria-metrics/victoria-metrics-single 0.45.0
+
+upstream_state="$work_dir/upstream-state.yaml"
+profile_build all --chart "$stack_dir/charts/nvcf-otel-collector" \
+  >"$upstream_state"
+assert_repository_source "$upstream_state" open-telemetry \
+  https://open-telemetry.github.io/opentelemetry-helm-charts false
+assert_repository_source "$upstream_state" prometheus-community \
+  https://prometheus-community.github.io/helm-charts false
+assert_repository_source "$upstream_state" victoria-metrics \
+  https://victoriametrics.github.io/helm-charts false
+
+mirror_state="$work_dir/mirror-state.yaml"
+profile_build all \
+  --state-values-set-string=opentelemetryOperator.chartRepository.url=nvcr.io/example/observability \
+  --state-values-set=opentelemetryOperator.chartRepository.oci=true \
+  --state-values-set-string=prometheusOperatorCrds.chartRepository.url=nvcr.io/example/observability \
+  --state-values-set=prometheusOperatorCrds.chartRepository.oci=true \
+  --state-values-set-string=victoriaMetrics.chartRepository.url=nvcr.io/example/observability \
+  --state-values-set=victoriaMetrics.chartRepository.oci=true \
+  --chart "$stack_dir/charts/nvcf-otel-collector" \
+  >"$mirror_state"
+assert_repository_source "$mirror_state" open-telemetry \
+  nvcr.io/example/observability true
+assert_repository_source "$mirror_state" prometheus-community \
+  nvcr.io/example/observability true
+assert_repository_source "$mirror_state" victoria-metrics \
+  nvcr.io/example/observability true
 
 service_monitor_template_count="$(
   find "$stack_dir/charts/nvcf-default-monitors/templates" \
@@ -362,6 +437,79 @@ assert_yaml_value "$worker_monitor_manifest" \
 assert_yaml_value "$work_dir/compute-monitor-values.yaml" \
   '.computePlane.worker.port' worker-metrics \
   'compute worker metrics Helmfile value'
+
+# Autoscaler queries require these Pod labels on the scraped worker series.
+# PodMonitor converts the hyphens in their names to underscores.
+worker_identity_labels='function-id,function-version-id,nca-id'
+assert_yaml_value "$worker_monitor_manifest" \
+  '.spec.podTargetLabels | sort | join(",")' "$worker_identity_labels" \
+  'worker metric identity labels in chart defaults'
+for profile in compute all; do
+  assert_yaml_value "$work_dir/$profile-monitor-values.yaml" \
+    '.computePlane.worker.podTargetLabels | sort | join(",")' \
+    "$worker_identity_labels" "$profile worker identity labels in Helmfile values"
+done
+yq -e 'select(.kind == "PodMonitor" and .metadata.name == "nvcf-default-monitors-dcgm") |
+  .spec | has("podTargetLabels") == false' \
+  "$work_dir/chart-compute/manifests.yaml" >/dev/null ||
+  fail 'worker identity labels must not change DCGM metrics'
+
+# Explicit label overrides, including an empty list, must remain authoritative.
+helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
+  --set computePlane.enabled=true \
+  --set 'computePlane.worker.podTargetLabels={function-id}' \
+  >"$work_dir/worker-label-override.yaml"
+assert_yaml_value "$work_dir/worker-label-override.yaml" \
+  'select(.kind == "PodMonitor" and .metadata.name == "nvcf-default-monitors-worker") |
+   .spec.podTargetLabels | join(",")' function-id 'worker identity label override'
+helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
+  --set computePlane.enabled=true \
+  --set-json 'computePlane.worker.podTargetLabels=[]' \
+  >"$work_dir/worker-labels-disabled.yaml"
+yq -e 'select(.kind == "PodMonitor" and .metadata.name == "nvcf-default-monitors-worker") |
+  .spec | has("podTargetLabels") == false' \
+  "$work_dir/worker-labels-disabled.yaml" >/dev/null ||
+  fail 'empty worker identity labels must omit podTargetLabels'
+
+# BYOO platform metrics federation selects worker and DCGM series by job name.
+# A PodMonitor defaults the job to namespace/name, so the chart sets it with an
+# endpoint relabeling. Keep the names aligned with the collector templates.
+byoo_templates_dir="$repo_dir/src/compute-plane-services/byoo-otel-collector/internal/otelconfig/source_templates"
+find "$work_dir/matrix-compute" -type f -name '*.yaml' -exec cat {} + \
+  >"$work_dir/stack-compute-monitors.yaml"
+[[ -s "$work_dir/stack-compute-monitors.yaml" ]] ||
+  fail 'stack compute monitor manifests were not rendered'
+monitor_job_expression='select(.kind == "PodMonitor" and .metadata.name == strenv(NVCF_MONITOR_NAME)) |
+  .spec.podMetricsEndpoints[0].relabelings[] | select(.targetLabel == "job") |
+  .action + "|" + ((.sourceLabels // []) | join(",")) + "|" + .replacement'
+for row in 'worker|nvcf-worker' 'dcgm|nvidia-dcgm-exporter'; do
+  IFS='|' read -r monitor expected_job <<<"$row"
+  for manifest in "$work_dir/chart-compute/manifests.yaml" \
+    "$work_dir/stack-compute-monitors.yaml"; do
+    assert_equal \
+      "$(NVCF_MONITOR_NAME="nvcf-default-monitors-$monitor" yq -r "$monitor_job_expression" "$manifest")" \
+      "replace||$expected_job" "$monitor job relabeling in $(basename "$manifest")"
+  done
+  for profile in compute all; do
+    assert_yaml_value "$work_dir/$profile-monitor-values.yaml" \
+      ".computePlane.$monitor.jobName" "$expected_job" \
+      "$profile $monitor job name in Helmfile values"
+  done
+  for template in "$byoo_templates_dir"/src-config-k8s-*.yaml.tmpl; do
+    grep -Fq "{job=~\"$expected_job\"," "$template" ||
+      fail "$(basename "$template") no longer selects job $expected_job"
+  done
+done
+
+# An empty job name keeps the PodMonitor default job.
+helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
+  --set computePlane.enabled=true \
+  --set-string computePlane.worker.jobName= \
+  >"$work_dir/worker-job-default.yaml"
+yq -e 'select(.kind == "PodMonitor" and .metadata.name == "nvcf-default-monitors-worker") |
+  .spec.podMetricsEndpoints[0] | has("relabelings") == false' \
+  "$work_dir/worker-job-default.yaml" >/dev/null ||
+  fail 'an empty worker job name must omit the job relabeling'
 
 # The application chart owns its Service labels. Compare them with the shared
 # ServiceMonitor selector so an application label change cannot silently break

@@ -82,6 +82,29 @@ case "$reserved_hostnames" in
     ;;
 esac
 
+# The policy only denies a match that ties a chart route under Gateway API rule
+# precedence, and that reduces to "a bare root match" only while every chart
+# route stays exactly one PathPrefix / with no method, header or query match.
+assert_yq_eq "$default_render" '[select(.kind == "HTTPRoute") | .spec.rules[] | select((.matches | length) != 1 or .matches[0].path.type != "PathPrefix" or .matches[0].path.value != "/" or (.matches[0] | has("headers")) or (.matches[0] | has("queryParams")) or (.matches[0] | has("method")))] | length' 0
+
+ties_root_match="$(yq ea -r 'select(.kind == "ValidatingAdmissionPolicy") | .spec.variables[] | select(.name == "tiesRootMatch") | .expression' "$default_render")"
+case "$ties_root_match" in
+  *'RegularExpression'*'match.path.value.matches("^/+$")'*) ;;
+  *)
+    echo "admission policy does not gate on a tying root match: $ties_root_match" >&2
+    exit 1
+    ;;
+esac
+
+conflicting_hostnames="$(yq ea -r 'select(.kind == "ValidatingAdmissionPolicy") | .spec.variables[] | select(.name == "conflictingHostnames") | .expression' "$default_render")"
+case "$conflicting_hostnames" in
+  *'!variables.tiesRootMatch'*) ;;
+  *)
+    echo "conflictingHostnames is not gated on tiesRootMatch: $conflicting_hostnames" >&2
+    exit 1
+    ;;
+esac
+
 # Default-enabled HTTPRoutes.
 assert_resource_count "$default_render" HTTPRoute nvcf-api gateway 1
 assert_resource_field "$default_render" HTTPRoute nvcf-api gateway '.metadata.labels."app.kubernetes.io/component"' nvcf-api-route

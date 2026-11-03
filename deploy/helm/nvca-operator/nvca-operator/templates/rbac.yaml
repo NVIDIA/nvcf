@@ -14,6 +14,11 @@
 # limitations under the License.
 
 {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+{{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
+{{- $controlPlane := eq (lower (trim (toString $cv.role))) "control-plane" }}
+{{- /* Grants exactly the requests the validator's check set makes, as listed
+       in src/compute-plane-services/nvca/internal/clustervalidator/rbac_inventory.yaml.
+       tests/cluster_validator_test.sh fails when the two differ. */}}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -33,48 +38,73 @@ metadata:
     app.kubernetes.io/component: validation
 rules:
   - apiGroups: [""]
-    resources:
-      - nodes
-      - services
-    verbs: ["get", "list"]
+    resources: ["nodes"]
+    verbs: ["list"]
   - apiGroups: [""]
+    # create/delete: the NetworkPolicy enforcement test and, under the
+    # control-plane role, the node-to-node probe run in per-run namespaces
+    # and delete them, along with orphans older runs left behind.
     resources: ["namespaces"]
     verbs: ["get", "list", "create", "delete"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "create", "delete", "watch"]
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    # get: read the network-checks config ConfigMap (its name is overridable
-    # via VALIDATOR_CONFIG_NAME, so this cannot be scoped by resourceName).
-    # create: write the cluster-validator-summary ConfigMap on the first run
-    # (create cannot be restricted by resourceName in Kubernetes RBAC).
-    verbs: ["get", "create"]
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    # update only ever targets the cluster-validator-summary ConfigMap the
-    # NVCA agent watches for the metrics pipeline, so scope it by name to
-    # limit blast radius if the validator ServiceAccount is compromised.
-    resourceNames: ["cluster-validator-summary"]
-    verbs: ["update"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "daemonsets"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "create", "delete"]
   - apiGroups: ["admissionregistration.k8s.io"]
     resources:
       - mutatingwebhookconfigurations
       - validatingwebhookconfigurations
-    verbs: ["get", "list"]
+    verbs: ["list"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
-    verbs: ["get", "list", "create", "update", "delete"]
+    verbs: ["list", "create", "update", "delete"]
+  {{- if $controlPlane }}
+  - apiGroups: [""]
+    # services: the LoadBalancer check. events: the node-to-node probe reads
+    # its pods' events to tell a slow first image pull from a node that could
+    # not network the pod.
+    resources: ["services", "events"]
+    verbs: ["list"]
+  - apiGroups: ["storage.k8s.io"]
+    # The StorageClass check: list finds the default class, and get reads the
+    # class clusterValidator.storageClass names. Without them the critical
+    # row is permanently unknown.
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    # deployments: Tier-1 and the Envoy proxies. replicasets: the newest one
+    # dates a Deployment rollout no progress deadline bounds. statefulsets:
+    # the Tier-2 quorum and placement check.
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    # list finds Envoy proxies run as DaemonSets and stale probe DaemonSets.
+    # create/delete: the node-to-node probe runs a short-lived DaemonSet in
+    # its per-run namespace and deletes it in the same run.
+    resources: ["daemonsets"]
+    verbs: ["list", "create", "delete"]
+  - apiGroups: ["apps"]
+    # The update revision's creation, or a StatefulSet rollback's write to
+    # it, dates a StatefulSet or DaemonSet rollout, so a replacement pod that
+    # never appears is not tolerated forever.
+    resources: ["controllerrevisions"]
+    verbs: ["get"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    # The LoadBalancer and Tier-1 checks follow the NVCF routes' parentRefs
+    # to find NVCF's Gateways, and list the Gateways and GatewayClasses to
+    # tell which of them Envoy Gateway runs, so another team's proxy is not
+    # blamed on NVCF.
+    resources: ["gatewayclasses", "gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes"]
+    verbs: ["list"]
+  {{- else }}
   - apiGroups: ["storage.k8s.io"]
     resources: ["csidrivers"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    # The SMB CSI controller Deployment carries the driver version.
+    resources: ["deployments"]
     verbs: ["get", "list"]
-  - apiGroups: ["nvidia.com"]
-    resources: ["clusterpolicies"]
-    verbs: ["get", "list"]
-  - nonResourceURLs: ["/readyz", "/version", "/healthz"]
+  {{- end }}
+  - nonResourceURLs: ["/readyz", "/version"]
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -87,6 +117,43 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
+  name: {{ include "nvcaop.fullname" . }}-cluster-validator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "nvcaop.fullname" . }}-cluster-validator
+    namespace: {{ .Release.Namespace }}
+---
+# The validator reads its network-checks ConfigMap and writes its summary only
+# in this namespace, so neither grant is cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "nvcaop.fullname" . }}-cluster-validator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcaop.labels" . | nindent 4 }}
+    app.kubernetes.io/component: validation
+rules:
+  - apiGroups: [""]
+    # create cannot be restricted by resourceName in Kubernetes RBAC.
+    resources: ["configmaps"]
+    verbs: ["get", "create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["cluster-validator-summary"]
+    verbs: ["update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "nvcaop.fullname" . }}-cluster-validator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcaop.labels" . | nindent 4 }}
+    app.kubernetes.io/component: validation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
   name: {{ include "nvcaop.fullname" . }}-cluster-validator
 subjects:
   - kind: ServiceAccount

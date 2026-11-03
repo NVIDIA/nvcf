@@ -16,12 +16,16 @@
  */
 package com.nvidia.icms.service.createInstances;
 
+import static com.nvidia.icms.inbound.rest.converters.ErrorDataConverter.toUnifiedErrorData;
 import static com.nvidia.icms.service.byoc.ClusterTargetingHelper.isClusterHealthyAndCapacityAvailable;
 import static com.nvidia.icms.service.createInstances.RequestInstanceDestination.isReservedOrReservedBackupDestination;
 import static com.nvidia.icms.service.createInstances.RequestInstanceDestination.isReservedOrReservedBackupDestinations;
+import static com.nvidia.icms.uec.IcmsUnifiedError.NVCF_CUSTOMER_NO_ACCESS_TO_GPU;
+import static com.nvidia.icms.uec.IcmsUnifiedError.NVCF_CUSTOMER_NO_ACCESS_TO_INSTANCE_TYPE;
 import static com.nvidia.icms.util.InstanceServiceUtil.isSetEmptyOrNull;
 import static com.nvidia.icms.util.InstanceServiceUtil.isTargetingEnabled;
 
+import com.nvidia.icms.configuration.bean.CapacityGatingProperties;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.errors.IcmsBadRequestException;
 import com.nvidia.icms.inbound.rest.model.CreateSpotInstancesResponse;
@@ -31,12 +35,16 @@ import com.nvidia.icms.service.byoc.ByocCreateService;
 import com.nvidia.icms.service.byoc.ByocValidationService;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
 import com.nvidia.icms.service.extensions.api.InstanceLifecycleService;
+import com.nvidia.icms.service.gating.CapacityGatingService;
 import com.nvidia.icms.service.internal.InstanceValidationService;
 import com.nvidia.icms.service.extensions.api.ReservationProcessor;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.Events;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
+import com.nvidia.icms.uec.IcmsHttpUnifiedErrorException;
+import com.nvidia.icms.uec.IcmsUnifiedError;
+import com.nvidia.icms.uec.UnifiedErrorReporter;
 import jakarta.validation.constraints.NotNull;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -47,6 +55,7 @@ import java.util.UUID;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -58,12 +67,14 @@ public class CreateInstanceService {
     private final InstanceLifecycleService instanceLifecycleService;
     private final ByocValidationService byocValidationService;
     private final IcmsConfigurationProperties icmsConfigurationProperties;
+    private final CapacityGatingProperties capacityGatingProperties;
     private final RequestDestinationProvider requestDestinationProvider;
     private final ClusterTargetingHelper clusterTargetingHelper;
     private final TelemetryEventClient telemetryEventClient;
     private final ReservationProcessor reservationProcessor;
     private final ComputePlatformService computePlatformService;
     private final InstanceValidationService instanceValidationService;
+    private final CapacityGatingService capacityGatingService;
 
     public CreateSpotInstancesResponse processInstanceRequest(
             @NotNull String customer,
@@ -113,7 +124,7 @@ public class CreateInstanceService {
                                                @NotNull SpotInstanceRequestSchema instanceRequest,
                                                @NotNull Map<String, CloudHealthEntity> cloudHealthByClusterId) {
                                                 
-        if (!icmsConfigurationProperties.isNcaAllowedForGpu(
+        if (!capacityGatingProperties.isNcaAllowedForGpu(
                 instanceRequest.getGpu(), instanceRequest.getNcaId())) {
             destinations = new HashSet<>(destinations);
             destinations.removeIf(destination ->
@@ -143,6 +154,10 @@ public class CreateInstanceService {
 
         log.info("InstanceRequest: {}: {} total destinations filtered after applying capacity validation",
                  instanceRequest.getLoggingId(), filteredDestinations.size());
+
+        // Applied last, on the destinations that would otherwise be used, so the errors above
+        // still report their own cause and a gating rejection always means gating was the reason.
+        capacityGatingService.removeGatedDestinations(filteredDestinations, instanceRequest);
 
         return filteredDestinations;
     }

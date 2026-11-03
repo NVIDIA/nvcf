@@ -31,6 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	fakek8sclient "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/utils/ptr"
 
 	fakebartclient "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
 
@@ -142,12 +143,30 @@ func boundSharedClaim(populated bool) *corev1.PersistentVolumeClaim {
 	return pvc
 }
 
+// rootWriterSelection is the selection the resolver records for a driver whose
+// fsGroupPolicy skips ReadWriteMany claims, OCI FSS being the qualified case.
+func rootWriterSelection(t *testing.T) *nvcastorage.PersistedModelCacheStorageSelection {
+	t.Helper()
+	selection := rwxSelection(t)
+	selection.Provider = "ociFss"
+	selection.Provisioner = "fss.csi.oraclecloud.com"
+	selection.WriterIdentity = nvcastorage.ModelCacheWriterIdentityRoot
+	return selection
+}
+
 func TestRWXReadOnly_FirstRequestCreatesSharedClaimAndWriter(t *testing.T) {
 	ctx := rwxTestContext(t)
 	c, k8s := rwxTestBackend(nil)
 	pvc, job := rwxArtifacts()
+	// A translator-shaped Job: a pod-level non-root requirement and an init
+	// container that also touches the claim.
+	job.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true)}
+	job.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "prepare", VolumeMounts: []corev1.VolumeMount{{Name: ModelVolumeName, MountPath: "/model"}}}}
+	// A sidecar that does not write the claim must keep its own identity.
+	job.Spec.Template.Spec.Containers = append(job.Spec.Template.Spec.Containers,
+		corev1.Container{Name: "sidecar", VolumeMounts: []corev1.VolumeMount{{Name: ModelVolumeName, MountPath: "/model", ReadOnly: true}}})
 
-	state, claim := c.setupRWXReadOnlyModelCachingForRequest(ctx, rwxRequest(t, rwxSelection(t)), pvc, job, rwxSelection(t))
+	state, claim := c.setupRWXReadOnlyModelCachingForRequest(ctx, rwxRequest(t, rootWriterSelection(t)), pvc, job, rootWriterSelection(t))
 	assert.Equal(t, ModelCachingInProgress, state)
 	assert.Equal(t, pvc.Name, claim, "an in-progress result names the claim so the request records its reference")
 
@@ -162,6 +181,58 @@ func TestRWXReadOnly_FirstRequestCreatesSharedClaimAndWriter(t *testing.T) {
 	require.NoError(t, err)
 	_, hasWitness := writer.Spec.Template.Annotations[nvcastorage.ModelCacheWriterPVCUIDAnnotationKey]
 	assert.True(t, hasWitness, "the writer records which claim it populates")
+	// The selection recorded the root identity: the resolver saw a CSIDriver
+	// whose fsGroupPolicy excludes ReadWriteMany volumes, which leaves a fresh
+	// claim's root owned by root. Every writer container, init containers
+	// included, runs as root, and the container-level runAsNonRoot is an
+	// explicit false so a pod-level true cannot veto uid 0. Only containers
+	// that write the claim are affected.
+	for _, c := range append(writer.Spec.Template.Spec.InitContainers, writer.Spec.Template.Spec.Containers...) {
+		if c.Name == "sidecar" {
+			assert.Nil(t, c.SecurityContext, "a container that does not write the claim keeps its identity")
+			continue
+		}
+		require.NotNil(t, c.SecurityContext, c.Name)
+		require.NotNil(t, c.SecurityContext.RunAsUser, c.Name)
+		assert.EqualValues(t, 0, *c.SecurityContext.RunAsUser, c.Name)
+		require.NotNil(t, c.SecurityContext.RunAsNonRoot, c.Name)
+		assert.False(t, *c.SecurityContext.RunAsNonRoot, c.Name)
+	}
+
+}
+
+// TestRWXReadOnly_WriterKeepsNonRootIdentityUnlessRecorded is the common
+// case and the upgrade case at once: a driver that applies fsGroup to the
+// shared claim (Weka, File policy) records the fsGroup identity, and a
+// selection persisted before identities existed records none. Neither may
+// touch the writer's emitted security context, so an installation that
+// enforces non-root cache jobs keeps working.
+func TestRWXReadOnly_WriterKeepsNonRootIdentityUnlessRecorded(t *testing.T) {
+	legacy := rwxSelection(t)
+	legacy.WriterIdentity = ""
+	fsGroup := rwxSelection(t)
+	fsGroup.WriterIdentity = nvcastorage.ModelCacheWriterIdentityFSGroup
+
+	for name, selection := range map[string]*nvcastorage.PersistedModelCacheStorageSelection{"legacy": legacy, "fsGroup": fsGroup} {
+		t.Run(name, func(t *testing.T) {
+			ctx := rwxTestContext(t)
+			c, k8s := rwxTestBackend(nil)
+			pvc, job := rwxArtifacts()
+			nonRoot := int64(65532)
+			job.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), FSGroup: &nonRoot}
+			job.Spec.Template.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{RunAsUser: &nonRoot, RunAsGroup: &nonRoot}
+			want := job.Spec.Template.Spec.DeepCopy()
+
+			state, _ := c.setupRWXReadOnlyModelCachingForRequest(ctx, rwxRequest(t, selection), pvc, job, selection)
+			assert.Equal(t, ModelCachingInProgress, state)
+
+			writer, err := k8s.BatchV1().Jobs(rwxTestNamespace).Get(ctx, job.Name, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, want.SecurityContext, writer.Spec.Template.Spec.SecurityContext)
+			assert.Equal(t, want.Containers[0].SecurityContext, writer.Spec.Template.Spec.Containers[0].SecurityContext,
+				"the writer keeps the identity the translator emitted")
+		})
+	}
 }
 
 func TestRWXReadOnly_CompletedWriterMarksClaimPopulated(t *testing.T) {

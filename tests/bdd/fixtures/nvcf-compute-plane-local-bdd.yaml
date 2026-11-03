@@ -20,11 +20,16 @@ global:
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
 
   nvcaOperator:
+    # NVCA subtracts the utils reservation plus small sidecars from every
+    # instance type. The default Helm resource limit gates keep that
+    # accounting on. This smaller local reservation keeps NCP.GPU.H100_1x
+    # registered on hosts with about 8 CPUs.
+    utils:
+      resources:
+        cpu: "1"
+        memory: 2Gi
     selfManaged:
-      # The simulated GPU density exceeds laptop CPU and memory ratios. Keep
-      # dynamic discovery's 1x type so NVCA can report local GPU capacity.
       featureGateValues:
-        - -InfraResourceOverhead
         - -EnforceContainerFunctionResourceLimits
         - -EnforceContainerTaskResourceLimits
       icmsServiceURL: http://api.sis.svc.cluster.local:8080

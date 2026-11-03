@@ -62,6 +62,7 @@ pub enum LimitResult {
 struct RateLimitCacheKey {
     client_auth_subject: String,
     nca_id: String,
+    owner_nca_id: String,
     function_id: Uuid,
     function_version_id: Uuid,
 }
@@ -117,6 +118,7 @@ impl RateLimitService {
         &self,
         client_auth_subject: String,
         nca_id: String,
+        owner_nca_id: String,
         function_id: Uuid,
         function_version_id: Uuid,
         sync_check: bool,
@@ -129,6 +131,7 @@ impl RateLimitService {
             || self.rate_limit_cache.contains_key(&RateLimitCacheKey {
                 client_auth_subject: client_auth_subject.clone(),
                 nca_id: nca_id.clone(),
+                owner_nca_id: owner_nca_id.clone(),
                 function_id,
                 function_version_id,
             })
@@ -139,6 +142,7 @@ impl RateLimitService {
                 self.rate_limit_address.clone(),
                 client_auth_subject.clone(),
                 nca_id.clone(),
+                owner_nca_id.clone(),
                 function_id,
                 function_version_id,
             )
@@ -149,6 +153,7 @@ impl RateLimitService {
                     RateLimitCacheKey {
                         client_auth_subject,
                         nca_id,
+                        owner_nca_id,
                         function_id,
                         function_version_id,
                     },
@@ -171,6 +176,7 @@ impl RateLimitService {
                     rate_limit_address,
                     client_auth_subject.clone(),
                     nca_id.clone(),
+                    owner_nca_id.clone(),
                     function_id,
                     function_version_id,
                 )
@@ -181,6 +187,7 @@ impl RateLimitService {
                         RateLimitCacheKey {
                             client_auth_subject,
                             nca_id,
+                            owner_nca_id,
                             function_id,
                             function_version_id,
                         },
@@ -201,6 +208,7 @@ impl RateLimitService {
         rate_limit_address: String,
         client_auth_subject: String,
         nca_id: String,
+        owner_nca_id: String,
         function_id: Uuid,
         function_version_id: Uuid,
     ) -> Result<(), Error> {
@@ -210,6 +218,7 @@ impl RateLimitService {
                 function_id: function_id.to_string(),
                 function_version_id: function_version_id.to_string(),
                 client_auth_subject,
+                owner_nca_id,
             })
             .await;
         match &response {
@@ -275,6 +284,7 @@ mod tests {
             .check_rate_limit(
                 "test-client".to_string(),
                 "test-nca".to_string(),
+                "test-owner-nca".to_string(),
                 uuid::Uuid::new_v4(),
                 uuid::Uuid::new_v4(),
                 false,

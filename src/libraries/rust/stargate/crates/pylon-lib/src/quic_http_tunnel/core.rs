@@ -25,10 +25,12 @@ use reqwest::header::{
 };
 use reqwest::{Client, Error as ReqwestError, Method, Response, StatusCode};
 use sonic_rs::JsonValueTrait;
-use stargate_protocol::common::is_hop_by_hop_header;
+use stargate_protocol::common::{connection_header_names, is_hop_by_hop_header};
 use stargate_protocol::tunnel_contract::{
     HEADER_MODEL, HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
     HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE, HEADER_STARGATE_UPSTREAM_RETRYABLE,
+    RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED, RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
+    RETRY_REASON_UPSTREAM_ADMISSION_REJECTED, is_internal_control_header,
 };
 use stargate_telemetry::{
     inject_trace_context, parent_context_from_headers, traceparent_from_headers,
@@ -45,7 +47,6 @@ use super::backend::{self, DEFAULT_PRIORITY_CEILING, UpstreamBackend};
 use crate::output_token_parser::{ExactOutputUpdate, OutputTokenParser};
 use crate::queue_admission::{
     PylonQueueMismatchRetryConfig, QueueAdmissionDecision, QueueTrackedRequestGuard,
-    RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
 };
 use crate::request_observer::{
     RequestObservationEndpoint, RequiredTunnelHeaders, TunnelRequestObserver,
@@ -67,13 +68,15 @@ pub(super) const DEFAULT_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 // Complete events are delivered incrementally, so one input chunk cannot make
 // the pylon retain an unbounded batch of parsed events.
 pub const DEFAULT_MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024;
-pub(super) const DEFAULT_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(30);
-pub(super) const DEFAULT_OUTPUT_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Longest wait for the first streamed output after upstream response headers.
+/// Engines hold queued requests here, so this must exceed the longest queue
+/// wait a caller should tolerate, not just normal time to first token.
+pub const DEFAULT_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Longest gap between streamed outputs once generation has started.
+pub const DEFAULT_OUTPUT_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES: usize = 64 * 1024;
-pub(super) const RETRY_REASON_UPSTREAM_ADMISSION_REJECTED: &str = "upstream_admission_rejected";
 pub(super) const RETRY_REASON_LOCAL_CONNECT_FAILURE: &str = "local_connect_failure";
 pub(super) const RETRY_REASON_MODEL_GENERATION_UNAVAILABLE: &str = "model_generation_unavailable";
-pub(super) const RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED: &str = "chat_usage_rewrite_saturated";
 pub(super) const WEBTRANSPORT_STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
@@ -494,7 +497,7 @@ impl TunnelRequestLifecycle {
                 obs.observe_output_calibration_details(exact_usage.reasoning_tokens, false);
             }
             if let Some(input_tokens) = exact_usage.input_tokens {
-                obs.observe_input_tokens_total(input_tokens);
+                obs.observe_input_usage(input_tokens, exact_usage.cached_input_tokens);
             }
             if let Some(output_tokens) = exact_usage.output_tokens {
                 let update = parser.observe_exact_output_tokens(output_tokens);
@@ -777,6 +780,13 @@ pub(super) async fn forward_tunnel_request(
         } else {
             None
         };
+        if let Some(observer) = lifecycle.observer.as_mut() {
+            observer.set_input_usage_expected(input_usage_expected(
+                observation_endpoint,
+                &body_bytes,
+                app.force_chat_completions_include_usage,
+            ));
+        }
         if let Some(decision) = lifecycle.admit_queue(app, &request_headers) {
             let QueueAdmissionDecision::Rejected {
                 expected_ms,
@@ -965,9 +975,20 @@ async fn send_upstream_request(
         Span::none()
     };
     let mut upstream_headers = HeaderMap::with_capacity(request_headers.len());
+    let connection_headers = connection_header_names(request_headers);
     for (name, value) in request_headers {
-        if should_forward_header(name, &app.retry) {
+        if should_forward_header(name, &app.retry) && !connection_headers.contains(name) {
             upstream_headers.append(name, value.clone());
+        }
+    }
+    if path_and_query.split('?').next() == Some("/v1/messages") {
+        let private_headers: Vec<_> = upstream_headers
+            .keys()
+            .filter(|name| !is_messages_backend_header(name))
+            .cloned()
+            .collect();
+        for name in private_headers {
+            upstream_headers.remove(name);
         }
     }
     if !health_request {
@@ -1026,6 +1047,25 @@ pub(super) enum UpstreamRequestError {
     Send(#[source] ReqwestError),
 }
 
+// Routing metadata stays on the tunnel for admission, then stops at the
+// model API boundary. Messages forwards only protocol and trace headers.
+fn is_messages_backend_header(name: &HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "content-type"
+            | "content-length"
+            | "accept"
+            | "accept-encoding"
+            | "anthropic-version"
+            | "anthropic-beta"
+            | "user-agent"
+            | "traceparent"
+            | "tracestate"
+            | "baggage"
+            | "x-request-id"
+    )
+}
+
 fn validate_request_body(
     observation_endpoint: Option<RequestObservationEndpoint>,
     body_bytes: &[u8],
@@ -1045,6 +1085,24 @@ fn validate_request_body(
     (body.get("stream").and_then(|value| value.as_bool()) == Some(true))
         .then_some(())
         .ok_or(stream_error)
+}
+
+fn input_usage_expected(
+    endpoint: Option<RequestObservationEndpoint>,
+    body_bytes: &[u8],
+    force_chat_completions_include_usage: bool,
+) -> bool {
+    match endpoint {
+        Some(RequestObservationEndpoint::Responses) => true,
+        Some(RequestObservationEndpoint::ChatCompletions) => {
+            force_chat_completions_include_usage
+                || serde_json::from_slice::<serde_json::Value>(body_bytes)
+                    .ok()
+                    .and_then(|body| body.get("stream_options")?.get("include_usage")?.as_bool())
+                    == Some(true)
+        }
+        Some(RequestObservationEndpoint::Embeddings) | None => false,
+    }
 }
 
 fn prepare_chat_completions_usage_rewrite(
@@ -1213,8 +1271,9 @@ pub(super) fn build_response_headers(
             );
         }
     }
+    let connection_headers = connection_header_names(response_headers);
     for (name, value) in response_headers {
-        if should_forward_response_header(name, retry) {
+        if should_forward_response_header(name, retry) && !connection_headers.contains(name) {
             header_frame.append(name, value.clone());
         }
     }
@@ -1381,13 +1440,7 @@ fn is_tunnel_control_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool
     // HeaderName is normalized, so this policy stays allocation-free on both hot paths.
     name == retry.upstream_retry_header
         || is_hop_by_hop_header(name)
-        || matches!(
-            name.as_str(),
-            HEADER_STARGATE_UPSTREAM_RETRYABLE
-                | HEADER_STARGATE_RETRYABLE
-                | HEADER_STARGATE_RETRY_REASON
-                | HEADER_STARGATE_RETRY_AFTER_MS
-        )
+        || is_internal_control_header(name)
 }
 
 #[cfg(test)]
@@ -1459,6 +1512,55 @@ mod tests {
                 .try_acquire_owned()
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn connection_nominated_headers_are_filtered_in_both_directions() {
+        let server = TestHttpServer::spawn(Router::new().route(
+            "/headers",
+            post(|headers: HeaderMap| async move {
+                assert!(!headers.contains_key("x-hop-one"));
+                assert!(!headers.contains_key("x-hop-two"));
+                assert!(!headers.contains_key("connection"));
+                assert_eq!(headers["x-end-to-end"], "preserved");
+                "ok"
+            }),
+        ))
+        .await;
+        let app = TunnelServerApp::new(
+            "header-test".to_string(),
+            server.as_str().to_string(),
+            TunnelForwardingConfig::default(),
+        );
+        let mut headers = HeaderMap::new();
+        for value in ["", " X-Hop-One, keep-alive", "x-HOP-two\t"] {
+            headers.append("connection", HeaderValue::from_static(value));
+        }
+        headers.append("x-hop-one", HeaderValue::from_static("private-one"));
+        headers.append("x-hop-one", HeaderValue::from_static("private-two"));
+        headers.insert("x-hop-two", HeaderValue::from_static("private-three"));
+        headers.insert("x-end-to-end", HeaderValue::from_static("preserved"));
+        let response = send_upstream_request(
+            &app,
+            None,
+            UpstreamRequestParts {
+                method: Method::POST,
+                path_and_query: "/headers",
+                headers: &headers,
+                body: Vec::new(),
+                health_request: true,
+                priority: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.text().await.unwrap(), "ok");
+        let forwarded =
+            build_response_headers(StatusCode::OK, &headers, &app.retry, None, "header-test")
+                .unwrap();
+        assert_eq!(forwarded.len(), 1);
+        assert_eq!(forwarded["x-end-to-end"], "preserved");
+        server.shutdown().await;
     }
 
     #[tokio::test]
@@ -1562,6 +1664,7 @@ mod tests {
     async fn queue_rejection_precedes_chat_usage_rewrite_capacity() {
         let (mut app, _observations) = observed_app("http://127.0.0.1:0");
         app.force_chat_completions_include_usage = true;
+        app.queue_mismatch_retry = PylonQueueMismatchRetryConfig::strict();
         app.runtime_state.update_model_throughput("model-a", 100.0);
         let _queued_request = app.runtime_state.track_request(&RequiredTunnelHeaders {
             request_id: "req-already-queued".to_string(),
@@ -1663,6 +1766,35 @@ mod tests {
             serde_json::from_slice(&inserted).expect("mutated body should remain JSON");
         assert!(mutated);
         assert_eq!(inserted["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn input_usage_expectation_matches_endpoint_and_request_options() {
+        assert!(input_usage_expected(
+            Some(RequestObservationEndpoint::ChatCompletions),
+            br#"{"stream_options":{"include_usage":true}}"#,
+            false,
+        ));
+        assert!(input_usage_expected(
+            Some(RequestObservationEndpoint::ChatCompletions),
+            br#"{"stream":true}"#,
+            true,
+        ));
+        assert!(!input_usage_expected(
+            Some(RequestObservationEndpoint::ChatCompletions),
+            br#"{"stream_options":{"include_usage":false}}"#,
+            false,
+        ));
+        assert!(input_usage_expected(
+            Some(RequestObservationEndpoint::Responses),
+            br#"{"stream":true}"#,
+            false,
+        ));
+        assert!(!input_usage_expected(
+            Some(RequestObservationEndpoint::Embeddings),
+            b"{}",
+            true,
+        ));
     }
 
     #[test]

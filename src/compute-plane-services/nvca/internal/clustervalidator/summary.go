@@ -21,9 +21,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -52,6 +54,10 @@ const (
 	// namespace.
 	SummaryConfigMapName = "cluster-validator-summary"
 
+	// SummaryManagedBy is the app.kubernetes.io/managed-by label value on the
+	// summary ConfigMap, so a cleanup deletes only one the validator wrote.
+	SummaryManagedBy = "cluster-validator"
+
 	// SummaryConfigMapKey is the data key inside the ConfigMap that
 	// holds the JSON payload.
 	SummaryConfigMapKey = "summary.json"
@@ -74,7 +80,34 @@ const (
 	// injects this with its own namespace when it constructs the agent
 	// Deployment.
 	SummaryConfigMapNamespaceEnv = "VALIDATOR_SUMMARY_NAMESPACE"
+
+	// EnabledEnv says whether the chart runs the cluster-validator. The chart
+	// sets it on the operator, and the operator sets it on every agent
+	// Deployment it writes, to "true" or "false"; it does not roll an agent an
+	// older operator wrote, which has none, only to add "false". The agent
+	// publishes the metrics baseline only when it is true: on a cluster
+	// without the validator, a last_run of 0 would read as a validator that
+	// never ran, forever. When it is false the agent reads no summary, so one
+	// left from an enabled period is not republished.
+	EnabledEnv = "NVCA_CLUSTER_VALIDATOR_ENABLED"
+
+	// InitialRunCronJobEnv names the cluster-validator CronJob the operator
+	// runs whenever its validator spec changes, including at install. The
+	// chart sets it under the control-plane role, where the operator's init
+	// container publishes no summary.
+	InitialRunCronJobEnv = "NVCA_CLUSTER_VALIDATOR_CRONJOB"
 )
+
+// Enabled reports what EnabledEnv says. set is false when it is unset or not a
+// boolean, as from an operator that predates it; enabled is then false too, and
+// the caller cannot tell an enabled validator from a disabled one.
+func Enabled() (enabled, set bool) {
+	v, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(EnabledEnv)))
+	if err != nil {
+		return false, false
+	}
+	return v, true
+}
 
 // ValidatorSummary is the structured wire format the validator writes to
 // SummaryConfigMapName at the end of every run. The fixed fields
@@ -135,11 +168,11 @@ const (
 	NetpolPolicySideIngress = "ingress"
 )
 
-// CheckKey* are the stable identifiers for the built-in checks. The agent
-// initializes one Prometheus gauge per key at zero so the series appears
-// on the first scrape even before any validator has run. Adding a new
-// check requires adding a constant here AND updating the agent's
-// init-to-zero list.
+// CheckKey* are the stable identifiers for the built-in checks. Where the
+// operator sets NVCA_CLUSTER_VALIDATOR_ENABLED=true, the agent initializes one
+// Prometheus gauge per key at zero, so the series appears on the first scrape
+// before the first summary. Adding a new check requires adding a constant
+// here AND updating the agent's init-to-zero list.
 const (
 	CheckKeyControlPlane           = "control_plane"
 	CheckKeyWorkerNodesAllReady    = "worker_nodes_all_ready"
@@ -151,6 +184,18 @@ const (
 	CheckKeyGPUOperator            = "gpu_operator"
 	CheckKeyConfigurableNetpol     = "configurable_netpol"
 	CheckKeyNetpolEnforcement      = "netpol_enforcement"
+	// Control-plane-specific check keys. Written to the summary only when the
+	// check has a result: a nil pointer (not run for this role, not fully
+	// observed, or not applicable) leaves the key out.
+	CheckKeyDefaultStorageClass = "default_storage_class"
+	CheckKeyGatewayAPICRDs      = "gateway_api_crds"
+	CheckKeyEnvoyGateway        = "envoy_gateway"
+	CheckKeyGatewayRoutes       = "gateway_routes"
+	CheckKeyExternalLB          = "external_lb"
+	CheckKeyNodeToNode          = "node_to_node"
+	// Control-plane HA readiness checks.
+	CheckKeyTier1Deployments  = "tier1_deployments"
+	CheckKeyTier2StatefulSets = "tier2_statefulsets"
 )
 
 // AllCheckKeys is the canonical ordering used for documentation and
@@ -160,17 +205,30 @@ var AllCheckKeys = []string{
 	CheckKeyWorkerNodesAllReady,
 	CheckKeyWebhooks,
 	CheckKeyNetworkPoliciesSupport,
+	// Compute-plane checks.
 	CheckKeySMBCSI,
 	CheckKeyEndpointReachability,
 	CheckKeyGPUResources,
 	CheckKeyGPUOperator,
 	CheckKeyConfigurableNetpol,
 	CheckKeyNetpolEnforcement,
+	// Control-plane checks (present in a summary only when they have a result).
+	CheckKeyDefaultStorageClass,
+	CheckKeyGatewayAPICRDs,
+	CheckKeyEnvoyGateway,
+	CheckKeyGatewayRoutes,
+	CheckKeyExternalLB,
+	CheckKeyNodeToNode,
+	CheckKeyTier1Deployments,
+	CheckKeyTier2StatefulSets,
 }
 
 // buildSummary projects a ValidationState into the wire format. Checks
-// that were not run (their *bool is nil) are omitted from the Checks
-// map so the agent can distinguish "not run" from "ran and failed".
+// without a result are omitted from the Checks map so the agent can
+// distinguish "no result" from "ran and failed". For the control-plane checks
+// that means a nil pointer; for the compute-plane bools it means the role is
+// control-plane and they were never invoked; for an always-run check it means
+// its read failed (state.Unobserved).
 func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool, verdict string) *ValidatorSummary {
 	now := time.Now().UTC()
 	s := &ValidatorSummary{
@@ -191,9 +249,15 @@ func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool
 	s.Checks[CheckKeyWorkerNodesAllReady] = state.NodesAllReady
 	s.Checks[CheckKeyWebhooks] = state.WebhooksSupported
 	s.Checks[CheckKeyNetworkPoliciesSupport] = state.NetworkPoliciesSupported
-	s.Checks[CheckKeySMBCSI] = state.SMBCSIDriverOK
-	s.Checks[CheckKeyGPUResources] = state.GPUAvailable
-	s.Checks[CheckKeyGPUOperator] = state.GPUOperatorInstalled
+	// Compute-plane checks are never invoked under the control-plane role, so
+	// their fields hold the zero value. Writing them unconditionally would
+	// publish gpu_resources=0 forever on a control plane that has no GPUs and
+	// was never checked for any, which METRICS.md documents as alertable.
+	if state.Role != RoleControlPlane {
+		s.Checks[CheckKeySMBCSI] = state.SMBCSIDriverOK
+		s.Checks[CheckKeyGPUResources] = state.GPUAvailable
+		s.Checks[CheckKeyGPUOperator] = state.GPUOperatorInstalled
+	}
 
 	if state.ReachabilityOK != nil {
 		s.Checks[CheckKeyEndpointReachability] = *state.ReachabilityOK
@@ -203,6 +267,39 @@ func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool
 	}
 	if state.EnforcementOK != nil {
 		s.Checks[CheckKeyNetpolEnforcement] = *state.EnforcementOK
+	}
+	// Control-plane checks are only written when they have a result. A nil
+	// pointer means not run for this role, not fully observed, or not
+	// applicable.
+	if state.DefaultStorageClassOK != nil {
+		s.Checks[CheckKeyDefaultStorageClass] = *state.DefaultStorageClassOK
+	}
+	if state.GatewayAPICRDsOK != nil {
+		s.Checks[CheckKeyGatewayAPICRDs] = *state.GatewayAPICRDsOK
+	}
+	if state.EnvoyGatewayOK != nil {
+		s.Checks[CheckKeyEnvoyGateway] = *state.EnvoyGatewayOK
+	}
+	if state.GatewayRoutesOK != nil {
+		s.Checks[CheckKeyGatewayRoutes] = *state.GatewayRoutesOK
+	}
+	if state.ExternalLBOK != nil {
+		s.Checks[CheckKeyExternalLB] = *state.ExternalLBOK
+	}
+	if state.NodeToNodeOK != nil {
+		s.Checks[CheckKeyNodeToNode] = *state.NodeToNodeOK
+	}
+	if state.Tier1DeploymentsOK != nil {
+		s.Checks[CheckKeyTier1Deployments] = *state.Tier1DeploymentsOK
+	}
+	if state.Tier2StatefulSetsOK != nil {
+		s.Checks[CheckKeyTier2StatefulSets] = *state.Tier2StatefulSetsOK
+	}
+
+	// An always-run check that could not read what it checks has no result,
+	// and publishing its zero value would alert on an API error.
+	for key := range state.Unobserved {
+		delete(s.Checks, key)
 	}
 
 	if len(state.EndpointResults) > 0 {
@@ -222,28 +319,32 @@ func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool
 }
 
 // writeSummaryConfigMap persists the summary as JSON to a well-known
-// ConfigMap. Creates the ConfigMap if it doesn't exist; otherwise
-// updates the data in place. Errors are logged but do NOT fail the
-// validator run — the metrics layer is an SLI, not a gate; failing the
-// validator over a metrics-write failure would surface as a critical
-// check failure to operators and is much worse than missing one data
-// point.
+// ConfigMap, creating it if it doesn't exist and otherwise updating the data
+// in place. The caller decides whether a failed write fails the run: for a
+// launcher's Job the summary is the run's output, for the operator's init
+// container it is not. A write that may succeed if repeated, such as one that
+// lost an update race to a concurrent run or was throttled, is retried here:
+// the Job's own retry reruns every check inside the same
+// activeDeadlineSeconds, and may be killed before it publishes anything.
 func writeSummaryConfigMap(
 	ctx context.Context,
-	log *logrus.Entry,
 	client kubernetes.Interface,
 	namespace string,
 	summary *ValidatorSummary,
-) {
+) error {
 	payload, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {
-		log.WithError(err).Warn("cluster-validator: failed to marshal summary; metrics will be stale")
-		return
+		return fmt.Errorf("marshal summary: %w", err)
 	}
+	return observeErr(ctx, func(c context.Context) error {
+		return putSummaryConfigMap(c, client, namespace, payload)
+	})
+}
 
-	writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
+// putSummaryConfigMap makes one attempt at the write.
+func putSummaryConfigMap(
+	writeCtx context.Context, client kubernetes.Interface, namespace string, payload []byte,
+) error {
 	existing, err := client.CoreV1().ConfigMaps(namespace).Get(writeCtx, SummaryConfigMapName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		cm := &corev1.ConfigMap{
@@ -252,31 +353,24 @@ func writeSummaryConfigMap(
 				Namespace: namespace,
 				Labels: map[string]string{
 					"app.kubernetes.io/component":  "cluster-validator",
-					"app.kubernetes.io/managed-by": "cluster-validator",
+					"app.kubernetes.io/managed-by": SummaryManagedBy,
 				},
 			},
 			Data: map[string]string{SummaryConfigMapKey: string(payload)},
 		}
 		_, cerr := client.CoreV1().ConfigMaps(namespace).Create(writeCtx, cm, metav1.CreateOptions{})
 		if cerr == nil {
-			return
+			return nil
 		}
 		if !apierrors.IsAlreadyExists(cerr) {
-			log.WithError(cerr).Warn("cluster-validator: failed to create summary ConfigMap; metrics will be stale")
-			return
+			return fmt.Errorf("create summary ConfigMap %s/%s: %w", namespace, SummaryConfigMapName, cerr)
 		}
-		// A concurrent run created the ConfigMap between our Get and Create
-		// (e.g. an overlapping CronJob and init-container run). That is not a
-		// failure — re-read and fall through to Update so this run's results
-		// win, rather than logging a misleading "metrics will be stale".
+		// A concurrent run created the ConfigMap between our Get and Create.
+		// Re-read and fall through to Update so this run's results win.
 		existing, err = client.CoreV1().ConfigMaps(namespace).Get(writeCtx, SummaryConfigMapName, metav1.GetOptions{})
-		if err != nil {
-			log.WithError(err).Warn("cluster-validator: failed to re-read summary ConfigMap after create conflict; metrics will be stale")
-			return
-		}
-	} else if err != nil {
-		log.WithError(err).Warn("cluster-validator: failed to read summary ConfigMap; metrics will be stale")
-		return
+	}
+	if err != nil {
+		return fmt.Errorf("read summary ConfigMap %s/%s: %w", namespace, SummaryConfigMapName, err)
 	}
 
 	updated := existing.DeepCopy()
@@ -284,9 +378,10 @@ func writeSummaryConfigMap(
 		updated.Data = map[string]string{}
 	}
 	updated.Data[SummaryConfigMapKey] = string(payload)
-	if _, uerr := client.CoreV1().ConfigMaps(namespace).Update(writeCtx, updated, metav1.UpdateOptions{}); uerr != nil {
-		log.WithError(uerr).Warn("cluster-validator: failed to update summary ConfigMap; metrics will be stale")
+	if _, err := client.CoreV1().ConfigMaps(namespace).Update(writeCtx, updated, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update summary ConfigMap %s/%s: %w", namespace, SummaryConfigMapName, err)
 	}
+	return nil
 }
 
 // ParseSummary unmarshals a summary JSON document and validates its

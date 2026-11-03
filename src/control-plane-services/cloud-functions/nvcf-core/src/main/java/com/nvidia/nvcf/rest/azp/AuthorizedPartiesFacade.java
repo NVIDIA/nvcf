@@ -40,6 +40,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 @Slf4j
 @Service
@@ -101,6 +102,21 @@ public class AuthorizedPartiesFacade {
                 .orElseGet(() -> MESG_AUTH_PARTY_ALL_VERSIONS.formatted(functionId, "Created"));
         log.info(mesg);
         return new AuthorizedPartiesResponse(dto);
+    }
+
+    // Returns all the function versions in the account with associated authorized parties.
+    // Authorized parties registered at the function level are inherited by all the versions
+    // of the function. If there are no authorized parties for a function version, then it
+    // is not included in the list.
+    public ListAuthorizedPartiesResponse getAuthorizedPartiesForAllFunctions(
+            String ncaId,
+            Authentication authentication) {
+        var azpDtos = functionLookupService.lookupEntitiesUsingAccountId(ncaId)
+                .filter(function -> privateFunctionMatch(ncaId, authentication, function))
+                .map(authorizedPartiesService::getAuthorizedParties)
+                .filter(dto -> !CollectionUtils.isEmpty(dto.authorizedParties()))
+                .toList();
+        return new ListAuthorizedPartiesResponse(azpDtos);
     }
 
     // Returns all the versions of the function with associated authorized parties. Authorized

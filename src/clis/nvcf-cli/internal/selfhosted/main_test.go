@@ -1,0 +1,55 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package selfhosted
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// TestMain points HOME at an empty directory so no test reads the developer's
+// ~/.docker/config.json, or runs a credential helper it names. Tests that need
+// a docker config write their own under a temporary HOME. HELM_DRIVER and the
+// NGC key variables are cleared too: an exported sql driver turns off the
+// stale-namespace probe's no-release signal, which the probe tests assert on.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "selfhosted-test-home-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("HOME", home)
+	// client-go resolved ~/.kube/config at init, before the swap above.
+	_ = os.Setenv("KUBECONFIG", filepath.Join(home, ".kube", "config"))
+	_ = os.Unsetenv("HELM_DRIVER")
+	// A docker config or an NGC key exported on the machine running the
+	// tests would otherwise be the credential every registry test sends.
+	_ = os.Unsetenv("DOCKER_CONFIG")
+	for _, name := range ngcAPIKeyEnvNames {
+		_ = os.Unsetenv(name)
+	}
+	// The fake clientset has no controllers, so a pod never ends on its own:
+	// keep the waits for that short. Tests of the waits set their own.
+	validatorStopTimeout = 2 * time.Second
+	validatorDeadlineGrace = 2 * time.Second
+	validatorPullFailureGrace = 0
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
+}

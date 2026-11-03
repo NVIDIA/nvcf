@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package config provides utilities for loading configuration from multiple
 // sources that can be used to configure the SDK's API clients, and utilities.
 //

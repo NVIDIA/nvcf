@@ -35,13 +35,6 @@ bazel test //... --flaky_test_attempts=3
 # Build the multi-arch OCI image index (linux/amd64 + linux/arm64).
 bazel build //:image_index
 
-# Push to the internal NGC registries (kaze / nv-ngc-devops / ncp-dev).
-# Targets live under //nvidia-internal:image_push_<destination> per the
-# catalog in nvidia-internal/destinations.bzl.
-bazel run //nvidia-internal:image_push_kaze
-bazel run //nvidia-internal:image_push_devops
-bazel run //nvidia-internal:image_push_ncp_dev
-
 # Regenerate per-package BUILD files after Go source changes.
 bazel run //:gazelle
 
@@ -49,8 +42,9 @@ bazel run //:gazelle
 bazel mod tidy
 ```
 
-The image is published from CI on the default branch. Local pushes
-need an `nvcr.io` docker login in the active `DOCKER_CONFIG`.
+Release images are built from the component's published source tag. Follow
+[monorepo release automation](../../../docs/dev/github-release-process.md) for versioning and maintenance releases.
+Local image builds do not publish a release.
 
 ## Overview
 
@@ -77,10 +71,10 @@ GRPC clients typically use one TCP connection per session. The proxy assumes tha
 
 ### Request Headers
 
-**Standard Headers:**
+Standard Headers:
 
 - `authorization` - Bearer token for authentication (required)
-- `function-id` - Function ID to invoke (required)  
+- `function-id` - Function ID to invoke (required)
 - `function-version-id` - Optional function version ID
 
 ### Reconnection Support
@@ -91,19 +85,19 @@ The proxy supports reconnection flows, allowing clients to reconnect to existing
 - `Sec-WebSocket-Protocol` - Supported for browser websocket connections which cannot set traditional headers
 - `nvcf-request-id` - `Cookie` - For automatic support of clients that do not manage the request id headers themselves
 
-**WebSocket Protocol Headers:**
+WebSocket Protocol Headers:
 For browser based WebSocket connections, http headers can be passed via `Sec-WebSocket-Protocol` using a dot-separated
 key-value format (e.g., `authorization.token`, `function-id.my-function`) as standard header control is not available
 to browsers. HTTP Header structured values are not used, as browsers cannot send separator characters in websocket
 headers either.
 
-**Request ID Priority:**
+Request ID Priority:
 
 1. `nvcf-reqid` header (for manual client management of sessions)
 2. `Sec-WebSocket-Protocol` header (for browser based WebSocket connections)
 3. `nvcf-request-id` cookie (fallback)
 
-**Response Headers:**
+Response Headers:
 
 - `nvcf-reqid` - Request ID returned in all responses
 - `Set-Cookie: nvcf-request-id` - Cookie automatically set for session persistence
@@ -198,7 +192,7 @@ end
 loop until request finish
     worker -> nats: subscribe to stateful_session.reconnect.${request_id}
     nats --> worker: reconnect messages
-    note right 
+    note right
         containing same info as stateful request
     end note
     worker -> proxy: (re)connect as normal with HTTP(S) CONNECT
@@ -329,7 +323,7 @@ rectangle "NVCA Cluster" {
         rectangle "GRPC Client" as GRPCClient
         rectangle "GRPC Proxy Deployment" as GRPCProxy
     }
-    
+
     rectangle "Worker (target)" {
         rectangle "NVCF Worker Deployment" as NVCFWorker
     }
@@ -363,7 +357,7 @@ def test_worker_grpc(
                                   grpc.ssl_channel_credentials())
     # proto generated grpc client
     grpc_client = grpc_service_pb2_grpc.GRPCInferenceServiceStub(channel)
-    
+
     function_id = create_grpc_function.function.id
     function_version_id = create_grpc_function.function.version_id
     logging.info(f"function at {create_grpc_function}")
@@ -400,7 +394,7 @@ def test_worker_http():
         post.raise_for_status()
 ```
 
-**Note**: When hosting an HTTP function, set the inference URL to anything except `/grpc`. This is because `/grpc` triggers the utils container to use GRPC-based health checks rather than HTTP-based health checks.
+Note: When hosting an HTTP function, set the inference URL to anything except `/grpc`. This is because `/grpc` triggers the utils container to use GRPC-based health checks rather than HTTP-based health checks.
 
 ## Development and Configuration
 
@@ -440,13 +434,8 @@ bazel test //...
 bazel build //:nvcf-grpc-proxy
 ./bazel-bin/nvcf-grpc-proxy_/nvcf-grpc-proxy --help
 
-# Build the multi-arch OCI image index (amd64 + arm64), matching the
-# image the CI publishes to nvcr.io/nv-ngc-devops/nvcf-grpc-proxy.
+# Build the multi-arch OCI image index (amd64 + arm64).
 bazel build //:image_index
-
-# Push the image to the registry. Requires nvcr.io credentials in
-# ~/.docker/config.json (`docker login nvcr.io -u \$oauthtoken ...`).
-bazel run --stamp //nvidia-internal:image_push_kaze
 
 # Regenerate BUILD files after adding a Go file or import.
 bazel run //:gazelle
@@ -472,9 +461,27 @@ Configuration is primarily handled through environment variables or command-line
 - `ENABLE_HTTP1_CONNECT`: Enable HTTP/1 CONNECT endpoints
 - `ENABLE_HTTP3_CONNECT`: Enable HTTP/3 CONNECT endpoints
 - `SELF_WORKER_FQDN`: Optional worker callback endpoint advertised for CONNECT traffic
+- `EVENT_LEDGER_ADDR`: Event ledger base URL, for example `http://event-ledger.nvcf.svc.cluster.local:8080`. Events are not published when empty
 
 See the `Config` struct in the code for a complete list of configuration options.
 
 GRPC Client credentials are provided by either OAuth2 Client Credentials or a bearer token loaded from the secrets.json file.
 OAuth2 Client Credentials should be provided at the json key "id" and "secret".
-Alternatively, bearer token credentials should be provided at the json key "nvcfApiToken" and "ratelimiterToken".
+Alternatively, bearer token credentials should be provided at the json key "nvcfApiToken", "ratelimiterToken", and "eventLedgerToken".
+
+#### Event ledger publisher
+
+When `EVENT_LEDGER_ADDR` is set, the proxy sends CloudEvents to
+`POST <EVENT_LEDGER_ADDR>/v3/ledger/cloudevents`. Delivery is best effort.
+Each send retries network errors, 429, and 5xx up to 3 times with jittered
+backoff, within 10 seconds. At
+most 1000 sends run at once and further events are dropped. Results are
+counted in `nvcf_grpc_proxy_service_event_ledger_publish_total` by
+`event_type` (the CloudEvent `type`) and `result` (`sent`, `failed`,
+`dropped`). Send time, including retries, is recorded in
+`nvcf_grpc_proxy_service_event_ledger_send_duration_seconds` by `result`.
+
+Authentication follows the same rule as the NVCF API client. If the secrets
+file has an `eventLedgerToken` key, that token is sent as a bearer token and
+reloaded when the file changes. Otherwise the proxy uses OAuth2 client
+credentials against `OAUTH2_FQDN` with the scope `fnds:createEvent`.

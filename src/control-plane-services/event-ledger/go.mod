@@ -15,7 +15,7 @@
 
 module github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/Masterminds/squirrel v1.5.4
@@ -54,7 +54,7 @@ require (
 )
 
 require (
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
+	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260923212141-ea12b8777d46
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

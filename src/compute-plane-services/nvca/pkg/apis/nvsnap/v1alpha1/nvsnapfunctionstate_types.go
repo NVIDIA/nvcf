@@ -179,6 +179,12 @@ type NvSnapFunctionStateStatus struct {
 	// observers attribute the in-flight claim.
 	CaptureOwner string `json:"captureOwner,omitempty"`
 
+	// CaptureOwnerUID is the UID of the CaptureOwner pod. Inference pod
+	// names are deterministic, so a replacement pod can reuse a dead
+	// claimant's namespace/name; the UID tells the two apart when the
+	// claim's liveness is checked.
+	CaptureOwnerUID string `json:"captureOwnerUID,omitempty"`
+
 	// CaptureLeaseExpiry bounds how long a Capturing claim is honored.
 	// If the owning reconcile dies mid-capture (controller restart,
 	// lost leader election, ctx cancel) the claim would otherwise pin

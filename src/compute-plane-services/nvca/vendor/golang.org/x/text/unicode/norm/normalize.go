@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2011 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -508,7 +505,10 @@ func decomposeSegment(rb *reorderBuffer, sp int, atEOF bool) int {
 	// Force one character to be consumed.
 	info := rb.f.info(rb.src, sp)
 	if info.isInvalid() {
-		return 0
+		// Consume the invalid character.
+		// Perhaps this should return iShortSrc instead?
+		// May not matter, this path does not appear to be reachable in practice.
+		return sp + 1
 	}
 	if s := rb.ss.next(info); s == ssStarter {
 		// TODO: this could be removed if we don't support merging.

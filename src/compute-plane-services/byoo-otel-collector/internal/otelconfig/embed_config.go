@@ -51,6 +51,21 @@ type TemplateConfig struct {
 	WorkloadMetrics   WorkloadMetricsConfig
 	OTelCollector     OTelCollectorConfig
 	DebugMode         bool
+	// CollectorTracesEnabled turns on the collector's own trace export to
+	// OTEL_EXPORTER_OTLP_ENDPOINT. Leave it off when that variable is unset.
+	CollectorTracesEnabled bool
+}
+
+// PlatformMetricsFederationEnabled reports whether the Kubernetes templates
+// render the platform metrics /federate scrape jobs.
+func (c TemplateConfig) PlatformMetricsFederationEnabled() bool {
+	return c.OTelCollector.PlatformMetricsFederation.IsEnabled()
+}
+
+// PlatformMetricsFederationTarget returns the host:port that the Kubernetes
+// templates federate platform metrics from.
+func (c TemplateConfig) PlatformMetricsFederationTarget() string {
+	return c.OTelCollector.PlatformMetricsFederation.EffectiveTarget()
 }
 
 type LogChunkingConfig struct {

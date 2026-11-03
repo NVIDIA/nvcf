@@ -106,10 +106,23 @@ refactor in every consumer; that is a feature.
 | Step | Notes |
 |------|-------|
 | `And I copy the file {string} to {string}` | Both paths are repo-relative. |
+| `And I write yaml file {string} with values:` (two-column table of dotted-path and value) | Creates a new YAML file from the visible table. The destination must not already exist; the step fails instead of overwriting so an authored file is never silently replaced. Parent directories are created. Path syntax and `${VAR}` expansion match `I update yaml file`. Boolean literals and collection literals such as `[]` are written as native YAML types, not quoted strings, because Helm treats the string `"false"` as truthy. Numbers stay as strings. The destination is ledger-backed and removed at teardown. |
 | `And I update yaml file {string} with keys:` (two-column table of dotted-path and value) | Path supports dotted notation and `[n]` indices (e.g. `global.imagePullSecrets[0].name`). Missing intermediate maps and missing list indices are upserted: writing `global.imagePullSecrets[0].name` against a file that has neither `global.imagePullSecrets` nor any list entry creates both. Existing scalars at intermediate positions cause the step to fail rather than silently overwrite a non-map. Value cells expand `${VAR}` from `os.Environ`. |
+| `And I set yaml file {string} key {string} to:` (YAML docstring) | Replaces the subtree at the dotted key with the parsed docstring, keeping numbers, booleans, and lists typed. Missing parents are created as for `I update yaml file`; a scalar at an intermediate position fails. `${VAR}` expansion applies to the docstring before parsing. Snapshotted by the Ledger. |
 | `And I prepare Helmfile environment {string} for stack {string} from fixture {string} with values:` (two-column table of dotted-path and value) | Validates the stack and environment names, derives `deploy/stacks/<stack>/environments/<environment>.yaml` from the absolute repository root, copies the explicit fixture, and applies the visible values table with the same YAML update and `${VAR}` interpolation behavior. Supported stacks are `self-managed`, `observability`, and `nvcf-compute-plane`. The destination is ledger-backed. |
 | `And I prepare self-managed secrets file {string} from template {string} using the current NGC registry credential` | The destination and template are explicit repo-relative paths with `${VAR}` interpolation. Replaces the template's registry credential placeholder with base64 of the current `$oauthtoken:<NGC_API_KEY>` credential and writes the destination with mode `0600`. The destination is ledger-backed, and secret material never enters Gherkin, command logs, or failure messages. |
 | `And I substitute a block in file {string}:` (docstring) | The docstring contains an old block and replacement block separated by exactly one `---` line. `${VAR}` interpolation applies before an exact, ledger-backed replacement. Missing or malformed old blocks fail. |
+
+### Kubernetes manifests (Given / When)
+
+The Given keeps every manifest field visible in the feature file. The When
+hides only the repeated `kubectl --context <ctx> apply -f <file>` mechanics
+and the target contexts stay visible as table rows.
+
+| Step | Notes |
+|------|-------|
+| `Given Kubernetes manifest {string} is:` (YAML docstring) | Stores the raw docstring under the visible name in scenario state. The name must be non-empty and declared at most once per scenario. No interpolation, validation, or I/O happens here, so the manifest may reference an env var that a later step exports. |
+| `When I successfully apply Kubernetes manifest {string} using contexts:` (table) | Requires a `context` header and one or more contexts. Interpolates `${VAR}` in the named manifest at apply time, writes the rendered body once to a file under the run's `out/<run-id>/` directory, and runs one explicit-context `kubectl apply -f <file>` per row in order. Each apply must exit 0 and is recorded like any successful command. Failures name the row, manifest, and context. The rendered file is a run artifact, not a ledger-backed working-tree path. |
 
 ### Command execution (When)
 
@@ -119,8 +132,10 @@ refactor in every consumer; that is a feature.
 | `When I run command:` (docstring) | Multi-line form for commands that don't fit on one line. Same recording semantics. |
 | `When I successfully run command {string}` | Single-line command that must exit 0. Preserves the command result for later output assertions and records the resolved command in the successful-command cache. |
 | `When I successfully run command:` (docstring) | Multi-line form for commands that must exit 0. Uses the same result recording, interpolation, logging, and cache semantics as the single-line form. |
+| `When I poll command for up to {int} seconds until output contains {string}:` (docstring) | Repeats the visible command until an exit-zero result contains the expected text. Preserves the matching result for later assertions and JSON-field export. |
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
+| `When I export command output JSON field {string} to environment variable {string}` | Reads a dot-path field from the previous exit-zero command's JSON stdout and exports its non-empty value through the env Ledger. |
 | `When I export the function selected by NVCF CLI to environment variables {string} and {string}` | Runs one `nvcf-cli status --json` for the selected config and exports the selected function ID and version ID under the two named env vars, in that order. Fails when no function is selected or either ID is empty. Both names stay visible in Gherkin. Snapshotted by the env Ledger; restored at suite teardown. |
 
 #### Registration observability command adapters
@@ -133,14 +148,14 @@ They preserve the real command output for subsequent assertions.
 |------|---------|
 | `When I successfully observe WatchStargates at {string} with TLS authority {string} using CA secret {string} in namespace {string} and context {string} for {string} seconds` | Reads the named CA certificate from the explicit Kubernetes secret and context, runs the public `WatchStargates` gRPC method against the visible endpoint and TLS authority with W3C trace context propagated through a generated `traceparent` header, and requires a streamed response before accepting the expected client deadline. |
 
-#### Function lifecycle command adapters
+#### Function and task lifecycle command adapters
 
 These steps hide the repeated executable, config prefix, fixed subcommand, shell
-quoting, and exit-zero assertion. Every meaningful function, deployment, and
+quoting, and exit-zero assertion. Every meaningful function, task, deployment, and
 invocation input remains visible. Each action runs exactly one `nvcf-cli`
 command and preserves its result for existing output assertions.
 
-The adapters validate only Gherkin structure. They do not store function
+The adapters validate only Gherkin structure. They do not store function or task
 identity, apply defaults, parse or normalize product values, enforce product
 preconditions, or allowlist CLI options. Supplied arguments reach `nvcf-cli`
 unchanged after `${VAR}` interpolation. The `successfully` wording is the
@@ -155,13 +170,55 @@ original order. Repeated options and empty values are preserved.
 |------|---------|
 | `Given I use NVCF CLI config {string}` | Interpolates and stores the supplied config argument without resolving or checking the path. Later lifecycle steps pass it to `--config`. |
 | `When I successfully create function {string} from image {string} with CLI options:` | Runs `function create --name <name> --image <image>` followed by the option rows. |
+| `When I successfully create function {string} from Helm chart {string} with CLI options:` | Runs `function create --name <name> --helm-chart <chart>` followed by the option rows. |
 | `When I successfully deploy the function selected by NVCF CLI with options:` | Runs `function deploy create` followed by the option rows. Function selection remains owned by CLI state. |
+| `When I successfully generate an Event Ledger API key with CLI options:` | Runs `api-key generate --for event-ledger` followed by the option rows and suppresses secret-bearing stdout. The CLI saves and later uses its own Event Ledger key. |
 | `When I successfully generate a function API key with CLI options:` | Runs `api-key generate --for function` followed by the option rows and suppresses secret-bearing stdout. |
 | `When I successfully invoke the function selected by NVCF CLI over HTTP with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke` with the exact request body, timeout, and poll duration. |
 | `When I successfully invoke the function selected by NVCF CLI over plaintext gRPC service {string} method {string} with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke --grpc --grpc-plaintext` with the visible service, method, request, timeout, and poll duration. |
-| `When I successfully invoke model {string} at {string} with timeout {string} seconds:` (JSON docstring) | Runs `function invoke` with the visible model, inference URL, exact request body, and timeout. |
+| `When I successfully invoke model {string} at {string} with timeout {string} seconds:` (JSON docstring) | Runs `function invoke` with the visible model, inference URL, exact request body, and timeout. Retries every second until the timeout while a newly deployed function is not yet routable (no eligible candidates, or 503 while its backend calibrates). |
 | `When I successfully invoke the function selected by NVCF CLI through Vanity Gateway host {string} path {string} with timeout {string} seconds:` (JSON docstring) | Sends an exact-host HTTP request through the local Envoy listener with the saved function API key passed over sensitive stdin, never argv or command logs. |
-| `When I successfully undeploy the function selected by NVCF CLI` | Runs `function delete --deployment-only`. Function selection remains owned by CLI state. |
+| `When I successfully undeploy the function selected by NVCF CLI` | Runs `function delete --deployment-only`. Function selection remains owned by CLI state. A successful run is remembered, so a queued teardown undeploy skips it. |
+| `When I successfully generate a task API key with CLI options:` | Runs `api-key generate --for task` followed by the option rows and suppresses secret-bearing stdout. The CLI saves and later uses its own task key. |
+| `When I successfully create task {string} from image {string} with CLI options:` | Runs `task create --name <name> --image <image>` followed by the option rows. The CLI saves the created task as its selected task. |
+| `Then the task selected by NVCF CLI should reach status {string} within {string} seconds, polling every {string} seconds` | Repeats `task get --json` through the selected config, requires each poll to exit 0, and compares `.task.status` with the exact expected string. The runner owns only the timeout and poll interval, which must be positive integers. It keeps no status allowlist and treats no status as terminal. On timeout the error names the expected status, last observed status, timeout, and command-log location, never the task response. |
+| `And I successfully delete the task selected by NVCF CLI` | Runs `task delete`. Task selection remains owned by CLI state. |
+
+### HTTP requests (Given / When / Then)
+
+These steps use the in-process HTTP client (`harness.HTTPClient`), not the command runner, so headers never reach `out/<run-id>/logs`. Redirects are not followed. Requests default to a 30-second deadline unless an explicit timeout is supplied. Pending headers apply to the next send or poll step only.
+
+| Step | Notes |
+|------|-------|
+| `Given the HTTP request header {string} is {string}` | Queues one request header for the next request. `${VAR}` expansion applies to the value. |
+| `Given the HTTP request header {string} is the NVCF CLI admin token with prefix {string}` | Queues a header whose value is the prefix plus the admin token stored by `nvcf-cli init` in the state file of the selected NVCF CLI config. The token never enters argv, env, or logs. |
+| `Given the HTTP request header {string} is the NVCF CLI function API key with prefix {string}` | Reads the saved function API key for the selected config. The key never enters argv, env, or logs. |
+| `When I send a {string} request to {string} with timeout {int} seconds and body:` (docstring) | Sends one request with an explicit positive deadline, including the full response body. Preserves status and body for existing assertions; no retries. |
+| `Then the HTTP response should take at least {string}` | Compares the full exchange duration with an explicit non-negative Go duration such as `60s`. Fails when a delay control was ignored. |
+| `Then the HTTP response body should end with {string}` | Matches a non-empty suffix after trimming trailing whitespace, for terminal stream markers such as `data: [DONE]`. |
+| `When I send a {string} request to {string}` | Sends the request with the queued headers and records status and body. `${VAR}` expansion applies to the URL. A non-2xx status is not a step failure. |
+| `When I send a {string} request to {string} with body:` (docstring) | As above with the interpolated docstring as the request body. |
+| `When I poll {string} {string} for up to {int} seconds until the HTTP response body contains {string}` | Repeats the request every 5 seconds until the body contains the text or the deadline passes. Used for eventually consistent reads. |
+| `Then the HTTP status should be {int}` | Last response status. The failure message includes a truncated body with API keys (`nvapi-...`) and JWTs masked. HTTP failure messages mask them everywhere they print a body or an expected value. |
+| `Then the HTTP status should be {int} or {int}` | Last response status equals either value. |
+| `Then the HTTP response body should contain {string}` | Substring match. The interpolated value must be non-empty. |
+| `Then the HTTP response body should not contain {string}` | Negative substring match. The interpolated value must be non-empty. |
+| `Then the HTTP response JSON field {string} should equal {string}` | Dotted path (object keys, array indexes) compared as text. A path continues into a string that holds a JSON object or array, such as a request an echo sample returns as its reply. |
+| `Then the HTTP response JSON field {string} should be absent` | Passes only when the last key is missing from an object that exists at the parent path, so a misspelled parent fails. |
+| `Then the HTTP response JSON field {string} should be at least {int}` | Dotted path parsed as a number and compared to a minimum. |
+| `When I export the HTTP response JSON field {string} to environment variable {string}` | Exports the field under the named env var. Fails when the field is missing or empty. Snapshotted by the env Ledger; restored at suite teardown. The value is never echoed. |
+
+### Scenario teardown (Given / When)
+
+Cleanup written as a later step is skipped when an earlier step fails, because the live runner stops at the first failed step. These steps queue cleanup that runs after the scenario ends instead, whether it passed or failed. Queued actions run in reverse order through a Godog After hook, a failing action does not stop the rest, and every failure is reported by failing the scenario. The queue is cleared before each scenario.
+
+| Step | Notes |
+|------|-------|
+| `When I send a {string} request to {string} at scenario teardown expecting status {int}` | Queues the request instead of sending it now. It takes the queued headers like the send step, so declare a credential just before it. `${VAR}` expansion applies to the URL when the step runs, so the variable must already be exported. Any status other than the expected one fails the scenario. |
+| `When the function selected by NVCF CLI is undeployed at scenario teardown` | Queues `function delete --deployment-only` for the selected CLI config. Register it after the function is created and before the deploy step, so a failed deploy is still cleaned up. It does nothing when the scenario already undeployed the function with the undeploy step. A "Deployment not found" result counts as done, and any other failure fails the scenario. |
+| `When the function selected by NVCF CLI is deleted at scenario teardown` | Queues `function delete` for the selected CLI config. Register it before the undeploy teardown step so it runs after the undeploy. Any failure fails the scenario. |
+| `When function {string} version {string} is undeployed at scenario teardown` | Queues `function delete --deployment-only --function-id <id> --version-id <version>` for the selected CLI config, for scenarios with more than one function. `${VAR}` expansion applies when the step runs, so export the IDs first. A function with no deployment counts as done. |
+| `When function {string} version {string} is deleted at scenario teardown` | Queues `function delete --function-id <id> --version-id <version>` for the selected CLI config. Register it before the matching undeploy step so it runs after the undeploy. Any failure fails the scenario. |
 
 ### Assertions (Then / And)
 
@@ -195,9 +252,11 @@ original order. Repeated options and empty values are preserved.
 | `Then these Kubernetes resources should exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with the explicit namespace and context, and reports the row whose resource is missing. |
 | `Then these Kubernetes resources should not exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with `--ignore-not-found` and requires empty name output, so absence does not depend on human-readable error text. |
 | `Then deployment {string} in namespace {string} using context {string} should complete rollout within {string}` | Runs `kubectl rollout status` for the named deployment with the explicit namespace, context, and timeout. Failure messages name the deployment without printing command output. |
+| `Then these Kubernetes workloads should complete rollout using context {string} within {string}:` (table) | Requires `kind`, `name`, and `namespace` headers. Runs one explicit-context `kubectl rollout status <kind>/<name>` per row in order with the shared context and timeout. The kind is lowercased and passed through without an allowlist, so Deployment, StatefulSet, and DaemonSet rows all work. Failures name the row, kind, name, and namespace without printing command output. Prefer this over a raw `kubectl rollout status` command step. |
 | `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
 | `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, `namespace`, and `parent` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` for the named Gateway parent using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, parent, and unmet condition without printing resource output. |
 | `Then every Pylon for function {string} using container {string} and context {string} should report metrics within {string}:` (table) | Requires `metric`, `comparison`, and `count` headers. Polls every running pod selected by the visible `function-name` annotation and container name. Each pod must expose non-empty metrics, and each metric row counts connected series whose sample value is `1`; `comparison` is `exactly` or `at least`, and the expected non-negative count remains visible. Discovery, parsing, and scrape failures remain failures rather than zero metric counts. |
+| `Then Prometheus metrics on port {string} of pods selected by {string} in namespace {string} using context {string} should total within {string}:` (table) | Requires `metric`, `labels`, `comparison`, and `total` headers. Polls every running pod selected by the visible label selector in the explicit namespace and context, and scrapes `/metrics` on the visible port through the Kubernetes API proxy. For each row it sums every sample of the metric whose labels include each comma-separated `name=value` pair in `labels`; an empty `labels` cell matches every sample. `comparison` is `exactly` or `at least` against the visible non-negative total. `${VAR}` interpolation applies to every argument and cell. Discovery and scrape failures remain failures rather than zero totals. |
 | `Then DNS name {string} should resolve within {string} seconds` | Waits for the explicit DNS name to resolve through the host resolver within the explicit timeout. `${VAR}` interpolation applies to the name and timeout. Resolution must remain successful for three consecutive checks. Failures report the unresolved name and timeout without printing resolver output. |
 | `Then the function selected by NVCF CLI should have no scheduled compute-plane instances using context {string} and kubeconfig {string}` | Resolves the selected function identity from `nvcf-cli status --json`, then reads `cluster agent list-functions --json` with the explicit compute-plane context and kubeconfig. The compute-plane CLI lists only scheduled functions, so no matching row and a matching row reporting zero instances both satisfy the assertion. |
 | `Then the function selected by NVCF CLI should report {string} compute-plane instances with status {string} using context {string} and kubeconfig {string} within {string}` | Resolves the selected function identity from `nvcf-cli status --json`, then polls `cluster agent get-function --json` with the explicit compute-plane context and kubeconfig until the reported instance count matches and that many instances report the visible status, compared case-insensitively. The expected count, status, and timeout stay visible. Each attempt is a separate runner invocation, so every poll is logged. |
@@ -289,7 +348,7 @@ contract verified in `src/clis/nvcf-cli/cmd/`):
 ## File restoration
 
 Every step that writes into a path under the repo working tree
-(`I copy the file ... to ...`, `I update yaml file ...`,
+(`I copy the file ... to ...`, `I write yaml file ...`, `I update yaml file ...`,
 `I prepare self-managed secrets file ...`, `I substitute a block ...`)
 registers that path with the runner's
 restoration ledger:
@@ -563,6 +622,20 @@ type PylonMetricExpectation struct {
 // Pylon pod selected by function name and container name in an explicit
 // Kubernetes context and polling window.
 func PylonMetricsCommand(functionName, containerName, kubeContext, timeout string, expectations []PylonMetricExpectation) (string, error)
+
+// PrometheusTotalExpectation describes the expected sum of every sample of
+// one metric whose labels include each comma-separated name=value pair.
+type PrometheusTotalExpectation struct {
+    Metric     string
+    Labels     string
+    Comparison string
+    Total      int
+}
+
+// PrometheusTotalsCommand builds an observation that sums matching samples
+// across every running pod selected by an explicit label selector, namespace,
+// metrics port, and Kubernetes context, polling until every expectation holds.
+func PrometheusTotalsCommand(port, selector, namespace, kubeContext, timeout string, expectations []PrometheusTotalExpectation) (string, error)
 
 // FilesDoNotContain recursively inspects regular files under root and
 // fails if any interpolated fixed string appears.

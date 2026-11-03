@@ -22,7 +22,8 @@ metadata:
   labels:
     {{- include "grpc-proxy.labels" . | nindent 4 }}
 data:
+  {{- $http3Env := include "grpc-proxy.http3Env" . | fromYaml }}
   {{- range $key, $value := .Values.grpcproxy.env }}
-  {{ $key }}: {{ $value | quote }}
+  {{ $key }}: {{ get $http3Env $key | default $value | quote }}
   {{- end }}
 {{- end }}

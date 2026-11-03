@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kelseyhightower/envconfig"
@@ -49,6 +50,7 @@ type envConfig struct {
 	ByooMetricSubsetFilterConfig  string `split_words:"true"`
 	ByooWorkloadMetricsDropLabels string `split_words:"true"`
 	ByooOtelCollectorConfigB64    string `split_words:"true"`
+	OtelExporterOtlpEndpoint      string `envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 }
 
 func processEnvConfig(env *envConfig) error {
@@ -91,6 +93,7 @@ func getTemplateConfig() (TemplateConfig, error) {
 	}
 	tcgf.OTelCollector = otelCollectorConfig
 	tcgf.DebugMode = env.ByooDebugMode
+	tcgf.CollectorTracesEnabled = strings.TrimSpace(env.OtelExporterOtlpEndpoint) != ""
 	metricSubsetFilterConfig, err := resolvedMetricSubsetFilterConfig(env.ByooMetricSubsetFilterConfig)
 	if err != nil {
 		return TemplateConfig{}, fmt.Errorf("BYOO_METRIC_SUBSET_FILTER_CONFIG: %w", err)
@@ -141,6 +144,9 @@ func GenerateConfig(output, telemetries string) error {
 
 	logger.Logger.Infof("BYOO TemplateConfig: %+v", tcgf)
 	logger.Logger.Infof("BYOO Telemetries: %s", telemetries)
+	if !tcgf.CollectorTracesEnabled {
+		logger.Logger.Info("OTEL_EXPORTER_OTLP_ENDPOINT is not set, so the collector does not export its own traces")
+	}
 
 	decodedByooData, err := base64.StdEncoding.DecodeString(telemetries)
 	if err != nil {

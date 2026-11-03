@@ -78,11 +78,11 @@ func TestSetConfigDefaultResources(t *testing.T) {
 				},
 				BYOOResources: nvcaconfig.ResourceRequirements{
 					Requests: nvcaconfig.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceCPU:    resource.MustParse("1"),
 						corev1.ResourceMemory: resource.MustParse("2Gi"),
 					},
 					Limits: nvcaconfig.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceCPU:    resource.MustParse("1"),
 						corev1.ResourceMemory: resource.MustParse("2Gi"),
 					},
 				},
@@ -161,11 +161,11 @@ func TestSetConfigDefaultResources(t *testing.T) {
 				},
 				BYOOResources: nvcaconfig.ResourceRequirements{
 					Requests: nvcaconfig.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceCPU:    resource.MustParse("1"),
 						corev1.ResourceMemory: resource.MustParse("2Gi"),
 					},
 					Limits: nvcaconfig.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceCPU:    resource.MustParse("1"),
 						corev1.ResourceMemory: resource.MustParse("2Gi"),
 					},
 				},
@@ -277,11 +277,11 @@ func TestSetConfigDefaultResources(t *testing.T) {
 				},
 				BYOOResources: nvcaconfig.ResourceRequirements{
 					Requests: nvcaconfig.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceCPU:    resource.MustParse("1"),
 						corev1.ResourceMemory: resource.MustParse("2Gi"),
 					},
 					Limits: nvcaconfig.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceCPU:    resource.MustParse("1"),
 						corev1.ResourceMemory: resource.MustParse("2Gi"),
 					},
 				},
@@ -298,6 +298,58 @@ func TestSetConfigDefaultResources(t *testing.T) {
 			},
 		}, cfg)
 	})
+}
+
+func TestSetConfigDefaultResourcesConfigOnly(t *testing.T) {
+	// The deprecated variables belong to the agent's process, so they must not leak in.
+	t.Setenv(utilsCPULimitEnv, "1")
+	t.Setenv(additionalOverheadResourcesEnv, base64.StdEncoding.EncodeToString([]byte(`{"cpu":"3"}`)))
+
+	cfg := nvcaconfig.Config{
+		Agent: nvcaconfig.AgentConfig{
+			AdditionalResourceOverhead: nvcaconfig.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+			BYOOResources: nvcaconfig.ResourceRequirements{
+				Requests: nvcaconfig.ResourceList{corev1.ResourceCPU: resource.MustParse("300m")},
+			},
+		},
+	}
+	SetConfigDefaultResourcesConfigOnly(&cfg)
+
+	quantities := func(rl nvcaconfig.ResourceList) map[corev1.ResourceName]string {
+		out := map[corev1.ResourceName]string{}
+		for rn, rq := range rl {
+			out[rn] = rq.String()
+		}
+		return out
+	}
+	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "4", corev1.ResourceMemory: "4Gi"},
+		quantities(cfg.Agent.UtilsResources))
+	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "2"},
+		quantities(cfg.Agent.AdditionalResourceOverhead))
+	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "500m", corev1.ResourceMemory: "2Gi"},
+		quantities(cfg.Agent.SharedStorage.Server.ContainerResources.Limits))
+	assert.Equal(t, quantities(nvcaconfig.ResourceList(common.GetDefaultContainerResourcesBYOO().Limits)),
+		quantities(cfg.Agent.BYOOResources.Limits))
+	assert.Equal(t, quantities(nvcaconfig.ResourceList(common.GetDefaultContainerResourcesFluentbit().Limits)),
+		quantities(cfg.Agent.BYOOFluentBitResources.Limits))
+}
+
+func TestDeprecatedResourceEnvs(t *testing.T) {
+	assert.ElementsMatch(t, []string{
+		"NVCF_UTILS_CPU_LIMIT",
+		"NVCF_UTILS_MEM_LIMIT",
+		"NVCF_UTILS_EPHEMERAL_STORAGE_LIMIT",
+		"NVCF_ADDITIONAL_OVERHEAD_RESOURCES_B64",
+		"NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64",
+	}, DeprecatedResourceEnvs())
+}
+
+func TestFormatResourceList(t *testing.T) {
+	assert.Equal(t, "", FormatResourceList(nil))
+	assert.Equal(t, "cpu 1500m, memory 2Gi", FormatResourceList(corev1.ResourceList{
+		corev1.ResourceMemory: resource.MustParse("2Gi"),
+		corev1.ResourceCPU:    resource.MustParse("1500m"),
+	}))
 }
 
 func TestGetAdditionalOverheadResources(t *testing.T) {
@@ -1404,9 +1456,9 @@ func TestGetContainerResourcesBYOO(t *testing.T) {
 		// Should return hardcoded defaults from vendor library
 		expected := common.GetDefaultContainerResourcesBYOO()
 		assert.Equal(t, expected, resources)
-		assert.Equal(t, "500m", resources.Requests.Cpu().String())
+		assert.Equal(t, "1", resources.Requests.Cpu().String())
 		assert.Equal(t, "2Gi", resources.Requests.Memory().String())
-		assert.Equal(t, "500m", resources.Limits.Cpu().String())
+		assert.Equal(t, "1", resources.Limits.Cpu().String())
 		assert.Equal(t, "2Gi", resources.Limits.Memory().String())
 	})
 
@@ -1492,9 +1544,9 @@ func TestSetConfigDefaultResourcesBYOO(t *testing.T) {
 		reqMem := cfg.Agent.BYOOResources.Requests[corev1.ResourceMemory]
 		limCPU := cfg.Agent.BYOOResources.Limits[corev1.ResourceCPU]
 		limMem := cfg.Agent.BYOOResources.Limits[corev1.ResourceMemory]
-		assert.Equal(t, "500m", reqCPU.String())
+		assert.Equal(t, "1", reqCPU.String())
 		assert.Equal(t, "2Gi", reqMem.String())
-		assert.Equal(t, "500m", limCPU.String())
+		assert.Equal(t, "1", limCPU.String())
 		assert.Equal(t, "2Gi", limMem.String())
 	})
 
@@ -1565,8 +1617,8 @@ func TestSetConfigDefaultResourcesBYOO(t *testing.T) {
 		limCPU := cfg.Agent.BYOOResources.Limits[corev1.ResourceCPU]
 		limMem := cfg.Agent.BYOOResources.Limits[corev1.ResourceMemory]
 		assert.Equal(t, "1", reqCPU.String())
-		assert.Equal(t, "2Gi", reqMem.String())  // default
-		assert.Equal(t, "500m", limCPU.String()) // default
+		assert.Equal(t, "2Gi", reqMem.String()) // default
+		assert.Equal(t, "1", limCPU.String())   // default
 		assert.Equal(t, "1Gi", limMem.String())
 	})
 }

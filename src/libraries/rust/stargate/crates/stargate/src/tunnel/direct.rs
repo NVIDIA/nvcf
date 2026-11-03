@@ -39,6 +39,10 @@ use super::request::OpenTunnelRequest;
 use super::webtransport::build_webtransport_client_connection;
 use super::{QuicTunnelConfig, StreamingResponse};
 
+/// Deadline for one health probe, kept separate from the proxy request
+/// timeout, which is sized for queued inference.
+const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct QuicHttpProxy {
     pub(super) config: QuicTunnelConfig,
     pub(super) endpoint_v4: Arc<Endpoint>,
@@ -143,6 +147,23 @@ impl QuicHttpProxy {
         &self,
         registration: &RegistrationGeneration,
     ) -> Result<Duration> {
+        // A hung probe would otherwise keep a stale ready result published
+        // for the whole request timeout.
+        self.health_check_rtt_within(registration, HEALTH_CHECK_TIMEOUT)
+            .await
+    }
+
+    pub(super) async fn health_check_rtt_within(
+        &self,
+        registration: &RegistrationGeneration,
+        deadline: Duration,
+    ) -> Result<Duration> {
+        tokio::time::timeout(deadline, self.probe_health_rtt(registration))
+            .await
+            .map_err(|_| anyhow!("health check timed out after {deadline:?}"))?
+    }
+
+    async fn probe_health_rtt(&self, registration: &RegistrationGeneration) -> Result<Duration> {
         let inference_server_id = registration.inference_server_id();
         let start = std::time::Instant::now();
         let mut headers = HeaderMap::new();
@@ -228,18 +249,25 @@ impl QuicHttpProxy {
     }
 }
 
-pub(super) fn parse_quic_addr(target_url: &str) -> Result<SocketAddr> {
-    let parsed_url = Url::parse(target_url).context("invalid quic target url")?;
+pub(crate) fn parse_quic_addr(target_url: &str) -> Result<SocketAddr> {
+    let parsed_url = Url::parse(target_url).context("inference_server_url must be a valid URL")?;
     ensure!(
         parsed_url.scheme() == "quic",
-        "target url is not quic scheme"
+        "inference_server_url scheme must be quic"
     );
     let port = parsed_url
         .port_or_known_default()
-        .ok_or_else(|| anyhow!("missing port in quic url"))?;
-    let ip = parsed_url
-        .host_str()
-        .and_then(|h| h.parse().ok())
-        .ok_or_else(|| anyhow!("quic inference_server_url host must be an IP address"))?;
+        .context("inference_server_url must include port")?;
+    let ip = match parsed_url
+        .host()
+        .context("inference_server_url must include host")?
+    {
+        url::Host::Ipv4(ip) => ip.into(),
+        url::Host::Ipv6(ip) => ip.into(),
+        // Non-special URL schemes represent IPv4 literals as domain hosts.
+        url::Host::Domain(host) => host
+            .parse()
+            .context("inference_server_url host must be an IP address")?,
+    };
     Ok(SocketAddr::new(ip, port))
 }

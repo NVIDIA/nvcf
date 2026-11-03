@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.context.annotation.Configuration;
 
 /**
@@ -34,7 +35,12 @@ import org.springframework.context.annotation.Configuration;
  * <p>An empty list (the default) preserves single/dual-issuer behavior, so
  * existing deployments that only set {@code issuer-uri} (and optionally
  * {@code admin-issuer-uri}) are unaffected.</p>
+ *
+ * <p>Refresh-scoped: entries can be added or removed at runtime, and
+ * {@link AuthManagerResolver#authenticationManagerResolver()} is rebuilt from the
+ * new value without a restart.</p>
  */
+@RefreshScope
 @Configuration
 @ConfigurationProperties(prefix = "icms.security.jwt")
 @Data

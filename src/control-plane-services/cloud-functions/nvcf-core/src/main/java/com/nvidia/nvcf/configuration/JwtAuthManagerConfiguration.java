@@ -49,21 +49,23 @@ public class JwtAuthManagerConfiguration {
 
     @Bean
     IssuerAuthenticationManagerEntry jwtAuthManager() {
-        return new IssuerAuthenticationManagerEntry(issuerUri, jwtAuthenticationManager());
+        return new IssuerAuthenticationManagerEntry(
+                issuerUri, jwtAuthenticationManager(issuerUri, jwkSetUri));
     }
 
-    private AuthenticationManager jwtAuthenticationManager() {
-        var provider = new JwtAuthenticationProvider(jwtDecoder());
+    // Package-private: reused by AuthManagerResolverConfiguration for each trusted issuer.
+    AuthenticationManager jwtAuthenticationManager(String issuer, String jwkSet) {
+        var provider = new JwtAuthenticationProvider(jwtDecoder(issuer, jwkSet));
         provider.setJwtAuthenticationConverter(jwtAuthenticationConverter());
         return provider::authenticate;
     }
 
-    private JwtDecoder jwtDecoder() {
+    private JwtDecoder jwtDecoder(String issuer, String jwkSet) {
         var decoder = NimbusJwtDecoder
-                .withJwkSetUri(jwkSetUri)
+                .withJwkSetUri(jwkSet)
                 .jwsAlgorithm(jwsAlgorithm)
                 .build();
-        decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(issuerUri));
+        decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(issuer));
         return decoder;
     }
 

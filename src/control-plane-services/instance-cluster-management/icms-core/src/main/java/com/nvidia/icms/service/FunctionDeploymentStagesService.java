@@ -82,19 +82,7 @@ public class FunctionDeploymentStagesService {
                                                                        event,
                                                                        instanceRequest.getDeploymentId(),
                                                                        instanceRequest.getGpuSpecificationId());
-                CompletableFuture
-                        .runAsync(() -> functionDeploymentStagesClient
-                                .sendFunctionDeploymentStage(fndsMessageModel))
-                        .exceptionally(exception -> {
-                            log.error(
-                                    "Failed to send deployment stage to Event Ledger: "
-                                            + "instanceId={}, functionId={}, ncaId={}",
-                                    fndsMessageModel.getInstanceId(),
-                                    fndsMessageModel.getFunctionId(),
-                                    fndsMessageModel.getNcaId(),
-                                    exception);
-                            return null;
-                        });
+                functionDeploymentStagesClient.sendFunctionDeploymentStage(fndsMessageModel);
             }
         } catch (Exception e) {
             String message = String.format("Deployment stage cannot be sent, Error: %s",

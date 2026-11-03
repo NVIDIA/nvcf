@@ -175,33 +175,44 @@ func renderManifestArtifactRegistryPaths(catalog *Catalog) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return renderReleaseSetSummary(catalog.ReleaseSet) + renderManifestTables(entries), nil
+	summary, err := renderReleaseSetSummary(catalog)
+	if err != nil {
+		return "", err
+	}
+	return summary + renderManifestTables(entries), nil
 }
 
-func renderReleaseSetSummary(releaseSet ReleaseSetMetadata) string {
-	if releaseSet.DocumentationVersion == "" {
-		return ""
+func renderReleaseSetSummary(catalog *Catalog) (string, error) {
+	if catalog.ReleaseSet == (ReleaseSetMetadata{}) {
+		return "", nil
 	}
-	return fmt.Sprintf("### Stack release set\n\nDocumentation: `%s` (%s)\n\n| Stack | Version | Source tag |\n| --- | --- | --- |\n| Control plane | `%s` | `%s` |\n| Compute plane | `%s` | `%s` |\n| Observability | `%s` | `%s` |\n\n",
-		releaseSet.DocumentationVersion,
-		releaseSet.Status,
-		releaseSet.Stacks.ControlPlane.Version,
-		releaseSet.Stacks.ControlPlane.SourceTag,
-		releaseSet.Stacks.ComputePlane.Version,
-		releaseSet.Stacks.ComputePlane.SourceTag,
-		releaseSet.Stacks.Observability.Version,
-		releaseSet.Stacks.Observability.SourceTag,
-	)
+	var b strings.Builder
+	b.WriteString("### Stack releases\n\n")
+	b.WriteString("| Stack | Version | Source tag |\n| --- | --- | --- |\n")
+	for _, stack := range releaseSetStackNames {
+		metadata, _ := catalog.ReleaseSet.Stacks.byName(stack)
+		link, err := overviewStackLink(stack, catalog.DocsEdition != nil)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(fmt.Sprintf("| [%s](%s) | `%s` | `%s` |\n",
+			documentationStackDisplayName(stack), link, metadata.Version, metadata.SourceTag))
+	}
+	b.WriteString("\n")
+	return b.String(), nil
 }
 
 func renderManifestTables(entries []resolvedManifestEntry) string {
 	var b strings.Builder
 	for _, section := range manifestSections {
+		sectionEntries := manifestEntriesForSection(entries, section)
+		if section.Kind == ManifestKindEACVE && len(sectionEntries) == 0 {
+			continue
+		}
 		b.WriteString("### " + section.Heading + "\n\n")
 		if section.Description != "" {
 			b.WriteString(section.Description + "\n\n")
 		}
-		sectionEntries := manifestEntriesForSection(entries, section)
 		if section.Kind == ManifestKindResource {
 			b.WriteString("| Artifact | Version | Stack | Description | Distribution | Source code |\n")
 			b.WriteString("| --- | --- | --- | --- | --- | --- |\n")

@@ -204,9 +204,9 @@ the required replica count and the managed TLS configuration. The
 `workload.stargateQUICInsecure` setting enables plaintext worker transport and
 must not be used in production.
 
-The request router uses `power-of-two` when no load-balancer configuration is
+The request router uses `power-of-n` when no load-balancer configuration is
 set. Configure other routing methods with the
-[LLM Request Router Load Balancing](https://github.com/NVIDIA/nvcf/blob/main/docs/user/llm-request-router-load-balancing.md)
+[LLM Request Router Load Balancing](https://github.com/NVIDIA/nvcf/blob/main/docs/self-managed/llm-request-router-load-balancing.md)
 guide.
 
 If the sidecar image is mirrored outside the stack's default image registry and

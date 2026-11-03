@@ -19,9 +19,7 @@ spring.main.allow-bean-definition-overriding: true
 server:
   shutdown: immediate
 
-grpc:
-  server:
-    port: 0  # Random port to avoid BindException when running multiple integration tests
+spring.grpc.server.port: 0  # Random port to avoid BindException when running multiple integration tests
 
 management:
   tracing:

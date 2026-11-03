@@ -18,16 +18,20 @@ limitations under the License.
 package selfhosted
 
 import (
+	"cmp"
 	"context"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,11 +42,13 @@ const (
 	// Wall-clock budget for cache freshness. Preflight is rarely re-run more
 	// often than this, and the cluster-validator's rc cadence is multi-day.
 	validatorTagCacheTTL = 1 * time.Hour
-
-	// Hard upper bound on the registry round-trip so a slow NGC can't stall
-	// preflight; we fall back to the const if this trips.
-	validatorTagFetchTimeout = 5 * time.Second
 )
+
+// validatorTagFetchTimeout is a hard upper bound on the registry round trips
+// of tag discovery, so a slow registry cannot stall preflight. When it trips,
+// an untagged image is reported as unresolved rather than launched. A var so
+// tests can shorten it.
+var validatorTagFetchTimeout = 5 * time.Second
 
 // Restrict to X.Y.Z or X.Y.Z-rc.N tags; excludes sigstore metadata
 // (sha256-*.sig/sbom/vex) and commit-SHA pre-releases (X.Y.Z-vSHA).
@@ -52,21 +58,24 @@ var validatorTagPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(-rc\.\d+)?$`)
 // substituted, sourced from the OCI registry hosting baseImage. Prefers
 // stable releases over rc; falls back to the highest rc when no stable
 // exists. Returns ("", false) on any failure (network, auth, parse, no
-// matching tags) so the caller can fall back to the input value as-is.
+// matching tags), and the caller then reports an untagged image as
+// unresolved.
 //
 // Discovery only runs when baseImage has no tag. A pinned tag
-// (image:vX.Y.Z) is honored verbatim — operators who specify a tag
+// (image:vX.Y.Z) is honored verbatim: operators who specify a tag
 // must get exactly that tag, never a registry-side override.
 //
 // Reads and writes a 1h-TTL cache at ~/.cache/nvcf-cli/validator-tag.json
 // so back-to-back preflight runs share the result without re-hitting the
 // registry.
 func ResolveLatestValidatorTag(ctx context.Context, baseImage string) (string, bool) {
+	// parseImageRef refuses a registry that is not a bare host[:port], so no
+	// URL below is built from one that moves the request elsewhere.
 	registry, repo, tag, ok := parseImageRef(baseImage)
 	if !ok {
 		return "", false
 	}
-	// Operator pinned an explicit tag — respect it, no discovery. The
+	// Operator pinned an explicit tag: respect it, no discovery. The
 	// caller's fallback path uses baseImage unchanged in this case.
 	if tag != "" {
 		return "", false
@@ -76,9 +85,7 @@ func ResolveLatestValidatorTag(ctx context.Context, baseImage string) (string, b
 		return fmt.Sprintf("%s/%s:%s", registry, repo, cached), true
 	}
 
-	fetchCtx, cancel := context.WithTimeout(ctx, validatorTagFetchTimeout)
-	defer cancel()
-	tags, err := fetchValidatorTags(fetchCtx, registry, repo)
+	tags, err := fetchValidatorTags(ctx, registry, repo)
 	if err != nil || len(tags) == 0 {
 		return "", false
 	}
@@ -90,33 +97,67 @@ func ResolveLatestValidatorTag(ctx context.Context, baseImage string) (string, b
 	return fmt.Sprintf("%s/%s:%s", registry, repo, best), true
 }
 
-// parseImageRef splits "registry/repo:tag" or "registry/repo@digest" into
-// its parts. The registry must contain a '.' or ':' to distinguish a
-// real hostname from a Docker Hub library shorthand. Returns ok=false on
-// any shape we don't recognize.
-func parseImageRef(image string) (registry, repo, tag string, ok bool) {
+// ImageRefIsPinned reports whether ref names a tag or a digest. An unpinned
+// reference is pulled as :latest, which a registry need not have.
+func ImageRefIsPinned(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if strings.Contains(ref, "@") {
+		return true
+	}
+	return strings.Contains(ref[strings.LastIndex(ref, "/")+1:], ":")
+}
+
+// parseImageRef splits an image reference into its registry, repository and
+// tag or digest, the way the container runtime reads it. A first component
+// with a '.' or ':', or "localhost", is the registry; anything else is a
+// Docker Hub name. In "repo:tag@digest" the digest pins the image and the tag
+// is dropped, so it never leaks into a token scope. ok is false for a
+// registry that is not a bare host[:port] and for an empty repository: every
+// caller builds a URL from the result.
+func parseImageRef(image string) (registry, repo, ref string, ok bool) {
 	image = strings.TrimSpace(image)
-	slash := strings.Index(image, "/")
-	if slash <= 0 {
+	registry, rest := dockerHubRegistry, image
+	if head, tail, found := strings.Cut(image, "/"); found &&
+		(strings.ContainsAny(head, ".:") || head == "localhost") {
+		registry, rest = head, tail
+	}
+	if host, _ := parseRegistryHostPort(registry); host == "" {
 		return "", "", "", false
 	}
-	head := image[:slash]
-	if !strings.ContainsAny(head, ".:") && head != "localhost" {
+	if name, digest, found := strings.Cut(rest, "@"); found {
+		rest, ref = name, digest
+		if i := strings.LastIndex(rest, ":"); i > strings.LastIndex(rest, "/") {
+			rest = rest[:i]
+		}
+	} else if i := strings.LastIndex(rest, ":"); i > strings.LastIndex(rest, "/") {
+		rest, ref = rest[:i], rest[i+1:]
+	}
+	if !isRepositoryPath(rest) {
 		return "", "", "", false
 	}
-	rest := image[slash+1:]
-	if at := strings.Index(rest, "@"); at != -1 {
-		return head, rest[:at], rest[at+1:], true
+	if registry == dockerHubRegistry && !strings.Contains(rest, "/") {
+		rest = "library/" + rest
 	}
-	if colon := strings.LastIndex(rest, ":"); colon != -1 {
-		return head, rest[:colon], rest[colon+1:], true
+	return registry, rest, ref, true
+}
+
+// isRepositoryPath reports whether s can be a repository path: non-empty
+// '/'-separated components with nothing that would change a URL built from it.
+func isRepositoryPath(s string) bool {
+	if s == "" {
+		return false
 	}
-	return head, rest, "", true
+	for _, part := range strings.Split(s, "/") {
+		if part == "" || !isBareRegistryHost(part) || strings.Contains(part, ":") {
+			return false
+		}
+	}
+	return true
 }
 
 // fetchValidatorTags walks the OCI tag-list endpoint for a single repo.
-// Handles the standard NGC bearer-token exchange: try anonymous, on 401
-// re-auth using credentials from ~/.docker/config.json or NGC_API_KEY.
+// Handles the standard Bearer token exchange: try anonymous, then on 401
+// re-auth with the credential the run settled for the repository.
 func fetchValidatorTags(ctx context.Context, registry, repo string) ([]string, error) {
 	tagsURL := fmt.Sprintf("https://%s/v2/%s/tags/list", registry, repo)
 	body, err := fetchWithBearer(ctx, tagsURL, registry, repo)
@@ -132,15 +173,21 @@ func fetchValidatorTags(ctx context.Context, registry, repo string) ([]string, e
 	return doc.Tags, nil
 }
 
-func fetchWithBearer(ctx context.Context, url, registry, repo string) ([]byte, error) {
-	client := &http.Client{Timeout: validatorTagFetchTimeout}
+// fetchWithBearer GETs rawURL, anonymously first and, on a 401, with a Bearer
+// token for the credential the run settled for repo. Its registry round trips
+// share validatorTagFetchTimeout. Reading the credential does not spend it: a
+// helper waiting on a keychain prompt or a pinentry is bounded on its own, and
+// the NGC key it gives way to must still have time to reach the registry.
+func fetchWithBearer(ctx context.Context, rawURL, registry, repo string) ([]byte, error) {
+	client := newRegistryHTTPClient(validatorTagFetchTimeout)
+	start := time.Now()
+	anonCtx, cancelAnon := context.WithTimeout(ctx, validatorTagFetchTimeout)
+	defer cancelAnon()
 
 	// First attempt without auth so anonymous-pullable registries work.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.Do(req)
+	resp, err := doRegistryRequest(anonCtx, client, func() (*http.Request, error) {
+		return http.NewRequestWithContext(anonCtx, http.MethodGet, rawURL, nil)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -152,21 +199,33 @@ func fetchWithBearer(ctx context.Context, url, registry, repo string) ([]byte, e
 		resp.Body.Close()
 		return nil, fmt.Errorf("registry returned %s", resp.Status)
 	}
+	// Capture the auth challenge before closing.
+	wwwAuth := selectAuthChallenge(resp.Header.Values("Www-Authenticate"))
 	resp.Body.Close()
+	spent := time.Since(start)
 
-	// Bearer-token exchange. Realm and scope come from the Www-Authenticate
-	// header; for NGC the realm is /proxy_auth and scope is repository:<repo>:pull.
-	token, err := exchangeBearerToken(ctx, client, registry, repo)
+	// The read runs outside the budget; settling the scope, a registry round
+	// trip, runs inside it.
+	creds := registryCredentialsFrom(ctx)
+	creds.read(ctx, registry)
+	authCtx, cancelAuth := context.WithTimeout(ctx, validatorTagFetchTimeout-spent)
+	defer cancelAuth()
+	var credential *registryCredential
+	if settled := creds.lookupChallenged(authCtx, registry, repo, wwwAuth); settled.ok {
+		credential = &settled.cred
+	}
+	token, err := exchangeBearerToken(authCtx, client, registry, repo, wwwAuth, credential)
 	if err != nil {
 		return nil, err
 	}
 
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err = client.Do(req)
+	resp, err = doRegistryRequest(authCtx, client, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(authCtx, http.MethodGet, rawURL, nil)
+		if err == nil {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		return req, err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -177,97 +236,395 @@ func fetchWithBearer(ctx context.Context, url, registry, repo string) ([]byte, e
 	return io.ReadAll(resp.Body)
 }
 
-// exchangeBearerToken does the NGC token exchange using credentials
-// resolved from ~/.docker/config.json or NGC env vars.
+// newRegistryHTTPClient is the one client every registry call uses, so none
+// can follow a redirect to plain http with the operator's credentials.
+func newRegistryHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, CheckRedirect: refuseInsecureRedirect}
+}
+
+// errRefusedRedirect is a redirect the registry client would not follow.
+type errRefusedRedirect struct{ msg string }
+
+func (e errRefusedRedirect) Error() string { return e.msg }
+
+// refuseInsecureRedirect rejects any redirect hop that is not https.
 //
-// NGC-specific: this constructs the token URL using NGC's /proxy_auth
-// realm rather than parsing the Www-Authenticate header from the 401
-// response (the generic OAuth2 distribution flow). Non-NGC registries
-// (GCR, ECR, GHCR, Harbor, etc.) will return a non-200 here and the
-// caller falls back to using the configured image reference as-is.
-// Acceptable for v1 since the validator image only ships from NGC.
-func exchangeBearerToken(ctx context.Context, client *http.Client, registry, repo string) (string, error) {
-	user, pass, ok := ngcCredentials(registry)
-	if !ok {
-		return "", fmt.Errorf("no NGC credentials for %s", registry)
+// Go strips the Authorization header only when a redirect changes host, and
+// that comparison ignores the scheme. Without this, an https realm that 302s to
+// http on the same host would re-send the operator's credentials in cleartext,
+// defeating the https-only realm check in exchangeBearerToken.
+func refuseInsecureRedirect(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "https" {
+		return errRefusedRedirect{msg: fmt.Sprintf("refusing redirect to non-https URL %q", req.URL.Redacted())}
 	}
-	tokenURL := fmt.Sprintf("https://%s/proxy_auth?service=%s&scope=repository:%s:pull", registry, registry, repo)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
-	if err != nil {
-		return "", err
+	if len(via) >= 10 {
+		return errRefusedRedirect{msg: fmt.Sprintf("stopped after %d redirects", len(via))}
 	}
-	req.SetBasicAuth(user, pass)
-	resp, err := client.Do(req)
+	return nil
+}
+
+// registryRetryAttempts and registryRetryBackoff bound the retries of a
+// registry call that failed transiently: a connection error, a 5xx or a 429.
+// Vars so tests need not wait out the backoff.
+var (
+	registryRetryAttempts = 3
+	registryRetryBackoff  = 500 * time.Millisecond
+)
+
+// registryRetryAfterCap bounds how long a Retry-After header can hold a retry.
+const registryRetryAfterCap = 5 * time.Second
+
+// doRegistryRequest sends the request build returns, retrying a transient
+// failure while ctx leaves time for another attempt. A refused redirect is
+// not retried. The last response or error is returned as is.
+func doRegistryRequest(
+	ctx context.Context, client *http.Client, build func() (*http.Request, error),
+) (*http.Response, error) {
+	for attempt := 1; ; attempt++ {
+		req, err := build()
+		if err != nil {
+			return nil, err
+		}
+		resp, err := client.Do(req)
+		var refused errRefusedRedirect
+		retry := err != nil && ctx.Err() == nil && !errors.As(err, &refused)
+		wait := time.Duration(attempt) * registryRetryBackoff
+		if err == nil && isTransientStatus(resp.StatusCode) {
+			retry = true
+			wait = max(wait, retryAfter(resp.Header.Get("Retry-After")))
+		}
+		if !retry || attempt >= registryRetryAttempts || !allowsRetryAfter(ctx, wait) {
+			return resp, err
+		}
+		if resp != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+			resp.Body.Close()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+// isTransientStatus reports a status a retry may clear.
+func isTransientStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
+
+// retryAfter reads a Retry-After header in seconds or as an HTTP date,
+// capped at registryRetryAfterCap.
+func retryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	var d time.Duration
+	if secs, err := strconv.Atoi(v); err == nil {
+		d = time.Duration(secs) * time.Second
+	} else if at, err := http.ParseTime(v); err == nil {
+		d = time.Until(at)
+	}
+	return min(max(d, 0), registryRetryAfterCap)
+}
+
+// allowsRetryAfter reports whether ctx allows waiting d and then trying once more.
+func allowsRetryAfter(ctx context.Context, d time.Duration) bool {
+	deadline, ok := ctx.Deadline()
+	return !ok || time.Until(deadline) > d
+}
+
+// tokenExchangeError is a token exchange that produced no token.
+type tokenExchangeError struct {
+	// status is the token endpoint's HTTP status; 0 when none was read.
+	status int
+	// credentialed reports that a credential was sent.
+	credentialed bool
+	// refused marks an exchange the CLI declined before sending anything,
+	// for a realm it will not send credentials to.
+	refused bool
+	msg     string
+}
+
+func (e *tokenExchangeError) Error() string { return e.msg }
+
+// rejected reports that the registry refused a credential it was sent:
+// a 401 or 403 from the token endpoint. Nothing else is evidence about the
+// credential.
+func (e *tokenExchangeError) rejected() bool {
+	return e.credentialed && (e.status == http.StatusUnauthorized || e.status == http.StatusForbidden)
+}
+
+// exchangeBearerToken implements the OCI Distribution Spec Bearer token flow,
+// parsing realm/service/scope from the WWW-Authenticate header. cred is the
+// credential to send, or nil for an anonymous token. A challenge with no
+// realm falls back to NGC's /proxy_auth, for nvcr.io only. Failures are a
+// *tokenExchangeError.
+func exchangeBearerToken(
+	ctx context.Context, client *http.Client, registry, repo, wwwAuthenticate string, cred *registryCredential,
+) (string, error) {
+	realm, service, scope := parseWWWAuthenticate(wwwAuthenticate)
+
+	if realm == "" {
+		if isNGCKeyRegistry(registry) {
+			return exchangeNGCBearerToken(ctx, client, registry, repo, cred)
+		}
+		return "", &tokenExchangeError{refused: true, msg: fmt.Sprintf("%s named no Bearer token realm", registry)}
+	}
+
+	u, err := url.Parse(realm)
+	// Reject non-HTTPS or relative realms before attaching credentials.
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return "", &tokenExchangeError{refused: true,
+			msg: fmt.Sprintf("refusing token exchange at insecure or relative realm %q for %s", realm, registry)}
+	}
+	if !realmAuthorized(registry, u) {
+		return "", &tokenExchangeError{refused: true,
+			msg: fmt.Sprintf("refusing to send credentials to realm host %q; not authorized for registry %s",
+				u.Hostname(), registry)}
+	}
+	q := u.Query()
+	if service != "" {
+		q.Set("service", service)
+	}
+	// Use scope from the WWW-Authenticate header when present.
+	// When scope is empty and a repo is provided, synthesize the standard
+	// pull scope. When neither is present (credential probe, no specific
+	// repo needed), omit scope entirely: most registries issue a valid
+	// token and the absence of a resource scope avoids org-level 403s for
+	// non-existent repositories.
+	if scope == "" && repo != "" {
+		scope = "repository:" + repo + ":pull"
+	}
+	if scope != "" {
+		q.Set("scope", scope)
+	}
+	u.RawQuery = q.Encode()
+	return requestToken(ctx, client, u.String(), realm, cred)
+}
+
+// realmAuthorized reports whether credentials for registry may go to the
+// token realm u. The realm comes from a registry-controlled response header,
+// so without this a registry could name realm="https://attacker.example/token"
+// and receive the operator's credentials. Allowed: the registry's own host,
+// a subdomain of it (auth.registry.example.com for registry.example.com), or
+// a documented delegation in trustedRealmDelegations. NVIDIA hosts get no
+// wider grant: nvcr.io issues its tokens itself.
+func realmAuthorized(registry string, u *url.URL) bool {
+	realmHost := strings.ToLower(u.Hostname())
+	// Reject an empty realm host explicitly. "https://:443/token" has a
+	// non-empty u.Host (":443"), but Hostname() is "", and an empty
+	// trustedRealmDelegations lookup would then compare equal.
+	if realmHost == "" {
+		return false
+	}
+	// Brackets off, to match u.Hostname(): "[fd00::1]" with no port fails
+	// SplitHostPort and would otherwise reject its own token server.
+	regHost := strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(registry, "["), "]"))
+	if h, _, err := net.SplitHostPort(registry); err == nil {
+		regHost = strings.ToLower(h)
+	}
+	return realmHost == regHost ||
+		strings.HasSuffix(realmHost, "."+regHost) ||
+		trustedRealmDelegations[regHost] == realmHost
+}
+
+// requestToken asks tokenURL for a Bearer token, sending cred as Basic auth
+// when it is set. label names the endpoint in errors.
+func requestToken(
+	ctx context.Context, client *http.Client, tokenURL, label string, cred *registryCredential,
+) (string, error) {
+	resp, err := doRegistryRequest(ctx, client, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
+		if err == nil && cred != nil {
+			req.SetBasicAuth(cred.user, cred.pass)
+		}
+		return req, err
+	})
 	if err != nil {
-		return "", err
+		var refused errRefusedRedirect
+		return "", &tokenExchangeError{
+			credentialed: cred != nil, refused: errors.As(err, &refused),
+			msg: fmt.Sprintf("token exchange at %s: %v", label, err),
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("token exchange returned %s", resp.Status)
+		return "", &tokenExchangeError{
+			status: resp.StatusCode, credentialed: cred != nil,
+			msg: fmt.Sprintf("token exchange at %s returned %s", label, resp.Status),
+		}
 	}
+	// Both "token" (OCI spec) and "access_token" (Docker Hub variant) are valid.
 	var doc struct {
-		Token string `json:"token"`
+		Token       string `json:"token"`
+		AccessToken string `json:"access_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
-		return "", err
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&doc); err != nil {
+		return "", &tokenExchangeError{credentialed: cred != nil,
+			msg: fmt.Sprintf("decode token response from %s: %v", label, err)}
 	}
-	if doc.Token == "" {
-		return "", fmt.Errorf("empty token in response")
+	if tok := cmp.Or(doc.Token, doc.AccessToken); tok != "" {
+		return tok, nil
 	}
-	return doc.Token, nil
+	return "", &tokenExchangeError{credentialed: cred != nil, msg: fmt.Sprintf("empty token in response from %s", label)}
 }
 
-// ngcCredentials resolves (username, password) for an NGC-hosted registry.
-// Checks ~/.docker/config.json first; falls back to NGC_API_KEY env vars
-// with the literal "$oauthtoken" sentinel username NGC expects.
-func ngcCredentials(registry string) (string, string, bool) {
-	if u, p, ok := credsFromDockerConfig(registry); ok {
-		return u, p, true
+// exchangeNGCBearerToken is NGC's /proxy_auth token exchange, used when
+// nvcr.io sends a challenge with no realm. It refuses every other registry,
+// so the NGC key never reaches an unrelated /proxy_auth endpoint.
+func exchangeNGCBearerToken(
+	ctx context.Context, client *http.Client, registry, repo string, cred *registryCredential,
+) (string, error) {
+	if !isNGCKeyRegistry(registry) {
+		return "", &tokenExchangeError{refused: true,
+			msg: fmt.Sprintf("NGC token fallback not applicable for registry %s", registry)}
 	}
-	if key := firstNonEmptyEnv(ngcAPIKeyEnvNames...); key != "" {
-		return "$oauthtoken", key, true
+	// url.Values omits scope entirely when repo is empty rather than sending
+	// scope= with an empty value. An empty scope validates the API key
+	// without org-scoped access checks.
+	q := url.Values{"service": {registry}}
+	if repo != "" {
+		q.Set("scope", "repository:"+repo+":pull")
 	}
-	return "", "", false
+	return requestToken(ctx, client, "https://"+registry+"/proxy_auth?"+q.Encode(), "NGC /proxy_auth", cred)
 }
 
-func credsFromDockerConfig(registry string) (string, string, bool) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", "", false
+// parseWWWAuthenticate extracts realm, service, and scope from a standard
+// Bearer challenge header:
+//
+//	Bearer realm="https://auth.example.com/token",service="reg.example.com",scope="repository:lib:pull"
+//
+// Returns empty strings when the header is absent, not a Bearer challenge, or
+// cannot be parsed. The parser handles quoted values that might contain commas.
+func parseWWWAuthenticate(header string) (realm, service, scope string) {
+	// Split scheme from parameters on the first whitespace. HTTP auth scheme
+	// names are case-insensitive (RFC 7235 s2.1), so compare with EqualFold.
+	idx := strings.IndexByte(header, ' ')
+	if idx < 0 || !strings.EqualFold(header[:idx], "Bearer") {
+		return
 	}
-	body, err := os.ReadFile(filepath.Join(home, ".docker", "config.json"))
-	if err != nil {
-		return "", "", false
-	}
-	var doc struct {
-		Auths map[string]struct {
-			Auth     string `json:"auth"`
-			Username string `json:"username"`
-			Password string `json:"password"`
-		} `json:"auths"`
-	}
-	if err := json.Unmarshal(body, &doc); err != nil {
-		return "", "", false
-	}
-	entry, ok := doc.Auths[registry]
-	if !ok {
-		return "", "", false
-	}
-	if entry.Username != "" && entry.Password != "" {
-		return entry.Username, entry.Password, true
-	}
-	if entry.Auth != "" {
-		raw, err := base64.StdEncoding.DecodeString(entry.Auth)
-		if err != nil {
-			return "", "", false
+	params := strings.TrimSpace(header[idx+1:])
+	for len(params) > 0 {
+		// Find key=
+		eq := strings.IndexByte(params, '=')
+		if eq < 0 {
+			break
 		}
-		colon := strings.IndexByte(string(raw), ':')
-		if colon == -1 {
-			return "", "", false
+		key := strings.TrimSpace(params[:eq])
+		params = params[eq+1:]
+
+		// Read value (quoted or unquoted)
+		var val string
+		if strings.HasPrefix(params, `"`) {
+			end := strings.IndexByte(params[1:], '"')
+			if end < 0 {
+				break
+			}
+			val = params[1 : end+1]
+			params = strings.TrimPrefix(strings.TrimSpace(params[end+2:]), ",")
+		} else {
+			comma := strings.IndexByte(params, ',')
+			if comma < 0 {
+				val = strings.TrimSpace(params)
+				params = ""
+			} else {
+				val = strings.TrimSpace(params[:comma])
+				params = params[comma+1:]
+			}
 		}
-		return string(raw[:colon]), string(raw[colon+1:]), true
+
+		switch strings.ToLower(key) {
+		case "realm":
+			realm = val
+		case "service":
+			service = val
+		case "scope":
+			scope = val
+		}
 	}
-	return "", "", false
+	return
+}
+
+// trustedRealmDelegations maps a registry host to its authorized token host
+// when the registry uses a separate host for token exchange. Only add entries
+// here for registries with publicly documented auth architectures; this list
+// extends the fail-closed realm validation and must not grow without a clear
+// trust basis.
+var trustedRealmDelegations = map[string]string{
+	// Docker Hub documents this split explicitly: the pull host and the auth
+	// host are distinct (docs.docker.com/registry/spec/auth/token/).
+	"registry-1.docker.io": "auth.docker.io",
+	"docker.io":            "auth.docker.io",
+}
+
+// ngcApprovedHosts is the set of exact hostnames (without port) that are
+// considered NGC-hosted. Dot-prefixed entries match any subdomain.
+var ngcApprovedHosts = []string{
+	"nvcr.io",
+	".nvcr.io",
+	"nvidia.com",
+	".nvidia.com",
+	"ngc.nvidia",
+	".ngc.nvidia",
+}
+
+// isBareRegistryHost reports whether s is a plain host[:port], with nothing in
+// it that could move the request somewhere else once concatenated into a URL.
+//
+// This matters because the registry string is interpolated directly into
+// "https://" + registry + "/...". A value like "evil.com/x.nvcr.io" ends with a
+// trusted suffix but parses to host evil.com, so a suffix check alone would
+// authorize sending credentials to an attacker. IPv6 literals keep their
+// brackets and are allowed.
+func isBareRegistryHost(s string) bool {
+	if s == "" {
+		return false
+	}
+	// "/" and "@" move the host; "?" and "#" truncate it; whitespace and
+	// control characters have no place in a hostname.
+	if strings.ContainsAny(s, "/@?#\\") {
+		return false
+	}
+	for _, r := range s {
+		if r <= ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// isNGCRegistry returns true when the registry host belongs to an NVIDIA / NGC
+// domain. The check strips any port from the registry string before matching
+// so that nvcr.io:443 is handled correctly, and uses dot-boundary matching to
+// reject deceptive suffixes such as evilnvcr.io or nvidia.com.invalid.
+func isNGCRegistry(registry string) bool {
+	// Never treat a value we cannot safely place in a URL as an NGC host: the
+	// caller uses this to decide whether to forward the NGC API key.
+	if !isBareRegistryHost(registry) {
+		return false
+	}
+	host := registry
+	// Strip port if present (e.g. nvcr.io:5000 -> nvcr.io).
+	if h, _, err := net.SplitHostPort(registry); err == nil {
+		host = h
+	}
+	host = strings.ToLower(host)
+	for _, approved := range ngcApprovedHosts {
+		if strings.HasPrefix(approved, ".") {
+			// Subdomain match: host must end with ".suffix" or equal "suffix".
+			suffix := approved[1:] // strip the leading dot
+			if host == suffix || strings.HasSuffix(host, approved) {
+				return true
+			}
+		} else {
+			if host == approved {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // pickBestValidatorTag filters to recognized validator tags and returns

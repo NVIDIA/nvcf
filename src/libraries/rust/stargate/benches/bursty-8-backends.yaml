@@ -40,8 +40,6 @@ backends:
       decode_jitter_ms: 4
       prefill_tokens_per_s: 4200
       decode_tokens_per_s: 90
-    registration:
-      last_mean_input_tps: 120
   profiles:
     - count: 2
       profile:
@@ -55,8 +53,6 @@ backends:
           decode_jitter_ms: 2
           prefill_tokens_per_s: 7200
           decode_tokens_per_s: 150
-        registration:
-          last_mean_input_tps: 220
     - count: 4
       profile:
         name: balanced
@@ -69,8 +65,6 @@ backends:
           decode_jitter_ms: 4
           prefill_tokens_per_s: 4200
           decode_tokens_per_s: 90
-        registration:
-          last_mean_input_tps: 120
     - count: 2
       profile:
         name: constrained
@@ -83,8 +77,6 @@ backends:
           decode_jitter_ms: 10
           prefill_tokens_per_s: 2200
           decode_tokens_per_s: 50
-        registration:
-          last_mean_input_tps: 60
 
 traffic_pattern:
   kind: bursty

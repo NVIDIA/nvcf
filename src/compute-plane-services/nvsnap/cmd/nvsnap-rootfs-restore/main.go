@@ -16,7 +16,7 @@ limitations under the License.
 */
 
 // Command nvsnap-rootfs-restore is the B′ rootfs-restore shim (see
-// docs/proposals/rootfs-overlay-mount-scale.md). The webhook injects it
+// docs/ARCHITECTURE.md §2). The webhook injects it
 // as the workload container's command for rootfs (non-CRIU) warm
 // restores. It reconstructs the warm rootfs as a SINGLE overlay and
 // pivot_roots the workload into it, then execs the workload's original

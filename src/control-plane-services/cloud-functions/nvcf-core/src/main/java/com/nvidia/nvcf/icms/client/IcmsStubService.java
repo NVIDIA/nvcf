@@ -85,6 +85,7 @@ public interface IcmsStubService {
                           required = false) Long cacheSize,
             @RequestParam("LaunchSpecification.DeploymentId") UUID deploymentId,
             @RequestParam("LaunchSpecification.GpuSpecificationId") UUID gpuSpecificationId,
+            @RequestParam("LaunchSpecification.MaxRequestConcurrency") int maxRequestConcurrency,
             @RequestParam("FunctionDetails.FunctionId") UUID functionId,
             @RequestParam("FunctionDetails.FunctionVersionId") UUID functionVersionId,
             @RequestParam("FunctionDetails.OwnerNcaId") String ownerNcaId,
@@ -347,7 +348,7 @@ public interface IcmsStubService {
         }
     }
 
-    @GetExchange("/v1/si/accounts/{ncaId}/clusters?includeAuthorizedClusters=true&includeGfnInAuthorizedClusters=true")
+    @GetExchange("/v1/si/accounts/{ncaId}/clusters?includeAuthorizedClusters=true&includeNonByocInAuthorizedClusters=true")
     List<ClusterResponse> getClusters(
             @PathVariable("ncaId") String ncaId,
             @RequestParam("instanceTypeUsage") InstanceUsageTypeEnum instanceUsage);

@@ -67,13 +67,13 @@ class BootReactiveExceptionHandlerTest {
 
     @Test
     void handleExceptionCatchAllReturnsInternalServerError() {
-        var ex = new IllegalStateException("unexpected");
+        var ex = new IllegalStateException("Query; CQL [SELECT * FROM t]; timeout");
         var response = handler.handleExceptionCatchAll(ex, exchange).block();
         assertThat(response).isNotNull();
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         assertThat(response.getBody()).isInstanceOf(ProblemDetail.class);
         var body = (ProblemDetail) response.getBody();
-        assertThat(body.getDetail()).isEqualTo("unexpected");
+        assertThat(body.getDetail()).isEqualTo("Internal server error");
     }
 
     @Test

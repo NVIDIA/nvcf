@@ -329,8 +329,8 @@ mod tests {
     use super::*;
     use crate::config::{
         AlgorithmConfig, ArrivalPatternConfig, BackendConfig, BackendProfile, HotsetTrafficConfig,
-        MixedSizeClassConfig, MixedSizeTrafficConfig, PrefixReuseTrafficConfig, RegistrationConfig,
-        ServiceTimeConfig, StargateConfig, TokenDistributionConfig, UniformTrafficConfig,
+        MixedSizeClassConfig, MixedSizeTrafficConfig, PrefixReuseTrafficConfig, ServiceTimeConfig,
+        StargateConfig, TokenDistributionConfig, UniformTrafficConfig,
     };
 
     fn base_config() -> BenchmarkConfig {
@@ -358,10 +358,7 @@ mod tests {
                         ttft_jitter_ms: 20,
                         decode_tokens_per_s: 80,
                         decode_jitter_ms: 0,
-                        prefill_tokens_per_s: None,
-                    },
-                    registration: RegistrationConfig {
-                        last_mean_input_tps: 100.0,
+                        prefill_tokens_per_s: 100.0,
                     },
                 },
             },

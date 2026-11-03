@@ -125,6 +125,11 @@ Render the effective chart-owned agent configuration. Top-level byoo/utils/
 storage/worker values provide the supported API. agentConfig.mergeConfig
 remains a legacy override and takes precedence for one minor-version
 transition.
+
+NVCA reads config keys case-insensitively. A mergeConfig key that differs
+from a chart-generated key only by case is renamed to the chart spelling and
+overrides the chart value. Rendering fails if mergeConfig or the effective
+configuration spells one key more than one way.
 */}}
 {{- define "nvcaop.effectiveAgentConfig" -}}
 {{- $byoo := .Values.byoo | default dict -}}
@@ -183,6 +188,9 @@ transition.
 {{- $_ := set $agent "sharedStorage" $sharedStorageEffective -}}
 {{- end -}}
 {{- $internalPersistentStorage := $storage.internalPersistentStorage | default dict -}}
+{{- if and $internalPersistentStorage.hardResourceQuota (not $internalPersistentStorage.storageClassName) -}}
+{{- fail "storage.internalPersistentStorage.storageClassName is required when hardResourceQuota is configured" -}}
+{{- end -}}
 {{- $ipsEffective := dict -}}
 {{- with $internalPersistentStorage.storageClassName }}
 {{- $_ := set $ipsEffective "storageClassName" . -}}
@@ -249,6 +257,22 @@ transition.
 {{- if $agent }}
 {{- $_ := set $config "agent" $agent -}}
 {{- end -}}
+{{- /* worker.download renders under workload.workerInitDownload. The chart defaults equal worker-init's built-in values; a field set to 0 is omitted so the image's default applies. */ -}}
+{{- $download := dict -}}
+{{- with $worker.download }}
+{{- if .concurrentDownloads }}
+{{- $_ := set $download "concurrentDownloads" (int .concurrentDownloads) -}}
+{{- end -}}
+{{- if .concurrentChunks }}
+{{- $_ := set $download "concurrentChunks" (int .concurrentChunks) -}}
+{{- end -}}
+{{- if .chunkSizeBytes }}
+{{- $_ := set $download "chunkSizeBytes" (int64 .chunkSizeBytes) -}}
+{{- end -}}
+{{- end -}}
+{{- if $download }}
+{{- $_ := set $config "workload" (dict "workerInitDownload" $download) -}}
+{{- end -}}
 {{- $agentConfig := .Values.agentConfig | default dict -}}
 {{- $mergeConfigData := $agentConfig.mergeConfig | default "" -}}
 {{- if $mergeConfigData }}
@@ -256,13 +280,80 @@ transition.
 {{- if hasKey $parsedMergeConfig "Error" -}}
 {{- fail (printf "agentConfig.mergeConfig contains invalid YAML: %s" $parsedMergeConfig.Error) -}}
 {{- end -}}
-{{- $config = mergeOverwrite $config ($parsedMergeConfig | default dict) -}}
+{{- $parsedMergeConfig = $parsedMergeConfig | default dict -}}
+{{- $_ := include "nvcaop.validateConfigKeyCase" (dict "value" $parsedMergeConfig "path" "" "source" "agentConfig.mergeConfig") -}}
+{{- $_ := include "nvcaop.alignOverrideKeyCase" (dict "base" $config "override" $parsedMergeConfig) -}}
+{{- $config = mergeOverwrite $config $parsedMergeConfig -}}
 {{- end -}}
+{{- $_ := include "nvcaop.validateConfigKeyCase" (dict "value" $config "path" "" "source" "effective agent configuration") -}}
 {{- $finalAgent := $config.agent | default dict -}}
 {{- if and $finalAgent.skipSelfDestruct $finalAgent.forceSelfDestruct -}}
 {{- fail "worker.skipSelfDestruct and worker.forceSelfDestruct cannot both be true (including via agentConfig.mergeConfig); NVCA rejects this combination at startup" -}}
 {{- end -}}
 {{- $config | toYaml -}}
+{{- end -}}
+
+{{/*
+Fail when a mapping in the agent configuration has keys that differ only by
+case. NVCA folds keys to lower case while iterating a map, so such keys
+resolve to an arbitrary value on each decode and the operator keeps rolling
+out the agent.
+Arguments: dict "value" <any> "path" <string> "source" <string>
+*/}}
+{{- define "nvcaop.validateConfigKeyCase" -}}
+{{- $value := .value -}}
+{{- if kindIs "map" $value -}}
+{{- $location := "at the top level" -}}
+{{- if .path -}}
+{{- $location = printf "under %q" .path -}}
+{{- end -}}
+{{- $seen := dict -}}
+{{- range $key := keys $value | sortAlpha -}}
+{{- $folded := lower $key -}}
+{{- if hasKey $seen $folded -}}
+{{- fail (printf "%s: keys %q and %q %s differ only by case; keep one spelling" $.source (get $seen $folded) $key $location) -}}
+{{- end -}}
+{{- $_ := set $seen $folded $key -}}
+{{- end -}}
+{{- range $key := keys $value | sortAlpha -}}
+{{- $childPath := ternary $key (printf "%s.%s" $.path $key) (eq $.path "") -}}
+{{- $_ := include "nvcaop.validateConfigKeyCase" (dict "value" (get $value $key) "path" $childPath "source" $.source) -}}
+{{- end -}}
+{{- else if kindIs "slice" $value -}}
+{{- range $index, $item := $value -}}
+{{- $_ := include "nvcaop.validateConfigKeyCase" (dict "value" $item "path" (printf "%s[%d]" $.path $index) "source" $.source) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Rename override keys in place to the spelling of the matching base key when
+the two differ only by case, so mergeOverwrite replaces the base value instead
+of keeping both spellings. Recurses into mappings present on both sides. The
+override must already pass nvcaop.validateConfigKeyCase.
+Arguments: dict "base" <map> "override" <map>
+*/}}
+{{- define "nvcaop.alignOverrideKeyCase" -}}
+{{- $base := .base -}}
+{{- $override := .override -}}
+{{- $baseKeys := dict -}}
+{{- range $key := keys $base | sortAlpha -}}
+{{- $_ := set $baseKeys (lower $key) $key -}}
+{{- end -}}
+{{- range $key := keys $override | sortAlpha -}}
+{{- $baseKey := get $baseKeys (lower $key) -}}
+{{- if $baseKey -}}
+{{- if ne $baseKey $key -}}
+{{- $_ := set $override $baseKey (get $override $key) -}}
+{{- $_ := unset $override $key -}}
+{{- end -}}
+{{- $baseValue := get $base $baseKey -}}
+{{- $overrideValue := get $override $baseKey -}}
+{{- if and (kindIs "map" $baseValue) (kindIs "map" $overrideValue) -}}
+{{- $_ := include "nvcaop.alignOverrideKeyCase" (dict "base" $baseValue "override" $overrideValue) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -326,38 +417,85 @@ Usage: {{ include "nvcaop.jsonListOrEmpty" <list> }}
 {{- end -}}
 
 {{/*
-Get the imageCredHelper repository based on image.repository
-If imageRepository is explicitly set, use it. Otherwise, calculate it based on image.repository prefix.
+Registry path (registry plus org and team) of a repository: everything
+before the last path element. The credential helper and collector default
+to this path, so a sibling image lives next to image.repository wherever
+that is: the public org, staging, or any other registry path. A repository
+with no registry path falls back to the public path nvcr.io/nvidia/nvcf-byoc
+instead of a bare name, which a container runtime would resolve on Docker
+Hub.
+Usage: {{ include "nvcaop.imageRegistryPath" .Values.image.repository }}
+*/}}
+{{- define "nvcaop.imageRegistryPath" -}}
+{{- $parts := splitList "/" . -}}
+{{- if gt (len $parts) 1 -}}
+{{- join "/" (initial $parts) -}}
+{{- else -}}
+nvcr.io/nvidia/nvcf-byoc
+{{- end -}}
+{{- end -}}
+
+{{/*
+Get the imageCredHelper repository based on image.repository.
+If imageRepository is explicitly set, use it. Otherwise it is the sibling of
+image.repository: nvcf-image-credential-helper under the same registry path
+(see nvcaop.imageRegistryPath). The default image.repository therefore still
+resolves to nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper and staging
+to stg.nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper. An operator
+image from any other registry path gets the helper from that same path.
 Usage: {{ include "nvcaop.imageCredHelperRepository" (dict "imageRepository" .Values.helmManaged.imageCredHelper.imageRepository "defaultRepository" .Values.image.repository) }}
 */}}
 {{- define "nvcaop.imageCredHelperRepository" -}}
 {{- if .imageRepository -}}
 {{- .imageRepository -}}
-{{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
-stg.nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper
 {{- else -}}
-nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper
+{{- include "nvcaop.imageRegistryPath" .defaultRepository }}/nvcf-image-credential-helper
 {{- end -}}
 {{- end -}}
 
 {{/*
-Get the OTel collector repository based on image.repository
-If imageRepository is explicitly set, use it. Otherwise, calculate it based on image.repository prefix.
+Get the OTel collector repository based on image.repository.
+If imageRepository is explicitly set, use it. Otherwise it is the sibling of
+image.repository, nvcf-otel-collector under the same registry path (see
+nvcaop.imageCredHelperRepository).
 Usage: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .Values.otelCollector.imageRepository "defaultRepository" .Values.image.repository) }}
 */}}
 {{- define "nvcaop.otelCollectorRepository" -}}
 {{- if .imageRepository -}}
 {{- .imageRepository -}}
-{{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
-stg.nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector
 {{- else -}}
-nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector
+{{- include "nvcaop.imageRegistryPath" .defaultRepository }}/nvcf-otel-collector
 {{- end -}}
 {{- end -}}
 
 {{/*
-Get the BYOO OTel collector repository based on image.repository.
-If imageRepository is explicitly set, use it. Otherwise, calculate it based on image.repository prefix.
+Return "true" when the operator would read OTEL_COLLECTOR_IMAGE_TAG: the
+collector is enabled at the top level, or the NVCFBackend this chart renders
+enables it without its own tag. The operator's built-in tag is not kept
+current, so the chart fails instead of leaving the tag unset in that case.
+*/}}
+{{- define "nvcaop.otelCollectorTagNeeded" -}}
+{{- $source := (.Values.ngcConfig).clusterSource | default "ngc-managed" -}}
+{{- $backend := dict -}}
+{{- if eq $source "self-managed" -}}
+{{- $backend = (.Values.selfManaged | default dict).otelCollector | default dict -}}
+{{- else if eq $source "helm-managed" -}}
+{{- $backend = (.Values.helmManaged | default dict).otelCollector | default dict -}}
+{{- end -}}
+{{- if or (.Values.otelCollector | default dict).enabled (and $backend.enabled (not $backend.imageTag)) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+Get the BYOO OTel collector repository based on image.repository and
+ngcConfig.clusterSource. If imageRepository is explicitly set, use it.
+Otherwise, staging resolves by image.repository prefix, and production
+resolves by cluster source: BYOC (ngc-managed) clusters authenticate image
+pulls with the NGC Cluster Key issued at registration, which is scoped to
+nvcf-core, not nvidia/nvcf-byoc (see NVIDIA/nvcf#798 and the follow-up fix
+for the staging repository in NVIDIA/nvcf#1040). Other cluster sources keep
+the nvidia/nvcf-byoc default pending their own verification.
 Usage: {{ include "nvcaop.byooOtelCollectorImage" . }}
 */}}
 {{- define "nvcaop.byooOtelCollectorRepository" -}}
@@ -365,23 +503,36 @@ Usage: {{ include "nvcaop.byooOtelCollectorImage" . }}
 {{- .imageRepository -}}
 {{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
 stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector
+{{- else if eq .clusterSource "ngc-managed" -}}
+nvcr.io/qtfpt1h0bieu/nvcf-core/byoo-otel-collector
 {{- else -}}
 nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
 {{- end -}}
 {{- end -}}
 
 {{/*
-Get the BYOO OTel collector image when its tag is configured.
+Get the BYOO OTel collector image when its tag is configured. values.yaml
+holds the only default tag, which the release bump updates. An empty or null
+tag renders nothing, so the chart sets no BYOO_OTEL_COLLECTOR_CONTAINER.
 */}}
 {{- define "nvcaop.byooOtelCollectorImage" -}}
 {{- $agent := .Values.agent | default dict -}}
 {{- $byooOtelCollector := $agent.byooOtelCollector | default dict -}}
-{{- $imageTag := "0.157.0-nv-0.2.1" -}}
-{{- if hasKey $byooOtelCollector "imageTag" -}}
-{{- $imageTag = $byooOtelCollector.imageTag -}}
+{{- with $byooOtelCollector.imageTag -}}
+{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" $.Values.image.repository "clusterSource" (($.Values.ngcConfig).clusterSource | default "ngc-managed"))) . -}}
 {{- end -}}
-{{- if $imageTag -}}
-{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" .Values.image.repository)) $imageTag -}}
+{{- end -}}
+
+{{/*
+Get the BYOO Fluent Bit image when agent.byooFluentBit.imageRepository is set.
+Otherwise return nothing so NVCA keeps its built-in upstream Fluent Bit image.
+Usage: {{ include "nvcaop.byooFluentBitImage" . }}
+*/}}
+{{- define "nvcaop.byooFluentBitImage" -}}
+{{- $agent := .Values.agent | default dict -}}
+{{- $byooFluentBit := $agent.byooFluentBit | default dict -}}
+{{- with $byooFluentBit.imageRepository -}}
+{{- printf "%s:%s" . (required "agent.byooFluentBit.imageTag is required when agent.byooFluentBit.imageRepository is set" $byooFluentBit.imageTag) -}}
 {{- end -}}
 {{- end -}}
 
@@ -418,6 +569,14 @@ Usage: {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
     "image" (dict "repository" "" "tag" "" "pullPolicy" "IfNotPresent")
     "schedule" "0 */3 * * *"
     "configMapName" "cluster-validator-network-checks"
+    "role" ""
+    "openBaoNamespace" ""
+    "envoyGatewayNamespace" ""
+    "gatewayNames" (list)
+    "externalComponents" (list)
+    "storageClass" ""
+    "nodeToNodeProbeImage" ""
+    "tolerations" (list)
     "networkChecks" (dict)
     "resources" (dict
       "requests" (dict "cpu" "100m" "memory" "64Mi")
@@ -448,3 +607,182 @@ stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator
 nvcr.io/nvidia/nvcf-byoc/cluster-validator
 {{- end -}}
 {{- end -}}
+
+{{/*
+Identifies everything a validator run reads from the release: its Job spec and
+its network-checks ConfigMap. The CronJob stamps it on every Job, and under the
+control-plane role the operator starts a run when the newest Job lacks it.
+*/}}
+{{- define "nvcaop.clusterValidatorSpecHash" -}}
+{{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
+{{- printf "%s\n---\n%s" (include "nvcaop.clusterValidatorJobSpec" .) (toYaml $cv.networkChecks) | sha256sum | trunc 16 -}}
+{{- end -}}
+
+{{/*
+The time budget of one cluster-validator Job run, in seconds. The checks end
+at runTimeout (VALIDATOR_TIMEOUT). After it, a check the deadline cut short
+deletes its probe (probeCleanup, clustervalidator.ProbeCleanupBound) and the
+run writes its summary (summaryWrite, clustervalidator.SummaryWriteBound).
+podStart covers scheduling and the image pull before the run starts. The Job's
+activeDeadlineSeconds is their sum, so it does not kill a run that is still
+cleaning up or publishing.
+*/}}
+{{- define "nvcaop.clusterValidatorTiming" -}}
+runTimeout: 540
+probeCleanup: 60
+summaryWrite: 75
+podStart: 120
+{{- end -}}
+
+{{/*
+The cluster-validator CronJob's Job spec. Under the control-plane role the
+operator also starts runs from the CronJob itself, so the two cannot drift.
+*/}}
+{{- define "nvcaop.clusterValidatorJobSpec" -}}
+{{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
+{{- $timing := include "nvcaop.clusterValidatorTiming" . | fromYaml -}}
+parallelism: 1
+completions: 1
+backoffLimit: 2
+activeDeadlineSeconds: {{ add $timing.runTimeout $timing.probeCleanup $timing.summaryWrite $timing.podStart }}
+# A published Not-Ready verdict that its recheck confirmed exits 3. The run
+# already ran the critical checks behind it a second time, so it fails the Job
+# at once rather than rerunning the suite. Any other failure is retried,
+# including a summary the run could not write and a Not-Ready the run had no
+# time left to recheck.
+podFailurePolicy:
+  rules:
+    - action: FailJob
+      onExitCodes:
+        containerName: cluster-validator
+        operator: In
+        values: [3]
+template:
+  metadata:
+    labels:
+      {{- include "nvcaop.baseSelectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: validation
+  spec:
+    serviceAccountName: {{ include "nvcaop.fullname" . }}-cluster-validator
+    automountServiceAccountToken: true
+    restartPolicy: Never
+    # Long enough for an interrupted run to delete its probe DaemonSet, pods
+    # and namespace, each of which gets its own 20s budget.
+    terminationGracePeriodSeconds: 120
+    securityContext:
+      runAsUser: 65534
+      runAsGroup: 65534
+      fsGroup: 65534
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
+    {{- if or .Values.generateImagePullSecret (gt (len .Values.imagePullSecrets) 0) }}
+    imagePullSecrets:
+    {{- if .Values.generateImagePullSecret }}
+    - name: {{ (.Values.imagePullSecretName) | default "nvca-operator-image-pull" | quote }}
+    {{- end }}
+    {{- range .Values.imagePullSecrets }}
+    - name: {{ .name | quote }}
+    {{- end }}
+    {{- end }}
+    containers:
+      - name: cluster-validator
+        image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" $cv.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.AppVersion $cv.image.tag }}
+        imagePullPolicy: {{ $cv.image.pullPolicy }}
+        env:
+          - name: VALIDATOR_CONFIG_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: VALIDATOR_CONFIG_NAME
+            value: {{ $cv.configMapName | quote }}
+          # Namespace the NVCA agent watches for the metrics summary; kept
+          # separate from the config namespace so a config-namespace
+          # override can't redirect metrics.
+          - name: VALIDATOR_SUMMARY_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          # Selects the check set: "control-plane" runs the gateway,
+          # storage, overlay and HA checks; "compute-plane" or unset runs
+          # the GPU set, and the schema rejects anything else. Without
+          # this the control-plane checks are unreachable from the chart.
+          - name: VALIDATOR_ROLE
+            value: {{ $cv.role | quote }}
+          # The CronJob runs beside an installed stack, so an empty
+          # control plane is a failure here rather than pre-install.
+          - name: VALIDATOR_POST_INSTALL
+            value: "true"
+          # The summary is this Job's output: a run that could not write it
+          # fails and is retried rather than completing.
+          - name: VALIDATOR_REQUIRE_SUMMARY
+            value: "true"
+          # The checks end here, which leaves the rest of
+          # activeDeadlineSeconds for the cleanup and the summary write.
+          - name: VALIDATOR_TIMEOUT
+            value: {{ printf "%ds" (int $timing.runTimeout) | quote }}
+          {{- with $cv.externalComponents }}
+          # Quorum components the stack does not run in-cluster, so Tier-2
+          # does not report them missing.
+          - name: NVCF_EXTERNAL_COMPONENTS
+            value: {{ join "," . | quote }}
+          {{- end }}
+          {{- if $cv.openBaoNamespace }}
+          # Relocated OpenBao: without this the Tier-2 quorum check
+          # silently skips its StatefulSet.
+          - name: NVCF_OPENBAO_NAMESPACE
+            value: {{ $cv.openBaoNamespace | quote }}
+          {{- end }}
+          {{- if $cv.envoyGatewayNamespace }}
+          # Set when the stack's controllerNamespace differs from the
+          # Envoy Gateway chart default.
+          - name: NVCF_ENVOY_GATEWAY_NAMESPACE
+            value: {{ $cv.envoyGatewayNamespace | quote }}
+          {{- end }}
+          {{- with $cv.gatewayNames }}
+          # Replaces route-based discovery of the NVCF Gateways.
+          - name: NVCF_GATEWAY_NAMES
+            value: {{ join "," . | quote }}
+          {{- end }}
+          {{- if $cv.storageClass }}
+          # The stack's global.storageClass: the class every PVC names.
+          - name: NVCF_STORAGE_CLASS
+            value: {{ $cv.storageClass | quote }}
+          {{- end }}
+          {{- if $cv.nodeToNodeProbeImage }}
+          - name: NVCF_N2N_PROBE_IMAGE
+            value: {{ $cv.nodeToNodeProbeImage | quote }}
+          {{- end }}
+        resources:
+          requests:
+            cpu: {{ $cv.resources.requests.cpu | quote }}
+            memory: {{ $cv.resources.requests.memory | quote }}
+          limits:
+            cpu: {{ $cv.resources.limits.cpu | quote }}
+            memory: {{ $cv.resources.limits.memory | quote }}
+        securityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+    tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      {{- with $cv.tolerations }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- /* The operator's own tolerations go with its nodeSelector: pinned to
+             tainted nodes, the Job would otherwise never schedule. */}}
+      {{- with .Values.tolerations }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+    {{- if .Values.nodeSelector.value }}
+    nodeSelector:
+      {{ .Values.nodeSelector.key }}: {{ .Values.nodeSelector.value }}
+    {{- end }}
+{{- end }}

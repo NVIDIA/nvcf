@@ -24,14 +24,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.boot.exceptions.ForbiddenException;
+import com.nvidia.nvcf.configuration.nats.NatsConfiguration.NatsProperties;
 import com.nvidia.nvcf.service.nats.AuthCalloutService.AuthCalloutPluginRequest;
 import com.nvidia.nvcf.service.token.GrpcTokenService;
 import com.nvidia.nvcf.service.token.GrpcTokenService.NvcfIssuedToken;
 import com.nvidia.nvcf.service.token.GrpcTokenService.NvcfIssuedToken.TokenType;
 import java.time.Instant;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.json.JsonMapper;
@@ -45,8 +46,14 @@ class AuthCalloutServiceTest {
     @Mock
     private GrpcTokenService grpcTokenService;
 
-    @InjectMocks
+    private NatsProperties natsProperties;
     private AuthCalloutService authCalloutService;
+
+    @BeforeEach
+    void setUp() {
+        natsProperties = new NatsProperties();
+        authCalloutService = new AuthCalloutService(grpcTokenService, natsProperties);
+    }
 
     // --- validateWebhookPlugin ---
 
@@ -76,6 +83,35 @@ class AuthCalloutServiceTest {
         assertThat(result.userClaim().pub).isNotNull();
         assertThat(result.userClaim().sub).isNotNull();
         assertThat(result.userClaim().resp).isNotNull();
+    }
+
+    @Test
+    void validateWebhookPluginAcceptsAndReturnsConfiguredWorkerAccount() {
+        natsProperties.setAuthCalloutWorkerAccount("APP");
+        when(grpcTokenService.validateToken(VALID_PAYLOAD, TokenType.WORKER)).thenReturn(
+                workerToken());
+
+        var result = authCalloutService.validateWebhookPlugin("APP", "webhook", VALID_PAYLOAD);
+
+        assertThat(result.account()).isEqualTo("APP");
+        assertThat(result.userId()).isEqualTo("worker-" + TEST_VERSION_ID_1);
+    }
+
+    @Test
+    void validateWebhookPluginConfiguredWorkerAccountRejectsTheDefaultAccount() {
+        natsProperties.setAuthCalloutWorkerAccount("APP");
+
+        assertThatThrownBy(() -> authCalloutService.validateWebhookPlugin(
+                API_USER_ACCOUNT, "webhook", VALID_PAYLOAD))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("APP");
+    }
+
+    @Test
+    void validateWebhookPluginDefaultWorkerAccountRejectsApp() {
+        assertThatThrownBy(() -> authCalloutService.validateWebhookPlugin(
+                "APP", "webhook", VALID_PAYLOAD))
+                .isInstanceOf(ForbiddenException.class);
     }
 
     @Test

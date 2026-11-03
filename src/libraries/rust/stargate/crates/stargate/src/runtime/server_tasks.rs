@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::net::{SocketAddr, TcpListener};
+use std::net::TcpListener;
 
 use anyhow::{Context, Result};
 use axum::Router;
@@ -21,6 +21,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tower::util::MapRequestLayer;
 
+use super::lingering_close::LingeringListener;
 use crate::control_plane::StargateService;
 use stargate_proto::pb::{
     stargate_control_plane_server::StargateControlPlaneServer,
@@ -82,9 +83,10 @@ pub(super) fn spawn_http_proxy_server(
     proxy_router: Router,
 ) {
     tasks.spawn_critical("HTTP proxy server", move |stop| async move {
+        // Handlers do not read ConnectInfo; axum provides it only for its own listeners.
         axum::serve(
-            listener,
-            proxy_router.into_make_service_with_connect_info::<SocketAddr>(),
+            LingeringListener::new(listener),
+            proxy_router.into_make_service(),
         )
         .with_graceful_shutdown(stop.cancelled_owned())
         .await

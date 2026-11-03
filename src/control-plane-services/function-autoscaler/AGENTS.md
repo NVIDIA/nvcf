@@ -8,10 +8,10 @@
 
 ## Architecture
 
-- **Scaling loop**: Queries utilization metrics, applies per-function scaling policies (static or custom via gRPC), decides desired instance count.
-- **Discovery**: Finds active functions from the timeseries DB (invocations + workers), writes them to Cassandra.
-- **Policy cache**: Fetches per-function scaling configs from a gRPC service, caches with configurable TTL.
-- **Distributed locking**: Cassandra-based locks for coordinating discovery and scaling across replicas.
+- Scaling loop: Queries utilization metrics, applies per-function scaling policies (static or custom via gRPC), decides desired instance count.
+- Discovery: Finds active functions from the timeseries DB (invocations + workers), writes them to Cassandra.
+- Policy cache: Fetches per-function scaling configs from a gRPC service, caches with configurable TTL.
+- Distributed locking: Cassandra-based locks for coordinating discovery and scaling across replicas.
 
 ## Key Paths
 
@@ -43,15 +43,28 @@ SECRETS_PATH=local_env/vault/secrets.json \
 cargo run --bin server -p rs-autoscaler
 ```
 
+The `cargo run` above has the same Bazel-only dependency described under Build
+& Test, so it does not resolve either. Run the `:server` Bazel target instead.
+
 ## Build & Test
+
+`crates/server` depends on `//src/libraries/rust/nvcf-info` as a Bazel target
+only, and cargo does not declare it, so `cargo build`, `cargo clippy`, and
+`cargo test` fail to resolve it. Build and test with Bazel from the monorepo
+root:
+
+```bash
+bazel test //src/control-plane-services/function-autoscaler/crates/server:all
+```
+
+Formatting and advisory checks do not compile the crate, so they still run
+under cargo:
 
 ```bash
 cargo fmt -p rs-autoscaler
-cargo clippy -p rs-autoscaler --all-targets -- -D warnings
-cargo test -p rs-autoscaler
 cargo deny check advisories
 ```
 
-CI subproject id: `function-autoscaler`. Native Bazel validation and release
-wiring live in `tools/ci/subproject-validations.yaml`, an internal GitLab CI
-config not present in this public snapshot.
+CI subproject id: `function-autoscaler`. Follow the root `RELEASE.md` and
+`docs/dev/github-release-process.md` for source versioning and publication
+handoffs. Inspect `.github/workflows/` for current public validation.

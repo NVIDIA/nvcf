@@ -27,9 +27,9 @@ name: bazel
 
 on:
   push:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'release/**']
   pull_request:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'release/**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -132,13 +132,13 @@ jobs:
           # before it even starts. byoo-otel-collector is the longest row (its
           # collector genrule dominates the build), so it leads. Keep the
           # longest-first ordering when adding rows.
-          ROWS='byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false
+          ROWS='byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false|go-root|build-container
           root|.|false
           grpc-proxy|src/invocation-plane-services/grpc-proxy|false|go-root|docker-host
           admin-token-issuer-proxy|src/control-plane-services/admin-token-issuer-proxy|false|go-root|build-container
           nats-auth-callout|src/control-plane-services/nats-auth-callout|false|go-root|build-container
           ratelimiter|src/invocation-plane-services/ratelimiter|false|go-root|build-container
-          http-invocation|src/invocation-plane-services/http-invocation|false|go-root|build-container
+          http-invocation|src/invocation-plane-services/http-invocation|false|go-root|docker-host
           llm-api-gateway|src/invocation-plane-services/llm-api-gateway|false|go-root|build-container
           vanity-gateway|src/invocation-plane-services/vanity-gateway|false|go-root|build-container
           nvca|src/compute-plane-services/nvca|false|go-root|build-container
@@ -153,6 +153,7 @@ jobs:
           helm-reval|src/control-plane-services/helm-reval|false|go-root|build-container
           stargate|src/libraries/rust/stargate|false|go-root|build-container
           nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container
+          nvstor|src/compute-plane-services/nvstor|false|go-root|build-container
           image-credential-helper|src/compute-plane-services/image-credential-helper|false|go-root|build-container
             nvcf-ui|src/uis/nvcf-ui|false|go-root|build-container'
 
@@ -194,8 +195,10 @@ jobs:
           # subtrees plus the shared Bazel scaffold). Java and stargate no longer
           # ride the root row: discovered Java components and stargate have
           # their own scoped rows, so src/libraries/ is narrowed to
-          # src/libraries/go/.
-          ROOT_GLOBS=(MODULE.bazel .bazelignore .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
+          # src/libraries/go/. The two stacks are the data of //:nvcf-cli-stacks,
+          # which the nvcf-cli tests that pin the CLI to the stacks read, so a
+          # change to a stack runs those tests.
+          ROOT_GLOBS=(MODULE.bazel .bazelignore .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ deploy/stacks/self-managed/ deploy/stacks/nvcf-compute-plane/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false
           changed=""
@@ -255,7 +258,7 @@ jobs:
           # subtrees a change actually touches (path prefix), plus the
           # reverse-dependency edges below (shared Java config -> every Java row;
           # a Java framework -> every Java service) and ROOT_GLOBS -> root row. A
-          # docs-only or helm-only change touches no subtree and runs nothing.
+          # docs-only or chart-only change touches no subtree and runs nothing.
           # The full-matrix fallbacks stay in the case above (workflow_dispatch,
           # an unreadable or rewritten diff, a new branch) so an untrustworthy
           # changeset is never under-tested.
@@ -416,7 +419,7 @@ jobs:
               hit=true
             elif [ "$path" = "." ]; then
               # Root is glob-gated on PRs and merges alike: it runs only when a
-              # ROOT_GLOB file changed (a docs- or helm-only change never triggers
+              # ROOT_GLOB file changed (a docs- or chart-only change never triggers
               # it). When it does run on a main push it uploads (CACHE_UPLOAD),
               # warming the cache; the rings do not evict, so a later root PR reads
               # that warm closure.
@@ -443,6 +446,20 @@ jobs:
             # schedule every Java row, not merely the root row.
             if [ "$hit" != "true" ] && [ "$java_shared_changed" = "true" ]; then
               case "$component_kind" in java-*) hit=true ;; esac
+            fi
+            # Stargate's routing-method drift test compiles in these NVCF docs
+            # (//:stargate-routing-method-docs), so a docs-only change to them
+            # still runs the stargate row.
+            if [ "$hit" != "true" ] && [ "$id" = "stargate" ]; then
+              for doc in docs/overview/llm-gateway.md docs/self-managed/llm-request-router-load-balancing.md; do
+                if grep -qxF "$doc" <<<"$changed"; then hit=true; break; fi
+              done
+            fi
+            # The nvcf-core tests read Stargate's routing method manifest
+            # (//src/libraries/rust/stargate:routing_methods.json), so a
+            # manifest change also runs the cloud-functions row.
+            if [ "$hit" != "true" ] && [ "$id" = "cloud-functions" ]; then
+              if grep -qxF src/libraries/rust/stargate/routing_methods.json <<<"$changed"; then hit=true; fi
             fi
             if [ "$hit" = "true" ]; then
               entry=$(jq -cn --arg id "$id" --arg path "$path" --argjson ts "$tests_skip" --arg wd "$workdir" --arg sc "$scope" --arg sm "$scoped" --arg ck "$component_kind" --arg cl "$ci_lane" '{id:$id, path:$path, tests_skip:$ts, workdir:$wd, scope:$sc, scoped:$sm, component_kind:$ck, ci_lane:$cl}')
@@ -604,6 +621,16 @@ jobs:
           key: byoo-gomod-${{ hashFiles('src/compute-plane-services/byoo-otel-collector/otelcol/go.sum') }}
           restore-keys: |
             byoo-gomod-
+
+      # nvstor-rdma links libibverbs (rdma-core), which the bazel-ci image does
+      # not carry. This row builds and tests for the runner's own architecture,
+      # so the native development package is enough; nvstor's own workflow
+      # cross-builds arm64.
+      - name: Install rdma-core development files (nvstor)
+        if: matrix.subtree.id == 'nvstor' && steps.precheck.outputs.skip == 'false'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libibverbs-dev
 
       # Decide the remote cache to use. The public EC2 Buildbarn is reachable
       # from GitHub-hosted runners over grpcs with a bearer token. When the
@@ -827,6 +854,8 @@ jobs:
         # documented build-only policy). Default is to run tests.
         if: steps.precheck.outputs.skip == 'false' && !matrix.subtree.tests_skip
         working-directory: ${{ matrix.subtree.workdir }}
+        env:
+          SCOPE: ${{ matrix.subtree.scope }}
         run: |
           if [ ! -s "$RUNNER_TEMP/targets.txt" ]; then
             echo "no targets to test; skipping"; exit 0
@@ -860,8 +889,12 @@ jobs:
             tests=$(bazel query --noshow_progress --output=label \
               "tests(set($patterns)) except attr(tags, 'requires-docker', set($patterns)) except attr(tags, 'manual', set($patterns))" 2>/dev/null) || tests="__QFAIL__"
             if [ "$tests" = "__QFAIL__" ]; then
-              echo "tests() query failed; falling back to full test set"
-              printf '//...\n' > "$ttfile"
+              # The row's full scope, not a bare //...: the root row's scope
+              # subtracts the subtrees other rows own, and a bare //... would
+              # test them here, outside their own row's setup.
+              echo "tests() query failed; falling back to the row's full test set"
+              # shellcheck disable=SC2086 # SCOPE is a space-separated pattern list
+              printf '%s\n' $SCOPE > "$ttfile"
             elif [ -z "$tests" ]; then
               # Not a coverage gap: requires-docker tests are excluded here (the
               # container has no Docker daemon) and run in the bazel-integration

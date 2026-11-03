@@ -43,6 +43,7 @@ import java.util.Map;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
@@ -90,14 +91,11 @@ public class AuthManagerResolver {
     private final ApiKeysService apiKeysService;
     private final ClusterRepository clusterRepository;
     private final NvcaConfigurationProperties nvcaConfig;
-    /**
-     * Trusted static JWT issuers, mapping each accepted {@code iss} claim to the JWKS URI
-     * used to verify its signatures. Built once at construction from the primary issuer,
-     * the legacy single admin issuer, and any configured {@code trusted-issuers[]} entries.
-     * Insertion order is preserved for deterministic manager registration; the primary
-     * issuer is always first.
-     */
-    private final Map<String, String> trustedIssuerJwkSetUris;
+    private final TrustedJwtIssuerProperties trustedIssuerProperties;
+    private final String issuerUri;
+    private final String jwkSetUri;
+    private final String adminIssuerUri;
+    private final String adminJwkSetUri;
     private final SignatureAlgorithm jwsAlgorithm;
     private final boolean apiKeyAuthEnabled;
 
@@ -121,21 +119,36 @@ public class AuthManagerResolver {
             String adminJwkSetUri,
             // Zero or more additional trusted static issuers (trusted-issuers[]), so tokens
             // from multiple external issuers can be trusted, keyed by iss. Empty by default,
-            // preserving single/dual-issuer behavior.
+            // preserving single/dual-issuer behavior. Held as a field (not flattened here) so the
+            // refresh-scoped authenticationManagerResolver() re-reads it on rebuild.
             TrustedJwtIssuerProperties trustedIssuerProperties,
             @Value("${icms.nvca.api-key.enabled:true}") boolean apiKeyAuthEnabled) {
         this.apiKeysService = apiKeysService;
         this.clusterRepository = clusterRepository;
         this.nvcaConfig = nvcaConfig;
-        this.trustedIssuerJwkSetUris = buildTrustedIssuerJwkSetUris(
-                issuerUri, jwkSetUri, adminIssuerUri, adminJwkSetUri, trustedIssuerProperties);
+        this.trustedIssuerProperties = trustedIssuerProperties;
+        this.issuerUri = issuerUri;
+        this.jwkSetUri = jwkSetUri;
+        this.adminIssuerUri = adminIssuerUri;
+        this.adminJwkSetUri = adminJwkSetUri;
         this.jwsAlgorithm = SignatureAlgorithm.valueOf(jwsAlgorithm);
         this.apiKeyAuthEnabled = apiKeyAuthEnabled;
     }
 
+    /**
+     * Refresh-scoped so {@code trusted-issuers[]} entries added or removed at runtime take effect
+     * without a restart: the bean is rebuilt on the first request after a configuration refresh,
+     * re-reading the refresh-scoped {@link TrustedJwtIssuerProperties}.
+     *
+     * <p>The primary and legacy admin issuers are {@code @Value}-bound at construction and stay
+     * fixed for the life of the context; only {@code trusted-issuers[]} participates in refresh.</p>
+     */
     @Bean
+    @RefreshScope
     AuthenticationManagerResolver<HttpServletRequest> authenticationManagerResolver() {
-        var jwtResolver = jwtResolver();
+        Map<String, String> trustedIssuerJwkSetUris = buildTrustedIssuerJwkSetUris(
+                issuerUri, jwkSetUri, adminIssuerUri, adminJwkSetUri, trustedIssuerProperties);
+        var jwtResolver = jwtResolver(trustedIssuerJwkSetUris);
         var authenticationManager = apiKeyAuthenticationManager();
         return request -> {
             var authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
@@ -151,7 +164,7 @@ public class AuthManagerResolver {
             // Known static issuer (primary, admin-issuer-proxy, or a configured trusted
             // external issuer) — use native Spring resolver.
             String issuer = extractIssuerFromToken(authorization);
-            if (isTrustedStaticIssuer(issuer)) {
+            if (isTrustedStaticIssuer(trustedIssuerJwkSetUris, issuer)) {
                 return jwtResolver.resolve(request);
             }
 
@@ -185,10 +198,11 @@ public class AuthManagerResolver {
         };
     }
 
-    private JwtIssuerAuthenticationManagerResolver jwtResolver() {
+    private JwtIssuerAuthenticationManagerResolver jwtResolver(Map<String, String> jwkSetUris) {
         Map<String, AuthenticationManager> managers = new HashMap<>();
-        // One JwtAuthenticationManager per trusted static issuer, keyed by iss.
-        trustedIssuerJwkSetUris.forEach((iss, jwks) ->
+        // One JwtAuthenticationManager per trusted static issuer, keyed by iss. Decoders fetch
+        // their JWKS lazily on first use, so rebuilding them on refresh costs nothing here.
+        jwkSetUris.forEach((iss, jwks) ->
                 managers.put(iss, jwtAuthenticationManagerFor(iss, jwks)));
         return new JwtIssuerAuthenticationManagerResolver(managers::get);
     }
@@ -461,8 +475,8 @@ public class AuthManagerResolver {
         return value != null && !value.isBlank();
     }
 
-    private boolean isTrustedStaticIssuer(String issuer) {
-        return issuer != null && trustedIssuerJwkSetUris.containsKey(issuer);
+    private static boolean isTrustedStaticIssuer(Map<String, String> jwkSetUris, String issuer) {
+        return issuer != null && jwkSetUris.containsKey(issuer);
     }
 
 }

@@ -22,8 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
+	"time"
 )
 
 func TestDefaultSetsExpectedDefaults(t *testing.T) {
@@ -35,14 +34,73 @@ func TestDefaultSetsExpectedDefaults(t *testing.T) {
 	if cfg.Telemetry.MetricsPort != 9464 {
 		t.Fatalf("metrics port = %d, want 9464", cfg.Telemetry.MetricsPort)
 	}
-	if cfg.DefaultServiceTier != servicetier.Auto {
-		t.Fatalf("default service tier = %q, want %q", cfg.DefaultServiceTier, servicetier.Auto)
-	}
 	if cfg.DefaultTPM != 0 {
 		t.Fatalf("default tpm = %d, want 0", cfg.DefaultTPM)
 	}
 	if cfg.DefaultRPM != 0 {
 		t.Fatalf("default rpm = %d, want 0", cfg.DefaultRPM)
+	}
+	if cfg.Server.InferenceWriteTimeout <= 0 {
+		t.Fatalf("inference write timeout = %s, want a positive stall bound", cfg.Server.InferenceWriteTimeout)
+	}
+	want := LastClusterConfig{
+		Enabled:         false,
+		TTL:             10 * time.Minute,
+		LookupTimeout:   20 * time.Millisecond,
+		LocalMaxEntries: 100000,
+	}
+	if cfg.Stargate.LastCluster != want {
+		t.Fatalf("last cluster = %+v, want %+v", cfg.Stargate.LastCluster, want)
+	}
+}
+
+func TestLoadFromEnvReadsLastCluster(t *testing.T) {
+	t.Setenv("STARGATE_LAST_CLUSTER_ENABLED", "true")
+	t.Setenv("STARGATE_LAST_CLUSTER_TTL", "90s")
+	t.Setenv("STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT", "5ms")
+	t.Setenv("STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES", "42")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	want := LastClusterConfig{
+		Enabled:         true,
+		TTL:             90 * time.Second,
+		LookupTimeout:   5 * time.Millisecond,
+		LocalMaxEntries: 42,
+	}
+	if cfg.Stargate.LastCluster != want {
+		t.Fatalf("last cluster = %+v, want %+v", cfg.Stargate.LastCluster, want)
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidLastCluster(t *testing.T) {
+	for key, value := range map[string]string{
+		"STARGATE_LAST_CLUSTER_TTL":               "0s",
+		"STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT":    "-1ms",
+		"STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES": "0",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, value)
+			if _, err := LoadFromEnv(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("LoadFromEnv() error = %v, want one naming %s", err, key)
+			}
+		})
+	}
+}
+
+func TestLoadFromEnvReadsInferenceWriteTimeout(t *testing.T) {
+	t.Setenv("NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT", "0s")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	if cfg.Server.InferenceWriteTimeout != 0 {
+		t.Fatalf("inference write timeout = %s, want 0s", cfg.Server.InferenceWriteTimeout)
 	}
 }
 
@@ -256,5 +314,106 @@ func TestLoadFromEnvFailsOnInvalidJSON(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "NVCF_MODEL_CAPABILITIES") {
 		t.Fatalf("error %q does not mention the offending key", err.Error())
+	}
+}
+
+func TestLoadFromEnvReadsMaxRequestBodyBytes(t *testing.T) {
+	t.Setenv("NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", "1048576")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.Server.MaxRequestBodyBytes != 1048576 {
+		t.Fatalf("max request body bytes = %d, want 1048576", cfg.Server.MaxRequestBodyBytes)
+	}
+}
+
+func TestLoadFromEnvDefaultsMaxRequestBodyBytesToUnlimited(t *testing.T) {
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.Server.MaxRequestBodyBytes != 0 {
+		t.Fatalf("max request body bytes = %d, want 0", cfg.Server.MaxRequestBodyBytes)
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidMaxRequestBodyBytes(t *testing.T) {
+	for _, value := range []string{"-1", "10MB"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", value)
+
+			_, err := LoadFromEnv()
+			if err == nil {
+				t.Fatal("LoadFromEnv() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), "NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES") {
+				t.Fatalf("error %q does not mention NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", err.Error())
+			}
+		})
+	}
+}
+
+func TestLoadFromEnvReadsExposeRouterErrorCodes(t *testing.T) {
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.ExposeRouterErrorCodes {
+		t.Fatal("router error codes are exposed by default")
+	}
+
+	t.Setenv("NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES", "true")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if !cfg.ExposeRouterErrorCodes {
+		t.Fatal("NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES=true was not applied")
+	}
+}
+
+func TestLoadFromEnvDecisionImageTokens(t *testing.T) {
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.DecisionImageTokens <= 0 {
+		t.Fatalf("default decision image tokens = %d, want a positive default", cfg.DecisionImageTokens)
+	}
+
+	t.Setenv("NVCF_DECISION_IMAGE_TOKENS", "2048")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.DecisionImageTokens != 2048 {
+		t.Fatalf("decision image tokens = %d, want 2048", cfg.DecisionImageTokens)
+	}
+
+	t.Setenv("NVCF_DECISION_IMAGE_TOKENS", "0")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.DecisionImageTokens != 0 {
+		t.Fatalf("decision image tokens = %d, want 0 (images not counted)", cfg.DecisionImageTokens)
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidDecisionImageTokens(t *testing.T) {
+	for _, value := range []string{"-1", "many"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("NVCF_DECISION_IMAGE_TOKENS", value)
+
+			_, err := LoadFromEnv()
+			if err == nil {
+				t.Fatal("LoadFromEnv() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), "NVCF_DECISION_IMAGE_TOKENS") {
+				t.Fatalf("error %q does not mention NVCF_DECISION_IMAGE_TOKENS", err.Error())
+			}
+		})
 	}
 }

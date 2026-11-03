@@ -36,6 +36,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 )
 
 const (
@@ -65,6 +66,29 @@ func resolveValidatorSummaryNamespace() string {
 		return ns
 	}
 	return defaultValidatorSummaryNamespace
+}
+
+// startValidatorSummaryReconciler republishes the cluster-validator summary
+// ConfigMap in the operator/validator namespace as metrics on the agent's
+// /metrics endpoint. It reads nothing where the operator says the validator is
+// disabled: a summary left from an enabled period would otherwise come back
+// with its old last_run and fire the staleness alert on a cluster with no
+// validator. Unset means an operator that predates the setting and may run the
+// validator, so the summary is still read. Failures are non-fatal: metrics are
+// an SLI, not a gate.
+func (a *Agent) startValidatorSummaryReconciler(ctx context.Context, client kubernetes.Interface) {
+	if a.metrics == nil {
+		return
+	}
+	log := core.GetLogger(ctx)
+	if enabled, set := clustervalidator.Enabled(); set && !enabled {
+		log.Infof("cluster-validator disabled (%s=false); not publishing its metrics", clustervalidator.EnabledEnv)
+		return
+	}
+	r := NewValidatorSummaryReconciler(client, resolveValidatorSummaryNamespace(), a.metrics)
+	if err := r.Start(ctx); err != nil {
+		log.WithError(err).Warn("cluster-validator summary reconciler failed to start; metrics will be unavailable")
+	}
 }
 
 // ValidatorSummaryReconciler watches the well-known cluster-validator
@@ -136,6 +160,7 @@ func (r *ValidatorSummaryReconciler) Start(ctx context.Context) error {
 		informers.WithTweakListOptions(func(opts *metav1.ListOptions) {
 			opts.FieldSelector = fieldSelector
 		}),
+		informers.WithTransform(k8sutil.StripManagedFields),
 	)
 	informer := factory.Core().V1().ConfigMaps().Informer()
 
@@ -172,6 +197,7 @@ func (r *ValidatorSummaryReconciler) Start(ctx context.Context) error {
 		informers.WithTweakListOptions(func(opts *metav1.ListOptions) {
 			opts.FieldSelector = fmt.Sprintf("metadata.name=%s", r.resetConfigMapName)
 		}),
+		informers.WithTransform(k8sutil.StripManagedFields),
 	)
 	resetInformer := resetFactory.Core().V1().ConfigMaps().Informer()
 	if _, err := resetInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{

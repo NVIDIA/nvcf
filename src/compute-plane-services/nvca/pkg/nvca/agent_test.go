@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,8 +48,11 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/icms"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
 	mockicmsservice "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/icmsservice"
@@ -63,6 +67,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	fakenodefeatures "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures/fake"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
@@ -844,6 +850,156 @@ func TestAgentRegisterWithICMSUpdatesQueueManagerCredentials(t *testing.T) {
 	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
 }
 
+// TestAgentStartRetriesInitialICMSRegistrationFailureInsteadOfFailingStart checks
+// that a failed initial ICMS registration, such as a 409 for an instance type that
+// still has active instances, does not make Start return. Start retries, stays
+// NotReady but live, and returns once a retry succeeds.
+func TestAgentStartRetriesInitialICMSRegistrationFailureInsteadOfFailingStart(t *testing.T) {
+	logCtx, logHook := core.WithTestingLogger(newTestContext())
+	ctx, cancel := context.WithCancel(logCtx)
+	t.Cleanup(cancel)
+
+	oldInitial, oldMax := initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval
+	initialICMSRegistrationRetryInterval = time.Millisecond
+	maxICMSRegistrationRetryInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		initialICMSRegistrationRetryInterval = oldInitial
+		maxICMSRegistrationRetryInterval = oldMax
+	})
+
+	registeredCredentials := getTestQueueCreds(true)
+	icmsClient := newBlockingRecordingICMSClient(
+		registrationResult{err: fmt.Errorf(
+			"register with ICMS: HTTP 409: cluster registration failed, active instances exists for removed [NCP.GPU.TESLA_1x] instanceTypes")},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    registeredCredentials,
+		}},
+	)
+
+	agentOpts := AgentOptions{
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			OAuthTokenScope:      "byoc_registration",
+			OAuthClientID:        "foo",
+			OAuthClientSecretKey: "bar",
+		},
+		NCAId:                          "randomNCAId123",
+		ClusterName:                    "bartnvbackend",
+		ClusterID:                      "clusterid-1",
+		ClusterDescription:             "this is a test cluster",
+		ClusterGroupName:               "group of all A30",
+		ComputeBackend:                 "k8s",
+		CloudProvider:                  "on-prem",
+		NamespaceLabels:                labels.Set{"foo": "bar"},
+		K8sVersion:                     "1.27.8",
+		CredRenewInterval:              DefaultCredRenewInterval,
+		HeartbeatInterval:              DefaultHeartBeatInterval,
+		SyncQueueInterval:              defaultSyncQueueInterval,
+		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
+		SyncAcknowledgeRequestInterval: ackReqInterval,
+		GPUCapacity:                    2,
+		FeatureFlagFetcher:             featureflag.DefaultFetcher,
+		MetricsRegisterer:              prometheus.NewRegistry(),
+	}
+	agent := newMockAgentSingleGPU(t, ctx, agentOpts)
+	agent.icmsClient = icmsClient
+
+	startErrCh := make(chan error, 1)
+	go func() { startErrCh <- agent.Start(ctx) }()
+
+	// The first attempt fails. Start must not have returned yet: it's retrying.
+	requireRegistrationAttempt(t, icmsClient, 0)
+	select {
+	case err := <-startErrCh:
+		t.Fatalf("Start returned (err=%v) after the first registration failure instead of retrying", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, http.StatusServiceUnavailable)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+
+	icmsClient.release(0)
+
+	// The retry is logged as a warning, not an error, and the process keeps running.
+	requireRegistrationAttempt(t, icmsClient, 1)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for _, entry := range logHook.AllEntries() {
+			if entry.Message == "Failed to register with ICMS, retrying in 1ms" {
+				assert.Equal(ct, logrus.WarnLevel, entry.Level)
+				return
+			}
+		}
+		assert.Fail(ct, "expected a retry warning log entry")
+	}, 5*time.Second, 10*time.Millisecond)
+
+	// The second attempt succeeds. Start must now return cleanly.
+	icmsClient.release(1)
+	select {
+	case err := <-startErrCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Start to return after registration succeeded")
+	}
+
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, http.StatusOK)
+	require.Len(t, icmsClient.requests(), 2)
+}
+
+func TestRegisterWithICMSRetryingStopsWithoutRetryWarningOnShutdown(t *testing.T) {
+	logCtx, logHook := core.WithTestingLogger(newTestContext())
+	ctx, cancel := context.WithCancel(logCtx)
+	cancel()
+
+	// Without a cache every attempt fails at once, here after shutdown began.
+	_, err := (&Agent{}).registerWithICMSRetrying(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	for _, entry := range logHook.AllEntries() {
+		assert.NotContains(t, entry.Message, "retrying")
+	}
+}
+
+func TestRetryICMSRegistrationRetriesOnlyErrorsThatCanClear(t *testing.T) {
+	oldInitial, oldMax := initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval
+	initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval = time.Millisecond, time.Millisecond
+	t.Cleanup(func() {
+		initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval = oldInitial, oldMax
+	})
+
+	for _, tc := range []struct {
+		name      string
+		err       error
+		wantRetry bool
+	}{
+		{name: "bad request", err: nvcaerrors.HTTPStatusError(http.StatusBadRequest, fmt.Errorf("malformed request"))},
+		{name: "unauthorized", err: nvcaerrors.HTTPStatusError(http.StatusUnauthorized, fmt.Errorf("bad credentials"))},
+		{name: "conflict", err: nvcaerrors.HTTPStatusError(http.StatusConflict, fmt.Errorf("active instances")), wantRetry: true},
+		{name: "too many requests", err: nvcaerrors.HTTPStatusError(http.StatusTooManyRequests, fmt.Errorf("rate limited")), wantRetry: true},
+		{name: "server error", err: nvcaerrors.HTTPStatusError(http.StatusServiceUnavailable, fmt.Errorf("unavailable")), wantRetry: true},
+		{name: "no HTTP status", err: fmt.Errorf("dial tcp: connection refused"), wantRetry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registered := &types.ICMSRegistrationResponse{ClusterID: "registered-cluster-id"}
+			attempts := 0
+			res, err := retryICMSRegistration(newTestContext(), func(context.Context) (*types.ICMSRegistrationResponse, error) {
+				attempts++
+				if attempts == 1 {
+					return nil, fmt.Errorf("register with ICMS: %w", tc.err)
+				}
+				return registered, nil
+			})
+			if !tc.wantRetry {
+				require.ErrorIs(t, err, tc.err)
+				assert.Equal(t, 1, attempts)
+				return
+			}
+			require.NoError(t, err)
+			assert.Same(t, registered, res)
+			assert.Equal(t, 2, attempts)
+		})
+	}
+}
+
 func TestAgent_getTelemetryAttributes(t *testing.T) {
 	ctx := context.Background()
 	agentOpts := AgentOptions{
@@ -1494,11 +1650,18 @@ func TestAgentMaintenanceModeInitialization(t *testing.T) {
 }
 
 // Mock implementation for testing
+type postedInstanceStatusUpdate struct {
+	requestID  string
+	instanceID string
+	payload    types.ICMSInstanceStatusUpdateRequest
+}
+
 type mockICMSClient struct {
 	healthStatusRequests []types.HealthStatusRequest
 	registrationRequests []types.ICMSRegistrationRequest
 	registrationResponse *types.ICMSRegistrationResponse
 	registerErr          error
+	postedStatusUpdates  []postedInstanceStatusUpdate
 }
 
 func (m *mockICMSClient) PutHealthStatus(ctx context.Context, req *types.HealthStatusRequest) (*types.HealthStatusResponse, error) {
@@ -1522,6 +1685,11 @@ func (m *mockICMSClient) Register(ctx context.Context, req *types.ICMSRegistrati
 }
 
 func (m *mockICMSClient) PostInstanceStatusUpdate(ctx context.Context, requestID, instanceID string, payload *types.ICMSInstanceStatusUpdateRequest) error {
+	m.postedStatusUpdates = append(m.postedStatusUpdates, postedInstanceStatusUpdate{
+		requestID:  requestID,
+		instanceID: instanceID,
+		payload:    *payload,
+	})
 	return nil
 }
 
@@ -1711,6 +1879,264 @@ func TestEvictAllWorkloads(t *testing.T) {
 	// Verify that miniservice was deleted
 	err = ag.backendk8scache.clients.HelmV2.Get(ctx, client.ObjectKey{Name: "instance-3-miniservice"}, ms)
 	assert.True(t, errors.IsNotFound(err), "Miniservice should be deleted")
+}
+
+// TestEvictAllWorkloads_SkipsTerminationUpdateForStillPresentInstance verifies that
+// evictAllWorkloads only reports instances to ICMS as terminated when PurgeInstanceID
+// actually confirmed the backing Pod/MiniService is gone. It simulates a MiniService whose
+// delete is accepted but that remains present (e.g. blocked by its own finalizer), and
+// checks that instance is excluded from the termination updates sent to ICMS while an
+// unrelated, successfully purged Pod instance is still reported.
+func TestEvictAllWorkloads_SkipsTerminationUpdateForStillPresentInstance(t *testing.T) {
+	ctx := newTestContext()
+
+	agentOpts := AgentOptions{
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			OAuthTokenScope:      "byoc_registration",
+			OAuthClientID:        "foo",
+			OAuthClientSecretKey: "bar",
+		},
+		NCAId:                          "randomNCAId123",
+		ClusterName:                    "bartnvbackend",
+		ClusterID:                      "clusterid-1",
+		ClusterDescription:             "this is a test cluster",
+		ClusterGroupName:               "group of all A30",
+		ComputeBackend:                 "k8s",
+		CloudProvider:                  "on-prem",
+		NamespaceLabels:                labels.Set{"foo": "bar"},
+		K8sVersion:                     "1.27.8",
+		CredRenewInterval:              DefaultCredRenewInterval,
+		HeartbeatInterval:              DefaultHeartBeatInterval,
+		SyncQueueInterval:              defaultSyncQueueInterval,
+		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
+		SyncAcknowledgeRequestInterval: ackReqInterval,
+		GPUCapacity:                    2,
+		FeatureFlagFetcher:             featureflag.DefaultFetcher,
+		MaintenanceMode:                types.MaintenanceModeCordonAndDrain,
+		MetricsRegisterer:              prometheus.NewRegistry(),
+	}
+
+	testReq := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-request-1",
+			Namespace: "default",
+		},
+		Spec: nvcav2beta1.ICMSRequestSpec{
+			RequestID: "req-1",
+		},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			RequestStatus: nvcav2beta1.ICMSRequestStatusInProgress,
+			Instances: map[string]nvcav2beta1.InstanceStatus{
+				"instance-ok": {
+					ID:     "instance-ok",
+					Type:   nvcav2beta1.InstanceTypePod,
+					Status: string(types.ICMSInstanceRunning),
+				},
+				"instance-blocked-miniservice": {
+					ID:     "instance-blocked-miniservice",
+					Type:   nvcav2beta1.InstanceTypeMiniService,
+					Status: string(types.ICMSInstanceRunning),
+				},
+			},
+		},
+	}
+
+	mockICMS := &mockICMSClient{}
+	ag := newMockAgentSingleGPU(t, ctx, agentOpts)
+	ag.icmsClient = mockICMS
+
+	require.NoError(t, ag.Start(ctx))
+
+	_, err := ag.backendk8scache.clients.BART.NvcaV2beta1().ICMSRequests(testReq.Namespace).Create(ctx, testReq, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		items, _ := ag.backendk8scache.icmsRequestLister.List(labels.Everything())
+		return len(items) >= 1
+	}, time.Second, time.Millisecond*50)
+
+	podNamespace := ag.backendk8scache.podInstanceNamespace
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "instance-ok",
+			Namespace: podNamespace,
+		},
+	}
+	_, err = ag.backendk8scache.clients.K8s.CoreV1().Pods(podNamespace).Create(ctx, pod, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	// Wait for the informer backing podSpecLister to observe the newly created pod before
+	// evicting, so the subsequent delete's existence check converges quickly instead of
+	// racing an informer that hasn't synced the pod's existence yet.
+	require.Eventually(t, func() bool {
+		_, err := ag.backendk8scache.podSpecLister.Get("instance-ok")
+		return err == nil
+	}, 5*time.Second, 50*time.Millisecond, "informer should observe the created pod")
+
+	// Replace HelmV2 with a client whose Delete is accepted but does not remove the
+	// object, simulating a MiniService still blocked by its own finalizer/cleanup.
+	sch := newMiniServiceScheme()
+	fakeHelmClient := ctrlfake.NewClientBuilder().
+		WithScheme(sch).
+		WithStatusSubresource(&v1alpha1.MiniService{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				return nil
+			},
+		}).
+		Build()
+	ag.backendk8scache.clients.HelmV2 = fakeHelmClient
+
+	ms := &v1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{Name: "instance-blocked-miniservice"},
+	}
+	require.NoError(t, ag.backendk8scache.clients.HelmV2.Create(ctx, ms))
+
+	// evictAllWorkloads issues Delete() and checks the informer-backed lister for actual
+	// absence in the same pass; the lister may not have converged yet by the time the
+	// check runs, so retry a few times (mirroring the retry-on-next-reconcile behavior
+	// this PR's fix relies on) until the successfully purged pod is reported.
+	//
+	// Eventually's condition runs in its own goroutine, so errors are captured here and
+	// asserted after Eventually returns rather than via require inside the closure, which
+	// is unsafe to call outside the test goroutine.
+	var evictErr error
+	require.Eventually(t, func() bool {
+		evictErr = ag.evictAllWorkloads(ctx)
+		if evictErr != nil {
+			return false
+		}
+		for _, u := range mockICMS.postedStatusUpdates {
+			if u.instanceID == "instance-ok" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 100*time.Millisecond, "instance-ok should eventually be reported terminated")
+	require.NoError(t, evictErr)
+
+	// The Pod instance was successfully purged; the MiniService instance was not.
+	_, err = ag.backendk8scache.clients.K8s.CoreV1().Pods(podNamespace).Get(ctx, "instance-ok", metav1.GetOptions{})
+	assert.True(t, errors.IsNotFound(err), "Pod instance-ok should be deleted")
+
+	err = ag.backendk8scache.clients.HelmV2.Get(ctx, client.ObjectKey{Name: "instance-blocked-miniservice"}, &v1alpha1.MiniService{})
+	assert.NoError(t, err, "MiniService instance should still exist since its delete was blocked")
+
+	var reportedIDs []string
+	for _, u := range mockICMS.postedStatusUpdates {
+		reportedIDs = append(reportedIDs, u.instanceID)
+		assert.Equal(t, types.ICMSInstanceTerminated, u.payload.InstanceState)
+	}
+	assert.Contains(t, reportedIDs, "instance-ok", "successfully purged instance should be reported terminated")
+	assert.NotContains(t, reportedIDs, "instance-blocked-miniservice", "still-present instance must not be reported terminated")
+}
+
+// TestHandleSelfDestruct_RetriesUntilInstancesConfirmedTerminated verifies that
+// handleSelfDestruct retries eviction when an instance's backing MiniService is not yet
+// confirmed gone on the first pass, and only enters self-destruct mode (which disables
+// further ICMS status-sync communication) once it is reported terminated.
+func TestHandleSelfDestruct_RetriesUntilInstancesConfirmedTerminated(t *testing.T) {
+	ctx := newTestContext()
+
+	agentOpts := AgentOptions{
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			OAuthTokenScope:      "byoc_registration",
+			OAuthClientID:        "foo",
+			OAuthClientSecretKey: "bar",
+		},
+		NCAId:                          "randomNCAId123",
+		ClusterName:                    "bartnvbackend",
+		ClusterID:                      "clusterid-1",
+		ClusterDescription:             "this is a test cluster",
+		ClusterGroupName:               "group of all A30",
+		ComputeBackend:                 "k8s",
+		CloudProvider:                  "on-prem",
+		NamespaceLabels:                labels.Set{"foo": "bar"},
+		K8sVersion:                     "1.27.8",
+		CredRenewInterval:              DefaultCredRenewInterval,
+		HeartbeatInterval:              DefaultHeartBeatInterval,
+		SyncQueueInterval:              defaultSyncQueueInterval,
+		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
+		SyncAcknowledgeRequestInterval: ackReqInterval,
+		GPUCapacity:                    2,
+		FeatureFlagFetcher:             featureflag.DefaultFetcher,
+		MaintenanceMode:                types.MaintenanceModeCordonAndDrain,
+		MetricsRegisterer:              prometheus.NewRegistry(),
+	}
+
+	testReq := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-request-1",
+			Namespace: "default",
+		},
+		Spec: nvcav2beta1.ICMSRequestSpec{
+			RequestID: "req-1",
+		},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			RequestStatus: nvcav2beta1.ICMSRequestStatusInProgress,
+			Instances: map[string]nvcav2beta1.InstanceStatus{
+				"instance-blocked-then-ok-miniservice": {
+					ID:     "instance-blocked-then-ok-miniservice",
+					Type:   nvcav2beta1.InstanceTypeMiniService,
+					Status: string(types.ICMSInstanceRunning),
+				},
+			},
+		},
+	}
+
+	mockICMS := &mockICMSClient{}
+	ag := newMockAgentSingleGPU(t, ctx, agentOpts)
+	ag.icmsClient = mockICMS
+
+	require.NoError(t, ag.Start(ctx))
+
+	_, err := ag.backendk8scache.clients.BART.NvcaV2beta1().ICMSRequests(testReq.Namespace).Create(ctx, testReq, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		items, _ := ag.backendk8scache.icmsRequestLister.List(labels.Everything())
+		return len(items) >= 1
+	}, time.Second, time.Millisecond*50)
+
+	// Block the MiniService's delete on the first attempt only, then let subsequent
+	// attempts through, simulating a finalizer that releases shortly after eviction starts.
+	var deleteAttempts atomic.Int32
+	sch := newMiniServiceScheme()
+	fakeHelmClient := ctrlfake.NewClientBuilder().
+		WithScheme(sch).
+		WithStatusSubresource(&v1alpha1.MiniService{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if deleteAttempts.Add(1) == 1 {
+					return nil
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	ag.backendk8scache.clients.HelmV2 = fakeHelmClient
+
+	ms := &v1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{Name: "instance-blocked-then-ok-miniservice"},
+	}
+	require.NoError(t, ag.backendk8scache.clients.HelmV2.Create(ctx, ms))
+
+	require.NoError(t, ag.handleSelfDestruct(ctx))
+
+	assert.True(t, ag.selfDestruct.Load(), "agent should enter self-destruct mode once eviction completes")
+	assert.GreaterOrEqual(t, deleteAttempts.Load(), int32(2), "eviction should have retried the delete at least once")
+
+	err = ag.backendk8scache.clients.HelmV2.Get(ctx, client.ObjectKey{Name: "instance-blocked-then-ok-miniservice"}, &v1alpha1.MiniService{})
+	assert.True(t, errors.IsNotFound(err), "MiniService should be deleted once its finalizer released")
+
+	var reportedIDs []string
+	for _, u := range mockICMS.postedStatusUpdates {
+		reportedIDs = append(reportedIDs, u.instanceID)
+	}
+	assert.Contains(t, reportedIDs, "instance-blocked-then-ok-miniservice",
+		"instance should be reported terminated once confirmed gone, before self-destruct disables status sync")
 }
 
 func TestEvictAllWorkloads_EmptyList(t *testing.T) {
@@ -2646,8 +3072,21 @@ func (m *mockHealthStatusCache) RefreshStatus(_ context.Context) (types.AgentHea
 	return m.status, nil
 }
 
+// TestStartReadinessNotSetOnICMSRegistrationFailure checks that while ICMS
+// registration keeps failing, Start keeps retrying without arming readiness, so
+// a rolling update does not cut over to this replica, and that canceling ctx
+// stops the retries.
 func TestStartReadinessNotSetOnICMSRegistrationFailure(t *testing.T) {
-	ctx := newTestContext()
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	oldInitial, oldMax := initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval
+	initialICMSRegistrationRetryInterval = time.Millisecond
+	maxICMSRegistrationRetryInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		initialICMSRegistrationRetryInterval = oldInitial
+		maxICMSRegistrationRetryInterval = oldMax
+	})
 
 	agentOpts := AgentOptions{
 		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
@@ -2680,12 +3119,19 @@ func TestStartReadinessNotSetOnICMSRegistrationFailure(t *testing.T) {
 		registerErr: fmt.Errorf("409 Conflict: instance type rename with active functions"),
 	}
 
-	err := ag.Start(ctx)
-	require.Error(t, err, "Start should fail when ICMS registration returns an error")
+	startErrCh := make(chan error, 1)
+	go func() { startErrCh <- ag.Start(ctx) }()
 
-	// Readiness must never be armed when Start() fails during ICMS registration.
+	// Start must not return while registration keeps failing: it retries instead.
+	select {
+	case err := <-startErrCh:
+		t.Fatalf("Start returned (err=%v) instead of retrying the persistent registration failure", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// Readiness must never be armed while registration keeps failing.
 	_, ok := ag.readinessCheckGetter.GetCheck()
-	assert.False(t, ok, "readiness check should not be set when ICMS registration fails")
+	assert.False(t, ok, "readiness check should not be set while ICMS registration keeps failing")
 
 	// The health server is started early in Start(), so the /healthz endpoint should
 	// respond with 503 since readiness was never armed.
@@ -2693,7 +3139,16 @@ func TestStartReadinessNotSetOnICMSRegistrationFailure(t *testing.T) {
 	if assert.NoError(t, httpErr, "health endpoint should be reachable") {
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
-			"readiness endpoint should return 503 when Start() fails before arming readiness")
+			"readiness endpoint should return 503 while registration keeps failing and readiness is never armed")
+	}
+
+	// Canceling ctx (pod shutdown) must make Start return promptly instead of retrying forever.
+	cancel()
+	select {
+	case err := <-startErrCh:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Start to return after context cancellation")
 	}
 }
 
@@ -2740,4 +3195,78 @@ func TestEventDispatcherSurvivesClosedChannel(t *testing.T) {
 		return a.resourceEventWorkerQueues["Pod"].Len() != 1
 	}, 250*time.Millisecond, 10*time.Millisecond,
 		"a closed channel must not enqueue anything further")
+}
+
+func TestRegisterWithICMSExplainsOverheadConflict(t *testing.T) {
+	backendGPUs := []types.BackendGPU{{
+		Name: "A100",
+		InstanceTypes: []types.InstanceType{{
+			Name:            "NCP.GPU.A100",
+			FullName:        "A100-SXM4-40GB",
+			CPU:             resource.MustParse("7910m"),
+			SystemMemory:    resource.MustParse("30Gi"),
+			GPUCount:        1,
+			GPUMemoryPerGPU: resource.MustParse("40Gi"),
+			Storage:         resource.MustParse("100Gi"),
+			NodeCount:       1,
+		}},
+	}}
+	conflict := nvcaerrors.HTTPStatusError(http.StatusConflict, fmt.Errorf("error response from ICMS: 409 Conflict"))
+
+	tests := []struct {
+		name        string
+		registerErr error
+		overheadCPU string
+		wantStatus  int
+		wantHint    bool
+	}{
+		{
+			name:        "conflict after the overhead removed an instance type",
+			registerErr: conflict,
+			overheadCPU: "7910m",
+			wantStatus:  http.StatusConflict,
+			wantHint:    true,
+		},
+		{
+			name:        "conflict while every instance type fits",
+			registerErr: conflict,
+			overheadCPU: "100m",
+			wantStatus:  http.StatusConflict,
+		},
+		{
+			name:        "other registration errors",
+			registerErr: nvcaerrors.HTTPStatusError(http.StatusInternalServerError, fmt.Errorf("error response from ICMS")),
+			overheadCPU: "7910m",
+			wantStatus:  http.StatusInternalServerError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bc := &BackendK8sCache{
+				nfClient: &fakenodefeatures.Client{BackendGPUs: backendGPUs},
+				infraOverheadGetter: enforce.InfraOverheadGetterFunc(func(context.Context) (v1.ResourceList, error) {
+					return v1.ResourceList{v1.ResourceCPU: resource.MustParse(tt.overheadCPU)}, nil
+				}),
+				featureFlagFetcher: featureflag.DefaultFetcher,
+				regITCache:         icms.NewRegistrationInstanceTypeCache(),
+			}
+			a := &Agent{
+				AgentOptions:    &AgentOptions{K8sVersion: "1.30.0"},
+				backendk8scache: bc,
+				icmsClient:      &mockICMSClient{registerErr: tt.registerErr},
+			}
+
+			_, err := a.registerWithICMS(newTestContext(), nil)
+			require.Error(t, err)
+			assert.Equal(t, tt.wantStatus, nvcaerrors.GetHTTPStatusCode(err), "the ICMS error must stay wrapped")
+			if !tt.wantHint {
+				assert.NotContains(t, err.Error(), "leaves no room")
+				return
+			}
+			assert.ErrorContains(t, err, "409 Conflict; the infrastructure resource overhead of cpu 7910m "+
+				"leaves no room in instance types NCP.GPU.A100_1x")
+			assert.ErrorContains(t, err, "if they have active instances, ICMS rejects the registration for that reason")
+			assert.ErrorContains(t, err, "lower byoo.additionalResourceOverhead")
+		})
+	}
 }

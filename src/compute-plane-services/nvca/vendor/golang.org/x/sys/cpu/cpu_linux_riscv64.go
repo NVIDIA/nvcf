@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2024 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -133,6 +130,9 @@ func doinit() {
 			RISCV64.HasFastMisaligned = v == riscv_HWPROBE_MISALIGNED_FAST
 		}
 	}
+	if RISCV64.HasV {
+		RISCV64.VLENB = readVLENB()
+	}
 
 	// Let's double check with HWCAP if the C extension does not appear to be supported.
 	// This may happen if we're running on a kernel older than 6.4.
@@ -140,6 +140,14 @@ func doinit() {
 	if !RISCV64.HasC {
 		RISCV64.HasC = isSet(hwCap, hwcap_RISCV_ISA_C)
 	}
+
+	doDerived = func() {
+		// If the vector extension is disabled by GODEBUG, then the VLENB is zero.
+		if !RISCV64.HasV {
+			RISCV64.VLENB = 0
+		}
+	}
+
 }
 
 func isSet(hwc uint, value uint) bool {

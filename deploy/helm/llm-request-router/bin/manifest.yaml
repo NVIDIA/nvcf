@@ -185,7 +185,7 @@ spec:
             - --watch-heartbeat-ms=5000
             - --shutdown-drain-timeout-ms=30000
             - --quic-connect-timeout-ms=2000
-            - --quic-request-timeout-ms=30000
+            - --quic-request-timeout-ms=300000
             - --metrics-port=9090
             - --reverse-tunnel-connect-timeout-ms=10000
           env:

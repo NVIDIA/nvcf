@@ -32,7 +32,6 @@ import org.springframework.context.annotation.Configuration;
 @Slf4j
 public class ByocConfigurationProperties {
     private String env;
-    private String queueNameFormat;
     private int instanceBatchCount;
     private int cloudHealthTtlForByocInSec;
     private int clusterExpiryTimeInDays;
@@ -40,7 +39,6 @@ public class ByocConfigurationProperties {
     private List<Map<String, String>> skipHealthCheckClusters;
     private boolean modelCachingEnabled;
     private Set<String> terminateCloudFailedInstancesFromClusters;
-    private boolean authorizedNcaIdUpdateEnabled;
     private Long cacheByteDivisionFactor;
     private Long cacheBytesBuffer;
     private Long cacheReservedSpace;

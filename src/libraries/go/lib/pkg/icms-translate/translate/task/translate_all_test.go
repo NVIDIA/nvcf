@@ -45,6 +45,9 @@ func TestTranslateContainerCreatesTaskPod(t *testing.T) {
 	require.Len(t, pod.Spec.InitContainers, 1)
 	assert.Equal(t, common.InitContainerName, pod.Spec.InitContainers[0].Name)
 	assert.Equal(t, "nvcr.io/nvidia/init:latest", pod.Spec.InitContainers[0].Image)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.InitContainers[0].SecurityContext.RunAsUser)
+	assert.True(t, *pod.Spec.InitContainers[0].SecurityContext.RunAsNonRoot)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.SecurityContext.FSGroup)
 
 	taskContainer := findTaskContainerByName(t, pod.Spec.Containers, taskContainerName)
 	assert.Equal(t, "nvcr.io/nvidia/task:latest", taskContainer.Image)
@@ -109,6 +112,9 @@ func TestTranslateHelmChartCreatesUtilsPod(t *testing.T) {
 	require.Len(t, pod.Spec.InitContainers, 1)
 	assert.Equal(t, common.InitContainerName, pod.Spec.InitContainers[0].Name)
 	assert.Equal(t, "nvcr.io/nvidia/init:latest", pod.Spec.InitContainers[0].Image)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.InitContainers[0].SecurityContext.RunAsUser)
+	assert.True(t, *pod.Spec.InitContainers[0].SecurityContext.RunAsNonRoot)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.SecurityContext.FSGroup)
 
 	utilsContainer := findTaskContainerByName(t, pod.Spec.Containers, common.UtilsContainerName)
 	assertTaskUtilsMetricsPort(t, utilsContainer)

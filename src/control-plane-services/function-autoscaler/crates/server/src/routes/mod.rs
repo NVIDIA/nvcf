@@ -17,8 +17,12 @@
 
 use crate::health::{ComponentHealth, Health, HealthStatus as HealthState};
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::Json;
+use axum::http::{header, Method, StatusCode};
+use axum::response::{IntoResponse, Json, Response};
+use axum::{
+    routing::{any, get},
+    Router,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,6 +54,21 @@ impl From<ComponentHealth> for ComponentHealthResponse {
             message: component.message,
             last_updated: component.last_updated,
         }
+    }
+}
+
+/// Build metadata. Version and commit are stamped by the version_env template
+/// in crates/server/BUILD.bazel on --stamp builds.
+pub async fn get_info() -> Json<nvcf_info::InfoResponse> {
+    Json(nvcf_info::info_response!("nvcf-function-autoscaler"))
+}
+
+/// Serves build metadata for GET and rejects other methods.
+async fn info(method: Method) -> Response {
+    if method == Method::GET {
+        get_info().await.into_response()
+    } else {
+        (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "GET")]).into_response()
     }
 }
 
@@ -96,13 +115,27 @@ pub async fn get_health(state: State<Arc<Health>>) -> (StatusCode, Json<HealthRe
     get_readiness(state).await
 }
 
+/// Shared health/build-metadata router, used by both the probe server (which
+/// starts before Cassandra/TimeseriesDb are ready) and the main app, so the
+/// route wiring only exists in one place and both callers stay in sync.
+pub fn health_router(health: Arc<Health>) -> Router {
+    Router::new()
+        .route("/admin/health/liveness", get(get_liveness))
+        .route("/admin/health/readiness", get(get_readiness))
+        .route("/health", get(get_health))
+        .route("/info", any(info))
+        .with_state(health)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::health::Health;
-    use axum::body::to_bytes;
+    use axum::body::{to_bytes, Body};
     use axum::http::header::CONTENT_TYPE;
+    use axum::http::{Method, Request};
     use axum::response::IntoResponse;
+    use tower::ServiceExt;
 
     #[tokio::test]
     async fn liveness_is_always_ok_even_when_dependencies_are_unhealthy() {
@@ -135,6 +168,67 @@ mod tests {
 
         let (status, _) = get_readiness(State(health)).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn info_reports_service_version_and_commit() {
+        let Json(info) = get_info().await;
+        assert_eq!(info.service, "nvcf-function-autoscaler");
+        // Stamped only on Bazel --stamp builds; under cargo these are the
+        // unstamped fallbacks. Assert they are populated, not their literals,
+        // so the test does not break on every release bump.
+        assert!(!info.version.is_empty());
+        assert!(!info.commit.is_empty());
+    }
+
+    // Requests /info through the router health_router builds, not the
+    // handler in isolation.
+    #[tokio::test]
+    async fn info_route_accepts_only_get() {
+        let health = Arc::new(Health::new());
+        let router = health_router(health);
+
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/info")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["service"], "nvcf-function-autoscaler");
+
+        assert!(!body["version"].as_str().unwrap().is_empty());
+        assert!(!body["commit"].as_str().unwrap().is_empty());
+        for method in [
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+            Method::TRACE,
+            Method::CONNECT,
+            Method::from_bytes(b"CUSTOM").unwrap(),
+        ] {
+            let request = Request::builder()
+                .method(method.clone())
+                .uri("/info?build=true")
+                .body(Body::empty())
+                .unwrap();
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{method}"
+            );
+            assert_eq!(response.headers()[header::ALLOW], "GET", "{method}");
+            assert!(to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .is_empty());
+        }
     }
 
     #[tokio::test]

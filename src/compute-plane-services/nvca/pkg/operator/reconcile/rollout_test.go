@@ -25,10 +25,13 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
@@ -1591,6 +1594,48 @@ func TestHasEnvOverridesChangedCheck(t *testing.T) {
 			check := hasEnvOverridesChangedCheck(ctx, tt.newFunctionEnvOverridesB64, tt.newTaskEnvOverridesB64, nb)
 			result := check()
 			assert.Equal(t, tt.expectedResult, result)
+		})
+	}
+}
+
+// The agent is rolled when its cluster-validator setting differs from the
+// operator's, and not when the Deployment cannot be read. An agent written by
+// an operator that predates the setting has none, which reads as disabled: it
+// is rolled only to enable the validator, so upgrading the operator does not
+// restart every agent on clusters that never enabled it. A later override of
+// the same variable is the user's and never rolls the agent.
+func TestHasClusterValidatorEnabledChangedCheck(t *testing.T) {
+	agent := func(env ...corev1.EnvVar) *appsv1.Deployment {
+		return &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "webhooks"}, {Name: agentContainerName, Env: env}},
+		}}}}
+	}
+	setting := func(v string) corev1.EnvVar { return corev1.EnvVar{Name: clustervalidator.EnabledEnv, Value: v} }
+	tests := []struct {
+		name    string
+		enabled bool
+		dep     *appsv1.Deployment
+		err     error
+		want    bool
+	}{
+		{name: "unchanged", enabled: true, dep: agent(setting("true"))},
+		{name: "enabled", enabled: true, dep: agent(setting("false")), want: true},
+		{name: "disabled", enabled: false, dep: agent(setting("true")), want: true},
+		{name: "never set, disabled", enabled: false, dep: agent(corev1.EnvVar{Name: "OTHER", Value: "x"})},
+		{name: "never set, enabled", enabled: true, dep: agent(corev1.EnvVar{Name: "OTHER", Value: "x"}), want: true},
+		{name: "user override after it", enabled: false, dep: agent(setting("false"), setting("true"))},
+		{name: "no agent container", enabled: true, dep: &appsv1.Deployment{}},
+		{name: "no Deployment yet", enabled: true,
+			err: k8serrors.NewNotFound(appsv1.Resource("deployments"), nvcaoptypes.NVCAModuleName)},
+		{name: "read failure", enabled: true, err: assert.AnError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			get := func(_ context.Context, name string, _ metav1.GetOptions) (*appsv1.Deployment, error) {
+				assert.Equal(t, nvcaoptypes.NVCAModuleName, name)
+				return tt.dep, tt.err
+			}
+			assert.Equal(t, tt.want, hasClusterValidatorEnabledChangedCheck(newTestContext(), tt.enabled, get)())
 		})
 	}
 }

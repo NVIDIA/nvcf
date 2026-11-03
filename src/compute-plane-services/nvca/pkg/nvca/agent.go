@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -54,6 +55,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 
 	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcalogging "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/logging"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
@@ -67,6 +69,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/scheme"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/byoofederation"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/hostisolation"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
@@ -565,11 +568,13 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 	nvcaotel.SetDefaultAttributes(opts.GetOTelAttributes())
 
 	// Initialize the default metrics
+	clusterValidatorEnabled, _ := clustervalidator.Enabled()
 	metricsOpts := []nvcametrics.DefaultMetricsOption{
 		nvcametrics.WithEventErrorTotalDefaultEvents(append(getAgentEvents(), getNVCAMetricEvents()...)),
 		nvcametrics.WithContainerCrashAndRestartTotalDefaultContainerNames(GetDefaultWorkloadContainerNamesToWatch()),
 		nvcametrics.WithKataRuntimeIsolationEnabled(opts.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrKataRuntimeIsolation)),
 		nvcametrics.WithMaintenanceMode(opts.MaintenanceMode),
+		nvcametrics.WithClusterValidatorEnabled(clusterValidatorEnabled),
 	}
 	if opts.MetricsRegisterer != nil {
 		metricsOpts = append(metricsOpts, nvcametrics.WithRegisterer(opts.MetricsRegisterer))
@@ -928,6 +933,57 @@ func (a *Agent) RegisterWithICMS(ctx context.Context) (*types.ICMSRegistrationRe
 	return res, nil
 }
 
+// Delays between attempts of the initial ICMS registration. The cap matches the 60s
+// registration sync.
+var (
+	initialICMSRegistrationRetryInterval = 10 * time.Second
+	maxICMSRegistrationRetryInterval     = time.Minute
+)
+
+// registerWithICMSRetrying calls RegisterWithICMS until it succeeds, fails with an
+// error that retrying cannot fix, or ctx is done. A failed initial registration, such
+// as an ICMS 409 for an instance type that still has active instances, fails the same
+// way after a restart, so exiting would only crash-loop. Start arms readiness after
+// registration, so the replica stays NotReady while it retries. With the Recreate
+// strategy (GracefulNoGPU) no previous replica keeps serving meanwhile; the operator
+// rejects configuration changes that would cause the 409 before the rollout.
+func (a *Agent) registerWithICMSRetrying(ctx context.Context) (*types.ICMSRegistrationResponse, error) {
+	return retryICMSRegistration(ctx, a.RegisterWithICMS)
+}
+
+func retryICMSRegistration(
+	ctx context.Context,
+	register func(context.Context) (*types.ICMSRegistrationResponse, error),
+) (*types.ICMSRegistrationResponse, error) {
+	log := core.GetLogger(ctx)
+	backoff := newGPURegistrationRetryBackoff(initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval)
+	for {
+		res, err := register(ctx)
+		if err == nil {
+			return res, nil
+		}
+		// An attempt cut short by shutdown is not worth a retry warning.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// Other client errors, such as bad credentials or a malformed request,
+		// fail the same way on every attempt.
+		if code := nvcaerrors.GetHTTPStatusCode(err); code >= 400 && code < 500 &&
+			code != http.StatusConflict && code != http.StatusTooManyRequests {
+			return nil, err
+		}
+		delay := backoff.next()
+		log.WithError(err).Warnf("Failed to register with ICMS, retrying in %s", delay)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func (a *Agent) registerWithICMS(ctx context.Context, regBackendGPUs []types.RegistrationGPU) (*types.ICMSRegistrationResponse, error) {
 	log := core.GetLogger(ctx)
 	k8sVersion := a.K8sVersion
@@ -953,7 +1009,12 @@ func (a *Agent) registerWithICMS(ctx context.Context, regBackendGPUs []types.Reg
 	nvcametrics.FromContext(ctx).RecordUpstreamRequest(nvcametrics.UpstreamOperationRegister, err)
 	if err != nil {
 		log.WithError(err).WithField("req", rreq).Error("Register with ICMS")
-		return nil, fmt.Errorf("register with ICMS: %v", err)
+		if nvcaerrors.GetHTTPStatusCode(err) == http.StatusConflict {
+			if hint := a.backendk8scache.overheadRemovedInstanceTypesHint(ctx); hint != "" {
+				return nil, fmt.Errorf("register with ICMS: %w; %s", err, hint)
+			}
+		}
+		return nil, fmt.Errorf("register with ICMS: %w", err)
 	}
 
 	if err := a.backendk8scache.StoreICMSRegistrationResponse(ctx, res); err != nil {
@@ -1126,18 +1187,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Start the cluster-validator summary reconciler. This watches the
-	// well-known summary ConfigMap in the operator/validator namespace
-	// and republishes its content as Prometheus metrics on the agent's
-	// /metrics endpoint. Failures here are non-fatal — metrics are an
-	// SLI, not a gate.
-	if a.metrics != nil {
-		validatorNS := resolveValidatorSummaryNamespace()
-		validatorReconciler := NewValidatorSummaryReconciler(k8sclients.K8s, validatorNS, a.metrics)
-		if startErr := validatorReconciler.Start(ctx); startErr != nil {
-			log.WithError(startErr).Warn("cluster-validator summary reconciler failed to start; metrics will be unavailable")
-		}
-	}
+	a.startValidatorSummaryReconciler(ctx, k8sclients.K8s)
 
 	infraOverheadGetter := enforce.NewInfraOverheadGetter(a.FeatureFlagFetcher, a.Config, enforce.GetRuntimeClassK8sClient(k8sclients.K8s))
 
@@ -1176,6 +1226,9 @@ func (a *Agent) Start(ctx context.Context) error {
 		WithInfraOverheadGetter(infraOverheadGetter).
 		WithSecretMirrorConfig(a.SecretMirrorSourceNamespace, a.SecretMirrorLabelSelector).
 		WithEnvOverrides(a.FunctionEnvOverrides, a.TaskEnvOverrides).
+		WithNotFoundInstanceStatusReporter(func(ctx context.Context, reqID, instanceID string) error {
+			return a.handleNotFoundInstanceStatusSyncAction(ctx, reqID, instanceID, ICMSInstanceReconcileTerminateAndUpdate)
+		}).
 		Start(ctx)
 	if err != nil {
 		log.WithError(err).Error("Failed to configure the Backend K8s Cache")
@@ -1251,6 +1304,10 @@ func (a *Agent) Start(ctx context.Context) error {
 	if a.FeatureFlagFetcher.IsFeatureFlagEnabled(&featureflag.HelmSharedStorage.FeatureFlag) {
 		statusUpdaters = append(statusUpdaters, nvcastorage.NewSMBCSIDriverHealthCheck(k8sclients.K8s.StorageV1().CSIDrivers()))
 	}
+	if checker := a.newBYOOFederationChecker(); checker != nil {
+		statusUpdaters = append(statusUpdaters, checker)
+		go checker.Run(ctx)
+	}
 	a.backendHealthCache = health.NewBackendStatusCache(a.MinHealthcheckRefreshWait, statusUpdaters...)
 
 	// Pause until NVCA is initially healthy
@@ -1294,10 +1351,13 @@ func (a *Agent) Start(ctx context.Context) error {
 			},
 		}
 	} else {
-		// Register with ICMS after health.
+		// Register with ICMS after health. This blocks until registration
+		// succeeds, fails with an error retrying cannot fix, or ctx is done;
+		// readiness is armed only afterwards, so a rolling update does not cut
+		// over to this replica while it retries.
 		log.Info("Registering with ICMS")
 		var regErr error
-		res, regErr = a.RegisterWithICMS(ctx)
+		res, regErr = a.registerWithICMSRetrying(ctx)
 		if regErr != nil {
 			log.WithError(regErr).Error("Failed to register with ICMS")
 			return regErr
@@ -1541,6 +1601,20 @@ func (a *Agent) apply(ctx context.Context, ev *core.Event) {
 		// increment the counter for error totals per event kind
 		metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(ev.Kind)...).Inc()
 	}
+}
+
+// newBYOOFederationChecker returns a checker for the configured BYOO platform
+// metrics federation target, or nil when there is nothing to check: BYOO is
+// off, federation is disabled, or the collector uses its default target.
+func (a *Agent) newBYOOFederationChecker() *byoofederation.Checker {
+	if !a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.BYOObservability) {
+		return nil
+	}
+	target := byoofederation.Target(a.Config.Agent.BYOOOTelCollector.PlatformMetricsFederation)
+	if target == "" {
+		return nil
+	}
+	return byoofederation.NewChecker(target, a.metrics)
 }
 
 func (a *Agent) PutNVCAStatusUpdate(ctx context.Context) error {
@@ -2187,6 +2261,31 @@ func (a *Agent) RenewICMSQueueCreds(ctx context.Context) error {
 	})
 }
 
+// allWorkloadsConfirmedTerminated reports whether every active ICMSRequest's instances have
+// been confirmed terminated (backing Pod/MiniService actually gone, not just deletion
+// requested) and reported. It mirrors evictAllWorkloads' request filtering so the two stay
+// in sync on what counts as "still needs eviction".
+func (a *Agent) allWorkloadsConfirmedTerminated(ctx context.Context) bool {
+	allReqs, err := a.backendk8scache.icmsRequestLister.List(labels.Everything())
+	if err != nil {
+		return false
+	}
+
+	for _, req := range allReqs {
+		if req.Status.RequestStatus == nvcav2beta1.ICMSRequestStatusFailed ||
+			req.Status.RequestStatus == nvcav2beta1.ICMSRequestStatusFailureAcknowledged {
+			continue
+		}
+		if len(req.Status.Instances) == 0 {
+			continue
+		}
+		if !a.backendk8scache.icmsRequestHelper.AllInstancesTerminatedAndReported(ctx, req) {
+			return false
+		}
+	}
+	return true
+}
+
 // evictAllWorkloads directly purges all workload instances and sends termination status updates to ICMS.
 func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 	log := core.GetLogger(ctx).WithFields(logrus.Fields{
@@ -2227,17 +2326,21 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 			instanceIDs = append(instanceIDs, instanceID)
 		}
 
-		// Initialize terminatedInstances map with existing instances
+		// terminatedInstances tracks instances PurgeInstanceID confirms terminated in this
+		// pass. It must start empty: PurgeInstanceID treats any pre-existing entry for an
+		// instance ID as "already handled" and skips it, so seeding this from
+		// req.Status.Instances (which holds each instance's current, non-terminated status)
+		// would make every instance look already-terminated and PurgeInstanceID would never
+		// report success for any of them.
 		terminatedInstances := make(map[string]nvcav2beta1.InstanceStatus)
-		if len(req.Status.Instances) != 0 {
-			terminatedInstances = req.Status.Instances
-		}
 
 		// Use PurgeInstanceID to directly terminate each instance
 		var terminatedCount int
+		var purgedInstanceIDs []string
 		for _, instanceID := range instanceIDs {
 			if a.backendk8scache.icmsRequestHelper.PurgeInstanceID(ctx, req, terminatedInstances, instanceID) {
 				terminatedCount++
+				purgedInstanceIDs = append(purgedInstanceIDs, instanceID)
 			}
 		}
 
@@ -2248,8 +2351,13 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 				"totalInstances":  len(instanceIDs),
 			}).Info("Successfully terminated instances during maintenance eviction")
 
-			// Update the request status with the terminated instances
-			req.Status.Instances = terminatedInstances
+			// Update the request status: overlay the newly terminated instances onto the
+			// existing set so instances not yet confirmed terminated in this pass (e.g.
+			// still blocked by a finalizer) are preserved rather than dropped.
+			updatedInstances := make(map[string]nvcav2beta1.InstanceStatus, len(req.Status.Instances))
+			maps.Copy(updatedInstances, req.Status.Instances)
+			maps.Copy(updatedInstances, terminatedInstances)
+			req.Status.Instances = updatedInstances
 			req.Status.RequestStatus = nvcav2beta1.ICMSRequestStatusInProgress
 			req.Status.LastStatusUpdated = &metav1.Time{Time: core.GetCurrentTime(ctx)}
 
@@ -2266,8 +2374,10 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 			}
 		}
 
-		// Send termination status updates to ICMS for each terminated instance.
-		for _, instanceID := range instanceIDs {
+		// Send termination status updates to ICMS only for instances PurgeInstanceID
+		// actually confirmed terminated; an instance whose backing Pod/MiniService is
+		// still present must not be reported as terminated.
+		for _, instanceID := range purgedInstanceIDs {
 			updateRequest := &types.ICMSInstanceStatusUpdateRequest{
 				Status:           types.ICMSRequestInstanceTerminatedByService,
 				InstanceState:    types.ICMSInstanceTerminated,
@@ -2299,6 +2409,14 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 	return nil
 }
 
+const (
+	// selfDestructEvictionRetries bounds how many times handleSelfDestruct retries
+	// evictAllWorkloads before giving up on confirming every instance terminated.
+	selfDestructEvictionRetries = 3
+	// selfDestructEvictionRetryInterval is the delay between eviction retry attempts.
+	selfDestructEvictionRetryInterval = 2 * time.Second
+)
+
 // handleSelfDestruct implements the self-destruct sequence when instructed by ICMS.
 // It evicts all workloads and stops ICMS communication (except termination updates during eviction).
 func (a *Agent) handleSelfDestruct(ctx context.Context) error {
@@ -2309,12 +2427,34 @@ func (a *Agent) handleSelfDestruct(ctx context.Context) error {
 	log.Warn("Starting self-destruct sequence - evicting workloads and stopping ICMS communication")
 
 	// Step 1: Evict all existing workloads (termination updates will still be sent to ICMS).
+	// evictAllWorkloads only reports an instance terminated once its backing Pod/MiniService
+	// is confirmed gone, so a single pass can leave instances unconfirmed if deletion hasn't
+	// converged yet (e.g. still blocked by a finalizer). Retry a bounded number of times,
+	// stopping as soon as everything is confirmed, so those instances get more chances to be
+	// reported while ICMS communication is still active below. This is a best-effort bound,
+	// not a guarantee: self-destruct proceeds regardless once retries are exhausted, since it
+	// was explicitly instructed by ICMS and must not hang indefinitely.
 	log.Info("Evicting all existing workloads")
-	if err := a.evictAllWorkloads(ctx); err != nil {
-		log.WithError(err).Error("Failed to evict workloads during self-destruct")
-		// Continue with self-destruct even if eviction fails partially
-	} else {
-		log.Info("Successfully evicted all workloads")
+	for attempt := 1; attempt <= selfDestructEvictionRetries; attempt++ {
+		if err := a.evictAllWorkloads(ctx); err != nil {
+			log.WithError(err).WithField("attempt", attempt).Warn("Failed to evict workloads during self-destruct")
+		}
+
+		if a.allWorkloadsConfirmedTerminated(ctx) {
+			log.Info("Successfully evicted all workloads")
+			break
+		}
+
+		if attempt == selfDestructEvictionRetries {
+			log.Warn("Exhausted eviction retries during self-destruct; some instances may not be confirmed terminated")
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			log.WithError(ctx.Err()).Warn("Context canceled while retrying eviction during self-destruct")
+		case <-time.After(selfDestructEvictionRetryInterval):
+		}
 	}
 
 	// Step 2: Mark agent as self-destructed (this will stop further ICMS communication).

@@ -18,6 +18,7 @@ limitations under the License.
 package models
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 )
@@ -28,13 +29,39 @@ const (
 	ObjectEmbedding               = "embedding"
 )
 
-type EmbeddingInputField []string
+type EmbeddingInputField []EmbeddingInput
+
+type EmbeddingInput struct {
+	Text   string
+	Tokens []uint32
+	// Raw holds an element that is not a string or a token array.
+	Raw json.RawMessage
+}
+
+func (input EmbeddingInput) MarshalJSON() ([]byte, error) {
+	if input.Raw != nil {
+		return input.Raw, nil
+	}
+	if input.Tokens != nil {
+		return json.Marshal(input.Tokens)
+	}
+	return json.Marshal(input.Text)
+}
 
 type CreateEmbeddingRequest struct {
 	Input          EmbeddingInputField `json:"input"`
 	Model          string              `json:"model"`
 	EncodingFormat *string             `json:"encoding_format"`
 	User           *string             `json:"user"`
+}
+
+func (*CreateEmbeddingRequest) DecodesMembers() {}
+
+// UnmarshalJSON checks only model and input. Other members that fail to
+// decode stay zero; the backend validates them.
+func (r *CreateEmbeddingRequest) UnmarshalJSON(data []byte) error {
+	_, err := DecodeMembers(data, r, "model", "input")
+	return err
 }
 
 type EmbeddingEmbedding struct {
@@ -64,24 +91,68 @@ type CreateEmbeddingResponse struct {
 }
 
 func (ef *EmbeddingInputField) UnmarshalJSON(data []byte) error {
-	var single string
-	if err := json.Unmarshal(data, &single); err == nil {
-		if len(single) > 0 {
-			*ef = []string{single}
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte(`""`)) {
+		*ef = nil
+		return nil
+	}
+	if !bytes.HasPrefix(trimmed, []byte("[")) {
+		*ef = EmbeddingInputField{decodeEmbeddingInput(trimmed)}
+		return nil
+	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(trimmed, &items); err != nil {
+		return err
+	}
+	// An array that starts with a number or null is one token array.
+	if len(items) > 0 && isNumberOrNull(items[0]) {
+		*ef = EmbeddingInputField{decodeEmbeddingInput(trimmed)}
+		return nil
+	}
+	batch := make(EmbeddingInputField, len(items))
+	for i, item := range items {
+		batch[i] = decodeEmbeddingInput(item)
+	}
+	*ef = batch
+	return nil
+}
+
+func isNumberOrNull(value json.RawMessage) bool {
+	switch c := value[0]; {
+	case c == '-', c == 'n', c >= '0' && c <= '9':
+		return true
+	default:
+		return false
+	}
+}
+
+// decodeEmbeddingInput keeps an element that is not a string or a token array
+// as raw JSON. The backend decides whether it is valid.
+func decodeEmbeddingInput(data json.RawMessage) EmbeddingInput {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return EmbeddingInput{Text: text}
+	}
+	if tokens, err := decodeEmbeddingTokens(data); err == nil {
+		return EmbeddingInput{Tokens: tokens}
+	}
+	return EmbeddingInput{Raw: append(json.RawMessage(nil), data...)}
+}
+
+func decodeEmbeddingTokens(data []byte) ([]uint32, error) {
+	var values []*uint32
+	if err := json.Unmarshal(data, &values); err != nil || values == nil {
+		return nil, &UnmarshalError{Field: "input", Msg: "token arrays must contain non-negative integers"}
+	}
+	tokens := make([]uint32, len(values))
+	for i, value := range values {
+		if value == nil {
+			return nil, &UnmarshalError{Field: "input", Msg: "token arrays must not contain null"}
 		}
-		return nil
+		tokens[i] = *value
 	}
-
-	var multiple []string
-	if err := json.Unmarshal(data, &multiple); err == nil {
-		*ef = multiple
-		return nil
-	}
-
-	return &UnmarshalError{
-		Field: "input",
-		Msg:   "Must be either a string or an array of string",
-	}
+	return tokens, nil
 }
 
 func (ee *EmbeddingEmbedding) MarshalJSON() ([]byte, error) {

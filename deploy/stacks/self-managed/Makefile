@@ -11,27 +11,47 @@ test:
 	@tests/llm-servicemonitor-defaults.sh
 	@tests/gateway-routes-local-chart.sh
 	@tests/gateway-routes-enable-wiring.sh
+	@tests/gateway-routes-hostname-policy-wiring.sh
 	@tests/gateway-routes-default-ownership.sh
 	@tests/grpc-proxy-nats-endpoint.sh
+	@tests/nats-image-overrides.sh
+	@tests/cert-manager-image-overrides.sh
 	@tests/llm-pki-openbao-migration.sh
+	@tests/openbao-injector-image-overrides.sh
+	@tests/openbao-jwt-lifecycle-wiring.sh
+	@tests/service-pki-wiring.sh
+	@tests/nonroot-llm-migrations.sh
 	@tests/api-keys-startup-probe.sh
+	@tests/nonroot-api-keys.sh
+	@tests/upgrade-receipt-wiring.sh
 	@tests/cassandra-openbao-credential-wiring.sh
 	@tests/llm-pki-release.sh
 	@tests/check-llm-pki-issuer.sh
 	@tests/pdb-value-wiring.sh
+	@tests/pod-annotations-wiring.sh
 	@tests/invocation-env-wiring.sh
 	@tests/invocation-tracing-baggage.sh
+	@tests/java-tracing-env-wiring.sh
 	@tests/image-override-wiring.sh
 	@tests/sidecar-registry-wiring.sh
 	@tests/api-env-wiring.sh
 	@tests/apikeys-env-wiring.sh
+	@tests/notary-env-wiring.sh
 	@tests/ess-base-url-wiring.sh
+	@tests/nvct-remote-config-wiring.sh
 	@tests/icms-condition-wiring.sh
+	@tests/admin-issuer-proxy-wiring.sh
+	@tests/nonroot-icms-migrations.sh
 	@tests/nats-placement-tags.sh
+	@tests/nats-container-resources.sh
 	@tests/nats-tls-wiring.sh
 	@tests/nats-auth-callout-wiring.sh
+	@tests/nats-worker-auth-wiring.sh
 	@tests/notary-image-repository.sh
 	@tests/nvcf-ui-migrations-image-tag.sh
+	@tests/nonroot-ui-migrations.sh
+	@tests/ha-value-wiring.sh
+	@tests/ha-chart-render.sh
 
 test-published-charts:
 	@: "$${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"
@@ -39,4 +59,5 @@ test-published-charts:
 	@tests/llm-router-published-chart.sh
 	@tests/gateway-routes-published-chart.sh
 	@tests/openbao-published-chart.sh
+	@tests/state-metrics-chart-contract.sh
 	@tests/cassandra-autoscaler-published-compatibility.sh

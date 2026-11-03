@@ -31,32 +31,51 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 )
 
 // storageProfilesConfigMap is the optional per-cluster overlay that
 // extends/overrides the built-in provisioner→strategy table (nvsnap#171).
 const storageProfilesConfigMap = "nvsnap-storage-profiles"
 
+// errUnqualifiedStorage reports that the L2 StorageClass's provisioner
+// matched no storage profile. It is deliberately distinct from a
+// transient failure: the caller disables L2 rather than promoting on
+// capability the driver never proved.
+var errUnqualifiedStorage = errors.New("L2 storage profile: provisioner matched no storage profile")
+
 // resolveL2Promoter reads the L2 StorageClass's provisioner +
 // parameters.type, resolves a StorageProfile (built-in table overlaid by
 // the nvsnap-storage-profiles ConfigMap), and constructs the matching
-// Promoter. Returns nil on ANY failure (SC unreadable, no profile match,
-// bad ConfigMap, construct error) — the backend then falls back to its
-// default snapshot-clone ROX promoter. Always logs the resolved strategy
-// (or the reason for fallback) so an operator can see what L2 will do.
-func resolveL2Promoter(ctx context.Context, kc kubernetes.Interface, dyn dynamic.Interface, scName, namespace string, log logrus.FieldLogger) checkpointstore.Promoter {
+// Promoter.
+//
+// Returns errUnqualifiedStorage when nothing matches, including when the
+// StorageClass itself cannot be read, because an unknown class is not a
+// qualified one. Promoting anyway would assume the driver supports
+// snapshots and binds ReadOnlyMany across nodes; an access mode a driver
+// merely accepts is not a qualification, and on Weka, VAST or FSS the
+// claim can bind and read wrong. Always logs what L2 resolved to.
+//
+// The resolved profile is returned alongside the promoter because the
+// webhook consumes it too (cachedir prewarm policy). It is nil when no
+// profile matched, so callers fall back to the profile's zero-value
+// defaults.
+func resolveL2Promoter(ctx context.Context, kc kubernetes.Interface, dyn dynamic.Interface, scName, namespace string, log logrus.FieldLogger) (checkpointstore.Promoter, *checkpointstore.StorageProfile, error) {
 	sc, err := kc.StorageV1().StorageClasses().Get(ctx, scName, metav1.GetOptions{})
 	if err != nil {
 		log.WithError(err).WithField("sc", scName).
-			Warn("L2 storage profile: cannot read StorageClass; falling back to default snapshot-clone ROX promoter")
-		return nil
+			Error("L2 storage profile: cannot read StorageClass; L2 disabled (an unreadable class cannot be a qualified one)")
+		return nil, nil, fmt.Errorf("%w: read StorageClass %q: %w", errUnqualifiedStorage, scName, err)
 	}
 	provisioner := sc.Provisioner
 	volType := sc.Parameters["type"] // disambiguates pd.csi (hyperdisk-ml vs pd-ssd)
@@ -75,21 +94,22 @@ func resolveL2Promoter(ctx context.Context, kc kubernetes.Interface, dyn dynamic
 	profile, key, ok := checkpointstore.ResolveStorageProfile(provisioner, volType, overlay)
 	if !ok {
 		log.WithFields(logrus.Fields{"sc": scName, "provisioner": provisioner, "type": volType}).
-			Warn("L2 storage profile: no profile for provisioner[/type]; falling back to default snapshot-clone ROX promoter (add an entry to the nvsnap-storage-profiles ConfigMap to support this backend)")
-		return nil
+			Error("L2 storage profile: no profile for provisioner[/type]; L2 disabled. Add an entry to the nvsnap-storage-profiles ConfigMap to qualify this backend")
+		return nil, nil, fmt.Errorf("%w: provisioner %q type %q", errUnqualifiedStorage, provisioner, volType)
 	}
 	promoter, err := checkpointstore.NewPromoterFromProfile(profile, scName, kc, dyn, log)
 	if err != nil {
 		log.WithError(err).WithField("strategy", profile.Strategy).
-			Warn("L2 storage profile: cannot construct promoter; falling back to default")
-		return nil
+			Error("L2 storage profile: cannot construct promoter; L2 disabled")
+		return nil, &profile, fmt.Errorf("construct promoter for strategy %q: %w", profile.Strategy, err)
 	}
 	log.WithFields(logrus.Fields{
 		"sc": scName, "provisioner": provisioner, "type": volType,
 		"profile_key": key, "strategy": profile.Strategy,
 		"read_only_many": profile.ReadOnlyMany, "vh_transform": profile.VolumeHandleTransform,
+		"prewarm": profile.PrewarmEnabled(), "prewarm_workers": profile.PrewarmWorkers(),
 	}).Info("L2 storage profile resolved")
-	return promoter
+	return promoter, &profile, nil
 }
 
 // startL2Backend constructs the PerCapturePVCBackend if L2 is enabled
@@ -133,6 +153,7 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 	if err != nil {
 		return nil, fmt.Errorf("L2: in-cluster config: %w", err)
 	}
+	restCfg = withClientLimits(restCfg)
 	kc, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return nil, fmt.Errorf("L2: kube client: %w", err)
@@ -156,20 +177,45 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 
 	// Default the mount-holder pull secret unless the operator
 	// explicitly cleared it. The "-" sentinel disables (no secret).
-	pullSecret := cfg.WriterPullSecret
-	if pullSecret == "" {
-		pullSecret = DefaultWriterPullSecret
-	}
-	var pullSecrets []string
-	if pullSecret != "" && pullSecret != "-" {
-		pullSecrets = []string{pullSecret}
-	}
+	pullSecrets := l2PullSecrets(cfg)
 
 	// Resolve the storage strategy from the L2 SC's provisioner +
-	// parameters.type (nvsnap#171). nil ⇒ the backend's applyDefaults
-	// falls back to the snapshot-clone ROX promoter (Hyperdisk-ML
-	// behavior) — back-compat for clusters with no profile match.
-	promoter := resolveL2Promoter(context.Background(), kc, dyn, cfg.StorageClass, cfg.Namespace, log)
+	// parameters.type (nvsnap#171). An unqualified provisioner disables
+	// L2 rather than promoting on assumed capability (nvsnap#2099): the
+	// old fallback took the Hyperdisk-ML shape on any unknown driver,
+	// which assumes snapshots and cross-node ReadOnlyMany. On Weka, VAST
+	// or FSS that is either a promote-time failure or a claim that binds
+	// and reads wrong. There is deliberately no override: qualify the
+	// driver in the nvsnap-storage-profiles ConfigMap instead.
+	promoter, profile, err := resolveL2Promoter(context.Background(), kc, dyn, cfg.StorageClass, cfg.Namespace, log)
+	a.l2Profile = profile
+	// The election picks one pod to take a cachedir capture for the rest
+	// of its configuration; CRIU captures every instance whole.
+	if (a.config.Election.Enabled || a.config.ModelVolume.Enabled) && !criuIsDefault() {
+		a.elector = &election.LeaseElector{KubeClient: kc, Namespace: cfg.Namespace, Deadline: a.config.Election.Deadline}
+		a.electionScope = &election.NodeArchScope{KubeClient: kc}
+		log.WithField("deadline", a.config.Election.Deadline).Info("admission election enabled (one downloader per hash)")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("L2 disabled: %w", err)
+	}
+	if a.config.ModelVolume.Enabled {
+		if mv, minter, err := buildModelVolume(kc, profile, promoter, cfg.StorageClass, cfg.Namespace, log); err != nil {
+			log.WithError(err).Warn("model volume disabled")
+		} else {
+			mv.Cfg.TenantLabel = a.modelVolumeTenantLabel()
+			a.modelVolume, a.modelMinter = mv, minter
+			// The compile-cache set is the model volume mechanism with
+			// another kind: same storage, same views, every mode. A CRIU
+			// restore brings the caches back with the process, so under
+			// CRIU there is no set to collect or seed.
+			if !criuIsDefault() {
+				ccfg := mv.Cfg
+				ccfg.Kind = modelvolume.KindCache
+				a.cacheVolume = &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
+			}
+		}
+	}
 
 	// SnapshotClass is only meaningful for the snapshot-clone strategy.
 	// Shared-volume backends (NVMesh/EFS/Filestore) never snapshot — they
@@ -197,6 +243,10 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 		Copier:            NewAgentCopier("/host", log),
 		SizeBytesFor:      defaultL2Size,
 		Log:               log,
+		// Claims to a capture only in its tenant's namespaces, and only for
+		// the election's followers of that capture.
+		TenantOf:   func(_ context.Context, ns string) string { return a.tenantScope(ns) },
+		IsFollower: isElectionFollower,
 	}
 	log.WithFields(logrus.Fields{
 		"storage_class":  cfg.StorageClass,
@@ -248,6 +298,14 @@ func defaultL2Size(_ string, m checkpointstore.Manifest) int64 {
 	if (m.CaptureMethod == "rootfs" || m.CaptureMethod == "cachedir") && m.TotalSizeBytes > 0 {
 		const floor = 2 * oneGiB
 		return max(m.TotalSizeBytes*12/10, floor)
+	}
+	// A CRIU capture measured on disk (the agent passes the checkpoint's
+	// allocated size): size from that. The vRAM estimate below asked
+	// 384 GiB (80 GiB x 4 GPUs x 1.2) for a 1.1 TB checkpoint of a model
+	// filling four 288 GB GPUs, and the copy ran out of space.
+	if m.CaptureMethod == "criu" && m.TotalSizeBytes > 0 {
+		const floor = 2 * oneGiB
+		return max(m.TotalSizeBytes*11/10, floor)
 	}
 
 	// CRIU/GPU-state path: dump ≈ vRAM. Manifest doesn't carry vRAM
@@ -334,4 +392,73 @@ func vramGBFromGPUType(gpuType string) string {
 		}
 	}
 	return ""
+}
+
+// buildModelVolume derives the write-once model volume setup from the
+// storage profile: "block" on shared-volume strategies (NVMesh), "rwx"
+// when the profile declares a distributed-filesystem class. Both need the
+// shared-volume promoter: it mints the per-namespace views of a primary
+// in every mode. Anything else leaves Helm functions alone.
+func buildModelVolume(kc kubernetes.Interface, profile *checkpointstore.StorageProfile, promoter checkpointstore.Promoter, l2Class, namespace string, log logrus.FieldLogger) (*modelvolume.Provisioner, *checkpointstore.SharedVolumePromoter, error) {
+	cfg := modelvolume.Config{StorageClass: l2Class, Size: resource.MustParse("512Gi"), Namespace: namespace}
+	var mvp *checkpointstore.ModelVolumeProfile
+	if profile != nil {
+		mvp = profile.ModelVolume
+	}
+	switch {
+	case mvp != nil && mvp.Mode == string(modelvolume.ModeRWX):
+		cfg.Mode = modelvolume.ModeRWX
+	case mvp != nil && mvp.Mode == string(modelvolume.ModeBlock), mvp == nil && profile != nil && profile.Strategy == checkpointstore.StrategySharedVolume:
+		cfg.Mode = modelvolume.ModeBlock
+	default:
+		return nil, nil, errors.New("storage profile resolves no model volume mode (block needs a shared-volume strategy such as NVMesh; rwx must be declared with a distributed filesystem class)")
+	}
+	if mvp != nil {
+		if mvp.StorageClass != "" {
+			cfg.StorageClass = mvp.StorageClass
+		}
+		if mvp.ReaderMode != "" {
+			cfg.Reader = modelvolume.ReaderMode(mvp.ReaderMode)
+		}
+		if mvp.Size != "" {
+			q, err := resource.ParseQuantity(mvp.Size)
+			if err != nil {
+				return nil, nil, fmt.Errorf("modelVolume.size %q: %w", mvp.Size, err)
+			}
+			cfg.Size = q
+		}
+		if mvp.MinSize != "" {
+			q, err := resource.ParseQuantity(mvp.MinSize)
+			if err != nil {
+				return nil, nil, fmt.Errorf("modelVolume.minSize %q: %w", mvp.MinSize, err)
+			}
+			cfg.MinSize = q
+		}
+	}
+	minter, ok := promoter.(*checkpointstore.SharedVolumePromoter)
+	if !ok {
+		return nil, nil, errors.New("the model volume needs the shared-volume promoter (profile strategy shared-volume) to mint per-namespace views")
+	}
+	log.WithFields(logrus.Fields{"mode": cfg.Mode, "storage_class": cfg.StorageClass, "namespace": cfg.SystemNamespace(), "shared_while_writing": cfg.SharedWhileWriting(), "rwx_size": cfg.Size.String()}).Info("model volume enabled (one download per model per cluster; block claims sized from the download)")
+	return &modelvolume.Provisioner{Kube: kc, Cfg: cfg}, minter, nil
+}
+
+// l2PullSecrets resolves the mount-holder / writer pull secret list: the
+// configured secret, the default unless cleared with "-", or none.
+func l2PullSecrets(cfg L2BackendConfig) []string {
+	pullSecret := cfg.WriterPullSecret
+	if pullSecret == "" {
+		pullSecret = DefaultWriterPullSecret
+	}
+	if pullSecret != "" && pullSecret != "-" {
+		return []string{pullSecret}
+	}
+	return nil
+}
+
+// isElectionFollower reports whether pod was admitted as an election
+// follower of hash: the stamps admission writes (internal/webhook/election.go).
+func isElectionFollower(pod *corev1.Pod, hash string) bool {
+	return pod.Annotations[election.HashAnnotation] == hash &&
+		pod.Annotations[election.RoleAnnotation] == string(election.RoleFollower)
 }

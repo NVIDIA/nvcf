@@ -99,6 +99,17 @@ go_oci_image(
         "/usr/bin/app",
     ],
     env = {"ULIMIT_FLAG": "1"},
+    user = "1000:1000",
     tags = ["nvcf-grpc-proxy"],
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "image_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":image_index"],
 )

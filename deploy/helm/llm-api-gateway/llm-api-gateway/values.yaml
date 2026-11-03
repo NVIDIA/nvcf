@@ -26,7 +26,7 @@ llmApiGateway:
   image:
     registry: ""
     repository: ""
-    tag: "0.14.2"
+    tag: "0.19.2"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -66,6 +66,14 @@ llmApiGateway:
     requestRouterUrl: "http://llm-request-router.nvcf.svc.cluster.local:8000"
     requestRouterConnectTimeout: 2s
     requestRouterRequestTimeout: 0s
+    # Longest a single response write may stall on a client that stopped
+    # reading. Applies only while a write is in progress, so it does not cap
+    # total response time or upstream pauses. 0s disables the bound.
+    inferenceWriteTimeout: 60s
+    # Flat input token estimate for each image on /v1/decisions and
+    # /v1/systemone. The image payload is never counted by size. Must be 0 or
+    # more; 0 counts images as free.
+    decisionImageTokens: 1024
     nvcfGrpcAddr: "api.nvcf.svc.cluster.local:9090"
     nvcfGrpcInsecure: false
     nvcfGrpcTimeout: 2s
@@ -75,11 +83,26 @@ llmApiGateway:
     defaultModel: ""
     defaultRpm: 120
     defaultTpm: 240000
+    # Put the LLM Request Router rejection reason, such as
+    # no_eligible_candidates, in error.code of OpenAI-format error responses.
+    # When false, the reason is only logged.
+    exposeRouterErrorCodes: false
+    # Session last-cluster hint (x-stargate-last-cluster-id) for the LLM
+    # Request Router. Stored in Olric when olric.enabled is true, otherwise in
+    # a per-pod LRU capped at localMaxEntries. Enable it after the router is
+    # upgraded and before any model turns on last_cluster_affinity.
+    lastCluster:
+      enabled: false
+      ttl: 10m
+      lookupTimeout: 20ms
+      localMaxEntries: 100000
 
-  # Rate-limit state is kept in an embedded Olric cluster colocated with the
-  # gateway pods (no separate Redis deployment). The gateway's server.go picks
-  # ratelimit.AllowAll when RATE_LIMIT_ENABLED=true AND OLRIC_ENABLED=false, so
-  # enabling rate limiting without Olric silently turns into a no-op.
+  # Rate-limit state and session last-cluster hints are kept in an embedded
+  # Olric cluster colocated with the gateway pods (no separate Redis
+  # deployment). The node starts whenever olric.enabled is true. The gateway's
+  # server.go picks ratelimit.AllowAll when RATE_LIMIT_ENABLED=true AND
+  # OLRIC_ENABLED=false, so enabling rate limiting without Olric silently turns
+  # into a no-op.
   olric:
     enabled: true
     # "local" | "lan" | "wan" - memberlist tuning. Use "local" for single-pod k3d
@@ -132,3 +155,9 @@ llmApiGateway:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+  # Zone spread; set by the HA value layer, empty by default.
+  topologySpreadConstraints: []
+
+  # Rollout strategy; set by the HA value layer, empty by default.
+  strategy: {}

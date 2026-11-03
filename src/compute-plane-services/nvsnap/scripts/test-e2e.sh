@@ -32,6 +32,8 @@ fi
 # Verify deployed agent matches expected version
 source "$SCRIPT_DIR/versions.sh"
 source "$SCRIPT_DIR/lib/agent-auth.sh"
+source "$SCRIPT_DIR/lib/wait-progress.sh"
+source "$SCRIPT_DIR/lib/restore-guard.sh"
 DEPLOYED=$(kubectl get ds nvsnap-agent -n nvsnap-system -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)
 EXPECTED="${NVSNAP_REGISTRY}/nvsnap-agent:${NVSNAP_APP_VERSION}"
 if [ "$DEPLOYED" != "$EXPECTED" ]; then
@@ -73,6 +75,10 @@ if [ -z "$WORKLOAD" ]; then
     echo "  nim-llama-8b      Llama-3.1-8B on NVIDIA NIM"
     echo "  e5-mistral        e5-mistral-7B-instruct on vLLM (embedding)"
     echo ""
+    echo "Workloads (gpushare CRIU, default NCCL settings):"
+    echo "  vllm-small-gpushare  TinyLlama 1.1B on vLLM (single GPU)"
+    echo "  vllm-tp4-gpushare    Qwen2.5-7B on vLLM (TP=4)"
+    echo ""
     echo "Workloads (multi-GPU rootfs):"
     echo "  vllm-70b          Llama-3.1-70B on vLLM (TP=4)"
     echo "  nim-qwen3-32b     Qwen3-32B on NVIDIA NIM (TP=2)"
@@ -92,6 +98,21 @@ case "$WORKLOAD" in
         POST_INFER_DATA='{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","prompt":"The meaning of life is","max_tokens":10}'
         SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-small.yaml"
         RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-small-restore.yaml"
+        ;;
+    vllm-small-gpushare|vllm-tp4-gpushare)
+        # gpushare: criu-v2 with libnvsnap_gpushare.so, default NCCL settings
+        # (TP=1 regression on any GPU node; TP=4 needs a node with 4 GPUs).
+        POD_NAME="$WORKLOAD"
+        CONTAINER_NAME="vllm"
+        RESTORE_POD_NAME="${WORKLOAD}-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        if [ "$WORKLOAD" = vllm-tp4-gpushare ]; then MODEL="Qwen/Qwen2.5-7B-Instruct"; else MODEL="TinyLlama/TinyLlama-1.1B-Chat-v1.0"; fi
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA="{\"model\":\"$MODEL\",\"prompt\":\"Hello\",\"max_tokens\":5}"
+        POST_INFER_DATA="{\"model\":\"$MODEL\",\"prompt\":\"The meaning of life is\",\"max_tokens\":10}"
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/${WORKLOAD}.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/${WORKLOAD}-restore.yaml"
         ;;
     vllm-mp)
         # E0 multi-GPU ladder: TinyLlama TP=1, multi-process EngineCore.
@@ -274,28 +295,31 @@ esac
 # General configuration
 NAMESPACE="nvsnap-system"
 
-# Timeouts (seconds) — 70B needs longer for model download + GPU memory dump/restore
-if [[ "$WORKLOAD" == *"70b"* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: 70B model download + load
-    MODELS_POLL_TIMEOUT=1200    # 20min
-    INFERENCE_POLL_TIMEOUT=300
-    RESTORE_READY_TIMEOUT=1200  # 20min: CRIU + 4x GPU memory restore
-elif [[ "$WORKLOAD" == trtllm-* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: ~25GB image pull + TRT engine compilation
-    MODELS_POLL_TIMEOUT=1200    # 20min
-    INFERENCE_POLL_TIMEOUT=300
-    RESTORE_READY_TIMEOUT=600   # 10min
-elif [[ "$WORKLOAD" == *"qwen32b"* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: ~64GB fp16 model download + load
-    MODELS_POLL_TIMEOUT=1200    # 20min
-    INFERENCE_POLL_TIMEOUT=300
-    RESTORE_READY_TIMEOUT=1200  # 20min: CRIU restore of ~64GB host-staged GPU memory
-else
-    POD_READY_TIMEOUT=600       # 10min
-    MODELS_POLL_TIMEOUT=600
-    INFERENCE_POLL_TIMEOUT=300
-    RESTORE_READY_TIMEOUT=600   # 10min
-fi
+# Readiness is progress-based, not deadline-based: see scripts/lib/wait-progress.sh.
+# There is deliberately no per-workload timeout table here. The old one keyed
+# fixed deadlines off substrings of the workload name, matched only 3 of the 13
+# workloads, and reported every miss as "Pod ready FAIL" -- which reads like a
+# capture bug. A pod that is still downloading a 64GB model is making progress
+# and is allowed to continue; a pod that has stopped changing is failed after
+# NVSNAP_STALL_TIMEOUT regardless of how large the model is.
+#
+#   NVSNAP_STALL_TIMEOUT       no observable progress this long = hung (default 600)
+#   NVSNAP_PULL_STALL_TIMEOUT  the same, while an image pull is in flight, since
+#                              Kubernetes reports no byte-level pull progress
+#                              and a large pull is indistinguishable from a hang
+#                              (default 1800)
+#   NVSNAP_MAX_WAIT            absolute ceiling, a backstop only (default 5400)
+#
+# The HTTP polls below run against an already-ready pod, so a plain deadline is
+# appropriate there. They are single generous defaults rather than a table.
+MODELS_POLL_TIMEOUT="${NVSNAP_MODELS_POLL_TIMEOUT:-1200}"
+INFERENCE_POLL_TIMEOUT="${NVSNAP_INFERENCE_POLL_TIMEOUT:-300}"
+for _tv in NVSNAP_MODELS_POLL_TIMEOUT:"$MODELS_POLL_TIMEOUT" NVSNAP_INFERENCE_POLL_TIMEOUT:"$INFERENCE_POLL_TIMEOUT"; do
+    if ! [[ "${_tv#*:}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: ${_tv%%:*} must be a positive integer number of seconds, got '${_tv#*:}'" >&2
+        exit 2
+    fi
+done
 MODELS_POLL_INTERVAL=30
 INFERENCE_POLL_INTERVAL=30
 POST_MODELS_TIMEOUT=120
@@ -365,8 +389,8 @@ print_summary() {
 # Usage: pod_curl <pod> <container> <method> <path> [data] [timeout]
 #
 # Tries curl first; falls back to python3 urllib for containers that
-# don't ship curl (e.g. NIM images). Clears LD_PRELOAD so the nvsnap
-# intercept library doesn't load into the probe binary.
+# don't ship curl (e.g. NIM images). Clears LD_PRELOAD so a workload's own
+# preloads don't load into the probe binary.
 pod_curl() {
     local pod="$1" container="$2" method="$3" path="$4" data="${5:-}" timeout="${6:-10}"
 
@@ -529,6 +553,9 @@ log_info "Pre-flight: pinning to node $SELECTED_NODE (needs $GPU_REQ GPU)"
 # single-GPU → criu.
 if [ -n "${CAPTURE_PATH:-}" ]; then
     : # respect caller override
+elif grep -q 'nvsnap.io/gpushare: "true"' "$SOURCE_MANIFEST"; then
+    # gpushare makes multi-GPU CRIU work: stay on criu-v2 at any GPU count.
+    CAPTURE_PATH="criu-v2"
 elif [ "$GPU_REQ" -ge 2 ]; then
     CAPTURE_PATH="rootfs"
 else
@@ -552,8 +579,8 @@ if [ "$CAPTURE_PATH" = "rootfs" ]; then
 fi
 
 # On the rootfs/cachedir path, prefer a dedicated <workload>-rootfs-restore.yaml
-# if one exists: the CRIU restore template chains restore-entrypoint and waits
-# for a CRIU dump that never appears on the rootfs path. The rootfs variant is a
+# if one exists: the CRIU restore template is a placeholder pod that waits for
+# the agent's in-namespace restore, which never comes on the rootfs path. The rootfs variant is a
 # plain pod with a nvsnap.io/restore-from annotation the webhook acts on.
 if [ "$CAPTURE_PATH" = "rootfs" ]; then
     _rootfs_tmpl="${RESTORE_MANIFEST_TEMPLATE%-restore.yaml}-rootfs-restore.yaml"
@@ -585,8 +612,8 @@ kubectl apply -f "$SOURCE_RENDERED"
 
 # ─── Step 3: Wait for pod ready (readiness probe checks /v1/models) ──────────
 step_start
-log_info "Step 3: Waiting for pod ready (up to ${POD_READY_TIMEOUT}s)..."
-if kubectl wait --for=condition=ready pod/$POD_NAME -n $NAMESPACE --timeout=${POD_READY_TIMEOUT}s; then
+log_info "Step 3: Waiting for pod ready (progress-based; stall after ${NVSNAP_STALL_TIMEOUT:-600}s)..."
+if wait_pod_ready "$POD_NAME" "$NAMESPACE"; then
     step_done "Pod ready" "OK"
 else
     kubectl logs $POD_NAME -n $NAMESPACE -c $CONTAINER_NAME --tail=20 || true
@@ -710,7 +737,7 @@ else
     log_info "Step 7: Creating checkpoint..."
     # criu-v2 must be requested explicitly per checkpoint — the agent only
     # takes the in-namespace engine via capturePath (or its own
-    # NVSNAP_CRIU_V2=1 env). Plain criu keeps the no-override behavior.
+    # criu-v2 engine). Plain criu keeps the no-override behavior.
     # The `|| CHECKPOINT_RC=$?` guard matters: under set -e a plain failing
     # command substitution kills the whole script before any diagnostics
     # below can print (first criu-v2 run died silently this way).
@@ -815,6 +842,10 @@ else
         "$RESTORE_MANIFEST_TEMPLATE" > "$RESTORE_MANIFEST"
 fi
 
+# See scripts/lib/restore-guard.sh: a surviving placeholder leaves the webhook
+# nothing to resolve, so the pod cold-starts while looking like a slow restore.
+assert_no_placeholders "$RESTORE_MANIFEST" || exit 1
+
 # Phase 5d: restore goes back to the simple hostPath mount on the
 # capture-source node (or the agent's EnsureLocal cascade materializes
 # it locally on a different target node before the placeholder reads
@@ -852,9 +883,29 @@ if [ "$CAPTURE_PATH" = "criu-v2" ]; then
     log_info "criu-v2: agent restore returned: $RESTORE_RESP"
 fi
 
-log_info "Waiting for restore pod ready (up to ${RESTORE_READY_TIMEOUT}s)..."
+# Prove the webhook admitted this pod AS A RESTORE before timing anything.
+#
+# A pod the webhook declined still starts, still serves, and still passes every
+# check below -- it just cold-starts, downloading the model again. The timings
+# then describe a cold start wearing a restore label, and nothing in the run
+# says so. (Measured: a 70B "restore" that spent 8m47s downloading weights,
+# because the pod carried no injected cache at all.)
+#
+# The observable signature of a real restore on the rootfs/cachedir path is the
+# injected cache mount plus a cache env that points into it.
+if [ "$CAPTURE_PATH" = "rootfs" ]; then
+    log_info "Verifying the restore pod was admitted as a restore..."
+    POD_CACHE_DIR=$(agent_pod_cache_dir)
+    if ! assert_restore_admitted "$RESTORE_POD_NAME" "$NAMESPACE" \
+            "$RESTORE_CONTAINER_NAME" "$POD_CACHE_DIR"; then
+        fail "Restore pod not admitted as a restore"
+    fi
+    log_info "  verified: $POD_CACHE_DIR is mounted and the cache env points into it"
+fi
+
+log_info "Waiting for restore pod ready (progress-based)..."
 log_info "  (readiness probe polls /v1/models — succeeds only when serving)"
-if kubectl wait --for=condition=ready pod/$RESTORE_POD_NAME -n $NAMESPACE --timeout=${RESTORE_READY_TIMEOUT}s; then
+if wait_pod_ready "$RESTORE_POD_NAME" "$NAMESPACE"; then
     step_done "Restore pod ready" "OK"
 else
     log_warn "Restore pod not ready, checking status..."
@@ -891,7 +942,7 @@ fi
 echo ""
 log_info "Key restore events:"
 kubectl logs $RESTORE_POD_NAME -n $NAMESPACE -c $RESTORE_CONTAINER_NAME 2>&1 | \
-    grep -E "wakeRestoredThreads|uv_loop_fork|libzmq.*CRIU|ETERM|reinit completed|RESTORE_COMPLETE" | head -10 || true
+    grep -E "Restoring FAILED|Tasks resumed|restore.*complete|RESTORE_COMPLETE" | head -10 || true
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 echo ""

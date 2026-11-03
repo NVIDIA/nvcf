@@ -35,73 +35,10 @@ spec:
       labels:
         {{- include "nvcaop.baseSelectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: validation
+      annotations:
+        # Every Job carries the spec it ran, so the operator can tell whether
+        # the newest run used the current one.
+        nvca.nvcf.nvidia.io/cluster-validator-spec: {{ include "nvcaop.clusterValidatorSpecHash" . | quote }}
     spec:
-      parallelism: 1
-      completions: 1
-      backoffLimit: 2
-      activeDeadlineSeconds: 600
-      template:
-        metadata:
-          labels:
-            {{- include "nvcaop.baseSelectorLabels" . | nindent 12 }}
-            app.kubernetes.io/component: validation
-        spec:
-          serviceAccountName: {{ include "nvcaop.fullname" . }}-cluster-validator
-          automountServiceAccountToken: true
-          restartPolicy: Never
-          securityContext:
-            runAsUser: 65534
-            runAsGroup: 65534
-            fsGroup: 65534
-          {{- if or .Values.generateImagePullSecret (gt (len .Values.imagePullSecrets) 0) }}
-          imagePullSecrets:
-          {{- if .Values.generateImagePullSecret }}
-          - name: {{ (.Values.imagePullSecretName) | default "nvca-operator-image-pull" | quote }}
-          {{- end }}
-          {{- range .Values.imagePullSecrets }}
-          - name: {{ .name | quote }}
-          {{- end }}
-          {{- end }}
-          containers:
-            - name: cluster-validator
-              image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" $cv.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.AppVersion $cv.image.tag }}
-              imagePullPolicy: {{ $cv.image.pullPolicy }}
-              env:
-                - name: VALIDATOR_CONFIG_NAMESPACE
-                  valueFrom:
-                    fieldRef:
-                      fieldPath: metadata.namespace
-                - name: VALIDATOR_CONFIG_NAME
-                  value: {{ $cv.configMapName | quote }}
-                # Namespace the NVCA agent watches for the metrics summary; kept
-                # separate from the config namespace so a config-namespace
-                # override can't redirect metrics.
-                - name: VALIDATOR_SUMMARY_NAMESPACE
-                  valueFrom:
-                    fieldRef:
-                      fieldPath: metadata.namespace
-              resources:
-                requests:
-                  cpu: {{ $cv.resources.requests.cpu | quote }}
-                  memory: {{ $cv.resources.requests.memory | quote }}
-                limits:
-                  cpu: {{ $cv.resources.limits.cpu | quote }}
-                  memory: {{ $cv.resources.limits.memory | quote }}
-              securityContext:
-                runAsNonRoot: true
-                readOnlyRootFilesystem: true
-                allowPrivilegeEscalation: false
-                capabilities:
-                  drop: ["ALL"]
-          tolerations:
-            - key: node-role.kubernetes.io/control-plane
-              operator: Exists
-              effect: NoSchedule
-            - key: node-role.kubernetes.io/master
-              operator: Exists
-              effect: NoSchedule
-          {{- if .Values.nodeSelector.value }}
-          nodeSelector:
-            {{ .Values.nodeSelector.key }}: {{ .Values.nodeSelector.value }}
-          {{- end }}
+      {{- include "nvcaop.clusterValidatorJobSpec" . | nindent 6 }}
 {{- end }}

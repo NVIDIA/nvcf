@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2016 The Snappy-Go Authors. All rights reserved.
 // Copyright (c) 2019 Klaus Post. All rights reserved.
 // Use of this source code is governed by a BSD-style

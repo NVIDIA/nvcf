@@ -37,6 +37,9 @@ import (
 
 const (
 	OTelContainerEnv = "BYOO_OTEL_COLLECTOR_CONTAINER"
+	// OTelExporterEndpointEnv is where the collector exports its own traces. It is
+	// set on the collector container only when the control plane sends a value.
+	OTelExporterEndpointEnv = "OTEL_EXPORTER_OTLP_ENDPOINT"
 	// Envs injected into workload containers.
 	OTelExporterLogsEndpointEnv    = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
 	OTelExporterMetricsEndpointEnv = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
@@ -55,6 +58,7 @@ const (
 	DefaultFluentbitImage = "fluent/fluent-bit:3.2"
 
 	protocolGRPC                = "grpc"
+	protocolHTTPProtobuf        = "http/protobuf"
 	otelExporterPortGRPC        = 14357
 	otelExporterPortHTTP        = 14358
 	otelExporterPortHealthCheck = 13133
@@ -99,7 +103,7 @@ func MakeOTelEnvSet(
 			endpoint = fmt.Sprintf("%s:%d%s", svcURL, otelExporterPortHTTP, otelExporterHTTPPathLogs)
 		}
 		envs = append(envs, []corev1.EnvVar{
-			{Name: OTelExporterLogsProtocolEnv, Value: strings.ToLower(ls.Logs.Protocol)},
+			{Name: OTelExporterLogsProtocolEnv, Value: otlpExporterProtocol(ls.Logs.Protocol)},
 			{Name: OTelExporterLogsEndpointEnv, Value: endpoint},
 		}...)
 	}
@@ -111,7 +115,7 @@ func MakeOTelEnvSet(
 			endpoint = fmt.Sprintf("%s:%d%s", svcURL, otelExporterPortHTTP, otelExporterHTTPPathMetrics)
 		}
 		envs = append(envs, []corev1.EnvVar{
-			{Name: OTelExporterMetricsProtocolEnv, Value: strings.ToLower(ls.Metrics.Protocol)},
+			{Name: OTelExporterMetricsProtocolEnv, Value: otlpExporterProtocol(ls.Metrics.Protocol)},
 			{Name: OTelExporterMetricsEndpointEnv, Value: endpoint},
 		}...)
 	}
@@ -123,7 +127,7 @@ func MakeOTelEnvSet(
 			endpoint = fmt.Sprintf("%s:%d%s", svcURL, otelExporterPortHTTP, otelExporterHTTPPathTraces)
 		}
 		envs = append(envs, []corev1.EnvVar{
-			{Name: OTelExporterTracesProtocolEnv, Value: strings.ToLower(ls.Traces.Protocol)},
+			{Name: OTelExporterTracesProtocolEnv, Value: otlpExporterProtocol(ls.Traces.Protocol)},
 			{Name: OTelExporterTracesEndpointEnv, Value: endpoint},
 		}...)
 	}
@@ -131,6 +135,16 @@ func MakeOTelEnvSet(
 		{Name: OTelHealthCheckEndpointEnv, Value: fmt.Sprintf("%s:%d%s", svcURL, otelExporterPortHealthCheck, otelHealthCheckPath)},
 	}...)
 	return envs
+}
+
+// otlpExporterProtocol returns the OTEL_EXPORTER_OTLP_*_PROTOCOL value for a telemetry protocol.
+// The OpenTelemetry spec allows grpc, http/protobuf, and http/json, so HTTP telemetry maps to
+// http/protobuf, matching the collector's OTLP/HTTP receiver.
+func otlpExporterProtocol(protocol string) string {
+	if strings.ToLower(protocol) == protocolGRPC {
+		return protocolGRPC
+	}
+	return protocolHTTPProtobuf
 }
 
 const (
@@ -156,15 +170,11 @@ const (
 	fluentbitVarLogPath       = "/var/log"
 	fluentbitDBVolumeName     = "fluentbit-db"
 	fluentbitDBPath           = "/fluent-bit/db"
-	fluentbitParsersConfigKey = "parsers.conf"
 )
 
 var (
 	//go:embed manifests/fluent-bit.conf.tmpl
 	fluentbitConfigTemplate string
-
-	//go:embed manifests/parsers.conf
-	fluentbitParsersConfig string
 
 	// fluentbitConfigTemplateParsed is the parsed template, initialized at package load time.
 	// If the template is invalid, the program will fail to start.
@@ -263,12 +273,12 @@ func getCommonOTelEnvs(allEnvSet map[string]string, otelPodIPOverride string) []
 func GetDefaultContainerResourcesBYOO() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    *resource.NewMilliQuantity(500, resource.DecimalSI), // 500m
-			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),     // 2Gi
+			corev1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI), // 1000m
+			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),      // 2Gi
 		},
 		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    *resource.NewMilliQuantity(500, resource.DecimalSI), // 500m
-			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),     // 2Gi
+			corev1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI), // 1000m
+			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),      // 2Gi
 		},
 	}
 }
@@ -294,8 +304,8 @@ func getOTelContainerBase(
 					Scheme: corev1.URISchemeHTTP,
 				},
 			},
-			InitialDelaySeconds: 30,
-			PeriodSeconds:       30,
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       5,
 			FailureThreshold:    3,
 			SuccessThreshold:    1,
 			TimeoutSeconds:      1,
@@ -368,10 +378,6 @@ func NewOTelContainer(
 				Name:  "OTEL_TRACING_ACCESS_TOKEN",
 				Value: allEnvSet["TRACING_ACCESS_TOKEN"],
 			},
-			{
-				Name:  "OTEL_EXPORTER_OTLP_ENDPOINT",
-				Value: allEnvSet["OTEL_EXPORTER_OTLP_ENDPOINT"],
-			},
 		}...)
 	} else {
 		otelEnvs = append(getCommonOTelEnvs(allEnvSet, oTelPodIPBindAddressOverride), []corev1.EnvVar{
@@ -383,11 +389,10 @@ func NewOTelContainer(
 				Name:  "OTEL_TRACING_ACCESS_TOKEN",
 				Value: allEnvSet["TRACING_ACCESS_TOKEN"],
 			},
-			{
-				Name:  "OTEL_EXPORTER_OTLP_ENDPOINT",
-				Value: allEnvSet["OTEL_EXPORTER_OTLP_ENDPOINT"],
-			},
 		}...)
+	}
+	if endpoint := allEnvSet[OTelExporterEndpointEnv]; endpoint != "" {
+		otelEnvs = append(otelEnvs, corev1.EnvVar{Name: OTelExporterEndpointEnv, Value: endpoint})
 	}
 	otelEnvs = append(otelEnvs, addtlOtelEnvs...)
 
@@ -589,8 +594,7 @@ func NewFluentbitConfigMap(name string, podName string, workloadType string) *co
 	cm := &corev1.ConfigMap{}
 	cm.Name = name
 	cm.Data = map[string]string{
-		fluentbitConfigCMKey:      fluentbitConfig,
-		fluentbitParsersConfigKey: fluentbitParsersConfig,
+		fluentbitConfigCMKey: fluentbitConfig,
 	}
 	return cm
 }

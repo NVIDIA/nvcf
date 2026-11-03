@@ -178,6 +178,15 @@ type AgentOptions struct {
 	// VaultOAuthClientMountPathTemplate is the template for constructing the
 	// Vault OAuth client mount path. Use %s as placeholder for clientID.
 	VaultOAuthClientMountPathTemplate string
+
+	// ClusterValidatorEnabled says the chart runs the cluster-validator, so
+	// the agent publishes its metrics baseline before the first summary.
+	ClusterValidatorEnabled bool
+	// ClusterValidatorCronJob names the cluster-validator CronJob in the
+	// operator's namespace to run whenever its validator spec changes. The
+	// chart sets it under the control-plane role, where the init container
+	// writes no summary.
+	ClusterValidatorCronJob string
 }
 
 type Agent struct {
@@ -320,6 +329,61 @@ func (a *Agent) getBackendK8sKubeClientsCh(ctx context.Context) <-chan *core.Kub
 	return core.NewKubeClientsStream().WithConfigCh(configCh).Start(ctx)
 }
 
+// backendK8sCacheBuilder configures the BackendK8sCache, and through it the
+// agent Deployment, from the operator's options.
+func (a *Agent) backendK8sCacheBuilder(
+	clients *kubeclients.KubeClients, envType nvidiaiov1.EnvType,
+) *BackendK8sCacheBuilder {
+	// Construct AgentConfig from parameters
+	agentConfig := nvidiaiov1.AgentConfig{
+		DeploymentConfig: nvidiaiov1.DeploymentConfig{
+			PriorityClassName:           a.PriorityClassName,
+			NodeSelectorKey:             a.NodeSelectorKey,
+			NodeSelectorValue:           a.NodeSelectorValue,
+			SecretMirrorSourceNamespace: a.NVCASecretMirrorSourceNamespace,
+			SecretMirrorLabelSelector:   a.NVCASecretMirrorLabelSelector,
+			GenerateImagePullSecret:     a.GenerateImagePullSecret,
+			AdditionalImagePullSecrets:  a.AdditionalImagePullSecrets,
+			OverrideEnvironmentVars:     a.AgentOverrideEnvVars, // nil if not specified
+			Tolerations:                 append([]corev1.Toleration(nil), a.NVCAAgentTolerations...),
+		},
+		NVCFWorkerConfig: nvidiaiov1.NVCFWorkerConfig{
+			CacheMountOptionsEnabled: a.NVCACacheMountOptionsEnabled,
+			CacheMountOptions:        a.NVCACacheMountOptions,
+			WorkerDegradationPeriod:  a.NVCAWorkerDegradationPeriod,
+		},
+		AgentResources:   &a.AgentResources,
+		WebhookResources: &a.WebhookResources,
+	}
+
+	return NewBackendK8sCacheBuilder().
+		WithClients(clients).
+		WithSystemNamespace(a.SystemNamespace).
+		WithK8sVersionOverride(a.K8sVersionOverride).
+		WithNGCServiceKeyFetcher(a.TokenFetcher).
+		WithNVCAImageRepo(a.NVCAImageRepo).
+		WithUIDGIDOverride(a.NVCARunAsUserID, a.NVCARunAsGroupID).
+		WithGXCache(a.GXCacheNamespace, a.EnableGXCache).
+		WithCrowdstrike(a.CrowdstrikeNamespace).
+		WithHelmRepositoryPrefix(a.HelmRepositoryPrefix).
+		WithDDCSIPAllowList(a.DDCSIPAllowList).
+		WithK8sClusterNetworkCIDRs(a.K8sClusterNetworkCIDRs).
+		WithAgentConfig(agentConfig).
+		WithEnvType(envType).
+		WithDispatchReconcileClusterFunc(a.dispatchReconcileCluster).
+		WithContainerResources(a.AgentResources, a.WebhookResources, a.OTelCollectorResources).
+		WithNVCFWorkerConfig(a.NVCACacheMountOptionsEnabled, a.NVCACacheMountOptions, a.NVCAWorkerDegradationPeriod).
+		WithWorkloadTolerations(a.NVCAWorkloadTolerations).
+		WithGenerateImagePullSecret(a.GenerateImagePullSecret).
+		WithAdditionalImagePullSecrets(a.AdditionalImagePullSecrets).
+		WithOTelCollectorConfig(a.OTelCollectorImageRepo, a.OTelCollectorImageTag, a.OTelCollectorEnabled).
+		WithNVCAOTELConfig(a.NVCAOTELConfig).
+		WithEnvOverrides(a.FunctionEnvOverridesB64, a.TaskEnvOverridesB64).
+		WithIdentitySource(a.IdentitySource).
+		WithClusterSource(a.ClusterSource).
+		WithClusterValidatorEnabled(a.ClusterValidatorEnabled)
+}
+
 func (a *Agent) newKubeClients(ctx context.Context, path string) (*kubeclients.KubeClients, error) {
 	log := core.GetLogger(ctx)
 
@@ -439,6 +503,13 @@ func (a *Agent) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if a.ClusterValidatorCronJob != "" {
+		go watchValidatorSpec(ctx, backendK8sClients.K8s, a.PodNamespace, a.ClusterValidatorCronJob)
+	}
+	if !a.ClusterValidatorEnabled {
+		go deleteLeftoverValidatorSummary(ctx, backendK8sClients.K8s, a.PodNamespace)
+	}
+	go sweepValidatorProbes(ctx, backendK8sClients.K8s, !a.ClusterValidatorEnabled)
 
 	// TODO: source this directly from values and default URL's based on that.
 	envType := nvidiaiov1.EnvTypeProd
@@ -446,54 +517,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		envType = nvidiaiov1.EnvTypeStage
 	}
 	log.Debug("Received kubeclients for backend K8s, configuring backendk8scache")
-	// Construct AgentConfig from parameters
-	agentConfig := nvidiaiov1.AgentConfig{
-		DeploymentConfig: nvidiaiov1.DeploymentConfig{
-			PriorityClassName:           a.PriorityClassName,
-			NodeSelectorKey:             a.NodeSelectorKey,
-			NodeSelectorValue:           a.NodeSelectorValue,
-			SecretMirrorSourceNamespace: a.NVCASecretMirrorSourceNamespace,
-			SecretMirrorLabelSelector:   a.NVCASecretMirrorLabelSelector,
-			GenerateImagePullSecret:     a.GenerateImagePullSecret,
-			AdditionalImagePullSecrets:  a.AdditionalImagePullSecrets,
-			OverrideEnvironmentVars:     a.AgentOverrideEnvVars, // nil if not specified
-			Tolerations:                 append([]corev1.Toleration(nil), a.NVCAAgentTolerations...),
-		},
-		NVCFWorkerConfig: nvidiaiov1.NVCFWorkerConfig{
-			CacheMountOptionsEnabled: a.NVCACacheMountOptionsEnabled,
-			CacheMountOptions:        a.NVCACacheMountOptions,
-			WorkerDegradationPeriod:  a.NVCAWorkerDegradationPeriod,
-		},
-		AgentResources:   &a.AgentResources,
-		WebhookResources: &a.WebhookResources,
-	}
-
-	backendk8scache, _, err = NewBackendK8sCacheBuilder().
-		WithClients(backendK8sClients).
-		WithSystemNamespace(a.SystemNamespace).
-		WithK8sVersionOverride(a.K8sVersionOverride).
-		WithNGCServiceKeyFetcher(a.TokenFetcher).
-		WithNVCAImageRepo(a.NVCAImageRepo).
-		WithUIDGIDOverride(a.NVCARunAsUserID, a.NVCARunAsGroupID).
-		WithGXCache(a.GXCacheNamespace, a.EnableGXCache).
-		WithCrowdstrike(a.CrowdstrikeNamespace).
-		WithHelmRepositoryPrefix(a.HelmRepositoryPrefix).
-		WithDDCSIPAllowList(a.DDCSIPAllowList).
-		WithK8sClusterNetworkCIDRs(a.K8sClusterNetworkCIDRs).
-		WithAgentConfig(agentConfig).
-		WithEnvType(envType).
-		WithDispatchReconcileClusterFunc(a.dispatchReconcileCluster).
-		WithContainerResources(a.AgentResources, a.WebhookResources, a.OTelCollectorResources).
-		WithNVCFWorkerConfig(a.NVCACacheMountOptionsEnabled, a.NVCACacheMountOptions, a.NVCAWorkerDegradationPeriod).
-		WithWorkloadTolerations(a.NVCAWorkloadTolerations).
-		WithGenerateImagePullSecret(a.GenerateImagePullSecret).
-		WithAdditionalImagePullSecrets(a.AdditionalImagePullSecrets).
-		WithOTelCollectorConfig(a.OTelCollectorImageRepo, a.OTelCollectorImageTag, a.OTelCollectorEnabled).
-		WithNVCAOTELConfig(a.NVCAOTELConfig).
-		WithEnvOverrides(a.FunctionEnvOverridesB64, a.TaskEnvOverridesB64).
-		WithIdentitySource(a.IdentitySource).
-		WithClusterSource(a.ClusterSource).
-		Start(ctx)
+	backendk8scache, _, err = a.backendK8sCacheBuilder(backendK8sClients, envType).Start(ctx)
 
 	if err != nil {
 		log.WithError(err).Error("failed to configure the Backend K8s Cache")

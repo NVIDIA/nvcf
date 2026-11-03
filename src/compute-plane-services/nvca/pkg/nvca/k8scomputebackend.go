@@ -56,6 +56,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/workloadtypes"
+	helmutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/helm"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcak8sutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcainternaltranslate "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/translate"
@@ -1139,6 +1140,47 @@ func (c K8sComputeBackend) CreatePodArtifact(ctx context.Context, podArt functio
 	return nil
 }
 
+// podInstanceExists reports whether the Pod backing instance id is still present, using the
+// same lister-backed check AllInstancesTerminatedAndReported relies on so both agree on what
+// "gone" means. A lookup error other than NotFound is treated as "still present" (fail-safe)
+// and logged, since it otherwise looks identical to the pod genuinely being there.
+func (c K8sComputeBackend) podInstanceExists(ctx context.Context, id string) bool {
+	_, err := c.bk8s.podSpecLister.Get(id)
+	if err != nil && !apierrors.IsNotFound(err) {
+		core.GetLogger(ctx).WithError(err).WithField("instance_id", id).
+			Warn("Failed to look up Pod, treating instance as still present")
+	}
+	return err == nil || !apierrors.IsNotFound(err)
+}
+
+// miniServiceInstanceExists reports whether the MiniService backing instance id is still
+// present. A lookup error other than NotFound is treated as "still present" (fail-safe) and
+// logged, since it otherwise looks identical to the MiniService genuinely being there.
+func (c K8sComputeBackend) miniServiceInstanceExists(ctx context.Context, id string) bool {
+	ms := &v1alpha1.MiniService{}
+	ms.Name = id
+	err := c.clients.HelmV2.Get(ctx, client.ObjectKeyFromObject(ms), ms)
+	if err != nil && !apierrors.IsNotFound(err) {
+		core.GetLogger(ctx).WithError(err).WithField("instance_id", id).
+			Warn("Failed to look up MiniService, treating instance as still present")
+	}
+	return err == nil || !apierrors.IsNotFound(err)
+}
+
+// instanceObjectExists reports whether the underlying object for inst (a Pod or MiniService)
+// still exists in the cluster. Used to confirm an instance is actually gone, not just that a
+// delete has been issued/accepted, before it is treated as terminated.
+func (c K8sComputeBackend) instanceObjectExists(ctx context.Context, inst nvcav2beta1.InstanceStatus) bool {
+	switch inst.Type {
+	case nvcav2beta1.InstanceTypePod:
+		return c.podInstanceExists(ctx, inst.ID)
+	case nvcav2beta1.InstanceTypeMiniService:
+		return c.miniServiceInstanceExists(ctx, inst.ID)
+	default:
+		return false
+	}
+}
+
 func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1.ICMSRequest,
 	terminatedInstances map[string]nvcav2beta1.InstanceStatus, id string) bool {
 	log := core.GetLogger(ctx).WithField("instance_id", id)
@@ -1174,6 +1216,14 @@ func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1
 			}
 		}
 
+		// A successful Delete only initiates removal; the MiniService object (and the
+		// resources it owns) can remain present until its own finalizer is released.
+		// Do not report the instance as terminated until it is actually gone.
+		if c.miniServiceInstanceExists(ctx, id) {
+			log.Debug("Miniservice delete requested but instance still present, will retry")
+			return false
+		}
+
 		if _, ok := terminatedInstances[id]; !ok {
 			terminatedInstances[id] = nvcav2beta1.InstanceStatus{
 				ID:                    id,
@@ -1194,6 +1244,13 @@ func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1
 		} else if err != nil && apierrors.IsNotFound(err) {
 			log.Debug("Pod not found, report as terminated")
 		} else {
+			// A successful Delete only initiates removal (sets DeletionTimestamp); the pod
+			// can remain present indefinitely if a finalizer is blocking it. Do not report
+			// the instance as terminated until it is actually gone.
+			if c.podInstanceExists(ctx, id) {
+				log.Debug("Pod delete requested but pod still present, will retry")
+				return false
+			}
 			log.Debug("Terminated Pod")
 			c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal,
 				string(types.EventCategoryInstanceTermination), "Stopped instance %v/%v", instanceUpdate(id), c.bk8s.podInstanceNamespace, id)
@@ -1373,15 +1430,13 @@ func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *k8sutil.TimeConfig) 
 	}
 	if initConditionTrue {
 		for _, containerStatus := range podStatus.ContainerStatuses {
-			if containerStatus.RestartCount >= k8sutil.RestartCountToFailInstance &&
-				k8sutil.IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+			if k8sutil.IsContainerInRestartLoop(pod, containerStatus, k8sTimeConfig) {
 				return true, types.ICMSInstanceFailedContainerRestartLoop
 			}
 		}
 	} else {
 		for _, containerStatus := range podStatus.InitContainerStatuses {
-			if containerStatus.RestartCount >= k8sutil.RestartCountToFailInstance &&
-				k8sutil.IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+			if k8sutil.IsContainerInRestartLoop(pod, containerStatus, k8sTimeConfig) {
 				return true, types.ICMSInstanceFailedInitContainerRestartLoop
 			}
 		}
@@ -1560,6 +1615,10 @@ var badICMSInstanceStates = map[types.ICMSInstanceState]struct{}{
 func (c K8sComputeBackend) GetICMSRequestUpdatesForCreateRequest(ctx context.Context, req *nvcav2beta1.ICMSRequest) []types.ICMSRequestUpdateInfo {
 	log := core.GetLogger(ctx)
 
+	if reason := GetCreationRejectionReason(req); reason != "" {
+		return c.getICMSRequestUpdatesForRejectedCreateRequest(ctx, req, reason)
+	}
+
 	var icmsRequestUpdates []types.ICMSRequestUpdateInfo
 	for id, st := range req.Status.Instances {
 		switch st.Type {
@@ -1585,6 +1644,46 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreateRequest(ctx context.Con
 	}
 	log.Debugf("ICMSRequestStatusUpdate: %v updates for CreationRequest", len(icmsRequestUpdates))
 	return icmsRequestUpdates
+}
+
+// getICMSRequestUpdatesForRejectedCreateRequest reports every instance of a
+// request whose creation message NVCA rejected as terminated, with the
+// rejection reason as the error log.
+func (c K8sComputeBackend) getICMSRequestUpdatesForRejectedCreateRequest(ctx context.Context,
+	req *nvcav2beta1.ICMSRequest, reason string,
+) []types.ICMSRequestUpdateInfo {
+	workloadType := workloadtypes.WorkloadTypeContainer
+	if helmutil.IsMiniServiceCreateRequest(req) {
+		workloadType = workloadtypes.WorkloadTypeHelm
+	}
+	failureCategory := nvcametrics.ICMSInstanceStateToFailureCategory(types.ICMSInstanceTerminatedTerminalError)
+
+	var updates []types.ICMSRequestUpdateInfo
+	for _, st := range req.Status.Instances {
+		if !c.bk8s.shouldReportInstanceStatusHeartbeat(ctx, req, st.ID,
+			string(types.ICMSInstanceTerminated), st.LastReportedStatus, st.LastReportedTimestamp) {
+			continue
+		}
+		updates = append(updates, types.ICMSRequestUpdateInfo{
+			RequestID:  req.Spec.RequestID,
+			InstanceID: st.ID,
+			Payload: types.ICMSInstanceStatusUpdateRequest{
+				Status:           types.ICMSRequestInstanceTerminatedByService,
+				InstanceState:    types.ICMSInstanceTerminated,
+				Action:           common.TerminationAction,
+				RequestState:     types.ICMSInstanceRequestClosed,
+				TerminationCause: types.ICMSInstanceTerminatedTerminalError,
+				SystemFailure:    string(types.ICMSInstanceTerminatedTerminalError),
+				HealthInfo:       types.HealthInfo{ErrorLog: reason},
+				FailureCategory:  string(failureCategory),
+			},
+		})
+		if m := nvcametrics.FromContext(ctx); m != nil {
+			m.RecordWorkloadStatus(workloadType, nvcametrics.ActionToWorkloadKind(req.Spec.Action),
+				workloadtypes.WorkloadStatusFailure, failureCategory)
+		}
+	}
+	return updates
 }
 
 func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.Context, st nvcav2beta1.InstanceStatus,
@@ -2323,22 +2422,11 @@ func (c K8sComputeBackend) AllInstancesTerminatedAndReported(ctx context.Context
 		return false
 	}
 	for _, inst := range req.Status.Instances {
-		switch inst.Type {
-		case nvcav2beta1.InstanceTypePod:
-			_, err := c.bk8s.podSpecLister.Get(inst.ID)
-			if err == nil || !apierrors.IsNotFound(err) {
-				// if pod is found or any other error, consider not terminated
-				return false
-			}
-			log.Debugf("Pod %s not running", inst.ID)
-		case nvcav2beta1.InstanceTypeMiniService:
-			msKey := client.ObjectKey{Name: inst.ID}
-			err := c.clients.HelmV2.Get(ctx, msKey, &v1alpha1.MiniService{})
-			if err == nil || !apierrors.IsNotFound(err) {
-				return false
-			}
-			log.Debugf("Miniservice %s does not exist", inst.ID)
+		// if the object is found (or any other error occurs looking it up), consider not terminated
+		if c.instanceObjectExists(ctx, inst) {
+			return false
 		}
+		log.Debugf("Instance %s (%s) no longer exists", inst.ID, inst.Type)
 		// if the termination was reported to ICMS
 		if inst.LastReportedStatus != string(types.ICMSInstanceTerminated) {
 			return false

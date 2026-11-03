@@ -56,6 +56,7 @@ API_KEYS_DEPS = [
     "@nv_third_party_deps//:org_springframework_spring_beans",
     "@nv_third_party_deps//:org_springframework_spring_context",
     "@nv_third_party_deps//:org_springframework_spring_core",
+    "@nv_third_party_deps//:org_springframework_spring_tx",
     "@nv_third_party_deps//:org_springframework_spring_web",
     "@nv_third_party_deps//:org_springframework_spring_webmvc",
     "@nv_third_party_deps//:tools_jackson_core_jackson_core",
@@ -190,6 +191,7 @@ java_oci_image(
         "JDK_JAVA_OPTIONS": "",
     },
     workdir = "/home/app",
+    user = "1000:1000",
 )
 
 # The shared guard every Java service uses, so the runtime contract cannot drift
@@ -203,4 +205,5 @@ java_image_contract_test(
         "JDK_JAVA_OPTIONS": "",
     },
     workdir = "/home/app",
+    user = "1000:1000",
 )

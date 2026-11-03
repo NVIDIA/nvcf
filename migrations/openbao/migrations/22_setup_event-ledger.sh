@@ -100,6 +100,27 @@ nvca_jwt_auth_role=$(generate_jwt_auth_role "${NVCA_SERVICE_ACCOUNT_NAME}" "${NV
 create_auth_jwt_role "${NVCA_SERVICE_ACCOUNT_NAME}" "${nvca_jwt_auth_role}"
 
 #-------------------------------------------
+# Add gRPC proxy as a caller via JWT Secret Role
+# Issuer: http://event-ledger.nvcf.svc.cluster.local
+#-------------------------------------------
+
+GRPC_PROXY_SERVICE_ACCOUNT_NAMESPACE="nvcf"
+GRPC_PROXY_SERVICE_ACCOUNT_NAME="grpc-proxy-proxy"
+# The gRPC proxy only writes events, so it does not get fnds:archiveEvents.
+GRPC_PROXY_SCOPES="fnds:createEvent"
+
+jwt_secret_role=$(generate_jwt_secret_role "${SERVICE_ACCOUNT_NAMESPACE}" "${SERVICE_ACCOUNT_NAME}" "${GRPC_PROXY_SERVICE_ACCOUNT_NAME}" "${GRPC_PROXY_SCOPES}")
+create_secret_jwt_role "${VAULT_SECRET_BASE_PATH}/jwt" "${GRPC_PROXY_SERVICE_ACCOUNT_NAME}" "${jwt_secret_role}"
+
+policy=$(generate_acl_policy "${VAULT_SECRET_BASE_PATH}/jwt/sign/${GRPC_PROXY_SERVICE_ACCOUNT_NAME}" "create,update,read")
+policy_name="${VAULT_POLICY_BASE_PATH}-jwt-sign-${GRPC_PROXY_SERVICE_ACCOUNT_NAME}-rw"
+write_policy "${policy_name}" "${policy}"
+
+grpc_proxy_merged_policies=$(merge_jwt_role_policies "${GRPC_PROXY_SERVICE_ACCOUNT_NAME}" "${policy_name}")
+grpc_proxy_jwt_auth_role=$(generate_jwt_auth_role "${GRPC_PROXY_SERVICE_ACCOUNT_NAME}" "${GRPC_PROXY_SERVICE_ACCOUNT_NAMESPACE}" "${grpc_proxy_merged_policies}")
+create_auth_jwt_role "${GRPC_PROXY_SERVICE_ACCOUNT_NAME}" "${grpc_proxy_jwt_auth_role}"
+
+#-------------------------------------------
 # Provision JWT Auth Role with policies
 #-------------------------------------------
 jwt_auth_role=$(generate_jwt_auth_role "${SERVICE_ACCOUNT_NAME}" "${SERVICE_ACCOUNT_NAMESPACE}" "${VAULT_JWT_AUTH_ROLE_POLICIES}")

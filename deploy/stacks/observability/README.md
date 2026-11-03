@@ -132,6 +132,10 @@ Control-plane defaults scrape `state-metrics`, `invocation-service`,
 `grpc-proxy`, `llm-api-gateway`, and `function-autoscaler` in `nvcf`.
 Compute defaults select NVCA in `nvca-system`, DCGM pods by their NVCA
 metrics label, and NVCA-managed workload pods by `icms-request-id`.
+The worker and DCGM PodMonitors set the `job` label to `nvcf-worker` and
+`nvidia-dcgm-exporter` through `jobName`. BYOO platform metrics federation
+selects series by these names, so keep them aligned with the collector
+templates.
 
 The default observability namespace is `monitoring`. A different namespace
 also requires NetworkPolicy reachability to the collector.

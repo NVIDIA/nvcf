@@ -17,6 +17,7 @@ go_library(
         "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/experimental/stats",
         "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/grpclog",
         "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/envconfig",
         "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/metadata",
         "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/resolver",
         "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/serviceconfig",

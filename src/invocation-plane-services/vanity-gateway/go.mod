@@ -1,6 +1,6 @@
 module ai-api-gateway-service
 
-go 1.25.0
+go 1.26.10
 
 require (
 	github.com/NVIDIA/nvcf-go v1.0.1
@@ -12,6 +12,7 @@ require (
 	github.com/go-chi/cors v1.2.2
 	github.com/go-logr/zapr v1.3.0
 	github.com/goccy/go-json v0.10.5
+	github.com/google/uuid v1.6.0
 	github.com/hellofresh/health-go/v5 v5.5.5
 	github.com/magiconair/properties v1.8.10
 	github.com/spf13/cobra v1.10.2
@@ -59,7 +60,6 @@ require (
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect

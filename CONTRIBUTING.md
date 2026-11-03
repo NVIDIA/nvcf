@@ -65,7 +65,10 @@ Name your branch using your username and a prefix that reflects the type of chan
 - `yourname/fix/description`: bug fix (for example, `jsmith/fix/router-timeout`)
 - `yourname/docs/description`: documentation change (for example, `jsmith/docs/update-quickstart`)
 
-Branch model: `main` is the active development branch. All PRs target `main`, except hotfixes. Stable releases are cut from `release-x.y` branches.
+Branch model: `main` is the active development branch. Target maintenance fixes
+at the owning component train when needed. Services and charts can release from
+main; stacks release from their maintenance branches. Follow the
+[release workflow](docs/dev/github-release-process.md) for branch names and gates.
 
 ### Step 3: Make Your Changes
 
@@ -95,7 +98,10 @@ Commit with a DCO sign-off and a conventional commit message (see [Commit Messag
 
 ### Step 6: Open a Pull Request
 
-- Push your branch and open a PR targeting `main`.
+- Push your branch and open a PR targeting the branch selected by the
+  [release workflow](docs/dev/github-release-process.md): `main` for new
+  development or compatible patches on its current minor, or the owning
+  maintenance branch when required.
 - Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md) when opening your pull request.
 - Reference the related issue in the PR description with `Fixes #123`.
 - Someone will review your PR soon!
@@ -165,19 +171,38 @@ For more information, see the [Developer Certificate of Origin](https://develope
 
 ## Documentation Contributions
 
-Documentation content lives under `docs/`. Fern publishes that content using version-specific navigation files under `fern/versions/`, and `fern/docs.yml` declares the public version list.
+Documentation lives under `docs/`. Fern publishes one docs edition menu with
+Overview, Self-Managed, Compute Plane, Observability, Manifest, and Release Notes
+tabs.
+Each edition records the exact three-stack combination; artifact releases keep
+their own versions.
 
-| Path | Audience | Published | Versioning role |
-|---|---|---|---|
-| `docs/user/` | Customers | Yes | Source content for the default `main` docs version. `fern/versions/main.yml` points here and publishes at `/nvcf/`. |
-| `docs/v0.5/` | Customers using release 0.5 | Yes | Frozen content for the `0.5` docs version. `fern/versions/v0.5.yml` points here and publishes at `/nvcf/v0.5/`. |
-| `docs/dev/` | Contributors / internal dev | Only if symlinked | Developer-oriented source pages. These are published only when a symlink from a versioned content tree, usually `docs/user/`, is listed in that version's Fern nav. |
-| `fern/docs.yml` | Docs site | Yes | Declares public versions, display names, slugs, and the nav file for each version. |
-| `fern/versions/*.yml` | Docs site | Yes | Defines navigation and page order for one published version. Page paths are relative to the version file. |
+| Path | Purpose |
+| --- | --- |
+| `docs/overview/` | Shared guides and generated compatibility/manifest content for the selected edition. |
+| `docs/self-managed/`, `docs/compute-plane/`, `docs/observability/` | Current stack sources, published as Development from `main`. |
+| `docs/<stack>-<version>/`, `docs/v*/` | Frozen historical archives. Change only for an explicitly approved historical fix. |
+| `docs/dev/` | Contributor guides; published only when navigation or a navigated symlink includes them. |
+| `fern/docs.yml`, `fern/editions.yml` | Canonical selector and exact protected release-branch commits. |
+| `fern/navigation.yml` | Current six-tab navigation with explicit page slugs. |
+| `fern/changelog/` | Native release notes with dated MDX entries. |
+| `fern/products/` | Retained historical navigation. |
 
-Use `docs/user/` for changes that should appear in the default `main` docs. Update `docs/v0.5/` only for fixes that must also apply to the 0.5 release docs. When adding, renaming, moving, or removing a published page, update the matching `fern/versions/<version>.yml` file.
+Edit current sources and update `fern/navigation.yml` when changing pages.
+Use relative source-file links across tabs to preserve the selected edition.
+Use an absolute product/version URL only for an intentional historical link.
+Do not rewrite archive sources or update an existing docs release branch.
 
-All navigation sections use `skip-slug: true`, so each page title becomes a flat URL slug within its published version. Keep page titles unique and descriptive within the version nav. Run `fern check` to validate the docs after any navigation or link change. Preview locally with `fern docs dev` from the `fern/` directory.
+Run `./tools/ci/check-docs` before submitting. Preview the working tree with
+`tools/ci/run-fern docs dev`, or validate the Development-first PR configuration:
+
+```bash
+tools/ci/preview-docs --check
+```
+
+Stable editions use protected `docs/releases/X.Y.Z` branches, not copied
+version folders or docs tags. See [the release workflow](docs/dev/docs-editions.md)
+for qualification, preparation, registration, corrections, and rollback.
 
 ---
 

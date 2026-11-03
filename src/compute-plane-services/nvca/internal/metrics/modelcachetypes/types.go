@@ -25,7 +25,10 @@ const (
 
 // Failure reason values for model cache metrics
 const (
-	ReasonCacheSpecInvalid   = "cache_spec_invalid"
+	ReasonCacheSpecInvalid = "cache_spec_invalid"
+	// ReasonCatalogMissing: the storage capability catalog ConfigMap is absent,
+	// so the request was created without a durable cache.
+	ReasonCatalogMissing     = "catalog_missing"
 	ReasonPVCSetupFailed     = "pvc_setup_failed"
 	ReasonPVCBindFailed      = "pvc_bind_failed"
 	ReasonRWPVCBindFailed    = "rw_pvc_bind_failed"
@@ -49,6 +52,7 @@ const (
 // Used for pre-initializing Prometheus counters to zero.
 var AllFailureReasons = []string{
 	ReasonCacheSpecInvalid,
+	ReasonCatalogMissing,
 	ReasonPVCSetupFailed,
 	ReasonPVCBindFailed,
 	ReasonRWPVCBindFailed,

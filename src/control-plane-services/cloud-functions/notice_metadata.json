@@ -806,6 +806,13 @@
       "name": "Kotlin Stdlib Jdk8",
       "url": "https://kotlinlang.org/"
     },
+    "org.springframework.boot:spring-boot-grpc-server:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-grpc-server",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter-aspectj:4.0.7": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -931,6 +938,13 @@
       ],
       "name": "Spring Cloud Kubernetes :: Kubernetes Native Starter :: Config",
       "url": "https://cloud.spring.io/spring-cloud-starter-kubernetes-client-config"
+    },
+    "org.springframework.grpc:spring-grpc-core:1.1.1": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "Spring gRPC Core",
+      "url": "https://github.com/spring-projects/spring-grpc/spring-grpc-core"
     },
     "org.springframework.retry:spring-retry:2.0.13": {
       "licenses": [

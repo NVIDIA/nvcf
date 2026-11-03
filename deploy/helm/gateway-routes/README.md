@@ -79,7 +79,7 @@ Important settings to review before deployment:
   explicit plaintext opt-in, and certificate ownership mode
 - `nvcfGatewayRoutes.routes.<route>.enabled` to toggle individual routes
 - `nvcfGatewayRoutes.hostnameConflictPolicy.enabled` to reject other
-  HTTPRoutes that reuse an enabled chart route's hostname on the shared listener
+  HTTPRoutes that would tie an enabled chart route's root match on the shared listener
 - `nvcfGatewayRoutes.routes.nvcfApi.grpc.enabled` and
   `nvcfGatewayRoutes.routes.nvctApi.grpc.enabled` to expose API gRPC routes
 - `nvcfGatewayRoutes.routes.<http-route>.hostnames` to override the templated HTTP route hostnames
@@ -91,10 +91,24 @@ The default values use `localhost` as the domain and assume backend services are
 
 Enabled `HTTPRoute` entries must not share a resolved hostname because each `HTTPRoute` in this chart uses a root `PathPrefix /` match on the shared Gateway. Helm rendering fails if two enabled HTTPRoutes would claim the same hostname.
 
-The hostname conflict policy is enabled by default. It rejects create and
-update requests for another HTTPRoute that reuses a hostname reserved by this
-chart on the configured shared Gateway listener. Disable it only when another
-admission controller owns the same hostname policy.
+The hostname conflict policy is enabled by default. Every HTTPRoute in this
+chart matches `PathPrefix /` with no method, header, or query match, so a second
+route presenting an equally undiscriminated match on the same hostname ties it
+under Gateway API rule precedence and the tie is resolved silently by creation
+timestamp. The policy rejects that on create and on update. A
+`RegularExpression` path counts as tying because Gateway API leaves its
+precedence implementation-specific.
+
+A route with a longer path prefix, an exact path, or a method, header, or query
+match is ordered deterministically by the spec, so it is admitted. That is how
+the self-managed stack's own `admin-token-issuer-proxy` route coexists with
+`api-keys` on `api-keys.<domain>`.
+
+The policy is an operator-safety guard, not an authorization boundary. It does
+not inspect the requesting identity, and any principal who can write HTTPRoutes
+in the Gateway namespace can already repoint a reserved route in place. Use the
+Gateway's `listeners[].allowedRoutes` and RBAC if you need a boundary. Disable
+the policy only when another admission controller owns the same concern.
 
 ## Routes
 

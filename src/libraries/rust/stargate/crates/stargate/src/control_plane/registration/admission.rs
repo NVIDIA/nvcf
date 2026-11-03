@@ -13,8 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::net::IpAddr;
-
 use anyhow::Context;
 use tonic::Status;
 use tracing::warn;
@@ -122,20 +120,16 @@ fn effective_cluster_id(update: &InferenceServerRegistration) -> &str {
 }
 
 fn validate_inference_server_url(url: &str, reverse_tunnel: bool) -> anyhow::Result<()> {
-    let parsed = Url::parse(url).context("inference_server_url must be a valid URL")?;
-    if reverse_tunnel {
-        if !matches!(parsed.scheme(), "http" | "https") {
-            anyhow::bail!("inference_server_url scheme must be http or https");
-        }
-    } else if parsed.scheme() != "quic" {
-        anyhow::bail!("inference_server_url scheme must be quic");
+    if !reverse_tunnel {
+        return crate::tunnel::parse_quic_addr(url).map(|_| ());
     }
-    let host = parsed
+    let parsed = Url::parse(url).context("inference_server_url must be a valid URL")?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        anyhow::bail!("inference_server_url scheme must be http or https");
+    }
+    parsed
         .host_str()
         .context("inference_server_url must include host")?;
-    if !reverse_tunnel && host.parse::<IpAddr>().is_err() {
-        anyhow::bail!("inference_server_url host must be an IP address");
-    }
     if parsed.port_or_known_default().is_none() {
         anyhow::bail!("inference_server_url must include port");
     }
@@ -186,6 +180,21 @@ mod tests {
         let status = validate_running_update(&make_identity(), update)
             .expect("changed registration identity should be rejected");
         assert_invalid_argument(status, expected_message);
+    }
+
+    #[test]
+    fn direct_registration_accepts_ipv6_literals() {
+        for (url, address) in [
+            ("quic://[::1]:4433", "[::1]:4433"),
+            ("quic://[2001:db8::42]:5000", "[2001:db8::42]:5000"),
+        ] {
+            let update = make_update("ipv6-backend", url, false);
+            let identity = admit_initial_registration(&update, false, None).unwrap();
+            assert_eq!(
+                crate::tunnel::parse_quic_addr(&identity.inference_server_url).unwrap(),
+                address.parse::<std::net::SocketAddr>().unwrap()
+            );
+        }
     }
 
     #[test]

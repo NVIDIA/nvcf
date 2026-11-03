@@ -90,45 +90,31 @@ pub mod pb {
 }
 
 #[cfg(test)]
-mod build_plan;
-
-#[cfg(test)]
-#[path = "../build.rs"]
-mod build_script;
-
-#[cfg(test)]
 mod tests {
-    use crate::build_plan::{PROTO_SERDE_DERIVE, proto_compile_plans};
     use crate::pb::{StargateInfo, WatchStargatesResponse};
+    use prost::Message;
 
     #[test]
-    fn proto_build_plan_covers_stargate_and_gateway_generation() {
-        let plans = proto_compile_plans();
-
-        assert_eq!(plans.len(), 2);
-        assert_eq!(plans[0].protos, ["proto/stargate.proto"]);
-        assert_eq!(plans[0].includes, ["proto"]);
-        assert!(plans[0].build_server);
-        assert_eq!(plans[0].type_attributes, [(".", PROTO_SERDE_DERIVE)]);
-        assert_eq!(
-            plans[0].field_attributes,
-            [
-                (
-                    "stargate.WatchStargatesResponse.stargates",
-                    "#[serde(default, serialize_with = \"crate::pb::serde_stargates_set::serialize\", deserialize_with = \"crate::pb::serde_stargates_set::deserialize\")]",
-                ),
-                (
-                    "stargate.WatchStargatesResponse.watch_stargate_urls",
-                    "#[serde(default, serialize_with = \"crate::pb::serde_string_set::serialize\", deserialize_with = \"crate::pb::serde_string_set::deserialize\")]",
-                ),
-            ]
-        );
-        assert_eq!(plans[1].protos, ["proto/llm_gateway.proto"]);
-        assert_eq!(plans[1].includes, ["proto"]);
-        assert!(plans[1].build_server);
-        assert!(plans[1].type_attributes.is_empty());
-        assert!(plans[1].field_attributes.is_empty());
-        assert_eq!(crate::build_script::planned_proto_compile_count(), 2);
+    fn model_stats_maximum_is_additive_and_preserves_absence() {
+        #[derive(Clone, PartialEq, Message)]
+        struct LegacyStats {
+            #[prost(double, tag = "1")]
+            last_mean_input_tps: f64,
+        }
+        let current = crate::pb::ModelStats {
+            last_mean_input_tps: 50.0,
+            max_input_tps: Some(200.0),
+            ..Default::default()
+        };
+        let bytes = current.encode_to_vec();
+        let decoded = crate::pb::ModelStats::decode(bytes.as_slice()).unwrap();
+        assert_eq!(decoded.max_input_tps, Some(200.0));
+        let legacy = LegacyStats::decode(bytes.as_slice()).unwrap();
+        assert_eq!(legacy.last_mean_input_tps, 50.0);
+        let old_bytes = legacy.encode_to_vec();
+        let old = crate::pb::ModelStats::decode(old_bytes.as_slice()).unwrap();
+        assert_eq!(old.last_mean_input_tps, 50.0);
+        assert_eq!(old.max_input_tps, None);
     }
 
     #[test]

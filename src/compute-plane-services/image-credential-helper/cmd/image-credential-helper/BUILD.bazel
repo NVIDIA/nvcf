@@ -61,6 +61,7 @@ go_oci_image(
     binary = ":image-credential-helper",
     binary_path = "/usr/bin/image-credential-helper",
     tags = ["nvcf-image-credential-helper"],
+    user = "1000:1000",
     visibility = ["//visibility:public"],
 )
 
@@ -89,4 +90,14 @@ go_test(
         "@io_k8s_apimachinery//pkg/labels",
         "@io_k8s_client_go//kubernetes/fake",
     ],
+)
+
+go_test(
+    name = "image_numeric_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":image_index"],
 )

@@ -94,20 +94,54 @@ global:
         imageRepository: nvcr.io/example/collectors/nvcf-otel-collector
 ```
 
+### BYOO Sidecar Images
+
+With `BYOObservability` on, NVCA adds a BYOO OpenTelemetry Collector sidecar
+to workloads that export telemetry. The stack pins its tag in
+`global.nvcaOperator.byooOtelCollector.imageTag`. Its repository defaults to
+`${global.image.registry}/${global.image.repository}/byoo-otel-collector`, so
+mirror the collector with the other stack images. If the collector is
+published outside that global image path, set its repository explicitly:
+
+```yaml
+global:
+  nvcaOperator:
+    byooOtelCollector:
+      imageRepository: registry.example.com/nvcf/byoo-otel-collector
+```
+
+Fluent Bit log collection is off by default. Set
+`global.nvcaOperator.byooFluentBit.enabled` to turn on the `BYOOFluentBit`
+feature gate. It requires `BYOObservability`, so the render fails on the
+`disabled` and `control` profiles unless that gate is set explicitly. The
+Fluent Bit image defaults to the upstream `docker.io/fluent/fluent-bit` image.
+Override it for a private or disconnected registry:
+
+```yaml
+global:
+  nvcaOperator:
+    byooFluentBit:
+      enabled: true
+      image:
+        registry: registry.example.com
+        repository: mirror/fluent-bit
+        tag: "3.2"
+```
+
 ## Chart and Image Sources
 
 The stack pins the NVCA operator chart in
 `helmfile.d/02-nvca.yaml.gotmpl`. Compute-plane base values supply the tested
-NVCA, NVCA operator, and OTel collector image tags. The chart supplies the
-image credential helper and shared storage image tags.
+NVCA, NVCA operator, OTel collector, image credential helper, and shared
+storage image tags.
 
 Use `global.helm.sources` for chart repository location and `global.image` for
 container image repository location. The stack rewrites repositories through
 those global values. Chart defaults provide fallback versions for values the
 compute-plane stack does not override.
 
-Only set `global.nvcaOperator.selfManaged.imageCredHelper.imageTag` when
-pinning a tested replacement helper image.
+Base values pin `global.nvcaOperator.selfManaged.imageCredHelper.imageTag` to
+a tested helper release. Override it only with another tested helper image.
 
 ## Helmfile Version Note
 
@@ -147,6 +181,19 @@ Override KAI component resources under `addons.kaiScheduler.<component>.resource
 (for example `addons.kaiScheduler.scheduler.resources.requests.memory`). Defaults
 are set in `helmfile.d/01-dependencies.yaml.gotmpl`.
 
+Dynamo's bundled NATS server defaults to
+`docker.io/library/nats:2.10.21-alpine`. Redirect it to a private mirror with:
+
+```yaml
+addons:
+  dynamoOperator:
+    nats:
+      image:
+        registry: nvcr.io
+        repository: YOUR_ORG/YOUR_TEAM/nats
+        tag: 2.10.21-alpine
+```
+
 `addons.topologyAwareScheduling` installs cluster-scoped KAI `Topology`
 resources from `topologyAwareScheduling.topologies` when KAI is enabled.
 When Grove is also enabled, the same toggle sets Grove
@@ -158,11 +205,11 @@ Enabling `addons.kaiScheduler.enabled` or `addons.dynamoOperator.enabled` also
 adds the matching NVCA feature gate. Enabling KAI, Grove, or Dynamo permits
 their workload resource types in the NVCA validation policy.
 
-See [Gang Scheduling](../../../docs/user/cluster-management/gang-scheduling.md)
+See [Gang Scheduling](../../../docs/compute-plane/cluster-management/gang-scheduling.md)
 for atomic workload placement and
-[Topology-Aware Scheduling](../../../docs/user/cluster-management/topology-aware-scheduling.md)
+[Topology-Aware Scheduling](../../../docs/compute-plane/cluster-management/topology-aware-scheduling.md)
 for GPU clique placement. See
-[KAI Scheduler](../../../docs/user/cluster-management/kai-scheduler.md) for
+[KAI Scheduler](../../../docs/compute-plane/cluster-management/kai-scheduler.md) for
 queue configuration and standalone installation.
 
 ## Multi-Cluster Example

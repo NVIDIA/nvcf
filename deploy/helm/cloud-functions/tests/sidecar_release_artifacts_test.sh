@@ -18,6 +18,7 @@ set -euo pipefail
 
 chart_root="$(cd "$(dirname "$0")/.." && pwd)"
 chart_dir="${chart_root}/nvcf-api"
+values_file="${chart_dir}/values.yaml"
 tmp_dir="$(mktemp -d)"
 
 cleanup() {
@@ -25,38 +26,109 @@ cleanup() {
 }
 trap cleanup EXIT
 
+fail() {
+  echo "$*" >&2
+  exit 1
+}
+
 hostname="nvcr.io"
-repository="0651155215864979/ncp-dev"
+repository="example-org/example-team"
+prefix='${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}'
 
 manifest="${tmp_dir}/manifest.yaml"
 manifest_without_sidecar_env="${tmp_dir}/manifest-without-sidecar-env.yaml"
 
-helm template nvcf-api "${chart_dir}" \
-  --namespace nvcf \
-  --values "${chart_dir}/values.yaml" \
-  --set-string api.image.registry=example.com \
-  --set-string api.image.repository=foo/bar/strap \
-  --set-string "api.env.NVCF_SIDECARS_HOSTNAME=${hostname}" \
-  --set-string "api.env.NVCF_SIDECARS_REPOSITORY=${repository}" \
-  --show-only templates/configmap-remote-config.yaml \
-  > "${manifest}"
+render() {
+  helm template nvcf-api "${chart_dir}" \
+    --namespace nvcf \
+    --values "${values_file}" \
+    --set-string api.image.registry=example.com \
+    --set-string api.image.repository=foo/bar/strap \
+    "$@" \
+    --show-only templates/configmap-remote-config.yaml
+}
+
+render_with_sidecar_env() {
+  render \
+    --set-string "api.env.NVCF_SIDECARS_HOSTNAME=${hostname}" \
+    --set-string "api.env.NVCF_SIDECARS_REPOSITORY=${repository}" \
+    "$@"
+}
+
+# Read one value out of the rendered nvcf-api.yaml remote config.
+remote_config() {
+  yq -r '.data."nvcf-api.yaml"' "$1" | yq -r "$2"
+}
+
+assert_remote_config() {
+  local manifest_file="$1" expression="$2" want="$3" label="$4" got
+  got="$(remote_config "${manifest_file}" "${expression}")"
+  [[ "${got}" == "${want}" ]] ||
+    fail "${label}: expected ${expression} to be ${want}, got ${got}"
+}
+
+# Expected references come from the chart defaults so a pin bump does not break
+# this test.
+worker_tag() {
+  local tag
+  tag="$(yq -r ".api.remoteConfig.workerImageTags.$1 // \"\"" "${values_file}")"
+  [[ -n "${tag}" ]] ||
+    fail "the chart no longer defaults api.remoteConfig.workerImageTags.$1, update this test"
+  printf '%s' "${tag}"
+}
+
+init_tag="$(worker_tag init)"
+utils_tag="$(worker_tag utils)"
+llm_credentials_tag="$(worker_tag llmCredentials)"
+
+render_with_sidecar_env > "${manifest}"
+
+# Worker references are composed from api.remoteConfig.workerImageTags and keep
+# the Spring placeholders, which the API resolves at runtime.
+assert_remote_config "${manifest}" '.nvcf.sidecars."init-container"' \
+  "${prefix}/nvcf-worker-init-oss:${init_tag}" "composed init reference"
+assert_remote_config "${manifest}" '.nvcf.sidecars."utils-container-image".go' \
+  "${prefix}/nvcf-worker-utils-oss:${utils_tag}" "composed utils reference"
+assert_remote_config "${manifest}" '.nvcf.sidecars."llm-credential-manager-image"' \
+  "${prefix}/nvcf-worker-llm-credentials-oss:${llm_credentials_tag}" "composed llm-credentials reference"
 
 # Every sidecar entry carrying the ${nvcf.sidecars.*} placeholder must surface a
 # concrete, placeholder-free release-artifact-*-image annotation resolved from
 # NVCF_SIDECARS_HOSTNAME / NVCF_SIDECARS_REPOSITORY.
 expected_annotations=(
-  "release-artifact-init-container-image: \"${hostname}/${repository}/nvcf-worker-init-oss:1.2.1\""
-  "release-artifact-utils-container-image-go-image: \"${hostname}/${repository}/nvcf-worker-utils-oss:1.2.3\""
-  "release-artifact-niclls-container-image: \"${hostname}/${repository}/nvcf_worker_niclls:2.110.0\""
-  "release-artifact-ess-agent-container-image: \"${hostname}/${repository}/ess-agent:1.4.1\""
-  "release-artifact-llm-credential-manager-image: \"${hostname}/${repository}/nvcf-worker-llm-credentials-oss:1.1.2\""
-  "release-artifact-llm-router-client-image: \"${hostname}/${repository}/pylon:0.15.1\""
+  "release-artifact-init-container-image: \"${hostname}/${repository}/nvcf-worker-init-oss:${init_tag}\""
+  "release-artifact-utils-container-image-go-image: \"${hostname}/${repository}/nvcf-worker-utils-oss:${utils_tag}\""
+  "release-artifact-llm-credential-manager-image: \"${hostname}/${repository}/nvcf-worker-llm-credentials-oss:${llm_credentials_tag}\""
 )
+
+# The other placeholder sidecars are listed in configData directly.
+placeholder_sidecars="$(yq -r \
+  '.api.remoteConfig.configData.nvcf.sidecars | to_entries[] | select((.value | type) == "!!str") | select(.value | test("\$\{nvcf\.sidecars\.")) | .key + " " + .value' \
+  "${values_file}")"
+
+while read -r key value; do
+  [[ -n "${key}" ]] || continue
+  name="release-artifact-${key}"
+  [[ "${name}" == *-image ]] || name="${name}-image"
+  resolved="${value//\$\{nvcf.sidecars.hostname\}/${hostname}}"
+  resolved="${resolved//\$\{nvcf.sidecars.repository\}/${repository}}"
+  expected_annotations+=("${name}: \"${resolved}\"")
+done <<< "${placeholder_sidecars}"
 
 for annotation in "${expected_annotations[@]}"; do
   if ! grep -Fq "${annotation}" "${manifest}"; then
-    echo "expected rendered remote-config ConfigMap to include annotation: ${annotation}" >&2
-    exit 1
+    fail "expected rendered remote-config ConfigMap to include annotation: ${annotation}"
+  fi
+done
+
+# Fixed annotation names anchor the naming rule, so a shared mistake in the
+# helper and the loop above cannot pass unnoticed.
+for name in \
+  "release-artifact-niclls-container-image" \
+  "release-artifact-ess-agent-container-image" \
+  "release-artifact-llm-router-client-image"; do
+  if ! grep -Fq "${name}: \"${hostname}/${repository}/" "${manifest}"; then
+    fail "expected rendered remote-config ConfigMap to include annotation: ${name}"
   fi
 done
 
@@ -67,30 +139,97 @@ for absent in \
   "release-artifact-otel-container" \
   "release-artifact-otel-collector-container"; do
   if grep -Fq "${absent}" "${manifest}"; then
-    echo "did not expect release-artifact annotation for non-placeholder sidecar: ${absent}" >&2
-    exit 1
+    fail "did not expect release-artifact annotation for non-placeholder sidecar: ${absent}"
   fi
 done
 
 # No annotation may leak an unresolved placeholder into the release artifacts.
 if grep -E 'release-artifact-.*\$\{' "${manifest}"; then
-  echo "release-artifact annotations must not contain unresolved \${...} placeholders" >&2
-  exit 1
+  fail "release-artifact annotations must not contain unresolved \${...} placeholders"
 fi
+
+# A tag override moves only its own worker reference and its annotation.
+tag_override_manifest="${tmp_dir}/manifest-tag-override.yaml"
+render_with_sidecar_env \
+  --set-string api.remoteConfig.workerImageTags.utils=0.0.1 \
+  > "${tag_override_manifest}"
+assert_remote_config "${tag_override_manifest}" '.nvcf.sidecars."utils-container-image".go' \
+  "${prefix}/nvcf-worker-utils-oss:0.0.1" "utils tag override"
+assert_remote_config "${tag_override_manifest}" '.nvcf.sidecars."init-container"' \
+  "${prefix}/nvcf-worker-init-oss:${init_tag}" "utils tag override leaves init"
+grep -Fq "release-artifact-utils-container-image-go-image: \"${hostname}/${repository}/nvcf-worker-utils-oss:0.0.1\"" \
+  "${tag_override_manifest}" ||
+  fail "the utils release-artifact annotation did not follow the tag override"
+
+# An explicit configData entry still replaces a whole worker reference, and a
+# sibling entry under the same parent keeps the composed default.
+reference_override_manifest="${tmp_dir}/manifest-reference-override.yaml"
+render_with_sidecar_env \
+  --set-string 'api.remoteConfig.configData.nvcf.sidecars.init-container=mirror.example.test/team/init:9.9.9' \
+  --set-string 'api.remoteConfig.configData.nvcf.sidecars.utils-container-image.python=mirror.example.test/team/utils-python:9.9.9' \
+  > "${reference_override_manifest}"
+assert_remote_config "${reference_override_manifest}" '.nvcf.sidecars."init-container"' \
+  "mirror.example.test/team/init:9.9.9" "configData init override"
+assert_remote_config "${reference_override_manifest}" '.nvcf.sidecars."utils-container-image".python' \
+  "mirror.example.test/team/utils-python:9.9.9" "configData utils sibling"
+assert_remote_config "${reference_override_manifest}" '.nvcf.sidecars."utils-container-image".go' \
+  "${prefix}/nvcf-worker-utils-oss:${utils_tag}" "configData utils sibling keeps the composed reference"
+if grep -Fq "release-artifact-init-container-image" "${reference_override_manifest}"; then
+  fail "a placeholder-free init-container override must not be reported as a release artifact"
+fi
+
+# An empty worker tag would render an invalid reference, so the render fails.
+if render --set-string api.remoteConfig.workerImageTags.init= \
+  > "${tmp_dir}/empty-tag.yaml" 2> "${tmp_dir}/empty-tag.log"; then
+  fail "an empty api.remoteConfig.workerImageTags.init was accepted"
+fi
+grep -Fq "api.remoteConfig.workerImageTags.init is required" "${tmp_dir}/empty-tag.log" ||
+  fail "an empty worker tag did not name the missing key"
+
+# helm upgrade --reuse-values renders these templates against the values stored
+# with the previous release. Values from before workerImageTags existed have no
+# tags but carry every worker reference in configData, so they must still
+# render and keep those references. The null drops the chart default tags.
+stored_values="${tmp_dir}/stored-values.yaml"
+cat > "${stored_values}" <<EOF
+api:
+  remoteConfig:
+    workerImageTags: null
+    configData:
+      nvcf:
+        sidecars:
+          init-container: "${prefix}/nvcf-worker-init-oss:0.9.1"
+          utils-container-image:
+            go: "${prefix}/nvcf-worker-utils-oss:0.9.2"
+          llm-credential-manager-image: "${prefix}/nvcf-worker-llm-credentials-oss:0.9.3"
+EOF
+stored_manifest="${tmp_dir}/manifest-stored-values.yaml"
+render_with_sidecar_env --values "${stored_values}" > "${stored_manifest}" ||
+  fail "values stored before workerImageTags existed no longer render"
+assert_remote_config "${stored_manifest}" '.nvcf.sidecars."init-container"' \
+  "${prefix}/nvcf-worker-init-oss:0.9.1" "stored init reference"
+assert_remote_config "${stored_manifest}" '.nvcf.sidecars."utils-container-image".go' \
+  "${prefix}/nvcf-worker-utils-oss:0.9.2" "stored utils reference"
+assert_remote_config "${stored_manifest}" '.nvcf.sidecars."llm-credential-manager-image"' \
+  "${prefix}/nvcf-worker-llm-credentials-oss:0.9.3" "stored llm-credentials reference"
+grep -Fq "release-artifact-init-container-image: \"${hostname}/${repository}/nvcf-worker-init-oss:0.9.1\"" \
+  "${stored_manifest}" ||
+  fail "the init release-artifact annotation did not follow the stored reference"
+
+# A tag stays required for a worker whose reference configData does not set.
+if render --set api.remoteConfig.workerImageTags=null \
+  > "${tmp_dir}/no-tags.yaml" 2> "${tmp_dir}/no-tags.log"; then
+  fail "missing worker tags were accepted without stored worker references"
+fi
+grep -Fq "api.remoteConfig.workerImageTags.init is required" "${tmp_dir}/no-tags.log" ||
+  fail "missing worker tags did not name the missing key"
 
 # Without the sidecar registry env vars the annotations must be omitted entirely
 # rather than emitting partially-resolved (invalid) references.
-helm template nvcf-api "${chart_dir}" \
-  --namespace nvcf \
-  --values "${chart_dir}/values.yaml" \
-  --set-string api.image.registry=example.com \
-  --set-string api.image.repository=foo/bar/strap \
-  --show-only templates/configmap-remote-config.yaml \
-  > "${manifest_without_sidecar_env}"
+render > "${manifest_without_sidecar_env}"
 
 if grep -Fq "release-artifact-" "${manifest_without_sidecar_env}"; then
-  echo "expected no release-artifact annotations when NVCF_SIDECARS_* env is unset" >&2
-  exit 1
+  fail "expected no release-artifact annotations when NVCF_SIDECARS_* env is unset"
 fi
 
-echo "remote-config ConfigMap surfaces resolved release-artifact image references for placeholder sidecars"
+echo "remote-config ConfigMap composes worker references and surfaces resolved release-artifact image references for placeholder sidecars"

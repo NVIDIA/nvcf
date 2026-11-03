@@ -255,6 +255,72 @@ func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
 	assert.Equal(t, cfg.BYOOOTelCollector, got)
 }
 
+func TestBYOOOTelCollectorConfig_PlatformMetricsFederationEnvVars(t *testing.T) {
+	disabled := false
+	tests := []struct {
+		name           string
+		federation     BYOOOTelPlatformMetricsFederationConfig
+		wantFederation string
+	}{
+		{name: "disabled", federation: BYOOOTelPlatformMetricsFederationConfig{Enabled: &disabled},
+			wantFederation: `{"enabled":false}`},
+		{name: "target", federation: BYOOOTelPlatformMetricsFederationConfig{Target: "vm.example.invalid:8428"},
+			wantFederation: `{"target":"vm.example.invalid:8428"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := BYOOOTelCollectorConfig{PlatformMetricsFederation: tt.federation}
+			require.False(t, cfg.IsZero())
+
+			envs := cfg.EnvVars()
+			require.Len(t, envs, 1)
+			assert.Equal(t, BYOOOTelCollectorConfigEnv, envs[0].Name)
+			decoded, err := base64.StdEncoding.DecodeString(envs[0].Value)
+			require.NoError(t, err)
+			var got map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(decoded, &got))
+			assert.JSONEq(t, tt.wantFederation, string(got["platformMetricsFederation"]))
+		})
+	}
+
+	assert.True(t, BYOOOTelPlatformMetricsFederationConfig{}.IsZero())
+	assert.Nil(t, BYOOOTelCollectorConfig{}.EnvVars())
+}
+
+func TestBYOOOTelCollectorConfig_ValidatePlatformMetricsFederation(t *testing.T) {
+	tests := []struct {
+		target  string
+		wantErr string
+	}{
+		{target: ""},
+		{target: "vmsingle.monitoring.svc.cluster.local:8428"},
+		{target: "Prometheus.Example.Invalid:9090"},
+		{target: "10.0.0.1:9090"},
+		{target: "[fd00::1]:9090"},
+		{target: "prometheus.example.invalid", wantErr: "must be host:port"},
+		{target: "http://prometheus.example.invalid:9090", wantErr: "must be host:port"},
+		{target: ":9090", wantErr: "DNS name or IP address"},
+		{target: "prometheus_example:9090", wantErr: "DNS name or IP address"},
+		{target: "prom\"etheus:9090", wantErr: "DNS name or IP address"},
+		{target: "prometheus.example.invalid:http", wantErr: "port between 1 and 65535"},
+		{target: "prometheus.example.invalid:0", wantErr: "port between 1 and 65535"},
+		{target: "prometheus.example.invalid:65536", wantErr: "port between 1 and 65535"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.target, func(t *testing.T) {
+			err := BYOOOTelCollectorConfig{
+				PlatformMetricsFederation: BYOOOTelPlatformMetricsFederationConfig{Target: tt.target},
+			}.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, "platform metrics federation: ")
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 func TestBYOOOTelCollectorConfig_ValidateSampling(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -302,6 +368,91 @@ func TestBYOOOTelCollectorConfig_ValidateSampling(t *testing.T) {
 			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
+}
+
+func TestAgentTimeConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     AgentTimeConfig
+		wantErr string
+	}{
+		{name: "accepts zero values", cfg: AgentTimeConfig{}},
+		{name: "accepts positive values", cfg: AgentTimeConfig{HeartbeatInterval: 30 * time.Second}},
+		{
+			name:    "rejects negative HeartbeatInterval",
+			cfg:     AgentTimeConfig{HeartbeatInterval: -1 * time.Second},
+			wantErr: "agent.heartbeatInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative CredRenewInterval",
+			cfg:     AgentTimeConfig{CredRenewInterval: -1 * time.Second},
+			wantErr: "agent.credRenewInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative SyncQueueInterval",
+			cfg:     AgentTimeConfig{SyncQueueInterval: -1 * time.Second},
+			wantErr: "agent.syncQueueInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative SyncRequestStatusInterval",
+			cfg:     AgentTimeConfig{SyncRequestStatusInterval: -1 * time.Second},
+			wantErr: "agent.syncRequestStatusInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative SyncAcknowledgeRequestInterval",
+			cfg:     AgentTimeConfig{SyncAcknowledgeRequestInterval: -1 * time.Second},
+			wantErr: "agent.syncAcknowledgeRequestInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative PeriodicInstanceStatusInterval",
+			cfg:     AgentTimeConfig{PeriodicInstanceStatusInterval: -1 * time.Second},
+			wantErr: "agent.periodicInstanceStatusInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative ICMSRequestAckInterval",
+			cfg:     AgentTimeConfig{ICMSRequestAckInterval: -1 * time.Second},
+			wantErr: "agent.icmsRequestAckInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative ICMSRequestAckRetryTimeout",
+			cfg:     AgentTimeConfig{ICMSRequestAckRetryTimeout: -1 * time.Second},
+			wantErr: "agent.icmsRequestAckRetryTimeout: must not be negative",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+// TestConfig_Validate_RejectsNegativeHeartbeatInterval is a regression test for
+// NVBug 6843414: worker.timeouts.heartbeatInterval=-1s was accepted by the Helm
+// update and the merged agent config, then reached time.NewTicker unvalidated,
+// panicking the replacement agent at startup with "non-positive interval for
+// NewTicker" and blocking rollout. Config.Validate() must now reject it before
+// Complete() or any ticker construction.
+func TestConfig_Validate_RejectsNegativeHeartbeatInterval(t *testing.T) {
+	cfg := Config{
+		Agent: AgentConfig{
+			AgentTimeConfig: AgentTimeConfig{HeartbeatInterval: -1 * time.Second},
+		},
+	}
+	err := cfg.Validate()
+	require.ErrorContains(t, err, "agent.heartbeatInterval: must not be negative")
+
+	// A zero HeartbeatInterval must continue to pass validation and be
+	// defaulted by Complete(), unaffected by the new negative-value check.
+	zeroCfg := Config{}
+	require.NoError(t, zeroCfg.Validate())
+	completed := zeroCfg.Agent.AgentTimeConfig.Complete()
+	assert.Equal(t, defaultHeartbeatInterval, completed.HeartbeatInterval)
 }
 
 func TestAgentTimeConfig_Complete(t *testing.T) {

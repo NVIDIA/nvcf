@@ -42,6 +42,10 @@ func Render(renderer string, catalog *Catalog) (string, error) {
 		return renderImageMirroringObservabilityStackSnippet(catalog)
 	case "image-mirroring-cli-snippet":
 		return renderImageMirroringCLISnippet(catalog)
+	case "compatibility-matrix":
+		return renderCompatibilityMatrix(catalog)
+	case "edition-overview", "edition-control-plane", "edition-compute-plane", "edition-observability":
+		return renderEditionSummary(catalog, strings.TrimPrefix(renderer, "edition-"))
 	default:
 		return "", fmt.Errorf("unknown renderer %q", renderer)
 	}
@@ -255,6 +259,18 @@ func (catalog *Catalog) findArtifacts(name string) []Artifact {
 }
 
 func SyncDocs(repoRoot string, catalog *Catalog, check bool) error {
+	if catalog.UmbrellaManifestSHA256 != "" {
+		m, data, err := loadUmbrellaManifest(filepath.Join(repoRoot, "docs", "umbrella-manifest.json"))
+		if err != nil {
+			return err
+		}
+		if umbrellaDigest(data) != catalog.UmbrellaManifestSHA256 {
+			return fmt.Errorf("umbrella docs manifest digest mismatch")
+		}
+		if err := validateUmbrellaDocsCatalogIdentity(m, catalog); err != nil {
+			return err
+		}
+	}
 	if err := ValidateCatalog(catalog); err != nil {
 		return err
 	}
@@ -296,7 +312,7 @@ func SyncDocs(repoRoot string, catalog *Catalog, check bool) error {
 	if len(drifted) > 0 {
 		return fmt.Errorf("%w: %s", ErrCheckFailed, strings.Join(drifted, ", "))
 	}
-	return nil
+	return syncEditionManifest(repoRoot, catalog, check)
 }
 
 func ReplaceMarkedBlock(content, marker, rendered string) (string, bool, error) {
@@ -305,6 +321,9 @@ func ReplaceMarkedBlock(content, marker, rendered string) (string, bool, error) 
 		return "", false, err
 	}
 	replacement := "\n\n" + strings.TrimRight(rendered, "\n") + "\n\n"
+	if strings.TrimSpace(rendered) == "" {
+		replacement = "\n\n"
+	}
 	if syntax.Legacy {
 		current := markerSyntaxes(marker)[0]
 		updated := content[:beginIndex] + current.Begin + replacement + current.End + content[endIndex+len(syntax.End):]

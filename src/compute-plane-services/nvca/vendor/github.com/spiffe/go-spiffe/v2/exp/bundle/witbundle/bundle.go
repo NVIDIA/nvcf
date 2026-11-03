@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package witbundle provides support for WIT bundles, which are JWK Sets used
 // to validate WIT-SVID signatures.
 package witbundle

@@ -19,10 +19,10 @@ package api
 
 import (
 	"maps"
+	"strings"
 
 	openairesponses "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api/adapters/openairesponses"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/mcp"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
@@ -71,6 +71,10 @@ func processInputItems(items []openairesponses.InputItem) []models.ChatMessage {
 	messages := []models.ChatMessage{}
 
 	for _, item := range items {
+		if item.Raw != nil {
+			messages = append(messages, models.ChatMessage{Raw: item.Raw})
+			continue
+		}
 		switch item.Type {
 		case openairesponses.ItemTypeMessage, "":
 			if item.Role != "" && len(item.MessageContent) > 0 {
@@ -104,8 +108,34 @@ func processInputItems(items []openairesponses.InputItem) []models.ChatMessage {
 			if toolCallOutput, ok := item.ToolCallData.(openairesponses.FunctionCallOutput); ok {
 				messages = append(messages, models.ChatMessage{
 					Role:       models.ChatCompletionRoleTool,
-					Content:    models.SingleTextContent(toolCallOutput.Output),
+					Content:    toolOutputToChatContent(toolCallOutput.Output),
 					ToolCallID: &toolCallOutput.CallID,
+				})
+			}
+
+		case openairesponses.ItemTypeCustomToolCall:
+			if call, ok := item.ToolCallData.(openairesponses.CustomToolCall); ok {
+				messages = append(messages, models.ChatMessage{
+					Role: models.ChatCompletionRoleAssistant,
+					ToolCalls: &[]models.ChatToolCall{
+						{
+							ID:   call.CallID,
+							Type: models.ToolTypeFunction,
+							Function: models.ChatToolCallFunction{
+								Name:      call.Name,
+								Arguments: call.Input,
+							},
+						},
+					},
+				})
+			}
+
+		case openairesponses.ItemTypeCustomToolCallOutput:
+			if output, ok := item.ToolCallData.(openairesponses.CustomToolCallOutput); ok {
+				messages = append(messages, models.ChatMessage{
+					Role:       models.ChatCompletionRoleTool,
+					Content:    toolOutputToChatContent(output.Output),
+					ToolCallID: &output.CallID,
 				})
 			}
 
@@ -140,10 +170,21 @@ func processInputItems(items []openairesponses.InputItem) []models.ChatMessage {
 	return messages
 }
 
+func toolOutputToChatContent(output openairesponses.ToolOutput) models.ChatMessageContent {
+	if output.IsContent {
+		return convertMessageContentToChatContent(output.Content)
+	}
+	return models.SingleTextContent(output.Text)
+}
+
 func convertMessageContentToChatContent(inputContent []openairesponses.InputContent) models.ChatMessageContent {
 	content := models.ChatMessageContent{}
 
 	for _, item := range inputContent {
+		if item.Raw != nil {
+			content = append(content, models.ContentPartRaw(item.Raw))
+			continue
+		}
 		switch item.Discriminator() {
 		case openairesponses.ContentTypeInputText:
 			if textContent, ok := item.GetTextContent(); ok && textContent.Text != "" {
@@ -182,6 +223,13 @@ func convertMessageContentToChatContent(inputContent []openairesponses.InputCont
 				URL:    url,
 				Detail: detail,
 			})
+		case openairesponses.ContentTypeInputAudio:
+			if audio, ok := item.GetAudioContent(); ok {
+				// This conversion is for admission estimates; native input is forwarded unchanged.
+				content = append(content, &models.ContentPartAudioURL{
+					URL: "data:audio/" + audio.InputAudio.Format + ";base64," + audio.InputAudio.Data,
+				})
+			}
 		}
 	}
 
@@ -211,22 +259,7 @@ func setServiceTier(
 	req *openairesponses.CreateRequest,
 	chatReq *models.ChatCompletionRequest,
 ) {
-	if req.ServiceTier == nil {
-		return
-	}
-
-	switch ptr.Deref(req.ServiceTier) {
-	case "auto", "default":
-		chatReq.ServiceTier = servicetier.Auto
-	case "on_demand":
-		chatReq.ServiceTier = servicetier.OnDemand
-	case "flex":
-		chatReq.ServiceTier = servicetier.Flex
-	case "batch":
-		chatReq.ServiceTier = servicetier.Batch
-	default:
-		chatReq.ServiceTier = servicetier.Auto
-	}
+	chatReq.ServiceTier = req.ServiceTier
 }
 
 func setMaxTokens(
@@ -255,20 +288,76 @@ func setTools(
 	}
 }
 
+func chatFunctionTool(t *openairesponses.FunctionTool) models.ChatTool {
+	return models.ChatTool{
+		Type: models.ToolTypeFunction,
+		Function: models.ChatFunctionSpec{
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  &t.Parameters,
+			Strict:      t.Strict,
+		},
+	}
+}
+
+func chatCustomTool(t *openairesponses.CustomTool) models.ChatTool {
+	return models.ChatTool{
+		Type: models.ToolTypeFunction,
+		Function: models.ChatFunctionSpec{
+			Name:        t.Name,
+			Description: t.Description,
+		},
+	}
+}
+
+// customToolFormatText returns the format definitions of custom tools, including
+// those nested in namespaces. chatCustomTool omits them from the chat tool, but
+// they are forwarded upstream and can be large grammars.
+func customToolFormatText(reqTools []openairesponses.Tool) string {
+	var text strings.Builder
+	for _, tool := range reqTools {
+		switch t := tool.(type) {
+		case *openairesponses.CustomTool:
+			text.Write(t.Format)
+		case *openairesponses.NamespaceTool:
+			text.WriteString(customToolFormatText(t.Tools))
+		}
+	}
+	return text.String()
+}
+
+// estimatedTokenCountForRawTools counts tools that the gateway does not model,
+// including those nested in namespaces, by raw size. convertTools skips them.
+func estimatedTokenCountForRawTools(reqTools []openairesponses.Tool) int {
+	totalTokens := 0
+	for _, tool := range reqTools {
+		switch t := tool.(type) {
+		case *openairesponses.RawTool:
+			totalTokens += estimatedTokenCountForRawJSON(t.Raw)
+		case *openairesponses.NamespaceTool:
+			totalTokens += estimatedTokenCountForRawTools(t.Tools)
+		}
+	}
+	return totalTokens
+}
+
 func convertTools(reqTools openairesponses.ToolSlice) []models.ChatTool {
 	tools := make([]models.ChatTool, 0, len(reqTools))
 	for _, tool := range reqTools {
 		switch t := tool.(type) {
 		case *openairesponses.FunctionTool:
-			tools = append(tools, models.ChatTool{
-				Type: models.ToolTypeFunction,
-				Function: models.ChatFunctionSpec{
-					Name:        t.Name,
-					Description: t.Description,
-					Parameters:  &t.Parameters,
-					Strict:      t.Strict,
-				},
-			})
+			tools = append(tools, chatFunctionTool(t))
+		case *openairesponses.NamespaceTool:
+			for _, nested := range t.Tools {
+				switch n := nested.(type) {
+				case *openairesponses.FunctionTool:
+					tools = append(tools, chatFunctionTool(n))
+				case *openairesponses.CustomTool:
+					tools = append(tools, chatCustomTool(n))
+				}
+			}
+		case *openairesponses.CustomTool:
+			tools = append(tools, chatCustomTool(t))
 		case *openairesponses.BrowserSearchTool:
 			tools = append(tools, models.ChatTool{
 				Type: models.ToolTypeBrowserSearch,
@@ -372,7 +461,7 @@ func setResponseFormat(
 			Name:        req.Text.Format.Name,
 			Description: ptr.Deref(req.Text.Format.Description),
 			Schema:      req.Text.Format.Schema,
-			Strict:      ptr.Deref(req.Text.Format.Strict),
+			Strict:      req.Text.Format.Strict,
 		}
 	}
 

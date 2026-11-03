@@ -80,30 +80,23 @@ assert_not_has 'nsenter'
 # the hashes match even while the running containerd holds the stale config.
 assert_not_has 'containerd_restart_pending'
 
-echo "Checking readiness reflects whether cache routing is live..."
-# A DaemonSet ready count below its desired count is the signal that some nodes
-# still pull straight from the upstream registry.
-assert_has 'test -f /tmp/nvcf-cc-ready'
-assert_has 'readinessProbe:'
-assert_has 'touch "${READY_MARKER}"'
-# Readiness comes from live runtime state: containerd's process start time
-# versus the mtime of the config it only reads at startup.
-assert_has 'containerd_config_active() {'
-assert_has 'pgrep -x containerd'
-assert_has 'proc_start_epoch() {'
-assert_has '[ "${start}" -gt "${mtime}" ]'
-# Self-correcting in both directions, so a node that loses activation stops
-# reporting ready.
-assert_has 'rm -f "${READY_MARKER}"'
-# Re-evaluated on a short interval, so a node flips to ready on its own once an
-# operator restarts containerd. The old 24h sleep never re-checked.
-assert_has 'reconcile_ready_marker() {'
-assert_has 'while true; do'
-assert_has 'sleep 60'
-assert_not_has 'sleep 86400'
-# The reconcile loop must only read state. Rewriting host config there races
-# with the OS / container toolkit, so the updater must be invoked exactly once,
-# in the one-shot setup phase above the loop.
+echo "Checking the configure container stays simple: no readiness gating, no runtime probing..."
+# Holding the pod not-ready on an inactive containerd config kept the ArgoCD
+# Application Progressing forever (NVIDIA/nvcf#2017). The DaemonSet writes the
+# node's registry config and certificates, logs a WARNING if this run had to
+# correct containerd's config.toml, and then only stays alive. It does not
+# probe the runtime, keep a marker, or gate readiness on anything.
+assert_not_has 'nvcf-cc-ready'
+assert_not_has 'reconcile_ready_marker'
+assert_not_has 'report_registry_config_state'
+assert_not_has 'containerd_config_active'
+assert_not_has 'proc_start_epoch'
+assert_not_has 'NOT READY:'
+assert_has 'WARNING: corrected containerd registry config on this node.'
+assert_has 'WARNING: Restart containerd or cycle this node to activate it.'
+assert_has 'while true; do sleep 86400; done'
+# Rewriting host config repeatedly races with the OS / container toolkit, so
+# the updater must be invoked exactly once in the one-shot setup phase.
 updater_calls="$(grep -F -c -- 'python3 update_config.py' "${OUT_FILE}" || true)"
 if [ "${updater_calls}" != "1" ]; then
   echo "FAILED: expected update_config.py to be invoked once, found ${updater_calls}" >&2

@@ -20,11 +20,14 @@ meaningful target, value, context, and timeout visible while hiding only
 command or output-format mechanics. Keep `When I run command` plus an
 assertion as the escape hatch for uncommon or command-specific behavior.
 
-Function lifecycle steps are a narrow command-adapter exception. They store
-only the selected `nvcf-cli` config, pass visible arguments to one CLI command,
-and preserve the real command result. They do not store function identity,
-apply defaults, parse or normalize product values, or enforce product
-preconditions. Their `successfully` wording asserts exit code 0 to keep happy
+Function and task lifecycle steps, plus API key generation for their backing
+services and Event Ledger, are a narrow command-adapter exception. They
+store only the selected `nvcf-cli` config, pass visible arguments to one CLI
+command, and preserve the real command result. They do not store function or
+task identity, apply defaults, parse or normalize product values, or enforce
+product preconditions. The task status assertion is a bounded test-runner
+poll of `task get --json` that compares `.task.status` with an exact string and
+classifies no status as terminal. Their `successfully` wording asserts exit code 0 to keep happy
 paths compact. Use raw command steps for negative and exit-code-specific cases
 so `nvcf-cli` and the NVCF API remain the product-validation boundary.
 
@@ -55,21 +58,48 @@ logic into `dsl/`.
 - `${VAR}` interpolation is the only env-var form the DSL recognizes;
   a bare `$word` is left literal. Implementations must not use
   `os.ExpandEnv`. Expansion lives in `dsl.Interpolate`.
-- Function lifecycle CLI option tables preserve row order, repeated options,
+- Function and task lifecycle CLI option tables preserve row order, repeated options,
   empty values, and product-invalid values. Only the `option | value` table
   structure is validated before the command runs.
 - The Helm function lifecycle uses `SAMPLE_HELM_FUNCTION_CHART`. The chart
   must be publicly reachable by ReVal, expose an `entrypoint` Service on port
   8000, answer `/health`, and echo the request message from `/echo`. Keep the
   chart reference outside the feature so release versions are not hard-coded.
+- The LLM field-fidelity scenario uses `SAMPLE_LLM_ECHO_IMAGE` (default: the
+  released in-repo sample), an
+  OpenAI-compatible sample that replies with the request it received when
+  `x_load_tester_echo` is true. Do not point it at the `:local` sample, which
+  returns a fixed reply other scenarios assert.
+- The BYOO feature reads its task sample from `SAMPLE_BYOO_TASK_IMAGE` and its
+  function sample from `SAMPLE_BYOO_FUNCTION_IMAGE`. Tag every BYOO
+  scenario that installs, upgrades, or removes a release with `@stack-change`
+  so `TestBYOOExistingInstall` never changes an existing install.
+- The Vanity Gateway shadow sampling scenario reads shadow decisions from the
+  gateway's metrics, because a client cannot see whether a request was
+  shadowed. Its session keys and first messages are chosen for fixed hash
+  buckets on either side of 50 percent; if the sampling hash or canonical
+  first-message form changes, pick new values and update the comment.
 - Gateway API route readiness tables expose each route's kind, name,
   namespace, and intended Gateway parent plus the shared context and timeout.
   The step requires `Accepted=True` and `ResolvedRefs=True` for that parent but
   does not allowlist route kinds or duplicate Gateway API validation.
-- File-mutating steps (`I copy the file`, `I update yaml file`,
-  `I prepare self-managed secrets file`, `I substitute a block`)
+- File-mutating steps (`I copy the file`, `I write yaml file`,
+  `I update yaml file`, `I prepare self-managed secrets file`,
+  `I substitute a block`)
   snapshot the destination through `Suite.Ledger` before the first write.
   Suite teardown restores every snapshotted path.
+- `CommandRunner` tokenizes command text with shlex and execs the argv
+  directly. There is no shell, so heredocs, pipes, and redirections only
+  work inside an explicit `/bin/bash -c '...'` wrapper. Apply inline YAML
+  through `Kubernetes manifest ... is:` plus `I successfully apply
+  Kubernetes manifest ... using contexts:` instead of `kubectl apply -f -`
+  with a heredoc.
+- `Kubernetes manifest ... is:` stores the raw docstring in
+  `ScenarioContext.Manifests`; the apply step interpolates `${VAR}` and
+  writes the rendered body under `out/<run-id>/` before each
+  explicit-context `kubectl apply`. Declare manifests with the scenario's
+  Givens even when they reference an env var exported later, and never
+  interpolate at declaration time.
 - `Given command has succeeded:` keys on the fully resolved command
   text. Two scenarios whose pre-interpolation text matches but whose
   env vars differ must miss the cache. The cache lives in

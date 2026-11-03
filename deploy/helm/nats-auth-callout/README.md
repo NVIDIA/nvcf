@@ -132,7 +132,7 @@ healthChecks:
   readinessProbe:
     enabled: true
     httpGet:
-      path: "/healthz"
+      path: "/readyz"
       port: "http"
       scheme: "HTTP"
     initialDelaySeconds: 5
@@ -155,10 +155,11 @@ healthChecks:
     successThreshold: 1
 ```
 
-**Available Health Endpoints:**
+Available health endpoints:
 
-- `/healthz` - Primary health check endpoint (recommended)
-- `/health` - Alternative health check endpoint
+- `/readyz` - Readiness probe. Passes when NATS is connected or no NATS dependency is configured.
+- `/healthz` - Liveness probe. Remains healthy during reconnects and fails if the NATS connection closes permanently.
+- `/health` - Alias for `/healthz`.
 - `/v1/ping` - Basic connectivity test
 
 ### Tracing Configuration Validation

@@ -13,30 +13,16 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 cargo_build_script(
     name = "build_script",
     edition = "2024",
-    srcs = [
-        "build.rs",
-        "src/build_plan.rs",
-    ],
+    srcs = ["build.rs"],
     crate_root = "build.rs",
     data = glob(["*.capnp"]),
-    # capnpc is listed in both [dev-dependencies] and [build-dependencies];
-    # crate_universe collapses the duplicate to a dev-dep, leaving
-    # all_crate_deps(build=True) empty. Add the crate label explicitly.
-    deps = all_crate_deps(build = True) + [
-        "@stargate_crates//:capnpc",
-    ],
+    deps = all_crate_deps(build = True),
 )
 
 rust_library(
     name = "stargate-protocol",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(),
-    # build.rs is pulled in as a test-only module
-    # (`#[cfg(test)] #[path = "../build.rs"] mod build_script;` in lib.rs),
-    # so it must be a compile input for the rust_test that reuses this
-    # crate. compile_data makes it available without treating it as a
-    # crate root; the non-test build ignores the cfg(test) module.
-    compile_data = ["build.rs"],
     crate_name = "stargate_protocol",
     edition = "2024",
     proc_macro_deps = all_crate_deps(proc_macro = True),

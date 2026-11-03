@@ -517,10 +517,12 @@ func TestServeExecPassesThroughUpstreamBadGateway(t *testing.T) {
 	require.Equal(t, upstreamBody, string(body))
 
 	metrics := collectGatewayMetrics(t, reader)
-	require.True(t, gatewayMetricHasAttributeAbsent(metrics, map[attribute.Key]attribute.Value{
-		"http.request.method":       attribute.StringValue(http.MethodPost),
-		"http.response.status_code": attribute.Int64Value(http.StatusBadGateway),
-	}, middleware.GatewayProxyOutcomeMetricAttribute))
+	require.True(t, gatewayMetricHasAttributes(metrics, map[attribute.Key]attribute.Value{
+		"http.request.method":                         attribute.StringValue(http.MethodPost),
+		"http.response.status_code":                   attribute.Int64Value(http.StatusBadGateway),
+		middleware.GatewayProxyOutcomeMetricAttribute: attribute.StringValue(string(middleware.GatewayProxyOutcomeUpstreamStatus)),
+	}))
+	require.Equal(t, string(middleware.GatewayProxyOutcomeUpstreamStatus), result.Header.Get(middleware.ErrorSourceHeader))
 }
 
 func TestServeExecRecordsGatewayProxyOutcomeOnParentSpan(t *testing.T) {

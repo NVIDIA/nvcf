@@ -15,14 +15,14 @@ metadata:
   labels:
     app: nim-qwen3-32b
     nvsnap.io/demo: "true"
-    nvsnap.io/capture: "true"   # opt-in to rootfs capture (multi-GPU only)
+    nvsnap.io/capture: "true"   # opt-in to cachedir capture (multi-GPU only)
   annotations:
     nvsnap.io/demo-name: "NIM"
-    nvsnap.io/desc: "Qwen3-32B multi-GPU TP=2 (rootfs)"
+    nvsnap.io/desc: "Qwen3-32B multi-GPU TP=2 (cachedir)"
     nvsnap.io/model: "qwen/qwen3-32b"
     nvsnap.io/port: "8000"
     nvsnap.io/gpus: "2"
-    nvsnap.io/path: "rootfs"
+    nvsnap.io/path: "cachedir"
     nvsnap.io/ckpt-size: "61 GB"
 spec:
   tolerations:

@@ -26,6 +26,7 @@ import com.nvidia.nvcf.rest.function.management.dto.FunctionModelDto;
 import com.nvidia.nvcf.rest.function.management.dto.FunctionTypeEnum;
 import com.nvidia.nvcf.rest.function.management.dto.LlmConfigValidator;
 import com.nvidia.nvcf.rest.function.management.dto.LlmInvocationConfigDto;
+import com.nvidia.nvcf.rest.function.management.dto.LlmRoutingMethodValidator;
 import com.nvidia.nvcf.rest.function.management.dto.UpdateFunctionRequest;
 import jakarta.annotation.Nullable;
 import java.util.Comparator;
@@ -178,6 +179,8 @@ public class FunctionLlmService {
         var requestedByName = requestedModels.stream()
                 .collect(Collectors.toMap(FunctionModelDto::getName, Function.identity()));
 
+        // Overrides hold the stored routingMethod form so a request that differs only by outer
+        // spaces does not rewrite an unchanged sibling.
         var overrides = requestedModels.stream()
                 .filter(m -> m.getLlmConfig() != null)
                 .filter(m -> m.getLlmConfig().getTokenRateLimit() != null
@@ -186,7 +189,8 @@ public class FunctionLlmService {
                         FunctionModelDto::getName,
                         m -> FunctionModelDto.LlmConfigDto.builder()
                                 .tokenRateLimit(m.getLlmConfig().getTokenRateLimit())
-                                .routingMethod(m.getLlmConfig().getRoutingMethod())
+                                .routingMethod(LlmRoutingMethodValidator.withoutOuterSpaces(
+                                        m.getLlmConfig().getRoutingMethod()))
                                 .build()));
 
         // One pass per sibling: validate uris/tokenizer and apply overrides, re-serializing only
@@ -403,7 +407,7 @@ public class FunctionLlmService {
                     llmConfig.setTokenRateLimit(llmConfigUpdate.tokenRateLimit());
                 }
                 if (llmConfigUpdate.routingMethod() != null) {
-                    LlmConfigValidator.validateRoutingMethod(
+                    LlmRoutingMethodValidator.validate(
                             modelUpdate.modelName(), llmConfigUpdate.routingMethod());
                     llmConfig.setRoutingMethod(llmConfigUpdate.routingMethod());
                 }

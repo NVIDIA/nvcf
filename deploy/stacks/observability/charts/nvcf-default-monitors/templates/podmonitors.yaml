@@ -40,10 +40,20 @@ spec:
     {{- toYaml $values.namespaceSelector | nindent 4 }}
   selector:
     {{- toYaml $values.selector | nindent 4 }}
+  {{- with $values.podTargetLabels }}
+  podTargetLabels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   podMetricsEndpoints:
     - interval: {{ $values.interval | quote }}
       path: {{ $values.path | quote }}
       port: {{ $values.port | quote }}
+      {{- with $values.jobName }}
+      relabelings:
+        - action: replace
+          targetLabel: job
+          replacement: {{ . | quote }}
+      {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

@@ -6,6 +6,7 @@ go_library(
         "common.go",
         "v1.go",
         "v2.go",
+        "v3_account_reads.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/db_client/cassandra",
     visibility = ["//:__subpackages__"],

@@ -13,11 +13,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+
 # Private OCI rule implementations.
+
+py_binary(
+    name = "java_runtime_contract",
+    srcs = ["java_runtime_contract.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "java_base_contract_test",
+    srcs = ["java_runtime_contract.py"],
+    main = "java_runtime_contract.py",
+    args = [
+        "$(location @distroless_java_linux_amd64)",
+        "$(location @distroless_java_linux_arm64_v8)",
+    ],
+    data = [
+        "@distroless_java_linux_amd64",
+        "@distroless_java_linux_arm64_v8",
+    ],
+)
+
+py_test(
+    name = "java_runtime_contract_test",
+    srcs = [
+        "java_runtime_contract.py",
+        "java_runtime_contract_test.py",
+    ],
+    imports = ["."],
+)
 
 # The shared Java image contract test script, referenced by the
 # java_image_contract_test macro in every Java service's BUILD file.
 exports_files(
-    ["java_image_contract_test.sh"],
+    [
+        "java_image_contract_test.sh",
+        "numeric_user_test.go",
+    ],
     visibility = ["//visibility:public"],
 )

@@ -78,6 +78,8 @@ func InitializeMetrics() {
 	_ = UpstreamRequestDuration()
 	_ = ModelURIAllowlistRejections()
 	_ = LLMTokens()
+	_ = MessagesUsage()
+	_ = DecisionUsage()
 	_ = ProviderTime()
 	_ = StreamFirstToken()
 	_ = StreamDuration()
@@ -97,6 +99,9 @@ func InitializeMetrics() {
 	_ = authRequestsTotal()
 	_ = authRequestDuration()
 	preInitAuthMetrics()
+	preInitDecisionMetrics()
+	_ = lastClusterLookupDuration()
+	preInitLastClusterMetrics()
 }
 
 func Add(
@@ -192,6 +197,20 @@ func LLMTokens() otelmetric.Int64Counter {
 	return must.Get(Meter().Int64Counter(
 		metricPrefix+"llm_tokens_total",
 		otelmetric.WithDescription("LLM token counts reported by upstream providers."),
+	))
+}
+
+func MessagesUsage() otelmetric.Int64Counter {
+	return must.Get(Meter().Int64Counter(metricPrefix+"messages_usage_observations_total", otelmetric.WithDescription("Messages usage accounting outcomes; estimates are not reported as actual tokens.")))
+}
+
+// DecisionUsage counts response usage observations on the decision routes.
+// status is "observed" when the response reported usage.input_tokens and
+// "absent" when it did not.
+func DecisionUsage() otelmetric.Int64Counter {
+	return must.Get(Meter().Int64Counter(
+		metricPrefix+"decision_usage_observations_total",
+		otelmetric.WithDescription("Decision route responses by whether they reported input token usage."),
 	))
 }
 
@@ -461,6 +480,82 @@ func preInitAuthMetrics() {
 	}
 }
 
+// Result labels for the Stargate last-cluster store metrics.
+const (
+	LastClusterLookupHit     = "hit"
+	LastClusterLookupMiss    = "miss"
+	LastClusterLookupError   = "error"
+	LastClusterLookupTimeout = "timeout"
+	LastClusterLookupSkipped = "skipped"
+
+	LastClusterWriteOK    = "ok"
+	LastClusterWriteError = "error"
+)
+
+var (
+	lastClusterLookupResults = []string{
+		LastClusterLookupHit,
+		LastClusterLookupMiss,
+		LastClusterLookupError,
+		LastClusterLookupTimeout,
+		LastClusterLookupSkipped,
+	}
+	lastClusterWriteResults = []string{LastClusterWriteOK, LastClusterWriteError}
+)
+
+func lastClusterLookupsTotal() otelmetric.Int64Counter {
+	return must.Get(Meter().Int64Counter(
+		metricPrefix+"last_cluster_lookups_total",
+		otelmetric.WithDescription("Stargate last-cluster store lookups, labelled by result."),
+	))
+}
+
+func lastClusterWritesTotal() otelmetric.Int64Counter {
+	return must.Get(Meter().Int64Counter(
+		metricPrefix+"last_cluster_writes_total",
+		otelmetric.WithDescription("Stargate last-cluster store writes, labelled by result."),
+	))
+}
+
+func lastClusterLookupDuration() otelmetric.Float64Histogram {
+	return must.Get(Meter().Float64Histogram(
+		metricPrefix+"last_cluster_lookup_duration_seconds",
+		otelmetric.WithUnit("s"),
+		otelmetric.WithDescription("Duration of Stargate last-cluster store lookups on the request path."),
+		// The lookup runs on the request path with a 20ms default deadline.
+		otelmetric.WithExplicitBucketBoundaries(0.001, 0.002, 0.005, 0.01, 0.02, 0.05),
+	))
+}
+
+// RecordLastClusterLookup counts one lookup. Skipped lookups never touch the
+// store, so they are counted but not timed.
+func RecordLastClusterLookup(ctx context.Context, result string, elapsed time.Duration) {
+	attrs := otelmetric.WithAttributes(attribute.String("result", result))
+	lastClusterLookupsTotal().Add(ctx, 1, attrs)
+	if result != LastClusterLookupSkipped {
+		lastClusterLookupDuration().Record(ctx, elapsed.Seconds(), attrs)
+	}
+}
+
+func RecordLastClusterWrite(ctx context.Context, result string) {
+	lastClusterWritesTotal().Add(ctx, 1, otelmetric.WithAttributes(attribute.String("result", result)))
+}
+
+// preInitLastClusterMetrics emits a zero sample for every result label so
+// absent() and rate() work on the first scrape, whether or not the feature
+// is enabled.
+func preInitLastClusterMetrics() {
+	ctx := context.Background()
+	lookups := lastClusterLookupsTotal()
+	for _, result := range lastClusterLookupResults {
+		lookups.Add(ctx, 0, otelmetric.WithAttributes(attribute.String("result", result)))
+	}
+	writes := lastClusterWritesTotal()
+	for _, result := range lastClusterWriteResults {
+		writes.Add(ctx, 0, otelmetric.WithAttributes(attribute.String("result", result)))
+	}
+}
+
 func DropReasonSameCluster() attribute.KeyValue {
 	return attribute.String("reason", dropReasonSameCluster)
 }
@@ -475,4 +570,49 @@ func DropReasonRemoteApplyDisabled() attribute.KeyValue {
 
 func SynchronizerDropReasonOldMessage() attribute.KeyValue {
 	return attribute.String("reason", synchronizerDropOldMessage)
+}
+
+// decisionRoutes are the routes whose series are seeded before traffic. The
+// route label comes from the router pattern, so without a seed the series for
+// a route that has not been called yet does not exist and absent() and rate()
+// have nothing to read.
+var decisionRoutes = []string{"/v1/decisions", "/v1/systemone"}
+
+// DecisionRoutes returns the decision routes seeded by InitializeMetrics.
+func DecisionRoutes() []string { return append([]string(nil), decisionRoutes...) }
+
+// decisionSeedStatuses bounds the status label of the seeded request series
+// to the statuses the decision routes commonly return.
+var decisionSeedStatuses = []string{"200", "400", "401", "404", "413", "429", "500", "502", "503", "504"}
+
+// preInitDecisionMetrics emits zero samples for the decision routes on the
+// usage counter and the HTTP request instruments, using the missing function
+// label so cardinality stays bounded.
+func preInitDecisionMetrics() {
+	ctx := context.Background()
+	usage := DecisionUsage()
+	requests := HTTPRequestsTotal()
+	active := HTTPActiveRequests()
+	for _, route := range decisionRoutes {
+		for _, status := range []string{"observed", "absent"} {
+			usage.Add(ctx, 0, otelmetric.WithAttributes(
+				attribute.String("endpoint", route),
+				attribute.String("status", status),
+				FunctionIDAttribute(""),
+			))
+		}
+		active.Add(ctx, 0, otelmetric.WithAttributes(
+			attribute.String("method", "POST"),
+			attribute.String("route", route),
+			FunctionIDAttribute(""),
+		))
+		for _, status := range decisionSeedStatuses {
+			requests.Add(ctx, 0, otelmetric.WithAttributes(
+				attribute.String("method", "POST"),
+				attribute.String("route", route),
+				FunctionIDAttribute(""),
+				attribute.String("status", status),
+			))
+		}
+	}
 }

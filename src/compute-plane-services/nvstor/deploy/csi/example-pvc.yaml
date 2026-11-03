@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+---
+# Example PVC using nvstor NFS storage class.
+# Use this to provision checkpoint storage for training pods.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: training-checkpoints
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteMany  # NFS supports multi-pod access
+  storageClassName: nvstor-nfs
+  resources:
+    requests:
+      storage: 100Gi
+---
+# Example pod using the PVC.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: training-worker
+  namespace: default
+spec:
+  containers:
+    - name: trainer
+      image: pytorch/pytorch:latest
+      command: ["python", "-c", "import torch; print('Checkpoint dir:', '/checkpoints')"]
+      volumeMounts:
+        - name: checkpoints
+          mountPath: /checkpoints
+      # Add accelerator resources here for GPU workloads.
+  volumes:
+    - name: checkpoints
+      persistentVolumeClaim:
+        claimName: training-checkpoints
+---
+# Example: CRIU checkpoint restore using nvstor NFS.
+# The NFS mount allows direct access to checkpoint files.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: criu-restore
+  namespace: default
+  annotations:
+    nvstor.storage.io/checkpoint-source: "s3://checkpoints/training-run-42/step-10000"
+spec:
+  containers:
+    - name: app
+      image: myapp:latest
+      volumeMounts:
+        - name: checkpoint-data
+          mountPath: /criu-data
+  volumes:
+    - name: checkpoint-data
+      persistentVolumeClaim:
+        claimName: training-checkpoints
+---
+# StatefulSet example: distributed training with per-replica storage.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: training-workers
+  namespace: default
+spec:
+  serviceName: training
+  replicas: 8
+  selector:
+    matchLabels:
+      app: training-worker
+  template:
+    metadata:
+      labels:
+        app: training-worker
+    spec:
+      containers:
+        - name: trainer
+          image: pytorch/pytorch:latest
+          volumeMounts:
+            - name: shared-checkpoints
+              mountPath: /checkpoints
+            - name: local-cache
+              mountPath: /cache
+      volumes:
+        - name: shared-checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+  volumeClaimTemplates:
+    - metadata:
+        name: local-cache
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: nvstor-block
+        resources:
+          requests:
+            storage: 50Gi

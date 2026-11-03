@@ -22,7 +22,7 @@
 #   whisper           ASR/TTS (whisper-large-v3 NIM)            1xH100  [pending NGC validation]
 #
 # Output:
-#   docs/PDF-BENCH-RESULTS.md  (markdown table, appended per workload)
+#   docs/results/PDF-BENCH-RESULTS.md  (markdown table, appended per workload)
 #
 # Exit codes:
 #   0 = bench complete (each phase recorded, even partial PASS)
@@ -32,7 +32,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/lib/restore-guard.sh"
 source "$SCRIPT_DIR/versions.sh"
+source "$SCRIPT_DIR/lib/wait-progress.sh"
 
 # ─── Global temp-file cleanup ────────────────────────────────────────────────
 # Single EXIT trap; each phase appends to TMP_FILES instead of installing its
@@ -74,7 +76,7 @@ PDF Testing Matrix workloads (in order):
   whisper           ASR/TTS:   whisper-large-v3 NIM         (1xH100)  [requires ngc-api-key]
   gemma-4-31b-nim   LLM:       gemma-4-31B via NIM 1.7.1    (1xH100)  [requires ngc-api-key]
 
-Results appended to docs/PDF-BENCH-RESULTS.md.
+Results appended to docs/results/PDF-BENCH-RESULTS.md.
 EOF
     exit 1
 fi
@@ -147,7 +149,7 @@ case "$WORKLOAD" in
     gemma-4-31b-nim)
         # NIM 1.7.1-variant of the same model — kept for parallel measurement.
         # Blocked on Riva ASR cudaHostUnregister post-restore failure (see
-        # docs/PDF-BENCH-RESULTS.md whisper footnote — same class of bug).
+        # docs/results/PDF-BENCH-RESULTS.md whisper footnote — same class of bug).
         POD_NAME="bench-gemma-4-31b"
         CONTAINER_NAME="nim"
         RESTORE_POD_NAME="bench-gemma-4-31b-restored"
@@ -266,7 +268,7 @@ fi
 # the SOURCE vLLM start with a parallel/streamed weight loader, so the captured
 # EntryArgv carries it and the B′ restore execs it. Lets us measure the
 # model-load GiB/s win from parallel reads off rox (single-stream rox ~0.76
-# GiB/s, parallel ceiling ~2.35 GiB/s — see docs/proposals/rootfs-overlay-mount-
+# GiB/s, parallel ceiling ~2.35 GiB/s — see docs/design/rootfs-overlay-mount-
 # scale.md). Values: "prefetch" → --safetensors-load-strategy=prefetch;
 # "runai_streamer" → --load-format runai_streamer. Default unset = no-op.
 # Only applies to vLLM sources (the args block contains "vllm serve").
@@ -300,7 +302,9 @@ fi
 CAPTURE_PATH="${CAPTURE_PATH:-rootfs}"
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
-POD_READY_TIMEOUT=1800  # 30m — gemma-4-31b NIM from NGC takes ~20-25 min cold download
+# Retained only for the rootfs-capture polling loops below; pod readiness is
+# progress-based (scripts/lib/wait-progress.sh) and ignores this.
+POD_READY_TIMEOUT=1800
 INFER_TIMEOUT=300
 NODE=""
 
@@ -424,7 +428,11 @@ wait_ready() {
         fi
         sleep 1
     done
-    kubectl -n "$NAMESPACE" wait --for=condition=Ready pod/"$pod" --timeout="${timeout}s" >/dev/null
+    # Progress-based from here: the caller's $timeout is ignored deliberately.
+    # A benchmark pod pulling 60GB from NGC is making progress and must not be
+    # failed for being slow; a pod that has stopped changing is failed after
+    # NVSNAP_STALL_TIMEOUT. See scripts/lib/wait-progress.sh.
+    wait_pod_ready "$pod" "$NAMESPACE"
 }
 
 verify_infer() {
@@ -679,7 +687,16 @@ if [ "$SKIP_RESTORE" -eq 0 ] && [ -n "$CHECKPOINT_ID" ]; then
             -e "s|nodeName: __NODE_NAME__|nodeName: $NODE|" \
             "$RESTORE_MANIFEST_TEMPLATE" > "$R_MANIFEST"
     fi
+    # A cold start measured here is published into PDF-BENCH-RESULTS.md as a
+    # restore row, so verify before spending the run rather than after.
+    assert_no_placeholders "$R_MANIFEST" || exit 1
     kubectl apply -f "$R_MANIFEST" >/dev/null
+    if [ "$CAPTURE_PATH" = "rootfs" ]; then
+        POD_CACHE_DIR=$(agent_pod_cache_dir)
+        assert_restore_admitted "$RESTORE_POD_NAME" "$NAMESPACE" \
+            "$RESTORE_CONTAINER_NAME" "$POD_CACHE_DIR" || exit 1
+        log_info "  verified: $POD_CACHE_DIR mounted, cache env points into it"
+    fi
     wait_ready "$RESTORE_POD_NAME" "$POD_READY_TIMEOUT" || { log_error "restore pod didn't ready"; exit 1; }
     verify_infer "$RESTORE_POD_NAME" "$RESTORE_CONTAINER_NAME" || log_warn "  post-restore inference probe failed (continuing)"
     IFS=':' read -r RESTORE_CDL RESTORE_MDL RESTORE_INIT RESTORE_TOTAL <<<"$(measure_phase "$RESTORE_POD_NAME" "$RESTORE_CONTAINER_NAME" restore)"
@@ -688,7 +705,7 @@ if [ "$SKIP_RESTORE" -eq 0 ] && [ -n "$CHECKPOINT_ID" ]; then
 fi
 
 # ─── Emit PDF table row ───────────────────────────────────────────────────────
-RESULTS="$PROJECT_ROOT/docs/PDF-BENCH-RESULTS.md"
+RESULTS="$PROJECT_ROOT/docs/results/PDF-BENCH-RESULTS.md"
 if [ ! -f "$RESULTS" ]; then
     cat > "$RESULTS" <<EOF
 # PDF Testing Matrix — NvSnap Benchmark Results

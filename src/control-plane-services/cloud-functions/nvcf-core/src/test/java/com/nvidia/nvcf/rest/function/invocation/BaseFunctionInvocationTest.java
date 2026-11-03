@@ -262,6 +262,12 @@ public class BaseFunctionInvocationTest {
                                            TEST_PUBLIC_FUNCTION_NCA_ID);
     }
 
+    protected void shareFunctionVersion(UUID functionId, UUID versionId, String ncaId) {
+        authorizedPartiesService.createAuthorizedParties(
+                functionId, Optional.of(versionId), TEST_NCA_ID,
+                List.of(AuthorizedPartyDto.builder().ncaId(ncaId).build()));
+    }
+
     private AuthorizedPartiesByFunctionDto associateAuthParties(
             UUID id,
             String ncaId,
@@ -331,6 +337,12 @@ public class BaseFunctionInvocationTest {
         entity.setRateLimit(rateLimitUdt);
         
         return functionsRepository.save(entity);
+    }
+
+    protected void createFunctionVersion(UUID functionId, UUID functionVersionId) {
+        testService.createTestFunctionEntity(functionId, functionVersionId,
+                                             TEST_NCA_ID, TEST_FUNCTION_NAME,
+                                             FunctionStatus.DEPLOYING);
     }
 
     protected FunctionEntity setFunctionActive(UUID functionId, UUID functionVersionId) {

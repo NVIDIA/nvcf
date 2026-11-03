@@ -16,7 +16,9 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use stargate::runtime::{BoundStargateListeners, StargateRuntime, StargateRuntimeConfig, WarmupConfig};
+use stargate::runtime::{
+    BoundStargateListeners, StargateRuntime, StargateRuntimeConfig, WarmupConfig,
+};
 
 use crate::common::{SelfDiscovery, base_config, init_crypto, make_stargate_runtime};
 
@@ -27,8 +29,7 @@ fn make_stargate_runtime_with_warmup(
     let ephemeral: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let mut config: StargateRuntimeConfig = base_config(id, ephemeral, ephemeral);
     config.warmup = warmup;
-    let listeners =
-        BoundStargateListeners::bind(&mut config).expect("test listeners should bind");
+    let listeners = BoundStargateListeners::bind(&mut config).expect("test listeners should bind");
     let grpc_addr = config.grpc_listen_addr;
     let http_addr = config.http_listen_addr;
     let discovery = Box::new(SelfDiscovery::new(id, grpc_addr, http_addr));

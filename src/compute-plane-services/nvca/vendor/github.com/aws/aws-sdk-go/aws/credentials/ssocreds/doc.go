@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package ssocreds provides a credential provider for retrieving temporary AWS credentials using an SSO access token.
 //
 // IMPORTANT: The provider in this package does not initiate or perform the AWS SSO login flow. The SDK provider

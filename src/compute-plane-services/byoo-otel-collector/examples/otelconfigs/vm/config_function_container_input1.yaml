@@ -241,6 +241,12 @@ processors:
       - context: scope
         statements:
           - set(scope.attributes, Filter(scope.attributes, (_, v) => v != ""))
+  transform/set_observed_time:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(log.observed_time, Now()) where log.observed_time_unix_nano == 0
 extensions:
   basicauth/GRAFANA_CLOUD-Grafana_prd-metrics:
     client_auth:
@@ -294,7 +300,7 @@ service:
         - batch:
             exporter:
               otlp:
-                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
+                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
                 headers:
                   - name: lightstep-access-token
                     value: ${env:OTEL_TRACING_ACCESS_TOKEN}
@@ -307,6 +313,7 @@ service:
         - splunk_hec/SPLUNK-splunk-prd-logs
       processors:
         - memory_limiter
+        - transform/set_observed_time
         - attributes/add-metadata
         - batch
     metrics:

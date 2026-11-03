@@ -214,6 +214,8 @@ func TestGrpcServer_Setup_ReturnsTracerInitializationError(t *testing.T) {
 			BaseServerConfig: &BaseServerConfig{
 				Tracing: tracing.OTELConfig{
 					Enabled: true,
+					// gRPC cannot parse this target, so the exporter setup fails.
+					Endpoint: "%zz",
 				},
 			},
 			GRPCAddr:  "127.0.0.1:0",

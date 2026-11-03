@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+version="$(node -p 'require("./fern/fern.config.json").version')"
+if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+  echo "Invalid Fern version in fern/fern.config.json: $version" >&2
+  exit 1
+fi
+cache="${FERN_CLI_CACHE:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/nvcf-fern-cli}"
+package="$cache/$version/node_modules/fern-api"
+if [ ! -f "$package/package.json" ] || [ ! -f "$package/cli.cjs" ]; then
+  npm install --prefix "$cache/$version" --no-package-lock --no-audit --no-fund "fern-api@$version" >&2
+fi
+installed="$(node -p 'require(process.argv[1]).version' "$package/package.json")"
+if [ "$installed" != "$version" ]; then
+  echo "Fern cache version mismatch: expected $version, found $installed in $package" >&2
+  exit 1
+fi
+exec node "$package/cli.cjs" "$@"

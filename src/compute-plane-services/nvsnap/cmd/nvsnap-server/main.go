@@ -55,7 +55,6 @@ func main() {
 	rootCmd.Flags().String("address", ":8080", "Server listen address")
 	rootCmd.Flags().String("kubeconfig", "", "Path to kubeconfig (auto-detects in-cluster or ~/.kube/config)")
 	rootCmd.Flags().Int("agent-port", 8081, "Agent HTTP port on nodes")
-	rootCmd.Flags().String("blobstore-url", "", "NvSnap-blobstore base URL (default: http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000)")
 	rootCmd.Flags().String("log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.Flags().String("db-path", "./nvsnap.db", "Path to SQLite database file")
 
@@ -93,7 +92,6 @@ func run(cmd *cobra.Command, args []string) error {
 	agentPort, _ := cmd.Flags().GetInt("agent-port")
 	address, _ := cmd.Flags().GetString("address")
 	dbPath, _ := cmd.Flags().GetString("db-path")
-	blobstoreURL, _ := cmd.Flags().GetString("blobstore-url")
 
 	catalog, err := db.Open(dbPath)
 	if err != nil {
@@ -103,9 +101,8 @@ func run(cmd *cobra.Command, args []string) error {
 	logrus.WithField("path", dbPath).Info("Opened checkpoint catalog database")
 
 	srv := server.New(server.Config{
-		Address:      address,
-		AgentPort:    agentPort,
-		BlobstoreURL: blobstoreURL,
+		Address:   address,
+		AgentPort: agentPort,
 		// Env rather than a flag: the chart projects it straight from the
 		// nvsnap-agent-token Secret, and a flag would put the credential in
 		// the process argv where any pod-reading client can see it.

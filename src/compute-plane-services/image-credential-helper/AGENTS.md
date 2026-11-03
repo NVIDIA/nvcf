@@ -32,9 +32,9 @@ go test ./cmd/image-credential-helper -run Test_runGlobal
 make shellcheck
 ```
 
-CI subproject id: `image-credential-helper`. Native CI and release wiring live
-in `tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
-present in this public snapshot.
+CI subproject id: `image-credential-helper`. Follow the root `RELEASE.md` and
+`docs/dev/github-release-process.md` for source versioning and publication
+handoffs. Inspect `.github/workflows/` for current public validation.
 
 ## Local Gotchas
 

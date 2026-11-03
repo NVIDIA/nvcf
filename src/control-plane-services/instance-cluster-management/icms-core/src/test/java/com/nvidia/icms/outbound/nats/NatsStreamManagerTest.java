@@ -63,6 +63,7 @@ class NatsStreamManagerTest {
     @Test
     void validateNatsStreams_createsNvcaStreamsWithExistingConfiguration() throws Exception {
         when(natsConfigurationProperties.getMessageTtl()).thenReturn(Duration.ofHours(24));
+        when(natsConfigurationProperties.getReplicas()).thenReturn(3);
         when(management.getStreamInfo(any()))
                 .thenThrow(apiException(Status.NOT_FOUND_CODE));
 
@@ -76,6 +77,8 @@ class NatsStreamManagerTest {
                      "Create.NVCA.>");
         assertStream(streams.get(1), NatsStreamManager.TERMINATE_NVCA_STREAM_NAME,
                      "Terminate.NVCA.>");
+        assertEquals(3, streams.get(0).getReplicas());
+        assertEquals(3, streams.get(1).getReplicas());
     }
 
     @Test
@@ -102,6 +105,7 @@ class NatsStreamManagerTest {
         when(natsConfigurationProperties.isEnabled()).thenReturn(true);
         when(natsConfigurationProperties.isCreateNatsStreams()).thenReturn(true);
         when(natsConfigurationProperties.getMessageTtl()).thenReturn(Duration.ofHours(24));
+        when(natsConfigurationProperties.getReplicas()).thenReturn(1);
         when(management.getStreamInfo(any()))
                 .thenThrow(apiException(Status.NOT_FOUND_CODE));
 
@@ -120,6 +124,38 @@ class NatsStreamManagerTest {
         natsStreamManager.createStream(configuration);
 
         verify(management, never()).addStream(configuration);
+        verify(management, never()).updateStream(any());
+    }
+
+    @Test
+    void createStream_raisesReplicasOfExistingStream() throws Exception {
+        var configuration = streamConfiguration(3);
+        var existing = StreamConfiguration.builder(streamConfiguration(1))
+                .maxBytes(1024)
+                .build();
+        var streamInfo = org.mockito.Mockito.mock(StreamInfo.class);
+        when(streamInfo.getConfiguration()).thenReturn(existing);
+        when(management.getStreamInfo(configuration.getName())).thenReturn(streamInfo);
+
+        natsStreamManager.createStream(configuration);
+
+        var captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(management).updateStream(captor.capture());
+        assertEquals(3, captor.getValue().getReplicas());
+        assertEquals(1024, captor.getValue().getMaxBytes());
+        verify(management, never()).addStream(any());
+    }
+
+    @Test
+    void createStream_doesNotLowerReplicasOfExistingStream() throws Exception {
+        var configuration = streamConfiguration(1);
+        var streamInfo = org.mockito.Mockito.mock(StreamInfo.class);
+        when(streamInfo.getConfiguration()).thenReturn(streamConfiguration(3));
+        when(management.getStreamInfo(configuration.getName())).thenReturn(streamInfo);
+
+        natsStreamManager.createStream(configuration);
+
+        verify(management, never()).updateStream(any());
     }
 
     @Test
@@ -171,7 +207,15 @@ class NatsStreamManagerTest {
     }
 
     private static StreamConfiguration streamConfiguration() {
-        return StreamConfiguration.builder().name("stream").subjects("subject.>").build();
+        return streamConfiguration(1);
+    }
+
+    private static StreamConfiguration streamConfiguration(int replicas) {
+        return StreamConfiguration.builder()
+                .name("stream")
+                .subjects("subject.>")
+                .replicas(replicas)
+                .build();
     }
 
     private static JetStreamApiException apiException(int statusCode) {

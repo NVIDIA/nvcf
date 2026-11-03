@@ -40,6 +40,7 @@ pub(crate) use keys::RegistrationIdentity;
 pub(crate) use registration::test_registration_generation;
 pub(crate) use registration::{RegistrationGeneration, RunningRegistration};
 pub(crate) use reservations::RoutingReservation;
+pub use reservations::apply_reservation;
 
 #[cfg(test)]
 use snapshots::RoutingTargetState;
@@ -51,6 +52,15 @@ pub struct StargateState {
 }
 
 impl StargateState {
+    pub(crate) fn forget_load_balancer_instance(
+        &self,
+        target: &RoutingTargetKey,
+        definition: &crate::load_balancer::LoadBalancerDefinition,
+    ) {
+        self.routing
+            .forget_load_balancer_instance(target, definition);
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -90,12 +100,35 @@ impl StargateState {
         model_ids
     }
 
+    /// Applies an update as if it had just been received.
+    #[cfg(test)]
     pub(crate) async fn apply_registration_update(
         &self,
         running: &RunningRegistration,
         update: &InferenceServerRegistration,
         reverse_connected: bool,
         rtt: Option<Duration>,
+    ) {
+        self.apply_received_registration_update(
+            running,
+            update,
+            reverse_connected,
+            rtt,
+            Instant::now(),
+        )
+        .await;
+    }
+
+    /// Applies an update received from the registration stream at
+    /// `received_at`. Reservations compare that receipt time, not the later
+    /// apply time, with their soft expiry.
+    pub(crate) async fn apply_received_registration_update(
+        &self,
+        running: &RunningRegistration,
+        update: &InferenceServerRegistration,
+        reverse_connected: bool,
+        rtt: Option<Duration>,
+        received_at: Instant,
     ) {
         let registration = running.generation();
         let identity = &registration.identity;
@@ -156,7 +189,8 @@ impl StargateState {
                             current_rtt,
                             Instant::now(),
                             effective_status,
-                        ),
+                        )
+                        .with_update_received_at(received_at),
                     )
                     .await;
             } else {

@@ -189,7 +189,8 @@ func RunShutdownCleanup(ctx context.Context, opts ShutdownHandlerOptions) Shutdo
 		log.Infof("Processing NVCFBackend %s/%s", nb.Namespace, nb.Name)
 
 		// Get namespaces for this backend
-		systemNS, requestsNS := BackendNamespaces(nb)
+		systemNS, _ := BackendNamespaces(nb)
+		requestsNS := AgentRequestsNamespace(ctx, opts.K8sClient, nb)
 
 		// Check if there are any ICMSRequest CRs (active workloads)
 		requestCount, err := CountICMSRequests(ctx, opts.DynamicClient, requestsNS)

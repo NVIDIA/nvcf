@@ -28,5 +28,5 @@ metadata:
     {{- include "nvcf-api.labels" . | nindent 4 }}
 data:
   nvcf-api.yaml: |-
-{{ toYaml .Values.api.remoteConfig.configData | indent 4 }}
+{{ include "nvcf-api.remoteConfigData" . | indent 4 }}
 {{- end }}

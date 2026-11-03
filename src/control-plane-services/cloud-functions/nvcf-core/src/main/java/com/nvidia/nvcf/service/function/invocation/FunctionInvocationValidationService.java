@@ -296,9 +296,7 @@ public class FunctionInvocationValidationService {
             var authorizedFunction = azpsService
                     .lookupFunctionByAuthorizedAccountAndFunctionIdAndVersionId(ncaId, functionId,
                                                                                 versionId);
-            if (authorizedFunction.isPresent()) {
-                return List.of(authorizedFunction.get());
-            }
+            return authorizedFunction.map(List::of).orElseGet(List::of);
         }
 
         return azpsService

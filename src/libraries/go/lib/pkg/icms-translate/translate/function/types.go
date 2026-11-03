@@ -79,6 +79,8 @@ type LaunchSpecification struct {
 	ICMSEnvironment string `json:"icmsEnvironment"`
 	CloudProvider   string `json:"cloudProvider"`
 	GPUName         string `json:"gpuName"`
+	// MaxRequestConcurrency is the per-instance limit from the NVCF deployment GPU specification.
+	MaxRequestConcurrency int `json:"maxRequestConcurrency,omitempty"`
 
 	// Helm chart function components of the launch spec.
 	*common.HelmChartLaunchSpecification `json:",inline"`

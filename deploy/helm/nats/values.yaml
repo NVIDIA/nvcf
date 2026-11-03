@@ -30,6 +30,14 @@ nats:
       registry: ""
       pullPolicy: IfNotPresent
   container:
+    merge:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
     image:
       registry: ""
       repository: ""
@@ -77,6 +85,14 @@ nats:
         value: "/healthz?js-server-only=true"
   reloader:
     enabled: true
+    merge:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
     image:
       registry: docker.io
       repository: natsio/nats-server-config-reloader
@@ -96,12 +112,29 @@ nats:
         nkey:
           secretName: nats-nkeys
           key: user.key
+  podTemplate:
+    merge:
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          fsGroupChangePolicy: OnRootMismatch
   # Auth callout NKey bootstrap.
   # The default secret name is shared with openbao-migrations; override it only
   # when every downstream consumer is configured to read the same Secret.
   authCallout:
     createNkeySecret: true
     secretName: nats-auth-callout-nkeys
+    # Worker token authentication. When enabled, the APP account also accepts
+    # worker logins (plugin webhook): the auth callout sends each one to the NVCF
+    # API, which checks the worker token and returns that function version's
+    # permissions in APP. Workers then need no NKey. The NVCF API tells workers
+    # their account (NVCF_NATS_ACCOUNT=APP under the ncp profile).
+    workerTokenAuth:
+      enabled: false
+      webhookUrl: http://api.nvcf.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth
   # RBAC - primarily to allow the bao migrations job to read the nkeys secret
   rbac:
     openbao:

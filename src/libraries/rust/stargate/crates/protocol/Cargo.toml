@@ -40,7 +40,6 @@ tracing = { workspace = true }
 capnpc = { workspace = true }
 
 [dev-dependencies]
-capnpc = { workspace = true }
 proptest = "=1.11.0"
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }

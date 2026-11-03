@@ -65,7 +65,7 @@ public class WorkerAssertionValidator {
             @Qualifier("notaryJwtDecoder") JwtDecoder jwtDecoder,
             JsonMapper jsonMapper,
             Clock clock,
-            @Value("${nvct.notary.base-url}") String issuer,
+            @Value("${nvct.notary.jwt.issuer-uri}") String issuer,
             @Value("${spring.security.oauth2.client.registration.notary.client-id}")
             String subject) {
         this.jwtDecoder = jwtDecoder;

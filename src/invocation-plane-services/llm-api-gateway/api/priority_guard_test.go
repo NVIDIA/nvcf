@@ -43,7 +43,7 @@ func newPriorityGuardTestServer(authClient InvocationAuthClient) *echo.Echo {
 func TestLLMRoutesRejectClientSuppliedPriority(t *testing.T) {
 	t.Parallel()
 
-	paths := []string{"/v1/chat/completions", "/v1/responses", "/v1/embeddings"}
+	paths := []string{"/v1/chat/completions", "/v1/responses", "/v1/embeddings", "/v1/messages"}
 	values := []struct {
 		name     string
 		priority string

@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: 1
+
+defaults:
+  maxTokens: 256
+  timeoutSeconds: 30
+  requestSloMs: 10000
+  maxWaitMs: 10000
+  cooldownSeconds: 60
+
+algorithms:
+  wait-and-widen:
+    routingHeader: null
+  power-of-n:
+    routingHeader: powerOfN
+
+suites:
+  smoke:
+    - smoke
+  canonical:
+    - smoke
+    - saturation
+    - session-affinity
+    - long-context-affinity
+    - mixed-sessions
+
+scenarios:
+  smoke:
+    kind: requests
+    requests: 32
+    rate: 8
+    workers: 8
+    promptBytes: 2048
+
+  saturation:
+    kind: sweep
+    rates: [8, 16, 24, 32, 48]
+    durationSeconds: 120
+    minimumWorkers: 32
+    workersPerRps: 2
+    promptBytes: 2048
+
+  # Prompts are turn-major: every session's turn N precedes any turn N+1. At
+  # 24 RPS a session's next turn is admitted about 21 s after its previous one,
+  # far above request latency, so turns of one session stay effectively serial.
+  session-affinity:
+    kind: session-affinity
+    sessions: 512
+    turnsPerSession: 12
+    repeats: 3
+    rate: 24
+    workers: 48
+    stablePrefixBytes: 3584
+    turnBytes: 512
+
+  long-context-affinity:
+    kind: session-workers
+    repeats: 1
+    rate: 32
+    workers: 32
+    sessionTasks:
+      - [80000, 100000, 120000]
+      - [80000, 100000, 120000]
+      - [8000, 16000, 24000]
+      - [80000, 100000, 120000]
+      - [80000, 100000, 120000]
+      - [1000, 2000, 4000]
+      - [80000, 100000, 120000]
+      - [80000, 100000, 120000]
+    requestSloMs: 60000
+    maxWaitMs: 60000
+    timeoutSeconds: 90
+
+  mixed-sessions:
+    kind: mixed-sessions
+    durationSeconds: 600
+    repeats: 2
+    hot:
+      rate: 8
+      workers: 128
+      minPromptBytes: 2048
+      maxPromptBytes: 16384
+    short:
+      rate: 4
+      workers: 64
+      promptBytesByTurn: [2048, 4096, 6144]

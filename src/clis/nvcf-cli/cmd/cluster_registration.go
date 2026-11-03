@@ -552,7 +552,7 @@ func registeredClusterIDs(resp *client.RegisterClusterResponse) (clusterGroupID,
 // Schema matches the nvca-operator chart's expected keys. clusterID,
 // clusterGroupID, and ncaID live at the top level with the mixed-case "ID"
 // suffix to match the `## @param` annotations in
-// `deployments/nvca-operator/values.yaml` (e.g. `## @param clusterID`). Region
+// `deploy/helm/nvca-operator/nvca-operator/values.yaml` (e.g. `## @param clusterID`). Region
 // lives under selfManaged because that is the value the self-managed backend
 // template consumes. identitySource is lifecycle metadata used by CLI teardown;
 // the chart deliberately ignores it.
@@ -630,8 +630,7 @@ func newSelfManagedValuesFromEndpoints(identitySource, region string, endpoints 
 
 // lookupExistingCluster finds an existing cluster by name via the ICMS
 // list-clusters endpoint and returns the cluster group ID and cluster ID.
-// This uses the same cluster-management auth as registration, avoiding the
-// NVCF API's ListClusterGroups which returns 403 for admin tokens.
+// This uses the same ICMS endpoint and cluster-management auth as registration.
 func lookupExistingCluster(ctx context.Context, c *client.Client, icmsURL, ncaID, clusterName string) (clusterGroupID, clusterID string, err error) {
 	clusters, err := c.ListClusters(ctx, icmsURL, ncaID)
 	if err != nil {

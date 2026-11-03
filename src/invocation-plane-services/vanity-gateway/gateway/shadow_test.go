@@ -342,9 +342,9 @@ func TestAdmittedShadowsPerBearerKeyUsesBearerBucket(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-key")
 
 	shadow := shadowConfig{
-		modelName:      "private/facebook/opt-125m-shadow",
-		percentage:     47,
-		samplingMethod: config.ShadowSamplingMethodPerBearerKey,
+		modelName:       "private/facebook/opt-125m-shadow",
+		percentage:      47,
+		samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey),
 	}
 	assert.Len(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(99)), 1)
 
@@ -352,7 +352,7 @@ func TestAdmittedShadowsPerBearerKeyUsesBearerBucket(t *testing.T) {
 	assert.Empty(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(0)))
 }
 
-func TestAdmittedShadowsPerBearerKeySkipsMalformedBearerBelow100(t *testing.T) {
+func TestAdmittedShadowsPerBearerKeyFallsBackToRandomForMalformedBearer(t *testing.T) {
 	tests := []struct {
 		name          string
 		authorization []string
@@ -372,12 +372,12 @@ func TestAdmittedShadowsPerBearerKeySkipsMalformedBearerBelow100(t *testing.T) {
 				req.Header.Add("Authorization", value)
 			}
 			shadow := shadowConfig{
-				modelName:      "private/facebook/opt-125m-shadow",
-				percentage:     99,
-				samplingMethod: config.ShadowSamplingMethodPerBearerKey,
+				modelName:       "private/facebook/opt-125m-shadow",
+				percentage:      99,
+				samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey),
 			}
 
-			assert.Empty(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(0)))
+			assert.Len(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(0)), 1)
 		})
 	}
 }
@@ -387,9 +387,9 @@ func TestAdmittedShadowsRandomUsesInjectedBucket(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-key")
 
 	shadow := shadowConfig{
-		modelName:      "private/facebook/opt-125m-shadow",
-		percentage:     40,
-		samplingMethod: config.ShadowSamplingMethodRandom,
+		modelName:       "private/facebook/opt-125m-shadow",
+		percentage:      40,
+		samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodRandom),
 	}
 
 	assert.Len(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(39)), 1)
@@ -409,9 +409,9 @@ func TestAdmittedShadowsPerBearerKeyNormalizesBearerScheme(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
 			req.Header.Set("Authorization", authorization)
 			shadow := shadowConfig{
-				modelName:      "private/facebook/opt-125m-shadow",
-				percentage:     47,
-				samplingMethod: config.ShadowSamplingMethodPerBearerKey,
+				modelName:       "private/facebook/opt-125m-shadow",
+				percentage:      47,
+				samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey),
 			}
 
 			assert.Len(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(99)), 1)
@@ -425,10 +425,10 @@ func TestAdmittedShadowsAppliesEachPolicyWithSharedRequestBuckets(t *testing.T) 
 
 	randomCalls := 0
 	admitted := admittedShadows(req, []shadowConfig{
-		{modelName: "key-in", percentage: 47, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
-		{modelName: "key-out", percentage: 46, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
-		{modelName: "random-in", percentage: 40, samplingMethod: config.ShadowSamplingMethodRandom},
-		{modelName: "random-out", percentage: 39, samplingMethod: config.ShadowSamplingMethodRandom},
+		{modelName: "key-in", percentage: 47, samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey)},
+		{modelName: "key-out", percentage: 46, samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey)},
+		{modelName: "random-in", percentage: 40, samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodRandom)},
+		{modelName: "random-out", percentage: 39, samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodRandom)},
 	}, func() int {
 		randomCalls++
 		return 39
@@ -442,11 +442,11 @@ func TestAdmittedShadowsAdmitsFullPercentagePerBearerKeyWithoutAuthorization(t *
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
 
 	admitted := admittedShadows(req, []shadowConfig{
-		{modelName: "always", percentage: 100, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
-		{modelName: "sampled", percentage: 99, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
+		{modelName: "always", percentage: 100, samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey)},
+		{modelName: "sampled", percentage: 99, samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey)},
 	}, fixedRandomBucket(0))
 
-	assert.Equal(t, []string{"always"}, shadowModelNames(admitted))
+	assert.Equal(t, []string{"always", "sampled"}, shadowModelNames(admitted))
 }
 
 func TestAdmittedShadowsMembershipIsIndependentOfTargetOrder(t *testing.T) {
@@ -454,10 +454,10 @@ func TestAdmittedShadowsMembershipIsIndependentOfTargetOrder(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-key")
 
 	shadows := []shadowConfig{
-		{modelName: "key-in", percentage: 47, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
-		{modelName: "key-out", percentage: 46, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
-		{modelName: "random-in", percentage: 40, samplingMethod: config.ShadowSamplingMethodRandom},
-		{modelName: "random-out", percentage: 39, samplingMethod: config.ShadowSamplingMethodRandom},
+		{modelName: "key-in", percentage: 47, samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey)},
+		{modelName: "key-out", percentage: 46, samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodPerBearerKey)},
+		{modelName: "random-in", percentage: 40, samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodRandom)},
+		{modelName: "random-out", percentage: 39, samplingMethods: testShadowSamplingMethods(config.ShadowSamplingMethodRandom)},
 	}
 	reversed := []shadowConfig{shadows[3], shadows[2], shadows[1], shadows[0]}
 

@@ -33,6 +33,10 @@ import (
 
 const nvcaSharedStorageonfigJSONBase64Key = "NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64"
 
+// SharedStorageSpecEnv is the deprecated environment variable that
+// ParseHelmSharedStorageSpecFromEnv reads.
+const SharedStorageSpecEnv = nvcaSharedStorageonfigJSONBase64Key
+
 type HelmSharedStorageFeatureFlag struct {
 	FeatureFlag
 	ServerSpec   SharedStorageSpec

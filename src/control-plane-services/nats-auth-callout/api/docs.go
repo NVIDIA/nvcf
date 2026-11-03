@@ -34,7 +34,7 @@ const docTemplate = `{
                         "BasicAuth": []
                     }
                 ],
-                "description": "return service health status",
+                "description": "liveness: fails only when the NATS connection is closed for good, so short NATS outages do not restart the service",
                 "consumes": [
                     "application/json"
                 ],
@@ -74,6 +74,38 @@ const docTemplate = `{
                         "description": "Internal server error",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "NATS connection closed",
+                        "schema": {
+                            "$ref": "#/definitions/models.HealthResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/readyz": {
+            "get": {
+                "description": "readiness: fails while the NATS connection is not connected",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Health"
+                ],
+                "summary": "Readiness check interface",
+                "responses": {
+                    "200": {
+                        "description": "Ready",
+                        "schema": {
+                            "$ref": "#/definitions/models.HealthResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "NATS connection not connected",
+                        "schema": {
+                            "$ref": "#/definitions/models.HealthResponse"
                         }
                     }
                 }

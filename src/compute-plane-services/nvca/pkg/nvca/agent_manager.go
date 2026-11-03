@@ -81,6 +81,29 @@ func storageControllerTypes(cachingEnabled bool) []nvcav1new.StorageRequestType 
 	return sts
 }
 
+// agentManagerCacheOptions returns the cache options of the agent's controller
+// manager. DefaultTransform also applies to the informers that the manager
+// creates lazily on a first read, and to every ByObject entry that sets no
+// transform of its own.
+func agentManagerCacheOptions() cache.Options {
+	return cache.Options{
+		DefaultTransform: k8sutil.StripManagedFields,
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.Event{}: {
+				// Exclude Kyverno events from the cache entirely.
+				// These PolicyViolation events are not actionable by users and can
+				// be very numerous, contributing to memory pressure. This filter
+				// is applied server-side so events never come over the wire.
+				Field: fields.AndSelectors(
+					fields.OneTermNotEqualSelector("reportingComponent", "kyverno-admission"),
+					fields.OneTermNotEqualSelector("reportingComponent", "kyverno-scan"),
+					fields.OneTermNotEqualSelector("reportingComponent", "kyverno-generate"),
+				),
+			},
+		},
+	}
+}
+
 func startControllerManagerForAgent(
 	ctx context.Context,
 	a *Agent,
@@ -93,22 +116,7 @@ func startControllerManagerForAgent(
 	mgr, err := ctrl.NewManager(clients.Config, manager.Options{
 		Scheme:        mgrScheme,
 		WebhookServer: fakeWebhookServer{},
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Event{}: {
-					// Exclude Kyverno events from the cache entirely.
-					// These PolicyViolation events are not actionable by users and can
-					// be very numerous, contributing to memory pressure. This filter
-					// is applied server-side so events never come over the wire.
-					// See DGXCINC-3086.
-					Field: fields.AndSelectors(
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-admission"),
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-scan"),
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-generate"),
-					),
-				},
-			},
-		},
+		Cache:         agentManagerCacheOptions(),
 	})
 	if err != nil {
 		log.WithError(err).Error("Failed to create controller manager")
@@ -158,6 +166,10 @@ func startControllerManagerForAgent(
 	}
 
 	log.Info("Starting MiniService controller")
+	k8sVersion, err := resolveK8sVersion(ctx, a.K8sVersion, a.backendk8scache.clients.DiscoveryClient)
+	if err != nil {
+		return fmt.Errorf("resolve Kubernetes version for MiniService controller: %w", err)
+	}
 
 	kartas, err := mscontroller.GetKartaObjects(ctx, a.backendk8scache.clients)
 	if err != nil {
@@ -189,7 +201,7 @@ func startControllerManagerForAgent(
 		mscontroller.ControllerOptions{
 			SystemNamespace:            a.SystemNamespace,
 			ICMSRequestNamespace:       a.RequestsNamespace,
-			K8sVersion:                 a.K8sVersion,
+			K8sVersion:                 k8sVersion,
 			FeatureFlagFetcher:         a.backendk8scache.featureFlagFetcher,
 			K8sTimeConfig:              a.K8sTimeConfig,
 			InstanceNamespaceLabels:    a.NamespaceLabels,
@@ -225,6 +237,7 @@ func startControllerManagerForAgent(
 
 	// Add GC cleaners to the manager
 	gcRunnable := gc.NewRunnable(clients, metrics, gc.DefaultInterval, a.RequestsNamespace)
+	gcRunnable.SetLogContext(ctx)
 	if err := mgr.Add(gcRunnable); err != nil {
 		log.WithError(err).Error("Failed to add GC controller to controller manager")
 		return fmt.Errorf("add GC controller to controller manager: %v", err)

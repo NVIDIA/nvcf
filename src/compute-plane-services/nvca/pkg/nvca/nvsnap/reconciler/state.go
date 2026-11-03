@@ -18,6 +18,7 @@ package reconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -63,6 +64,11 @@ type cfsStatus struct {
 	// crash recovery. Both zero-valued when not Capturing.
 	CaptureOwner       string
 	CaptureLeaseExpiry *metav1.Time
+	// CaptureOwnerUID is the UID of the CaptureOwner pod. Inference pods
+	// have deterministic names (request name plus instance index), so a
+	// replacement pod can carry the same namespace/name as a dead
+	// claimant; the UID tells them apart.
+	CaptureOwnerUID string
 	// ColdStartPioneer / ColdStartPioneerExpiry back the serialized-herd
 	// cold-start pioneer election. ColdStartPioneer is the namespace/name
 	// of the ICMSRequest that won the right to cold-start + capture while
@@ -142,6 +148,7 @@ func readStatus(cfs *unstructured.Unstructured) cfsStatus {
 		}
 	}
 	out.CaptureOwner, _, _ = unstructured.NestedString(cfs.Object, "status", "captureOwner")
+	out.CaptureOwnerUID, _, _ = unstructured.NestedString(cfs.Object, "status", "captureOwnerUID")
 	if rfc, found, _ := unstructured.NestedString(cfs.Object, "status", "captureLeaseExpiry"); found {
 		if t, err := time.Parse(time.RFC3339, rfc); err == nil {
 			mt := metav1.NewTime(t)
@@ -243,10 +250,70 @@ type statusUpdate struct {
 // /status, and the alternative — failing every status write —
 // would break Hook B entirely. Tracking removal: nvca-nvsnap
 // status-subresource-registration follow-up.
-func writeStatus(ctx context.Context, dc dynamic.Interface, fvID string, upd statusUpdate) error {
+// claimToken identifies the reconcile that holds the capture claim: the
+// owner pod's namespace/name and UID. Terminal status writes carry it so
+// a reconcile whose claim was taken over (its pod began terminating and
+// a peer stole the claim while it was still polling) cannot release or
+// overwrite the new owner's claim. The zero token writes unfenced, for
+// paths that never held a claim (recovery before claiming, the sweep).
+type claimToken struct {
+	Owner string
+	UID   string
+	// ExpectUnclaimed fences a write from a path that holds no claim but
+	// observed none on the object (the sweep): the write is rejected if a
+	// claim appeared in between, so a fresh capture is never released by
+	// a recovery that read stale state.
+	ExpectUnclaimed bool
+	// ObservedResourceVersion, when set, rejects the write if the object
+	// changed at all since the writer observed it. Owner and unclaimed
+	// checks compare states and cannot see a claim that opened and closed
+	// in between, or a lease the same pod refreshed; the version can.
+	ObservedResourceVersion string
+}
+
+func (t claimToken) empty() bool {
+	return t.Owner == "" && !t.ExpectUnclaimed && t.ObservedResourceVersion == ""
+}
+
+// ErrClaimSuperseded is returned by writeStatus when the caller's claim
+// token no longer matches the claim on the object: another reconcile owns
+// the capture now and this one must not touch the status.
+var ErrClaimSuperseded = errors.New("capture claim superseded by another owner")
+
+// supersedes reports whether the claim recorded on the object belongs to
+// someone other than token. An object with no claim never supersedes.
+func (st cfsStatus) supersedes(token claimToken) bool {
+	if token.empty() {
+		return false
+	}
+	if token.ExpectUnclaimed {
+		return st.CaptureOwner != ""
+	}
+	if token.Owner == "" {
+		return false // version-only fence, checked by the caller
+	}
+	if st.CaptureOwner == "" {
+		// The writer's claim is gone: another terminal write (a recovery
+		// or a takeover that finished) already closed this capture, so
+		// the writer's outcome must not replace it.
+		return true
+	}
+	if st.CaptureOwner != token.Owner {
+		return true
+	}
+	return st.CaptureOwnerUID != "" && token.UID != "" && st.CaptureOwnerUID != token.UID
+}
+
+func writeStatus(ctx context.Context, dc dynamic.Interface, fvID string, upd statusUpdate, token claimToken) error {
 	cur, err := dc.Resource(CFSResource).Get(ctx, fvID, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("get NvSnapFunctionState %s: %w", fvID, err)
+	}
+	if token.ObservedResourceVersion != "" && cur.GetResourceVersion() != token.ObservedResourceVersion {
+		return ErrClaimSuperseded
+	}
+	if readStatus(cur).supersedes(token) {
+		return ErrClaimSuperseded
 	}
 	// Read the existing status map and patch only the keys we manage.
 	// SetNestedField(...,"status") would otherwise replace the whole
@@ -274,6 +341,7 @@ func writeStatus(ctx context.Context, dc dynamic.Interface, fvID string, upd sta
 	// would either pin the function until lease expiry or let readStatus
 	// mis-report a stale owner.
 	delete(status, "captureOwner")
+	delete(status, "captureOwnerUID")
 	delete(status, "captureLeaseExpiry")
 	// Release the cold-start pioneer claim too (serialized-herd). A
 	// terminal status write means the pioneer's cold-start + capture is
@@ -331,6 +399,22 @@ func writeStatus(ctx context.Context, dc dynamic.Interface, fvID string, upd sta
 // wall-clock deadline to stamp; now is injected for deterministic
 // tests.
 func tryClaimCapture(ctx context.Context, dc dynamic.Interface, fvID, owner string, leaseExpiry, now time.Time) (bool, error) {
+	return tryClaimCaptureLive(ctx, dc, fvID, owner, "", leaseExpiry, now, nil)
+}
+
+// OwnerAliveFunc reports whether the pod named "namespace/name" that holds a
+// capture claim still exists and is not terminating. nil means "unknown",
+// which keeps the claim.
+type OwnerAliveFunc func(ctx context.Context, owner, ownerUID string) bool
+
+// tryClaimCaptureLive is tryClaimCapture with a liveness check on the
+// current owner. A live lease normally protects an in-flight capture from a
+// second pioneer, but the lease outlives its owner: a pod that dies mid
+// capture (evicted, replaced by a redeploy, its node agent restarted under
+// it) leaves the version Capturing with nobody working on it until the
+// lease expires, roughly 50 minutes. If the owner is gone, the claim is
+// stealable at once.
+func tryClaimCaptureLive(ctx context.Context, dc dynamic.Interface, fvID, owner, ownerUID string, leaseExpiry, now time.Time, ownerAlive OwnerAliveFunc) (bool, error) {
 	cur, err := dc.Resource(CFSResource).Get(ctx, fvID, metav1.GetOptions{})
 	if err != nil {
 		return false, fmt.Errorf("get NvSnapFunctionState %s: %w", fvID, err)
@@ -342,10 +426,17 @@ func tryClaimCapture(ctx context.Context, dc dynamic.Interface, fvID, owner stri
 		return false, nil
 	case nvsnapv1alpha1.LocalCacheStateCapturing:
 		leaseLive := st.CaptureLeaseExpiry != nil && now.Before(st.CaptureLeaseExpiry.Time)
-		if leaseLive && st.CaptureOwner != owner {
-			return false, nil // another pod holds a live claim
+		// The same namespace/name with a different UID is a replacement
+		// pod, not the claimant: treat it as foreign.
+		sameOwner := st.CaptureOwner == owner && (st.CaptureOwnerUID == "" || ownerUID == "" || st.CaptureOwnerUID == ownerUID)
+		if leaseLive && !sameOwner {
+			if ownerAlive == nil || ownerAlive(ctx, st.CaptureOwner, st.CaptureOwnerUID) {
+				return false, nil // another pod holds a live claim
+			}
+			// The owner is gone: nothing will finish or release this
+			// claim. Steal it now rather than at lease expiry.
 		}
-		// expired lease (steal) or our own claim (re-entrant) → fall through
+		// expired lease, dead owner (steal) or our own claim (re-entrant) → fall through
 	}
 
 	// Patch only the keys we manage; preserve checkpointHash/attemptCount/etc.
@@ -355,6 +446,11 @@ func tryClaimCapture(ctx context.Context, dc dynamic.Interface, fvID, owner stri
 	}
 	status["localCacheState"] = string(nvsnapv1alpha1.LocalCacheStateCapturing)
 	status["captureOwner"] = owner
+	if ownerUID != "" {
+		status["captureOwnerUID"] = ownerUID
+	} else {
+		delete(status, "captureOwnerUID")
+	}
 	status["captureLeaseExpiry"] = leaseExpiry.UTC().Format(time.RFC3339)
 	if err := unstructured.SetNestedField(cur.Object, status, "status"); err != nil {
 		return false, fmt.Errorf("set status: %w", err)
@@ -485,7 +581,7 @@ func TryClaimColdStartPioneer(ctx context.Context, dc dynamic.Interface, fvID, o
 // Distinct from recordFailure on purpose: this does not set LastError or
 // increment AttemptCount, so a path whose contract is "treat it as if the
 // capture never happened" leaves no CFS-level error surface behind.
-func releaseCaptureClaim(ctx context.Context, dc dynamic.Interface, fvID string, prev cfsStatus) error {
+func releaseCaptureClaim(ctx context.Context, dc dynamic.Interface, fvID string, prev cfsStatus, token claimToken) error {
 	upd := statusUpdate{
 		CheckpointHash:  prev.CheckpointHash,
 		CapturedHere:    prev.CapturedHere,
@@ -499,5 +595,5 @@ func releaseCaptureClaim(ctx context.Context, dc dynamic.Interface, fvID string,
 	if prev.LastAttemptAt != nil {
 		upd.LastAttemptAt = prev.LastAttemptAt.Time
 	}
-	return writeStatus(ctx, dc, fvID, upd)
+	return writeStatus(ctx, dc, fvID, upd, token)
 }

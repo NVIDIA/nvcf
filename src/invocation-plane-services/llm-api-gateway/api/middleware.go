@@ -19,6 +19,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
@@ -44,12 +46,19 @@ const (
 	HeaderRequestID          = "X-Request-ID"
 	HeaderTargetRegion       = "X-NVCF-Target-Region"
 	HeaderLegacyTargetRegion = "X-Groq-Region"
+
+	// Anthropic SDKs read the request ID only from this header.
+	headerMessagesRequestID = "Request-Id"
 )
 
 func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 	requestsTotal := telemetry.HTTPRequestsTotal()
 	requestDuration := telemetry.HTTPServerRequestDuration()
 	activeRequests := telemetry.HTTPActiveRequests()
+	var maxRequestBodyBytes int64
+	if cfg != nil {
+		maxRequestBodyBytes = cfg.Server.MaxRequestBodyBytes
+	}
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ec echo.Context) error {
@@ -57,13 +66,9 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			requestStart := time.Now()
 
 			requestID := requestIDHeader(gc.Request().Header)
-
-			routingKey := requestRoutingKey(gc.Request())
-			targetRegion := targetRegionHeader(gc.Request().Header)
-			bearerToken := bearerTokenFromHeader(gc.Request().Header.Get(echo.HeaderAuthorization))
-			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion)
-
 			gc.store.Set(contextKeyRequestID, requestID)
+			// The error handler receives the original echo context.
+			ec.Set(contextKeyRequestID, requestID)
 
 			parentCtx := otel.GetTextMapPropagator().Extract(
 				gc.UserContext(),
@@ -74,6 +79,18 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 				parentCtx,
 				gc.Request().Method+" "+routePath,
 			)
+
+			// Enforce the body limit inside the span and before anything else
+			// buffers the body, including the routing-key lookup. A rejected
+			// request still gets the span, metrics, and completion log.
+			bodyErr := bufferRequestBody(gc.Request(), maxRequestBodyBytes)
+			routingKey := ""
+			if bodyErr == nil {
+				routingKey = requestRoutingKey(gc.Request())
+			}
+			targetRegion := targetRegionHeader(gc.Request().Header)
+			bearerToken := callerCredential(gc.Request())
+			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion)
 
 			span.SetAttributes(
 				attribute.String("http.request.method", gc.Request().Method),
@@ -90,7 +107,26 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			ctx = telemetry.LoggingSpanContext(ctx, logger)
 			gc.SetUserContext(ctx)
 			gc.SetRequest(gc.Request().WithContext(ctx))
+			logRequestBodyReadFailure(ctx, bodyErr)
 			gc.Response().Header().Set(HeaderRequestID, requestID)
+			switch errorShapeFor(gc.Request()) {
+			case shapeAnthropic:
+				// Runs as headers are written, after backend headers are
+				// copied, so the NVCF ID replaces any backend request ID.
+				gc.Response().Before(func() {
+					gc.Response().Header().Set(HeaderRequestID, requestID)
+					gc.Response().Header().Set(headerMessagesRequestID, requestID)
+				})
+			case shapeSystemOne:
+				// System One errors carry the NVCF ID in the body, so the
+				// header must match after backend headers are copied.
+				gc.Response().Before(func() {
+					if relayed, _ := gc.Get(contextKeyBackendErrorRelayed).(bool); relayed {
+						return
+					}
+					gc.Response().Header().Set(HeaderRequestID, requestID)
+				})
+			}
 
 			metricAttrs := []attribute.KeyValue{
 				attribute.String("method", gc.Request().Method),
@@ -100,7 +136,10 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			telemetry.AddUpDownWithContext(ctx, activeRequests, 1, metricAttrs...)
 			defer telemetry.AddUpDownWithContext(context.WithoutCancel(ctx), activeRequests, -1, metricAttrs...)
 
-			err := next(gc)
+			err := bodyErr
+			if err == nil {
+				err = next(gc)
+			}
 			statusCode := httpStatusCode(gc, err)
 			status := strconv.Itoa(statusCode)
 			finalAttrs := append(metricAttrs, attribute.String("status", status))
@@ -115,6 +154,20 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			return err
 		}
 	}
+}
+
+// logRequestBodyReadFailure logs the internal cause of a body read failure,
+// which the client response omits. Oversized bodies carry no internal cause
+// and are covered by the completion log.
+func logRequestBodyReadFailure(ctx context.Context, err error) {
+	var httpErr *echo.HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Internal == nil {
+		return
+	}
+	telemetry.Logger(ctx).Warn().
+		Err(httpErr.Internal).
+		Int("status", httpErr.Code).
+		Msg("failed to read request body")
 }
 
 func requestIDHeader(headers http.Header) string {
@@ -176,13 +229,29 @@ func logCompletedHTTPRequest(ctx context.Context, gc *GatewayContext, requestSta
 	log.Msg("completed http request")
 }
 
+// completionLogEvent logs request-router rejections at info or above with
+// router_error_code, because clients see the code only when
+// ExposeRouterErrorCodes is enabled.
 func completionLogEvent(ctx context.Context, statusCode int, err error) *zerolog.Event {
-	if statusCode < http.StatusInternalServerError {
+	var upstream *provider.UpstreamError
+	routerCode := ""
+	if errors.As(err, &upstream) {
+		routerCode = upstream.RouterCode
+	}
+	var log *zerolog.Event
+	switch {
+	case statusCode >= http.StatusInternalServerError:
+		log = telemetry.Logger(ctx).Warn()
+		if err != nil {
+			log = log.Err(err)
+		}
+	case routerCode != "":
+		log = telemetry.Logger(ctx).Info()
+	default:
 		return telemetry.Logger(ctx).Debug()
 	}
-	log := telemetry.Logger(ctx).Warn()
-	if err != nil {
-		log = log.Err(err)
+	if routerCode != "" {
+		log = log.Str("router_error_code", routerCode)
 	}
 	return log
 }
@@ -216,6 +285,30 @@ func httpStatusCode(gc *GatewayContext, err error) int {
 		return http.StatusInternalServerError
 	}
 	return http.StatusOK
+}
+
+// headerAPIKey is the Anthropic SDK default credential header.
+const headerAPIKey = "X-Api-Key"
+
+// callerCredential returns the NVCF API key that authorizes the request.
+// Authorization, when present, is authoritative on every route. Messages also
+// accepts X-Api-Key so Anthropic SDK clients work with their default settings.
+// The Stargate provider strips both headers from outbound Messages requests.
+func callerCredential(r *http.Request) string {
+	if len(r.Header.Values(echo.HeaderAuthorization)) > 0 {
+		return bearerTokenFromHeader(r.Header.Get(echo.HeaderAuthorization))
+	}
+	if isMessagesRequest(r) {
+		return r.Header.Get(headerAPIKey)
+	}
+	return ""
+}
+
+// isMessagesRequest reports whether r targets the Anthropic Messages route.
+// Credential selection, request-id, the 401 message, and the error envelope
+// all use it so they stay in step.
+func isMessagesRequest(r *http.Request) bool {
+	return r.URL.Path == messagesEndpointPath
 }
 
 func bearerTokenFromHeader(value string) string {

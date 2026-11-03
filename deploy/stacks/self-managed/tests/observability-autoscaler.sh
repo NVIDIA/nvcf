@@ -94,6 +94,21 @@ write_autoscaler_values() {
     --output-file-template "$output_file" >/dev/null
 }
 
+write_stage_autoscaler_values() {
+  local output_file="$1"
+  shift
+
+  HELMFILE_ENV=stg HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" helmfile \
+    --file "$test_stack_dir/helmfile.d/03-observability.yaml.gotmpl" \
+    --environment default \
+    "${state_values[@]}" \
+    --state-values-set observability.profile=control \
+    "$@" \
+    --selector name=function-autoscaler \
+    write-values \
+    --output-file-template "$output_file" >/dev/null
+}
+
 write_autoscaler_values "$work_dir/autoscaler-values.yaml"
 
 autoscaler_values="$work_dir/autoscaler-values.yaml"
@@ -115,6 +130,23 @@ for expected in \
   grep -q "$expected" "$autoscaler_values" ||
     fail "control profile did not render autoscaler value: $expected"
 done
+test "$(yq -r '.functionautoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE // "cassandra"' "$autoscaler_values")" = "cassandra" ||
+  fail "autoscaler defaulted to local discovery"
+
+cp "$test_stack_dir/environments/base.yaml" "$test_stack_dir/environments/stg.yaml"
+cp "$test_stack_dir/secrets/base-secrets.yaml" "$test_stack_dir/secrets/stg-secrets.yaml"
+write_stage_autoscaler_values "$work_dir/stage-autoscaler-values.yaml"
+test "$(yq -r '.functionautoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE // "cassandra"' "$work_dir/stage-autoscaler-values.yaml")" = "cassandra" ||
+  fail "stage-named environment unexpectedly enabled local discovery"
+yq -i '.functionAutoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE = "local_discovery"' \
+  "$test_stack_dir/environments/stg.yaml"
+write_stage_autoscaler_values "$work_dir/stage-local-autoscaler-values.yaml"
+test "$(yq -r '.functionautoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE' "$work_dir/stage-local-autoscaler-values.yaml")" = "local_discovery" ||
+  fail "stage autoscaler did not honor its environment values"
+write_stage_autoscaler_values "$work_dir/stage-cassandra-autoscaler-values.yaml" \
+  --state-values-set-string functionAutoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE=cassandra
+test "$(yq -r '.functionautoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE' "$work_dir/stage-cassandra-autoscaler-values.yaml")" = "cassandra" ||
+  fail "stage autoscaler did not honor the Cassandra override"
 
 write_autoscaler_values "$work_dir/custom-autoscaler-values.yaml" \
   --state-values-set-string functionAutoscaler.env.SCALING__LOOKBACK_SECONDS=90 \

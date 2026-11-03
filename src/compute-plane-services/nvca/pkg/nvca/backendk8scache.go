@@ -101,6 +101,11 @@ const (
 	NVCAFinalizer               = "nvca.finalizers.nvidia.io"
 	NVCADeploymentName          = "nvca"
 	SecretMirroredFromLabelKey  = "nvca.nvcf.nvidia.io/mirrored-from-namespace"
+
+	// ICMSRequestCreationRejectedAnnotation records why NVCA rejected a creation
+	// message because of cluster configuration. A rejected request is never
+	// applied: it is reported to ICMS as failed with this reason.
+	ICMSRequestCreationRejectedAnnotation = "nvca.nvcf.nvidia.io/creation-rejected-reason"
 )
 
 var (
@@ -187,8 +192,14 @@ type BackendK8sCache struct {
 	// Use Function Deployment Stages to log state transition events.
 	fndsClient fnds.Client
 
-	icmsRequestWQ workqueue.RateLimitingInterface
-	nodeUpdateWQ  workqueue.RateLimitingInterface
+	icmsRequestWQ      workqueue.RateLimitingInterface
+	nodeUpdateWQ       workqueue.RateLimitingInterface
+	notFoundInstanceWQ workqueue.RateLimitingInterface
+	// notFoundInstanceReporter posts a terminated status to ICMS for an
+	// instance whose ICMSRequest CR was deleted locally before ICMS itself
+	// was ever told the instance is gone. Wired by Agent, which owns the
+	// ICMS HTTP client; nil in builds/tests that don't need it.
+	notFoundInstanceReporter func(ctx context.Context, reqID, instanceID string) error
 
 	podLister                            listersv1.PodLister
 	podSpecLister                        listersv1.PodNamespaceLister
@@ -454,6 +465,17 @@ func (b *BackendK8sCacheBuilder) WithFNDSClient(client fnds.Client) *BackendK8sC
 	return &next
 }
 
+// WithNotFoundInstanceStatusReporter wires the callback used to tell ICMS an
+// instance is terminated immediately when its ICMSRequest CR is deleted
+// locally, instead of waiting for the next periodic instance status sync.
+func (b *BackendK8sCacheBuilder) WithNotFoundInstanceStatusReporter(
+	reporter func(ctx context.Context, reqID, instanceID string) error,
+) *BackendK8sCacheBuilder {
+	next := *b
+	next.notFoundInstanceReporter = reporter
+	return &next
+}
+
 func (b *BackendK8sCacheBuilder) WithPVCRebind(on bool) *BackendK8sCacheBuilder {
 	next := *b
 	next.pvcRebindEnabled = on
@@ -534,6 +556,8 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		autoPurgeDegradedWorkers:             b.autoPurgeDegradedWorkers,
 		icmsRequestWQ:                        workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		nodeUpdateWQ:                         workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceWQ:                   workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter:             b.notFoundInstanceReporter,
 		featureFlagFetcher:                   b.featureFlagFetcher,
 		nsightProfilingAllowlist:             profiling.New(),
 		lowLatencyStreamingEnabled:           b.lowLatencyStreamingEnabled,
@@ -556,6 +580,10 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 	go func() {
 		<-ctx.Done()
 		c.nodeUpdateWQ.ShutDown()
+	}()
+	go func() {
+		<-ctx.Done()
+		c.notFoundInstanceWQ.ShutDown()
 	}()
 
 	if c.systemNamespace == "" {
@@ -590,6 +618,7 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 	nvcaInformerFactory := nvcainformers.NewSharedInformerFactoryWithOptions(
 		b.clients.BART,
 		ResyncInterval,
+		nvcainformers.WithTransform(k8sutil.StripManagedFields),
 	)
 	icmsReqGenInf, err := nvcaInformerFactory.ForResource(nvcav2beta1new.SchemeGroupVersion.WithResource("icmsrequests"))
 	if err != nil {
@@ -605,7 +634,8 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 	nodeInfFactory := k8sinformers.NewSharedInformerFactoryWithOptions(
 		c.clients.K8s,
 		c.resyncPeriod,
-		nodefeatures.NewNodeInformerOptions(c.featureFlagFetcher)...,
+		append(nodefeatures.NewNodeInformerOptions(c.featureFlagFetcher),
+			k8sinformers.WithTransform(k8sutil.StripManagedFields))...,
 	)
 	nodeInf := nodeInfFactory.Core().V1().Nodes()
 	sharedNodeIInf := nodeInf.Informer()
@@ -645,6 +675,7 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 			podInfFactory := k8sinformers.NewSharedInformerFactoryWithOptions(
 				k8sClient,
 				resyncPeriod,
+				k8sinformers.WithTransform(k8sutil.StripManagedFields),
 			)
 			podInf := podInfFactory.Core().V1().Pods()
 			_, err := podInf.Informer().AddEventHandler(&cache.ResourceEventHandlerFuncs{
@@ -697,6 +728,7 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 			eventInfFactory := k8sinformers.NewSharedInformerFactoryWithOptions(
 				k8sClient,
 				resyncPeriod,
+				k8sinformers.WithTransform(k8sutil.StripManagedFields),
 			)
 			eventInf := eventInfFactory.Core().V1().Events()
 			_, err := eventInf.Informer().AddEventHandler(&cache.ResourceEventHandlerFuncs{
@@ -722,8 +754,8 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		// Labels must be added for podInstanceNamespace if gxcache is enabled
 		if c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.GXCache) {
 			if err := ensureGXCacheNamespaceLabels(ctx, c.clients.K8s.CoreV1().Namespaces(), c.podInstanceNamespace); err != nil {
-				log.WithError(err).Error("failed to apply label to nvcf-backend namespace for GXCache enablement")
-				return nil, nil, err
+				return nil, nil, fmt.Errorf("apply GXCache label to requests namespace %q (worker.requestsNamespace): %w",
+					c.podInstanceNamespace, err)
 			}
 		}
 
@@ -828,6 +860,9 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 				}
 				c.icmsRequestWQ.Add(makeNamespacedName(req))
 			},
+			DeleteFunc: func(obj interface{}) {
+				c.enqueueNotFoundInstancesOnDelete(ctx, obj)
+			},
 		})
 		if err != nil {
 			log.WithError(err).Error("failed to add event handler for ICMS requests")
@@ -905,7 +940,64 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		}()
 	}
 
+	if c.notFoundInstanceReporter != nil {
+		log.Info("Starting not-found instance status worker")
+		go func() {
+			for c.processNotFoundInstanceWork(ctx) {
+			}
+		}()
+	}
+
 	return c, out, nil
+}
+
+// notFoundInstanceKey identifies one instance to report to ICMS as
+// terminated because its ICMSRequest CR was deleted locally without ICMS
+// ever being told the instance is gone.
+type notFoundInstanceKey struct {
+	RequestID  string
+	InstanceID string
+}
+
+// enqueueNotFoundInstancesOnDelete handles an ICMSRequest informer delete
+// event. Once the CR is gone, nothing will ever enumerate its instances
+// again to tell ICMS they're terminated (see PostICMSInstanceRequestStatusUpdates,
+// which only walks currently-existing CRs), so this reports them now instead
+// of waiting for the periodic instance status sync to notice the CR is
+// missing.
+func (c *BackendK8sCache) enqueueNotFoundInstancesOnDelete(ctx context.Context, obj interface{}) {
+	log := core.GetLogger(ctx)
+
+	// No worker drains notFoundInstanceWQ without a reporter (see the guard
+	// on the worker startup in Start()), so enqueueing here would just leak
+	// entries for the process lifetime. The periodic instance status sync
+	// remains the fallback in builds that don't wire a reporter.
+	if c.notFoundInstanceReporter == nil {
+		return
+	}
+
+	req, ok := obj.(*nvcav2beta1new.ICMSRequest)
+	if !ok {
+		tombstone, isTombstone := obj.(cache.DeletedFinalStateUnknown)
+		if !isTombstone {
+			log.Errorf("Wrong object type in ICMS request delete event handler: %T", obj)
+			return
+		}
+		req, ok = tombstone.Obj.(*nvcav2beta1new.ICMSRequest)
+		if !ok {
+			// The informer lost the object before delivering its delete
+			// event, and the tombstone's last-known object isn't an
+			// ICMSRequest either, so status.instances isn't available here.
+			// The periodic instance status sync remains the fallback.
+			log.Warn("ICMS request delete tombstone: last known instance status unavailable, " +
+				"deferring to periodic instance status sync")
+			return
+		}
+	}
+
+	for instanceID := range req.Status.Instances {
+		c.notFoundInstanceWQ.Add(notFoundInstanceKey{RequestID: req.Spec.RequestID, InstanceID: instanceID})
+	}
 }
 
 type eventWatcher func(ctx context.Context, event *corev1.Event)
@@ -926,6 +1018,7 @@ func (c *BackendK8sCache) startSecretMirroringInformer(ctx context.Context) erro
 		k8sinformers.WithTweakListOptions(func(lo *metav1.ListOptions) {
 			lo.LabelSelector = labelSelector.String()
 		}),
+		k8sinformers.WithTransform(k8sutil.StripManagedFields),
 	)
 	secretInf := secretInfFactory.Core().V1().Secrets()
 	c.secretLister = secretInf.Lister()
@@ -1173,6 +1266,52 @@ func (c *BackendK8sCache) processICMSRequestWork(ctx context.Context) bool {
 	return true
 }
 
+// processNotFoundInstanceWork drains notFoundInstanceWQ, reporting each
+// queued instance to ICMS as terminated via notFoundInstanceReporter. This
+// is the same corrective action the periodic instance status sync takes for
+// an instance ICMS still thinks is live but that has no local ICMSRequest CR
+// (see ReconcileInstanceStatus), just triggered immediately by the CR's
+// deletion instead of waiting for the next periodic pass.
+func (c *BackendK8sCache) processNotFoundInstanceWork(ctx context.Context) bool {
+	log := core.GetLogger(ctx)
+
+	obj, shutdown := c.notFoundInstanceWQ.Get()
+	if shutdown {
+		log.Info("Not-found instance worker shutting down")
+		return false
+	}
+	defer c.notFoundInstanceWQ.Done(obj)
+
+	key, ok := obj.(notFoundInstanceKey)
+	if !ok {
+		c.notFoundInstanceWQ.Forget(obj)
+		log.Errorf("Unexpected dequeued object type: %T", obj)
+		return true
+	}
+
+	log = log.WithFields(logrus.Fields{
+		"requestID":  key.RequestID,
+		"instanceID": key.InstanceID,
+	})
+	err := nvcaotel.InvokeWithSpan(ctx, c.tracer, "nvca.BackendK8sCache.ReportNotFoundInstance",
+		func(ctx context.Context) error {
+			return c.notFoundInstanceReporter(ctx, key.RequestID, key.InstanceID)
+		},
+		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+		oteltrace.WithAttributes(
+			otelattr.String(nvcaotel.ICMSRequestIDAttributeKey, key.RequestID),
+			otelattr.String("nvcf.instance.id", key.InstanceID)))
+	if err != nil {
+		log.WithError(err).Error("Failed to report not-found instance as terminated, requeuing")
+		c.notFoundInstanceWQ.AddRateLimited(obj)
+		return true
+	}
+
+	c.notFoundInstanceWQ.Forget(obj)
+	log.Debug("Reported not-found instance as terminated")
+	return true
+}
+
 func (c *BackendK8sCache) onNVCFPodUpdate(ctx context.Context, oldPod, newPod *corev1.Pod) error {
 	log := core.GetLogger(ctx)
 
@@ -1372,7 +1511,8 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 	f := k8sinformers.NewSharedInformerFactoryWithOptions(
 		c.clients.K8s,
 		c.resyncPeriod,
-		k8sinformers.WithNamespace(c.systemNamespace))
+		k8sinformers.WithNamespace(c.systemNamespace),
+		k8sinformers.WithTransform(k8sutil.StripManagedFields))
 
 	cmi := f.Core().V1().ConfigMaps()
 	c.syncedFuncs = append(c.syncedFuncs, cmi.Informer().HasSynced)
@@ -1507,6 +1647,7 @@ func (c *BackendK8sCache) initInstanceNamespaceInformer(ctx context.Context) err
 		k8sinformers.WithTweakListOptions(func(lo *metav1.ListOptions) {
 			lo.LabelSelector = namespaceLabelSel.String()
 		}),
+		k8sinformers.WithTransform(k8sutil.StripManagedFields),
 	)
 	namespaceInf := infFactory.Core().V1().Namespaces()
 	c.instanceNamespaceLister = namespaceInf.Lister()
@@ -1573,6 +1714,17 @@ func getCurrentK8sVersion(ctx context.Context, serverVersionClient discovery.Ser
 		return "", fmt.Errorf("failed to query the running k8s version, error: %w", err)
 	}
 	return ver.GitVersion, nil
+}
+
+func resolveK8sVersion(
+	ctx context.Context,
+	override string,
+	serverVersionClient discovery.ServerVersionInterface,
+) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	return getCurrentK8sVersion(ctx, serverVersionClient)
 }
 
 // TODO: Revisit to include this info in a new API from NVCA Operator to ICMS (via NGC API)
@@ -1803,6 +1955,34 @@ func (c *BackendK8sCache) GetRegisteredBackendGPUs(ctx context.Context,
 		return nil, err
 	}
 	return regBackendGPUs, nil
+}
+
+// overheadRemovedInstanceTypesHint explains, for a registration that ICMS
+// rejected, which instance types the infrastructure resource overhead leaves out
+// of the registration. It returns "" when the overhead leaves none out.
+func (c *BackendK8sCache) overheadRemovedInstanceTypesHint(ctx context.Context) string {
+	overhead, err := c.infraOverheadGetter.GetInfraOverhead(ctx)
+	if err != nil || len(overhead) == 0 {
+		return ""
+	}
+	backendGPUs, err := c.GetAllBackendGPUs(ctx)
+	if err != nil {
+		return ""
+	}
+	removed := types.BackendGPUs(backendGPUs).InstanceTypesRemovedByOverhead(
+		c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.MultiNodeWorkloads), overhead)
+	if len(removed) == 0 {
+		return ""
+	}
+	names := make([]string, len(removed))
+	for i, it := range removed {
+		names[i] = it.Name
+	}
+	return fmt.Sprintf("the infrastructure resource overhead of %s leaves no room in instance types %s, so NVCA "+
+		"left them out of the registration; if they have active instances, ICMS rejects the registration for that "+
+		"reason: lower byoo.additionalResourceOverhead or another infrastructure container resource (utils.resources, "+
+		"byoo.resources, byoo.fluentbit.resources, storage.sharedStorage.server.resources), or remove those instances",
+		k8sutil.FormatResourceList(overhead), strings.Join(names, ", "))
 }
 
 func (c *BackendK8sCache) UpdateInstanceTypeMetrics(
@@ -2144,7 +2324,7 @@ func getICMSLabelSelectorString(msgID string) string {
 	return fmt.Sprintf("%s=%s", SQSMessageIDKey, msgID)
 }
 
-func (c *BackendK8sCache) checkICMSRequestExists(ctx context.Context, msgID string) (bool, error) {
+func (c *BackendK8sCache) checkICMSRequestExists(ctx context.Context, msgID, requestID string) (bool, error) {
 	log := core.GetLogger(ctx)
 	selectorStr := getICMSLabelSelectorString(msgID)
 	icmsRequests, err := c.clients.BART.NvcaV2beta1().ICMSRequests(c.requestsNamespace).List(ctx, metav1.ListOptions{LabelSelector: selectorStr})
@@ -2152,9 +2332,13 @@ func (c *BackendK8sCache) checkICMSRequestExists(ctx context.Context, msgID stri
 		return true, fmt.Errorf("failed to list ICMS request in %v namespace: err: %v", c.requestsNamespace, err)
 	}
 
-	if icmsRequests != nil && len(icmsRequests.Items) > 0 {
-		log.Debugf("ICMS request for %v already in progress, skipping", msgID)
-		return true, nil
+	if icmsRequests != nil {
+		for _, request := range icmsRequests.Items {
+			if requestID == "" || request.Spec.RequestID == "" || request.Spec.RequestID == requestID {
+				log.WithField("requestId", requestID).Debugf("ICMS request for %v already in progress, skipping", msgID)
+				return true, nil
+			}
+		}
 	}
 	return false, nil
 }
@@ -2165,15 +2349,14 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 ) (*nvcav2beta1new.ICMSRequest, error) {
 	log := core.GetLogger(ctx)
 
-	exists, err := c.checkICMSRequestExists(ctx, msgID)
+	msgMeta := msg.GetCreationQueueMessageMetadata()
+	exists, err := c.checkICMSRequestExists(ctx, msgID, msgMeta.RequestID)
 	if err != nil {
 		return nil, fmt.Errorf("failed precheck %v, err: %v", msgID, err)
 	}
 	if exists {
 		return nil, nil
 	}
-
-	msgMeta := msg.GetCreationQueueMessageMetadata()
 
 	o := nvcav2beta1new.ICMSRequest{
 		Spec: nvcav2beta1new.ICMSRequestSpec{
@@ -2199,7 +2382,10 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 	metrics.QueueMessageProcessedTotal.
 		WithLabelValues(metrics.WithDefaultLabelValues(string(msg.GetCreationQueueMessageMetadata().Action))...).Inc()
 
-	isBYOOEnabled := c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.BYOObservability)
+	// rejectReason is set for configuration rejections that will fail the same
+	// way on every retry. Such requests are persisted and reported as failed
+	// instead of being requeued.
+	var rejectReason string
 
 	switch mt := msg.(type) {
 	case function.CreationQueueMessage:
@@ -2210,22 +2396,22 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 			mt.LaunchSpecification == nil || mt.LaunchSpecification.EnvironmentB64 == "" {
 			o.Spec.CreationMsgInfo.LaunchArtifacts = mt.LaunchArtifacts
 		}
-		if mt.LaunchSpecification != nil && mt.LaunchSpecification.Telemetries != nil &&
-			!(isBYOOEnabled && c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.UseFunctionTranslator)) {
-			return nil, fmt.Errorf("telemetries is set but required features are disabled: %s, %s",
-				featureflag.BYOObservability.Key, featureflag.UseFunctionTranslator.Key)
+		if mt.LaunchSpecification != nil && mt.LaunchSpecification.Telemetries != nil {
+			rejectReason = c.byooDisabledReason("function",
+				featureflag.BYOObservability, featureflag.UseFunctionTranslator)
 		}
 		o.Spec.CreationMsgInfo.FunctionLaunchSpecification = mt.LaunchSpecification
 		// Apply environment variable overrides if configured
-		if len(c.functionEnvOverrides) > 0 && mt.LaunchSpecification != nil {
+		if rejectReason == "" && len(c.functionEnvOverrides) > 0 && mt.LaunchSpecification != nil {
 			modified, err := envutil.ApplyEnvOverrides(
 				mt.LaunchSpecification.EnvironmentB64,
 				c.functionEnvOverrides,
 			)
 			if err != nil {
-				return nil, fmt.Errorf("apply function env overrides: %w", err)
+				rejectReason = fmt.Sprintf("NVCA could not apply the cluster's function environment overrides: %v", err)
+			} else {
+				o.Spec.CreationMsgInfo.FunctionLaunchSpecification.EnvironmentB64 = modified
 			}
-			o.Spec.CreationMsgInfo.FunctionLaunchSpecification.EnvironmentB64 = modified
 		}
 		// TODO: remove these fields when migration is in place.
 		o.Spec.FunctionID = mt.Details.FunctionID
@@ -2242,22 +2428,22 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 	case task.CreationQueueMessage:
 		o.Spec.TaskDetails = mt.Details
 
-		if mt.LaunchSpecification.Telemetries != nil && !isBYOOEnabled {
-			return nil, fmt.Errorf("telemetries is set but required features are disabled: %s",
-				featureflag.BYOObservability.Key)
+		if mt.LaunchSpecification.Telemetries != nil {
+			rejectReason = c.byooDisabledReason("task", featureflag.BYOObservability)
 		}
 
 		o.Spec.CreationMsgInfo.TaskLaunchSpecification = &mt.LaunchSpecification
 		// Apply environment variable overrides if configured
-		if len(c.taskEnvOverrides) > 0 {
+		if rejectReason == "" && len(c.taskEnvOverrides) > 0 {
 			modified, err := envutil.ApplyEnvOverrides(
 				mt.LaunchSpecification.EnvironmentB64,
 				c.taskEnvOverrides,
 			)
 			if err != nil {
-				return nil, fmt.Errorf("apply task env overrides: %w", err)
+				rejectReason = fmt.Sprintf("NVCA could not apply the cluster's task environment overrides: %v", err)
+			} else {
+				o.Spec.CreationMsgInfo.TaskLaunchSpecification.EnvironmentB64 = modified
 			}
-			o.Spec.CreationMsgInfo.TaskLaunchSpecification.EnvironmentB64 = modified
 		}
 		o.ObjectMeta = getICMSRequestObjectMeta(types.DeploymentInfo{
 			RequestID:      msgMeta.RequestID,
@@ -2268,7 +2454,12 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 			TaskID:         mt.Details.TaskID,
 		})
 	}
-	if err := c.persistModelCacheStorageSelection(ctx, &o); err != nil {
+	if rejectReason != "" {
+		if o.Annotations == nil {
+			o.Annotations = map[string]string{}
+		}
+		o.Annotations[ICMSRequestCreationRejectedAnnotation] = rejectReason
+	} else if err := c.persistModelCacheStorageSelection(ctx, &o); err != nil {
 		return nil, err
 	}
 	obj, err := c.clients.BART.NvcaV2beta1().ICMSRequests(c.requestsNamespace).Create(ctx, &o, metav1.CreateOptions{})
@@ -2281,10 +2472,38 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 	return obj, nil
 }
 
+// byooDisabledReason returns an actionable rejection reason when any of the
+// feature flags BYOO needs for this workload kind are disabled, or "" when all
+// of them are enabled.
+func (c *BackendK8sCache) byooDisabledReason(workload string, required ...*featureflag.FeatureFlag) string {
+	var disabled []string
+	for _, ff := range required {
+		if !c.featureFlagFetcher.IsFeatureFlagEnabled(ff) {
+			disabled = append(disabled, ff.Key)
+		}
+	}
+	if len(disabled) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Bring Your Own Observability (BYOO) is disabled on this cluster: "+
+		"the %s requests telemetries, but these NVCA feature flags are not enabled: %s. "+
+		"Enable them on the cluster, or deploy without telemetries.",
+		workload, strings.Join(disabled, ", "))
+}
+
+// GetCreationRejectionReason returns why NVCA rejected the creation message
+// for req, or "" if it was accepted.
+func GetCreationRejectionReason(req *nvcav2beta1new.ICMSRequest) string {
+	if req == nil {
+		return ""
+	}
+	return req.Annotations[ICMSRequestCreationRejectedAnnotation]
+}
+
 func (c *BackendK8sCache) CreateICMSTerminationMessageRequest(ctx context.Context, tm types.ICMSTerminationMessage, msgReceipt, msgID string) error {
 	log := core.GetLogger(ctx)
 
-	exists, err := c.checkICMSRequestExists(ctx, msgID)
+	exists, err := c.checkICMSRequestExists(ctx, msgID, tm.RequestID)
 	if err != nil {
 		return fmt.Errorf("failed precheck %v, err: %v", msgID, err)
 	}
@@ -2648,6 +2867,10 @@ func (c *BackendK8sCache) syncICMSRequest(ctx context.Context, req *nvcav2beta1n
 	case nvcav2beta1new.ICMSRequestStatusInProgress, nvcav2beta1new.ICMSRequestStatusCachingInProgress:
 		switch requestAction {
 		case common.FunctionCreationAction, common.TaskCreationAction:
+			if reason := GetCreationRejectionReason(req); reason != "" {
+				// Fail through the terminal error path so ICMS is told why.
+				return nvcaerrors.TerminalError(errors.New(reason))
+			}
 			if c.icmsRequestHelper.AllInstancesTerminatedAndReported(ctx, req) {
 				// this occurs when the backend goes unhealthy
 				// ICMS sends a termination for all instances

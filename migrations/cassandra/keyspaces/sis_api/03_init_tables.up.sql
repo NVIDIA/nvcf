@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS sis_api.requests (
     nca_id                text,
     reservation_id        uuid,
     gpu_count_per_instance int,
+    creation_bucket        timestamp,
     PRIMARY KEY (request_id)
 );
 
@@ -149,6 +150,8 @@ CREATE CUSTOM INDEX IF NOT EXISTS idx_requests_by_deployment_id
     ON sis_api.requests (deployment_id) USING 'StorageAttachedIndex';
 CREATE CUSTOM INDEX IF NOT EXISTS idx_requests_by_nca_id
     ON sis_api.requests (nca_id) USING 'StorageAttachedIndex';
+CREATE CUSTOM INDEX IF NOT EXISTS idx_requests_by_creation_day
+    ON sis_api.requests (creation_bucket) USING 'StorageAttachedIndex';
 
 -- Time-bucketed request tombstone tracker (for cleanup jobs).
 CREATE TABLE IF NOT EXISTS sis_api.requests_by_day (
@@ -192,6 +195,7 @@ CREATE TABLE IF NOT EXISTS sis_api.instances (
     capacity_type                       text,
     instance_expiration_time            timestamp,
     backup_to_primary_migration_scheduled boolean,
+    creation_bucket                     timestamp,
     PRIMARY KEY (instance_id)
 );
 
@@ -203,6 +207,8 @@ CREATE CUSTOM INDEX IF NOT EXISTS idx_instances_by_nca_id
     ON sis_api.instances (nca_id) USING 'StorageAttachedIndex';
 CREATE CUSTOM INDEX IF NOT EXISTS idx_instances_by_zone
     ON sis_api.instances (zone) USING 'StorageAttachedIndex';
+CREATE CUSTOM INDEX IF NOT EXISTS idx_instances_by_creation_day
+    ON sis_api.instances (creation_bucket) USING 'StorageAttachedIndex';
 
 -- Time-bucketed instance tombstone tracker (for cleanup jobs).
 CREATE TABLE IF NOT EXISTS sis_api.instances_by_day (
@@ -318,7 +324,7 @@ CREATE TABLE IF NOT EXISTS sis_api.cloud_health (
     PRIMARY KEY ((cloud_provider, zone))
 );
 
--- Full cluster state, keyed by (group, cluster) for group-scoped queries.
+-- Deprecated: cluster_by_group_id_and_cluster_id is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT EXISTS sis_api.cluster_by_group_id_and_cluster_id (
     cluster_name                       text,
     cluster_id                         text,
@@ -419,7 +425,7 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_configuration_by_cluster_id (
     PRIMARY KEY (cluster_id)
 );
 
--- Cluster group metadata, keyed by group id.
+-- Deprecated: cluster_group_by_cluster_group_id is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT EXISTS sis_api.cluster_group_by_cluster_group_id (
     cluster_group_name text,
     cluster_group_id   text,
@@ -438,7 +444,7 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_health (
     PRIMARY KEY (cluster_id)
 );
 
--- Clusters visible to an account (primary lookup path for account-scoped queries).
+-- Deprecated: clusters_by_account is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT EXISTS sis_api.clusters_by_account (
     cluster_name                       text,
     registration_time                  timestamp,
@@ -492,7 +498,7 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_groups_by_authorized_accounts (
     PRIMARY KEY ((nca_id_key), cluster_group_name, cluster_group_id)
 ) WITH CLUSTERING ORDER BY (cluster_group_name ASC, cluster_group_id ASC);
 
--- Clusters accessible to authorized (non-owner) accounts.
+-- Deprecated: clusters_by_authorized_accounts is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT EXISTS sis_api.clusters_by_authorized_accounts (
     nca_id_key                         text,
     cluster_name                       text,
@@ -513,7 +519,7 @@ CREATE TABLE IF NOT EXISTS sis_api.clusters_by_authorized_accounts (
     PRIMARY KEY ((nca_id_key), cluster_id)
 ) WITH CLUSTERING ORDER BY (cluster_id ASC);
 
--- Cluster groups owned by an account.
+-- Deprecated: cluster_groups_by_account is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT EXISTS sis_api.cluster_groups_by_account (
     cluster_group_name  text,
     cluster_group_id    text,

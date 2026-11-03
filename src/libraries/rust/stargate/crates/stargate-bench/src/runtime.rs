@@ -53,7 +53,7 @@ impl BackendRuntimeSpec {
             decode_jitter_ms: profile.service_time_ms.decode_jitter_ms,
             ttft_ms: profile.service_time_ms.ttft_mean,
             ttft_jitter_ms: profile.service_time_ms.ttft_jitter_ms,
-            prefill_tokens_per_s: profile.service_time_ms.prefill_tokens_per_s.unwrap_or(0.0),
+            prefill_tokens_per_s: profile.service_time_ms.prefill_tokens_per_s,
             max_concurrent_requests,
             kv_cache_capacity_tokens,
         }
@@ -68,7 +68,7 @@ pub(crate) struct PylonRuntimeSpec {
     pub(crate) inference_server_id: String,
     pub(crate) cluster_id: Option<String>,
     pub(crate) profile_slug: String,
-    pub(crate) last_mean_input_tps: f64,
+    pub(crate) initial_input_tps: f64,
 }
 
 impl PylonRuntimeSpec {
@@ -82,7 +82,7 @@ impl PylonRuntimeSpec {
             inference_server_id: backend_name(backend_index),
             cluster_id: config.backends.cluster_id_for_index(backend_index),
             profile_slug: slugify(&profile.name),
-            last_mean_input_tps: profile.registration.last_mean_input_tps,
+            initial_input_tps: profile.service_time_ms.prefill_tokens_per_s,
         }
     }
 
@@ -135,8 +135,7 @@ mod tests {
                         "decode_tokens_per_s": 50,
                         "decode_jitter_ms": 2,
                         "prefill_tokens_per_s": 123.0
-                    },
-                    "registration": { "last_mean_input_tps": 100.0 }
+                    }
                 }
             },
             "traffic_pattern": {
@@ -165,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn pylon_runtime_spec_targets_shared_upstream_and_keeps_registration_identity() {
+    fn pylon_runtime_spec_targets_shared_upstream() {
         let config = config();
 
         let spec = PylonRuntimeSpec::for_backend(&config, 1);
@@ -175,6 +174,7 @@ mod tests {
         assert_eq!(spec.upstream_backend_name, "backend-0");
         assert_eq!(spec.inference_server_id, "backend-1");
         assert_eq!(spec.cluster_id.as_deref(), Some("cluster-0"));
+        assert_eq!(spec.initial_input_tps, 123.0);
         assert!(!spec.owns_upstream_backend());
     }
 

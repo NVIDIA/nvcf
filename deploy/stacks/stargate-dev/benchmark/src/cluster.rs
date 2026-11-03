@@ -1,0 +1,1436 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::path::PathBuf;
+use std::process::Output;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{Context, Result, bail, ensure};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use tokio::process::Command;
+use tokio::task::{JoinError, JoinSet};
+use tokio::time::{Instant, sleep, timeout_at};
+
+use crate::process::capture;
+
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+const ROUTER_SELECTOR: &str =
+    "app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance=llm-request-router";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Region {
+    pub region: String,
+    pub namespace: String,
+    pub model_name: String,
+    pub routing_key: String,
+    pub clusters: Clusters,
+    // Not serialized, so campaign manifests keep their recorded topology.
+    #[serde(default, skip_serializing)]
+    platform: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Clusters {
+    pub stargate: Cluster,
+    pub mockdcs: Vec<Cluster>,
+}
+
+impl Region {
+    /// The hub cluster followed by the MockDC clusters.
+    pub fn all_clusters(&self) -> impl Iterator<Item = &Cluster> {
+        std::iter::once(&self.clusters.stargate).chain(&self.clusters.mockdcs)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Cluster {
+    pub name: String,
+    pub kube_context: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct Topology {
+    pub regions: Vec<Region>,
+    executable: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CacheReset {
+    pub before: Value,
+    pub after: Value,
+    pub calibration: Vec<Value>,
+}
+
+#[derive(Debug)]
+struct AuthenticationFailure(String);
+
+impl fmt::Display for AuthenticationFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for AuthenticationFailure {}
+
+impl Topology {
+    #[cfg(test)]
+    pub(crate) fn with_executable(mut self, executable: PathBuf) -> Self {
+        self.executable = executable;
+        self
+    }
+
+    pub fn load(primary: &str, peers: &[String]) -> Result<Self> {
+        let mut names = BTreeSet::new();
+        let mut contexts = BTreeSet::new();
+        let mut regions = Vec::new();
+        for name in std::iter::once(primary).chain(peers.iter().map(String::as_str)) {
+            ensure!(
+                names.insert(name),
+                "region and peer regions must be distinct"
+            );
+            let source = match name {
+                "us-west-2" => include_str!("../../environments/us-west-2.yaml"),
+                "us-east-1" => include_str!("../../environments/us-east-1.yaml"),
+                "eu-west-1" => include_str!("../../environments/eu-west-1.yaml"),
+                "ap-northeast-1" => include_str!("../../environments/ap-northeast-1.yaml"),
+                "ap-southeast-2" => include_str!("../../environments/ap-southeast-2.yaml"),
+                "local-a" => include_str!("../../environments/local-a.yaml"),
+                "local-b" => include_str!("../../environments/local-b.yaml"),
+                _ => bail!("unsupported region {name:?}"),
+            };
+            let region: Region = serde_yaml_ng::from_str(source)
+                .with_context(|| format!("parse embedded region {name}"))?;
+            ensure!(
+                region.region == name,
+                "embedded region does not match {name}"
+            );
+            ensure!(
+                region.clusters.mockdcs.len() == 2,
+                "region {name} must define two MockDCs"
+            );
+            for cluster in region.all_clusters() {
+                ensure!(
+                    contexts.insert(cluster.kube_context.clone()),
+                    "duplicate Kubernetes context {}",
+                    cluster.kube_context
+                );
+            }
+            regions.push(region);
+        }
+        let topology = Self {
+            regions,
+            executable: PathBuf::from("kubectl"),
+        };
+        for peer in &topology.regions[1..] {
+            let primary = topology.primary();
+            ensure!(
+                peer.platform == primary.platform,
+                "region {} and peer region {} run on different platforms; connect local regions only to local regions",
+                primary.region,
+                peer.region
+            );
+            ensure!(
+                peer.namespace == primary.namespace
+                    && peer.model_name == primary.model_name
+                    && peer.routing_key == primary.routing_key,
+                "connected benchmark regions must share namespace, model and routing key"
+            );
+        }
+        Ok(topology)
+    }
+
+    pub fn primary(&self) -> &Region {
+        &self.regions[0]
+    }
+
+    pub fn kubectl(&self, context: &str, namespace: &str, timeout: Duration) -> Command {
+        let mut command = Command::new(&self.executable);
+        command.args(["--context", context, "-n", namespace]);
+        command.arg(format!(
+            "--request-timeout={}s",
+            timeout.as_secs().saturating_sub(5).max(1)
+        ));
+        command
+    }
+
+    pub async fn read(
+        &self,
+        context: &str,
+        namespace: &str,
+        arguments: &[&str],
+        timeout: Duration,
+    ) -> Result<String> {
+        ensure!(
+            arguments.first() == Some(&"get") || arguments.starts_with(&["rollout", "status"]),
+            "only Kubernetes reads may use automatic retries"
+        );
+        let output = read_with_retries(
+            context,
+            || {
+                let mut command = self.kubectl(context, namespace, timeout);
+                command.args(arguments);
+                command
+            },
+            timeout,
+        )
+        .await?;
+        command_stdout(output, context)
+    }
+
+    pub async fn write(
+        &self,
+        context: &str,
+        namespace: &str,
+        arguments: &[&str],
+        timeout: Duration,
+    ) -> Result<String> {
+        let mut command = self.kubectl(context, namespace, timeout);
+        command.args(arguments);
+        let output = capture(command, timeout)
+            .await
+            .with_context(|| format!("Kubernetes command failed for {context}"))?;
+        command_stdout(output, context)
+    }
+
+    async fn read_json(&self, context: &str, namespace: &str, arguments: &[&str]) -> Result<Value> {
+        let source = self
+            .read(context, namespace, arguments, READ_TIMEOUT)
+            .await?;
+        serde_json::from_str(&source)
+            .with_context(|| format!("parse Kubernetes response from {context}"))
+    }
+
+    pub async fn verify_region(&self, index: usize) -> Result<Vec<Value>> {
+        let region = self.regions.get(index).context("invalid region index")?;
+        let mut calibration = Vec::new();
+        let context = &region.clusters.stargate.kube_context;
+        for (name, replicas) in [
+            ("stargate-dev-auth", 1),
+            ("llm-request-router", 3),
+            ("llm-request-router-backend-router", 3),
+        ] {
+            self.require_deployment(context, &region.namespace, name, replicas)
+                .await?;
+        }
+        let service = self
+            .read_json(
+                context,
+                &region.namespace,
+                &[
+                    "get",
+                    "service",
+                    "llm-request-router-backend-router",
+                    "-o",
+                    "json",
+                ],
+            )
+            .await?;
+        check_registration_service(&service)?;
+        let pods = self
+            .read_json(
+                context,
+                &region.namespace,
+                &["get", "pods", "-l", ROUTER_SELECTOR, "-o", "json"],
+            )
+            .await?;
+        ensure!(
+            items(&pods)?.len() == 3,
+            "found {} Stargate Pods; expected 3",
+            items(&pods)?.len()
+        );
+        let expected = (self.regions.len() * 4) as f64;
+        for pod in items(&pods)? {
+            let name = required_str(pod, "/metadata/name")?;
+            let path = format!(
+                "--raw=/api/v1/namespaces/{}/pods/{name}:9090/proxy/metrics",
+                region.namespace
+            );
+            let metrics = self
+                .read(context, &region.namespace, &["get", &path], READ_TIMEOUT)
+                .await?;
+            check_router_metrics(&metrics, &region.routing_key, &region.model_name, expected)
+                .with_context(|| format!("Stargate Pod {name} membership is not ready"))?;
+        }
+        for mockdc in &region.clusters.mockdcs {
+            let pods = self.mockdc_pods(region, mockdc).await?;
+            check_mockdc(&pods, &mockdc.name)?;
+            for pod in active_pods(&pods)? {
+                calibration.push(self.calibration_evidence(region, mockdc, pod).await?);
+            }
+        }
+        Ok(calibration)
+    }
+
+    async fn require_deployment(
+        &self,
+        context: &str,
+        namespace: &str,
+        name: &str,
+        replicas: u64,
+    ) -> Result<()> {
+        let deployment = self
+            .read_json(
+                context,
+                namespace,
+                &["get", "deployment", name, "-o", "json"],
+            )
+            .await?;
+        check_deployment(&deployment, name, replicas)
+    }
+
+    pub async fn wait_ready(&self) -> Result<Vec<Value>> {
+        let deadline = Instant::now() + Duration::from_secs(300);
+        let mut last_error = String::from("verification has not completed");
+        let topology = Arc::new(self.clone());
+        loop {
+            let verification = async {
+                let mut checks = JoinSet::new();
+                for index in 0..self.regions.len() {
+                    let topology = Arc::clone(&topology);
+                    checks.spawn(async move {
+                        topology
+                            .verify_region(index)
+                            .await
+                            .map(|evidence| (index, evidence))
+                    });
+                }
+                let mut evidence = vec![Vec::new(); self.regions.len()];
+                while let Some(check) = checks.join_next().await {
+                    let (index, region_evidence) =
+                        check.context("join regional readiness check")??;
+                    evidence[index] = region_evidence;
+                }
+                Ok::<_, anyhow::Error>(evidence.into_iter().flatten().collect())
+            };
+            match timeout_at(deadline, verification).await {
+                Ok(Ok(evidence)) => return Ok(evidence),
+                Ok(Err(error)) => {
+                    if error.downcast_ref::<AuthenticationFailure>().is_some()
+                        || error.downcast_ref::<JoinError>().is_some()
+                    {
+                        return Err(error);
+                    }
+                    last_error = format!("{error:#}");
+                }
+                Err(_) => {
+                    bail!("regional health did not converge within 300 seconds: {last_error}")
+                }
+            }
+            if timeout_at(deadline, sleep(Duration::from_secs(5)))
+                .await
+                .is_err()
+            {
+                bail!("regional health did not converge within 300 seconds: {last_error}");
+            }
+        }
+    }
+
+    pub async fn snapshot_controls(&self) -> Result<Value> {
+        let mut deployments = BTreeMap::new();
+        let mut policies = BTreeMap::new();
+        for region in &self.regions {
+            for cluster in region.all_clusters() {
+                let listing = self
+                    .read_json(
+                        &cluster.kube_context,
+                        &region.namespace,
+                        &["get", "deployments", "-o", "json"],
+                    )
+                    .await?;
+                let mut controls = BTreeMap::new();
+                for deployment in items(&listing)? {
+                    let name = required_str(deployment, "/metadata/name")?;
+                    controls.insert(name, json!({
+                        "replicas": deployment.pointer("/spec/replicas").context("deployment replicas missing")?,
+                        "podSpec": deployment.pointer("/spec/template/spec").context("deployment Pod spec missing")?,
+                    }));
+                }
+                deployments.insert(
+                    cluster.kube_context.clone(),
+                    serde_json::to_value(controls)?,
+                );
+            }
+            let policy = self
+                .read_json(
+                    &region.clusters.stargate.kube_context,
+                    &region.namespace,
+                    &["get", "configmap", "llm-request-router-lb", "-o", "json"],
+                )
+                .await?;
+            let source = required_str(&policy, "/data/lb-config.json")?;
+            policies.insert(
+                region.region.clone(),
+                serde_json::from_str::<Value>(source)
+                    .context("parse deployed load-balancer configuration")?,
+            );
+        }
+        Ok(json!({"deployments": deployments, "loadBalancers": policies}))
+    }
+
+    pub async fn pod_state(&self) -> Result<Value> {
+        let mut pods = BTreeMap::new();
+        for region in &self.regions {
+            for cluster in region.all_clusters() {
+                let listing = self
+                    .read_json(
+                        &cluster.kube_context,
+                        &region.namespace,
+                        &["get", "pods", "-o", "json"],
+                    )
+                    .await?;
+                for pod in active_pods(&listing)? {
+                    let name = required_str(pod, "/metadata/name")?;
+                    let statuses = pod
+                        .pointer("/status/containerStatuses")
+                        .and_then(Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
+                    let mut containers = BTreeMap::new();
+                    for container in statuses {
+                        containers.insert(
+                            required_str(container, "/name")?,
+                            json!({
+                                "containerID": container.get("containerID"),
+                                "imageID": container.get("imageID"),
+                                "restartCount": container.get("restartCount"),
+                            }),
+                        );
+                    }
+                    pods.insert(
+                        format!("{}/{name}", cluster.kube_context),
+                        json!({
+                            "uid": required_str(pod, "/metadata/uid")?, "containers": containers,
+                        }),
+                    );
+                }
+            }
+        }
+        Ok(serde_json::to_value(pods)?)
+    }
+
+    fn backend_targets(&self) -> impl Iterator<Item = (&Region, &Cluster, String)> {
+        self.regions.iter().flat_map(|region| {
+            region.clusters.mockdcs.iter().flat_map(move |cluster| {
+                (0..2).map(move |index| {
+                    (
+                        region,
+                        cluster,
+                        format!("{}-stargate-dev-mockdc-backend-{index}", cluster.name),
+                    )
+                })
+            })
+        })
+    }
+
+    pub async fn cache_stats(&self) -> Result<Value> {
+        let mut stats = BTreeMap::new();
+        for (region, cluster, service) in self.backend_targets() {
+            let path = format!(
+                "--raw=/api/v1/namespaces/{}/services/http:{service}:http/proxy/kv-cache/stats",
+                region.namespace
+            );
+            let snapshot = self
+                .read_json(&cluster.kube_context, &region.namespace, &["get", &path])
+                .await?;
+            ensure!(
+                snapshot.is_object(),
+                "cache stats for {service} are not an object"
+            );
+            stats.insert(service, snapshot);
+        }
+        Ok(serde_json::to_value(stats)?)
+    }
+
+    /// Restart every (context, namespace, Deployment name) target, then wait
+    /// for all of them to roll out.
+    async fn restart_and_wait(&self, targets: &[(&str, &str, String)]) -> Result<()> {
+        for (context, namespace, name) in targets {
+            self.write(
+                context,
+                namespace,
+                &["rollout", "restart", &format!("deployment/{name}")],
+                Duration::from_secs(120),
+            )
+            .await?;
+        }
+        for (context, namespace, name) in targets {
+            self.read(
+                context,
+                namespace,
+                &[
+                    "rollout",
+                    "status",
+                    &format!("deployment/{name}"),
+                    "--timeout=5m",
+                ],
+                Duration::from_secs(330),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn reset_caches(&self) -> Result<CacheReset> {
+        let before = self.cache_stats().await?;
+        // Backends restart first so the routers come back to empty caches.
+        let backends: Vec<_> = self
+            .backend_targets()
+            .map(|(region, cluster, name)| {
+                (
+                    cluster.kube_context.as_str(),
+                    region.namespace.as_str(),
+                    name,
+                )
+            })
+            .collect();
+        self.restart_and_wait(&backends).await?;
+        let routers: Vec<_> = self
+            .regions
+            .iter()
+            .map(|region| {
+                (
+                    region.clusters.stargate.kube_context.as_str(),
+                    region.namespace.as_str(),
+                    "llm-request-router".to_owned(),
+                )
+            })
+            .collect();
+        self.restart_and_wait(&routers).await?;
+        let calibration = self.wait_ready().await?;
+        let after = self.cache_stats().await?;
+        check_empty_caches(&after)?;
+        Ok(CacheReset {
+            before,
+            after,
+            calibration,
+        })
+    }
+
+    async fn mockdc_pods(&self, region: &Region, mockdc: &Cluster) -> Result<Value> {
+        self.read_json(
+            &mockdc.kube_context,
+            &region.namespace,
+            &[
+                "get",
+                "pods",
+                "-l",
+                &format!("app.kubernetes.io/instance={}", mockdc.name),
+                "-o",
+                "json",
+            ],
+        )
+        .await
+    }
+
+    async fn calibration_evidence(
+        &self,
+        region: &Region,
+        mockdc: &Cluster,
+        pod: &Value,
+    ) -> Result<Value> {
+        let (engine_limit, calibration_limit) = calibration_limits(pod)?;
+        let name = required_str(pod, "/metadata/name")?;
+        let path = format!(
+            "--raw=/api/v1/namespaces/{}/pods/{name}:9089/proxy/metrics",
+            region.namespace
+        );
+        let metrics = self
+            .read(
+                &mockdc.kube_context,
+                &region.namespace,
+                &["get", &path],
+                READ_TIMEOUT,
+            )
+            .await?;
+        let mut evidence = check_fallback_metrics(&metrics, &region.model_name)
+            .with_context(|| format!("startup calibration is not ready for {name}"))?;
+        let row = evidence
+            .as_object_mut()
+            .context("fallback evidence must be an object")?;
+        row.insert("context".into(), json!(mockdc.kube_context));
+        row.insert("pod".into(), json!(name));
+        row.insert("configuredEngineConcurrency".into(), json!(engine_limit));
+        row.insert("calibrationMaxConcurrency".into(), json!(calibration_limit));
+        Ok(evidence)
+    }
+}
+
+/// Run an idempotent Kubernetes read up to three times. Authentication
+/// failures stop at once; transient API errors and timeouts are retried.
+pub(crate) async fn read_with_retries(
+    context: &str,
+    command: impl Fn() -> Command,
+    timeout: Duration,
+) -> Result<Output> {
+    for attempt in 0..3 {
+        match capture(command(), timeout).await {
+            Ok(output) => {
+                let message = String::from_utf8_lossy(&output.stderr);
+                if !output.status.success() && authentication_error(&message) {
+                    return Err(AuthenticationFailure(format!(
+                        "Kubernetes authentication failed for {context}: {}",
+                        message.trim()
+                    ))
+                    .into());
+                }
+                if output.status.success() || !transient_control_error(&message) || attempt == 2 {
+                    return Ok(output);
+                }
+            }
+            Err(error) => {
+                let timed_out = error.is::<tokio::time::error::Elapsed>()
+                    || error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut);
+                if !timed_out || attempt == 2 {
+                    return Err(error)
+                        .with_context(|| format!("Kubernetes read failed for {context}"));
+                }
+            }
+        }
+        sleep(Duration::from_secs(attempt + 1)).await;
+    }
+    unreachable!("the final read attempt always returns")
+}
+
+fn command_stdout(output: Output, context: &str) -> Result<String> {
+    ensure!(
+        output.status.success(),
+        "kubectl failed for {context}: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    String::from_utf8(output.stdout)
+        .with_context(|| format!("kubectl returned non-UTF-8 output for {context}"))
+}
+
+pub(crate) fn authentication_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "unauthorized",
+        "forbidden",
+        "provide credentials",
+        "must be logged in",
+        "accessdenied",
+        "expiredtoken",
+        "token has expired",
+        "error loading sso token",
+        "sso session",
+        "refresh cached sso",
+        "getting credentials",
+        "exec plugin",
+        "exec: executable",
+    ]
+    .iter()
+    .any(|pattern| message.contains(pattern))
+}
+
+pub(crate) fn transient_control_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "tls handshake timeout",
+        "connection reset",
+        "http2: client connection lost",
+        "http2: server sent goaway and closed the connection",
+        "use of closed network connection",
+        "unexpected eof",
+        "i/o timeout",
+        "context deadline exceeded",
+        "unable to connect to the server",
+        "serviceunavailable",
+        "too many requests",
+        "toomanyrequests",
+    ]
+    .iter()
+    .any(|pattern| message.contains(pattern))
+}
+
+fn items(listing: &Value) -> Result<&[Value]> {
+    listing
+        .get("items")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .context("Kubernetes response lacks an items array")
+}
+
+fn active_pods(listing: &Value) -> Result<impl Iterator<Item = &Value>> {
+    Ok(items(listing)?.iter().filter(|pod| {
+        pod.pointer("/metadata/deletionTimestamp")
+            .is_none_or(Value::is_null)
+    }))
+}
+
+fn required_str<'a>(value: &'a Value, pointer: &str) -> Result<&'a str> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .with_context(|| format!("Kubernetes response lacks string {pointer}"))
+}
+
+fn check_deployment(deployment: &Value, name: &str, replicas: u64) -> Result<()> {
+    let configured = deployment.pointer("/spec/replicas").and_then(Value::as_u64);
+    ensure!(
+        configured == Some(replicas),
+        "Deployment {name} is configured for {configured:?} replicas; expected {replicas}"
+    );
+    for field in ["readyReplicas", "updatedReplicas", "availableReplicas"] {
+        let count = deployment
+            .get("status")
+            .and_then(|status| status.get(field))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        ensure!(
+            count == replicas,
+            "Deployment {name} has {count} {field}; expected {replicas}"
+        );
+    }
+    let generation = deployment
+        .pointer("/metadata/generation")
+        .and_then(Value::as_u64)
+        .context("deployment generation missing")?;
+    ensure!(
+        deployment
+            .pointer("/status/observedGeneration")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            >= generation,
+        "Deployment {name} has not observed its current generation"
+    );
+    Ok(())
+}
+
+fn check_registration_service(service: &Value) -> Result<()> {
+    ensure!(
+        service.pointer("/spec/type").and_then(Value::as_str) == Some("LoadBalancer"),
+        "backend-router Service is not a LoadBalancer"
+    );
+    let ports = service
+        .pointer("/spec/ports")
+        .and_then(Value::as_array)
+        .context("backend-router ports missing")?;
+    let actual: BTreeSet<_> = ports
+        .iter()
+        .map(|port| {
+            (
+                port.get("port").and_then(Value::as_u64),
+                port.get("protocol").and_then(Value::as_str),
+            )
+        })
+        .collect();
+    ensure!(
+        actual == BTreeSet::from([(Some(50071), Some("TCP")), (Some(50072), Some("UDP"))]),
+        "backend-router Service exposes {actual:?}; expected 50071/TCP and 50072/UDP"
+    );
+    ensure!(
+        service
+            .pointer("/status/loadBalancer/ingress")
+            .and_then(Value::as_array)
+            .is_some_and(|ingress| !ingress.is_empty()),
+        "backend-router LoadBalancer has no ingress endpoint"
+    );
+    Ok(())
+}
+
+/// Find the element named `name` in the Kubernetes array at `pointer`, such
+/// as a Pod's containers or container statuses.
+pub(crate) fn named<'a>(value: &'a Value, pointer: &str, name: &str) -> Option<&'a Value> {
+    value
+        .pointer(pointer)?
+        .as_array()?
+        .iter()
+        .find(|item| item.get("name").and_then(Value::as_str) == Some(name))
+}
+
+fn container_args<'a>(pod: &'a Value, name: &str) -> Result<Vec<&'a str>> {
+    let container = named(pod, "/spec/containers", name)
+        .with_context(|| format!("Pod lacks {name} container"))?;
+    container
+        .get("args")
+        .and_then(Value::as_array)
+        .context("container arguments missing")?
+        .iter()
+        .map(|argument| {
+            argument
+                .as_str()
+                .context("container argument is not a string")
+        })
+        .collect()
+}
+
+fn argument<'a>(arguments: &[&'a str], name: &str) -> Option<&'a str> {
+    let prefix = format!("{name}=");
+    arguments.iter().enumerate().find_map(|(index, argument)| {
+        argument.strip_prefix(&prefix).or_else(|| {
+            (*argument == name)
+                .then(|| arguments.get(index + 1).copied())
+                .flatten()
+        })
+    })
+}
+
+fn check_mockdc(listing: &Value, name: &str) -> Result<()> {
+    let pods: Vec<_> = active_pods(listing)?.collect();
+    ensure!(
+        pods.len() == 2,
+        "MockDC {name} has {} Pods; expected 2",
+        pods.len()
+    );
+    let mut identifiers = BTreeSet::new();
+    for pod in pods {
+        let statuses = pod
+            .pointer("/status/containerStatuses")
+            .and_then(Value::as_array)
+            .context("MockDC container statuses missing")?;
+        let ready: BTreeMap<_, _> = statuses
+            .iter()
+            .map(|status| {
+                (
+                    status["name"].as_str().unwrap_or(""),
+                    status["ready"].as_bool().unwrap_or(false),
+                )
+            })
+            .collect();
+        ensure!(
+            ready == BTreeMap::from([("mock-dynamo", true), ("pylon", true)]),
+            "MockDC Pod is not fully ready"
+        );
+        let arguments = container_args(pod, "pylon")?;
+        identifiers.insert(
+            argument(&arguments, "--inference-server-id")
+                .context("Pylon inference-server-id missing")?,
+        );
+    }
+    let expected = BTreeSet::from([format!("{name}-backend-0"), format!("{name}-backend-1")]);
+    ensure!(
+        identifiers
+            .iter()
+            .copied()
+            .eq(expected.iter().map(String::as_str)),
+        "MockDC {name} has unexpected Pylon identities"
+    );
+    Ok(())
+}
+
+fn metric_values(source: &str, name: &str, filters: &[(&str, &str)]) -> Result<Vec<f64>> {
+    let mut values = Vec::new();
+    for line in source.lines().map(str::trim) {
+        let Some(mut tail) = line.strip_prefix(name) else {
+            continue;
+        };
+        let mut labels = BTreeMap::new();
+        if let Some(rest) = tail.strip_prefix('{') {
+            tail = rest.trim_start();
+            while !tail.starts_with('}') {
+                let (key, value) = tail
+                    .split_once('=')
+                    .context("metric label lacks equals sign")?;
+                let mut strings = serde_json::Deserializer::from_str(value).into_iter::<String>();
+                let value = strings
+                    .next()
+                    .context("metric label lacks quoted value")??;
+                let consumed = strings.byte_offset();
+                ensure!(
+                    labels.insert(key.trim(), value).is_none(),
+                    "duplicate metric label"
+                );
+                tail = tail[key.len() + 1 + consumed..].trim_start();
+                if let Some(rest) = tail.strip_prefix(',') {
+                    tail = rest.trim_start();
+                } else {
+                    ensure!(tail.starts_with('}'), "metric label lacks delimiter");
+                }
+            }
+            tail = &tail[1..];
+        } else if !tail.starts_with(char::is_whitespace) {
+            continue;
+        }
+        if filters
+            .iter()
+            .all(|(key, expected)| labels.get(key).map(String::as_str) == Some(*expected))
+        {
+            let value: f64 = tail
+                .split_whitespace()
+                .next()
+                .context("metric sample value missing")?
+                .parse()
+                .context("invalid metric sample value")?;
+            ensure!(value.is_finite(), "metric {name} is not finite");
+            values.push(value);
+        }
+    }
+    Ok(values)
+}
+
+fn check_router_metrics(
+    metrics: &str,
+    routing_key: &str,
+    model: &str,
+    expected: f64,
+) -> Result<()> {
+    let values = metric_values(
+        metrics,
+        "stargate_active_inference_servers",
+        &[("routing_key", routing_key), ("model", model)],
+    )?;
+    ensure!(
+        values == [expected],
+        "router reports {values:?} active backends for model {model} and routing key {routing_key}; expected {expected}"
+    );
+    Ok(())
+}
+
+fn calibration_limits(pod: &Value) -> Result<(u64, u64)> {
+    let pylon = container_args(pod, "pylon")?;
+    ensure!(
+        pylon.contains(&"--do-calibration"),
+        "the benchmark requires Pylon startup calibration (--do-calibration)"
+    );
+    ensure!(
+        argument(&pylon, "--engine-stats-stream") == Some("off"),
+        "calibrated fallback requires engine-stats-stream=off"
+    );
+    ensure!(
+        argument(&pylon, "--active-canary-interval-ms") == Some("0"),
+        "calibrated benchmark must disable active canary traffic"
+    );
+    ensure!(
+        argument(&pylon, "--initial-input-tps").is_none(),
+        "startup calibration must not use initial input TPS"
+    );
+    let engine = argument(&pylon, "--max-engine-concurrency")
+        .context("engine concurrency missing")?
+        .parse::<u64>()?;
+    let calibration = argument(&pylon, "--calibration-max-concurrency")
+        .context("calibration concurrency missing")?
+        .parse::<u64>()?;
+    ensure!(
+        engine > 0 && calibration > 0,
+        "calibration concurrency must be positive"
+    );
+    Ok((engine, calibration))
+}
+
+fn check_fallback_metrics(metrics: &str, model: &str) -> Result<Value> {
+    let events: f64 = metric_values(metrics, "pylon_engine_stats_stream_events_total", &[])?
+        .iter()
+        .sum();
+    let connected: f64 = metric_values(metrics, "pylon_engine_stats_stream_connected", &[])?
+        .iter()
+        .sum();
+    let calibrations: f64 = metric_values(
+        metrics,
+        "pylon_model_calibration_duration_ms_count",
+        &[("model", model), ("outcome", "completed")],
+    )?
+    .iter()
+    .sum();
+    let input_tps = metric_values(
+        metrics,
+        "pylon_model_last_mean_input_tps",
+        &[("model", model)],
+    )?;
+    let engine_sources: f64 = metric_values(
+        metrics,
+        "pylon_model_stats_source",
+        &[("model", model), ("source", "engine_stats_stream")],
+    )?
+    .iter()
+    .sum();
+    ensure!(
+        events == 0.0 && connected == 0.0 && engine_sources == 0.0,
+        "engine stats stream is active during fallback calibration"
+    );
+    ensure!(
+        calibrations >= 1.0,
+        "completed model calibration is missing"
+    );
+    ensure!(
+        input_tps.len() == 1 && input_tps[0] > 0.0,
+        "calibrated input TPS is missing"
+    );
+    Ok(
+        json!({"engineEvents": events, "connectedStreams": connected,
+        "calibrationsCompleted": calibrations, "inputTps": input_tps[0], "engineStatsSource": engine_sources}),
+    )
+}
+
+fn check_empty_caches(stats: &Value) -> Result<()> {
+    for (backend, snapshot) in stats
+        .as_object()
+        .context("cache snapshot is not an object")?
+    {
+        for field in ["kv_cache_entries", "kv_cache_used_tokens"] {
+            ensure!(
+                snapshot.get(field).and_then(Value::as_u64) == Some(0),
+                "backend {backend} cache field {field} is not zero"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{FakeCommand, healthy_west_region, kubectl as respond, mockdc_pod};
+
+    fn pod(name: &str, identity: &str, terminating: bool) -> Value {
+        let mut pod = mockdc_pod(name, identity);
+        if terminating {
+            pod["metadata"]["deletionTimestamp"] = json!("2026-09-17T00:00:00Z");
+        }
+        pod
+    }
+
+    #[test]
+    fn topology_loads_single_or_connected_regions_and_rejects_duplicate_selection() -> Result<()> {
+        let west = Topology::load("us-west-2", &[])?;
+        assert_eq!(west.backend_targets().count(), 4);
+        assert_eq!(
+            west.primary().clusters.stargate.kube_context,
+            "stargate-usw2"
+        );
+        let connected = Topology::load("us-east-1", &["us-west-2".into()])?;
+        assert_eq!(connected.backend_targets().count(), 8);
+        assert_eq!(connected.primary().region, "us-east-1");
+        let regions = [
+            "us-west-2",
+            "us-east-1",
+            "eu-west-1",
+            "ap-northeast-1",
+            "ap-southeast-2",
+        ];
+        for primary in regions {
+            let peers = regions
+                .iter()
+                .filter(|region| **region != primary)
+                .map(|region| (*region).to_owned())
+                .collect::<Vec<_>>();
+            let global = Topology::load(primary, &peers)?;
+            assert_eq!(global.primary().region, primary);
+            assert_eq!(global.backend_targets().count(), 20);
+            assert_eq!(
+                global
+                    .backend_targets()
+                    .map(|(_, _, name)| name)
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+                20
+            );
+        }
+        assert!(Topology::load("us-west-2", &["us-west-2".into()]).is_err());
+        assert!(Topology::load("../us-west-2", &[]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn local_regions_connect_only_to_local_regions() -> Result<()> {
+        Topology::load("local-a", &["local-b".into()])?;
+        for (primary, peer) in [("local-a", "us-west-2"), ("us-west-2", "local-b")] {
+            let error = Topology::load(primary, &[peer.into()]).unwrap_err();
+            assert!(error.to_string().contains("different platforms"), "{error}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reads_retry_only_transient_failures_and_writes_are_never_retried() -> Result<()> {
+        let fake = FakeCommand::new();
+        let mut topology = Topology::load("us-west-2", &[])?;
+        topology.executable = fake.executable();
+        respond(
+            &fake,
+            "test",
+            "test",
+            &["get", "pods"],
+            &[
+                (1, "", "TLS handshake timeout"),
+                (1, "", "Error from server (TooManyRequests)"),
+                (0, "ready", ""),
+            ],
+        );
+        assert_eq!(
+            topology
+                .read("test", "test", &["get", "pods"], READ_TIMEOUT)
+                .await?,
+            "ready"
+        );
+        assert_eq!(fake.calls().len(), 3);
+
+        respond(
+            &fake,
+            "test",
+            "test",
+            &["get", "nodes"],
+            &[(1, "", "connection reset")],
+        );
+        assert!(
+            topology
+                .read("test", "test", &["get", "nodes"], READ_TIMEOUT)
+                .await
+                .is_err()
+        );
+        assert_eq!(fake.calls().len(), 6);
+
+        respond(
+            &fake,
+            "test",
+            "test",
+            &["get", "services"],
+            &[
+                (1, "", "Unable to connect to the server: Forbidden"),
+                (0, "must not retry", ""),
+            ],
+        );
+        let denied = topology
+            .read("test", "test", &["get", "services"], READ_TIMEOUT)
+            .await
+            .unwrap_err();
+        assert!(denied.downcast_ref::<AuthenticationFailure>().is_some());
+        assert_eq!(fake.calls().len(), 7);
+
+        respond(
+            &fake,
+            "test",
+            "test",
+            &["rollout", "restart", "deployment/test"],
+            &[(1, "", "connection reset"), (0, "must not retry", "")],
+        );
+        assert!(
+            topology
+                .write(
+                    "test",
+                    "test",
+                    &["rollout", "restart", "deployment/test"],
+                    READ_TIMEOUT
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(fake.calls().len(), 8);
+        assert!(
+            topology
+                .read("test", "test", &["delete", "pod", "test"], READ_TIMEOUT)
+                .await
+                .is_err()
+        );
+        assert_eq!(fake.calls().len(), 8);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn readiness_does_not_retry_authentication_failures() -> Result<()> {
+        for message in [
+            "Unable to connect to the server: Token has expired and refresh failed",
+            "Unable to connect to the server: getting credentials: exec: executable aws failed with exit code 253",
+        ] {
+            let fake = FakeCommand::new();
+            fake.default_response(&[(1, "", message)]);
+            let mut topology = Topology::load("us-west-2", &[])?;
+            topology.executable = fake.executable();
+            let error = tokio::time::timeout(Duration::from_secs(2), topology.wait_ready())
+                .await?
+                .unwrap_err();
+            assert!(error.downcast_ref::<AuthenticationFailure>().is_some());
+            assert_eq!(fake.calls().len(), 1);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn readiness_checks_all_regions_concurrently_and_stops_on_authentication_failure()
+    -> Result<()> {
+        let fake = FakeCommand::new();
+        fake.default_response(&[(1, "", "Unauthorized")]);
+        let root = fake.executable().parent().unwrap().to_owned();
+        std::fs::write(root.join("wait-for-calls"), "5")?;
+        let peers =
+            ["us-east-1", "eu-west-1", "ap-northeast-1", "ap-southeast-2"].map(str::to_owned);
+        let topology = Topology::load("us-west-2", &peers)?.with_executable(fake.executable());
+        let error = tokio::time::timeout(Duration::from_secs(3), topology.wait_ready())
+            .await?
+            .unwrap_err();
+        assert!(error.downcast_ref::<AuthenticationFailure>().is_some());
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 5);
+        let contexts: BTreeSet<_> = calls.iter().map(|args| args[1].to_string_lossy()).collect();
+        assert_eq!(contexts.len(), 5);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshots_ignore_rollout_annotations_but_record_images_and_restarts() -> Result<()> {
+        let fake = FakeCommand::new();
+        let mut topology = Topology::load("us-west-2", &[])?;
+        topology.executable = fake.executable();
+        let region = topology.primary();
+        for cluster in region.all_clusters() {
+            let before = json!({"items":[{"metadata":{"name":"service", "generation":1}, "spec":{
+                "replicas":1, "template":{"metadata":{"annotations":{"restartedAt":"before"}}, "spec":{
+                    "containers":[{"name":"service","image":"old","resources":{"limits":{"cpu":"1"}}, "args":["--fixed"],"env":[]}]
+                }}
+            }}]});
+            let mut restarted = before.clone();
+            restarted["items"][0]["metadata"]["generation"] = json!(2);
+            restarted["items"][0]["spec"]["template"]["metadata"]["annotations"]["restartedAt"] =
+                json!("after");
+            let mut changed = restarted.clone();
+            changed["items"][0]["spec"]["template"]["spec"]["containers"][0]["image"] =
+                json!("new");
+            respond(
+                &fake,
+                &cluster.kube_context,
+                &region.namespace,
+                &["get", "deployments", "-o", "json"],
+                &[
+                    (0, &before.to_string(), ""),
+                    (0, &restarted.to_string(), ""),
+                    (0, &changed.to_string(), ""),
+                ],
+            );
+            let pods = json!({"items":[
+                {"metadata":{"name":"ready","uid":"pod-id"},"status":{"containerStatuses":[{"name":"worker","containerID":"first","imageID":"digest","restartCount":0}]}},
+                {"metadata":{"name":"pending","uid":"pending-id"},"status":{"phase":"Pending"}}
+            ]});
+            let mut restarted = pods.clone();
+            restarted["items"][0]["status"]["containerStatuses"][0]["containerID"] =
+                json!("second");
+            restarted["items"][0]["status"]["containerStatuses"][0]["restartCount"] = json!(1);
+            respond(
+                &fake,
+                &cluster.kube_context,
+                &region.namespace,
+                &["get", "pods", "-o", "json"],
+                &[(0, &pods.to_string(), ""), (0, &restarted.to_string(), "")],
+            );
+        }
+        respond(
+            &fake,
+            &region.clusters.stargate.kube_context,
+            &region.namespace,
+            &["get", "configmap", "llm-request-router-lb", "-o", "json"],
+            &[(0, r#"{"data":{"lb-config.json":"{\"n\":2}"}}"#, "")],
+        );
+        let before = topology.snapshot_controls().await?;
+        assert_eq!(before, topology.snapshot_controls().await?);
+        assert_ne!(before, topology.snapshot_controls().await?);
+        let before = topology.pod_state().await?;
+        assert_eq!(before["stargate-usw2/pending"]["containers"], json!({}));
+        assert_ne!(before, topology.pod_state().await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cache_reset_waits_for_backends_before_restarting_routers() -> Result<()> {
+        let fake = FakeCommand::new();
+        fake.default_response(&[(0, "", "")]);
+        let mut topology = Topology::load("us-west-2", &[])?;
+        topology.executable = fake.executable();
+        healthy_west_region(&fake);
+        for (region, cluster, service) in topology.backend_targets() {
+            let path = format!(
+                "--raw=/api/v1/namespaces/{}/services/http:{service}:http/proxy/kv-cache/stats",
+                region.namespace
+            );
+            respond(
+                &fake,
+                &cluster.kube_context,
+                &region.namespace,
+                &["get", &path],
+                &[
+                    (0, r#"{"kv_cache_entries":3,"kv_cache_used_tokens":99}"#, ""),
+                    (0, r#"{"kv_cache_entries":0,"kv_cache_used_tokens":0}"#, ""),
+                ],
+            );
+        }
+        let reset =
+            tokio::time::timeout(Duration::from_secs(10), topology.reset_caches()).await??;
+        assert_eq!(reset.before.as_object().unwrap().len(), 4);
+        for snapshot in reset.before.as_object().unwrap().values() {
+            assert_eq!(snapshot["kv_cache_entries"], 3);
+        }
+        check_empty_caches(&reset.after)?;
+        assert_eq!(reset.calibration.len(), 4);
+        for evidence in &reset.calibration {
+            assert_eq!(evidence["inputTps"], 321.0);
+            assert_eq!(evidence["configuredEngineConcurrency"], 17);
+            assert_eq!(evidence["calibrationMaxConcurrency"], 13);
+        }
+        let calls: Vec<Vec<String>> = fake
+            .calls()
+            .into_iter()
+            .map(|arguments| {
+                arguments
+                    .into_iter()
+                    .map(|argument| argument.into_string().unwrap())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| arguments
+                    .iter()
+                    .any(|argument| argument.contains(":9089/proxy/metrics")))
+                .count(),
+            4
+        );
+        let rollouts: Vec<_> = calls
+            .iter()
+            .filter_map(|arguments| {
+                arguments
+                    .iter()
+                    .position(|argument| argument == "rollout")
+                    .map(|index| (&arguments[index + 1], &arguments[index + 2]))
+            })
+            .collect();
+        assert_eq!(rollouts.len(), 10);
+        assert!(
+            rollouts[..4]
+                .iter()
+                .all(|(operation, name)| *operation == "restart" && name.contains("mockdc"))
+        );
+        assert!(
+            rollouts[4..8]
+                .iter()
+                .all(|(operation, name)| *operation == "status" && name.contains("mockdc"))
+        );
+        assert_eq!(
+            rollouts[8],
+            (
+                &"restart".to_owned(),
+                &"deployment/llm-request-router".to_owned()
+            )
+        );
+        assert_eq!(
+            rollouts[9],
+            (
+                &"status".to_owned(),
+                &"deployment/llm-request-router".to_owned()
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deployment_requires_current_generation_and_all_ready_replicas() -> Result<()> {
+        let mut deployment = json!({
+            "metadata": {"generation": 2}, "spec": {"replicas": 3},
+            "status": {"observedGeneration": 2, "readyReplicas": 3, "updatedReplicas": 3, "availableReplicas": 3}
+        });
+        check_deployment(&deployment, "router", 3)?;
+        for key in [
+            "observedGeneration",
+            "readyReplicas",
+            "updatedReplicas",
+            "availableReplicas",
+        ] {
+            let original = deployment["status"][key].take();
+            assert!(
+                check_deployment(&deployment, "router", 3).is_err(),
+                "missing {key} accepted"
+            );
+            deployment["status"][key] = original;
+        }
+        deployment["status"]["observedGeneration"] = json!(1);
+        assert!(check_deployment(&deployment, "router", 3).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn registration_service_requires_both_protocols_and_ingress() -> Result<()> {
+        let mut service = json!({"spec": {"type": "LoadBalancer", "ports": [
+            {"port":50071,"protocol":"TCP"}, {"port":50072,"protocol":"UDP"}
+        ]}, "status": {"loadBalancer":{"ingress":[{"hostname":"example.invalid"}]}}});
+        check_registration_service(&service)?;
+        service["spec"]["ports"][1]["protocol"] = json!("TCP");
+        assert!(check_registration_service(&service).is_err());
+        service["spec"]["ports"][1]["protocol"] = json!("UDP");
+        service["status"]["loadBalancer"]["ingress"] = json!([]);
+        assert!(check_registration_service(&service).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn mockdc_ignores_terminating_pods_but_requires_both_ready_identities() -> Result<()> {
+        let mut pods = json!({"items": [pod("old", "mock-backend-0", true),
+            pod("new-0", "mock-backend-0", false), pod("new-1", "mock-backend-1", false)]});
+        check_mockdc(&pods, "mock")?;
+        pods["items"][2]["status"]["containerStatuses"][1]["ready"] = json!(false);
+        assert!(check_mockdc(&pods, "mock").is_err());
+        pods["items"][2] = pod("new-1", "mock-backend-0", false);
+        assert!(check_mockdc(&pods, "mock").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn metrics_use_exact_names_and_decode_escaped_labels() -> Result<()> {
+        let metrics = concat!(
+            "# gauge help\n",
+            "stargate_active_inference_servers_other{model=\"m\",routing_key=\"r\"} 999\n",
+            "stargate_active_inference_servers{model=\"other\",routing_key=\"r\"} 900\n",
+            "stargate_active_inference_servers{ model=\"m\", routing_key=\"r\" } 8 12345\n",
+            "escaped{key=\"a,}\\\"b\\n\\\\\"} 4\n",
+        );
+        check_router_metrics(metrics, "r", "m", 8.0)?;
+        assert!(check_router_metrics(metrics, "r", "m", 4.0).is_err());
+        assert!(check_router_metrics(metrics, "missing", "m", 8.0).is_err());
+        assert_eq!(
+            metric_values(metrics, "escaped", &[("key", "a,}\"b\n\\")])?,
+            [4.0]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_configuration_is_inferred_and_metrics_are_model_scoped() -> Result<()> {
+        let pod = pod("worker", "backend-0", false);
+        assert_eq!(calibration_limits(&pod)?, (17, 13));
+        let mut uncalibrated = pod.clone();
+        uncalibrated["spec"]["containers"][1]["args"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|argument| argument != "--do-calibration");
+        assert!(calibration_limits(&uncalibrated).is_err());
+        let metrics = concat!(
+            "pylon_engine_stats_stream_events_total{kind=\"sample\"} 0\n",
+            "pylon_engine_stats_stream_connected{mode=\"off\"} 0\n",
+            "pylon_model_calibration_duration_ms_count{model=\"wanted\",outcome=\"completed\"} 1\n",
+            "pylon_model_last_mean_input_tps{model=\"wanted\"} 321\n",
+            "pylon_model_stats_source{model=\"wanted\",source=\"engine_stats_stream\"} 0\n",
+            "pylon_model_calibration_duration_ms_count{model=\"other\",outcome=\"completed\"} 100\n",
+            "pylon_model_last_mean_input_tps{model=\"other\"} 999\n",
+        );
+        assert_eq!(
+            check_fallback_metrics(metrics, "wanted")?["inputTps"],
+            321.0
+        );
+        assert!(check_fallback_metrics(metrics, "missing").is_err());
+        let incomplete = metrics.replace(
+            "model=\"wanted\",outcome=\"completed\"} 1",
+            "model=\"wanted\",outcome=\"completed\"} 0",
+        );
+        assert!(check_fallback_metrics(&incomplete, "wanted").is_err());
+        let active = metrics.replace("mode=\"off\"} 0", "mode=\"off\"} 1");
+        assert!(check_fallback_metrics(&active, "wanted").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reset_requires_explicit_zero_cache_fields() -> Result<()> {
+        check_empty_caches(&json!({"backend": {"kv_cache_entries": 0,"kv_cache_used_tokens": 0}}))?;
+        assert!(check_empty_caches(&json!({"backend": {"kv_cache_entries": 0}})).is_err());
+        assert!(
+            check_empty_caches(
+                &json!({"backend": {"kv_cache_entries": 1,"kv_cache_used_tokens": 0}})
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+}

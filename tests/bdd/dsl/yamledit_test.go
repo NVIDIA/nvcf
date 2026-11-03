@@ -313,6 +313,107 @@ func TestSubstituteFileBlockRejectsMissingOldBlock(t *testing.T) {
 	}
 }
 
+// TestRenderYAMLFromKeysBuildsNestedDocument verifies that
+// RenderYAMLFromKeys produces a nested YAML structure from dotted-path
+// key/value pairs without touching the filesystem.
+func TestRenderYAMLFromKeysBuildsNestedDocument(t *testing.T) {
+	keys := [][2]string{
+		{"llmRequestRouter.fullnameOverride", "llm-request-router-region-b"},
+		{"llmRequestRouter.replicaCount", "2"},
+		{"llmRequestRouter.workload.kind", "StatefulSet"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	out := string(body)
+	for _, want := range []string{
+		"fullnameOverride: llm-request-router-region-b",
+		"replicaCount: \"2\"",
+		"kind: StatefulSet",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderYAMLFromKeysPreservesBoolsAndCollections verifies that
+// booleans and collection literals are decoded to native YAML types
+// while numbers remain as quoted strings.
+func TestRenderYAMLFromKeysPreservesBoolsAndCollections(t *testing.T) {
+	keys := [][2]string{
+		{"router.enabled", "true"},
+		{"router.pki.enabled", "false"},
+		{"router.replicaCount", "2"},
+		{"router.discovery.remoteWatchUrls", "[]"},
+		{"router.name", "region-b"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := string(body)
+
+	for _, want := range []string{
+		"enabled: true",
+		"enabled: false",
+		"remoteWatchUrls: []",
+		"name: region-b",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		`enabled: "true"`,
+		`enabled: "false"`,
+		`remoteWatchUrls: "[]"`,
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("value emitted as quoted string %q:\n%s", unwanted, out)
+		}
+	}
+	// Numbers stay as quoted strings; Helm coerces them in templates.
+	if !strings.Contains(out, `replicaCount: "2"`) {
+		t.Fatalf("replicaCount should remain a quoted string:\n%s", out)
+	}
+}
+
+// TestRenderYAMLFromKeysRejectsInvalidPath confirms that a malformed
+// dotted path surfaces as an error instead of a partial document.
+func TestRenderYAMLFromKeysRejectsInvalidPath(t *testing.T) {
+	keys := [][2]string{
+		{"router.name", "region-b"},
+		{"router..enabled", "true"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err == nil || !strings.Contains(err.Error(), "empty segment") {
+		t.Fatalf("err = %v, want invalid-path error", err)
+	}
+	if body != nil {
+		t.Fatalf("body should be nil on error, got:\n%s", body)
+	}
+}
+
+// TestRenderYAMLFromKeysInterpolatesValues confirms that ${VAR}
+// references in value cells are expanded before serialization.
+func TestRenderYAMLFromKeysInterpolatesValues(t *testing.T) {
+	t.Setenv("BDD_TEST_HOST", "region-b.example.invalid")
+
+	keys := [][2]string{
+		{"service.host", "${BDD_TEST_HOST}"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(string(body), "host: region-b.example.invalid") {
+		t.Fatalf("interpolation failed:\n%s", body)
+	}
+}
+
 func TestParsePathInvalidShapes(t *testing.T) {
 	bads := []string{
 		"a..b",
@@ -327,5 +428,63 @@ func TestParsePathInvalidShapes(t *testing.T) {
 				t.Fatalf("expected error for %q", p)
 			}
 		})
+	}
+}
+
+func TestSetYAMLKeyReplacesSubtreeWithTypedYAML(t *testing.T) {
+	t.Setenv("BDD_TEST_FUNCTION_ID", "fn-1")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env.yaml")
+	writeFile(t, path, "global:\n  domain: localhost\naddons:\n  vanityGateway:\n    enabled: true\n    mappingConfig:\n      v2config:\n        openai:\n          host: old.localhost\n")
+
+	err := SetYAMLKey(path, "addons.vanityGateway.mappingConfig.v2config.openai", `host: openai.localhost
+chatCompletions:
+  primary:
+    functionID: ${BDD_TEST_FUNCTION_ID}
+    shadows:
+      - modelName: shadow
+        percentage: 50
+        samplingMethod: [promptCacheKey, firstMessageHash]
+`)
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	for key, want := range map[string]string{
+		"global.domain":                "localhost",
+		"addons.vanityGateway.enabled": "true",
+		"addons.vanityGateway.mappingConfig.v2config.openai.host":                               "openai.localhost",
+		"addons.vanityGateway.mappingConfig.v2config.openai.chatCompletions.primary.functionID": "fn-1",
+	} {
+		got, found, err := ReadYAMLKey(path, key)
+		if err != nil || !found || got != want {
+			t.Fatalf("%s = %q (found %v, err %v), want %q", key, got, found, err, want)
+		}
+	}
+	data, _ := os.ReadFile(path)
+	for _, want := range []string{"percentage: 50\n", "- promptCacheKey\n"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("typed value %q missing:\n%s", want, data)
+		}
+	}
+}
+
+func TestSetYAMLKeyCreatesMissingParentsAndRejectsBadInput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env.yaml")
+	writeFile(t, path, "global: scalar\n")
+	if err := SetYAMLKey(path, "addons.vanityGateway.mappingConfig", "v2config: {}\n"); err != nil {
+		t.Fatalf("missing parents: %v", err)
+	}
+	if _, found, _ := ReadYAMLKey(path, "addons.vanityGateway.mappingConfig.v2config"); !found {
+		t.Fatal("subtree not created")
+	}
+	if err := SetYAMLKey(path, "global.child", "a: 1\n"); err == nil {
+		t.Fatal("expected error when a scalar blocks descent")
+	}
+	if err := SetYAMLKey(path, "addons.bad", "a: [1\n"); err == nil {
+		t.Fatal("expected error for invalid YAML")
+	}
+	if err := SetYAMLKey(path, "", "a: 1\n"); err == nil {
+		t.Fatal("expected error for an empty key")
 	}
 }

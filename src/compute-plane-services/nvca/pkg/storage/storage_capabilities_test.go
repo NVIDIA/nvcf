@@ -18,7 +18,10 @@ limitations under the License.
 package storage
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	fakek8sclient "k8s.io/client-go/kubernetes/fake"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -93,9 +97,6 @@ func TestLoadStorageCapabilityCatalogStrict(t *testing.T) {
 }
 
 func TestLoadStorageCapabilityCatalogErrors(t *testing.T) {
-	missingConfigMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: testCatalogNamespace},
-	}
 	missingData := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: StorageCapabilityConfigMapName, Namespace: testCatalogNamespace},
 	}
@@ -117,10 +118,6 @@ func TestLoadStorageCapabilityCatalogErrors(t *testing.T) {
 		{
 			name: "empty namespace", namespace: "",
 			configMap: capabilityCatalogConfigMap(validCatalog), want: "namespace is empty",
-		},
-		{
-			name: "missing ConfigMap", namespace: testCatalogNamespace,
-			configMap: missingConfigMap, want: "get storage capability ConfigMap",
 		},
 		{
 			name: "missing data key", namespace: testCatalogNamespace,
@@ -363,11 +360,23 @@ func TestValidateStorageCapabilityCatalogAllowsNothingQualified(t *testing.T) {
 	require.NoError(t, validateStorageCapabilityCatalog(catalog))
 }
 
-func TestShippedStorageCapabilityCatalog(t *testing.T) {
-	chartDir := filepath.Join("src", "compute-plane-services", "nvca", "deployments", "nvca-operator")
-	if _, err := os.Stat(chartDir); os.IsNotExist(err) {
-		chartDir = filepath.Join("..", "..", "deployments", "nvca-operator")
+// shippedChartDir locates the operator chart. Bazel runs the test from the
+// runfiles root with the catalog staged as a data dependency; go test runs it
+// from the package directory. The chart lives outside this package either way.
+func shippedChartDir(t *testing.T) string {
+	t.Helper()
+	rel := filepath.Join("deploy", "helm", "nvca-operator", "nvca-operator")
+	for _, candidate := range []string{rel, filepath.Join("_main", rel), filepath.Join("..", "..", "..", "..", "..", rel)} {
+		if _, err := os.Stat(filepath.Join(candidate, "files", "nvcf-storage-capabilities-v1alpha1.yaml")); err == nil {
+			return candidate
+		}
 	}
+	t.Fatal("could not locate the nvca-operator chart files")
+	return ""
+}
+
+func TestShippedStorageCapabilityCatalog(t *testing.T) {
+	chartDir := shippedChartDir(t)
 	raw, err := os.ReadFile(filepath.Join(chartDir, "files", "nvcf-storage-capabilities-v1alpha1.yaml"))
 	require.NoError(t, err)
 	c := capabilityClient(t, capabilityCatalogConfigMap(string(raw))).Build()
@@ -380,17 +389,26 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	require.NotNil(t, nvmesh.ReaderMountOptions)
 	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, *nvmesh.ReaderMountOptions)
 
-	// Weka, FSS and Lustre are recorded but not qualified for a cache workflow,
-	// so they carry no access modes and caching stays off for them. Enabling
-	// one is an edit to its accessModes, backed by a qualification run.
-	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com", "lustre.csi.oraclecloud.com"} {
+	// Weka, OCI FSS and NetApp Trident (ONTAP NAS) are shared filesystems
+	// enabled on the ReadWriteMany shape: one shared claim, readers mount it
+	// read-only, no derived reader PV and therefore no reader mount options.
+	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com", "csi.trident.netapp.io"} {
 		driver, ok := catalog.Drivers[provisioner]
 		require.True(t, ok, provisioner)
 		require.NotNil(t, driver.AccessModes, provisioner)
-		assert.Empty(t, *driver.AccessModes, provisioner)
+		assert.Equal(t, []string{"ReadWriteMany"}, *driver.AccessModes, provisioner)
 		require.NotNil(t, driver.ReaderMountOptions, provisioner)
 		assert.Empty(t, *driver.ReaderMountOptions, provisioner)
 	}
+
+	// Lustre is recorded but not enabled for a cache workflow, so it carries
+	// no access modes and caching stays off for it.
+	lustre, ok := catalog.Drivers["lustre.csi.oraclecloud.com"]
+	require.True(t, ok)
+	require.NotNil(t, lustre.AccessModes)
+	assert.Empty(t, *lustre.AccessModes)
+	require.NotNil(t, lustre.ReaderMountOptions)
+	assert.Empty(t, *lustre.ReaderMountOptions)
 
 	schemaRaw, err := os.ReadFile(filepath.Join(chartDir, "files", "nvcf-storage-capabilities-v1alpha1.schema.json"))
 	require.NoError(t, err)
@@ -510,7 +528,7 @@ func TestSelectionFollowsQualifiedModes(t *testing.T) {
 	sc := testModelCacheStorageClass()
 	sc.Provisioner = provisioner
 	for _, workflow := range []ModelCacheWorkflow{ModelCacheWorkflowRegular, ModelCacheWorkflowHelm} {
-		selection, err := selectModelCacheStorageFromObjects(sc, catalog, "sha256:catalog", workflow)
+		selection, err := selectModelCacheStorageFromObjects(sc, catalog, "sha256:catalog", workflow, nil)
 		require.NoError(t, err, workflow)
 		assert.Equal(t, ModelCacheTransitionRWXReadOnly, selection.Transition, workflow)
 		assert.Equal(t,
@@ -544,4 +562,231 @@ func TestStorageCapabilityCatalogEncryptionSupported(t *testing.T) {
 		digestDriverProfile(NVMeshStorageClassProvisioner, nvmesh, ModelCacheWorkflowHelm, ModelCacheTransitionROXReadOnly),
 		digestDriverProfile(NVMeshStorageClassProvisioner, without, ModelCacheWorkflowHelm, ModelCacheTransitionROXReadOnly),
 		"encryption support is part of the driver profile digest")
+}
+
+func TestResolveModelCacheStorageWithClientsetMissingCatalogUsesBuiltin(t *testing.T) {
+	sc := testModelCacheStorageClass()
+	k8s := fakek8sclient.NewSimpleClientset(sc)
+
+	selection, err := ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.NoError(t, err, "an absent catalog ConfigMap must resolve against the built-in catalog")
+	assert.True(t, selection.CatalogBuiltin)
+	assert.Equal(t, ModelCacheProviderNVMesh, selection.Provider)
+	assert.Equal(t, ModelCacheTransitionROXReadOnly, selection.Transition)
+	assert.Equal(t, digestCatalogPayload(builtinStorageCapabilityCatalogYAML), selection.CatalogRevision)
+
+	// With the ConfigMap present the selection is identical except for the flag.
+	k8s = fakek8sclient.NewSimpleClientset(sc, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: StorageCapabilityConfigMapName, Namespace: "nvca-system"},
+		Data:       map[string]string{StorageCapabilityConfigMapKey: builtinStorageCapabilityCatalogYAML},
+	})
+	fromConfigMap, err := ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.NoError(t, err)
+	assert.False(t, fromConfigMap.CatalogBuiltin)
+	fromConfigMap.CatalogBuiltin = true
+	assert.Equal(t, selection, fromConfigMap)
+
+	// A present but empty catalog is a configuration error, not absence.
+	k8s = fakek8sclient.NewSimpleClientset(sc, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: StorageCapabilityConfigMapName, Namespace: "nvca-system"},
+	})
+	_, err = ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.ErrorContains(t, err, "has no")
+}
+
+// The built-in catalog must be the one the chart installs, or an agent ahead
+// of its chart would resolve differently from a converged install.
+func TestBuiltinCatalogMatchesChart(t *testing.T) {
+	chartCopy, err := os.ReadFile(filepath.Join(shippedChartDir(t), "files", "nvcf-storage-capabilities-v1alpha1.yaml"))
+	require.NoError(t, err, "the chart catalog must be readable; the built-in copy is checked against it")
+	assert.Equal(t, string(chartCopy), builtinStorageCapabilityCatalogYAML)
+	_, _, err = builtinStorageCapabilityCatalog()
+	require.NoError(t, err)
+}
+
+func TestLoadStorageCapabilityCatalogMissingConfigMapUsesBuiltin(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	catalog, digest, builtin, err := loadStorageCapabilityCatalogSnapshot(t.Context(), c, testCatalogNamespace)
+	require.NoError(t, err)
+	assert.True(t, builtin)
+	assert.Equal(t, digestCatalogPayload(builtinStorageCapabilityCatalogYAML), digest)
+	_, ok := catalog.Drivers[NVMeshStorageClassProvisioner]
+	assert.True(t, ok, "the built-in catalog must qualify NVMesh")
+}
+
+func csiDriverWithPolicy(name string, policy *storagev1.FSGroupPolicy) *storagev1.CSIDriver {
+	return &storagev1.CSIDriver{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec:       storagev1.CSIDriverSpec{FSGroupPolicy: policy},
+	}
+}
+
+func fsGroupPolicy(p storagev1.FSGroupPolicy) *storagev1.FSGroupPolicy { return &p }
+
+// TestSharedClaimWriterIdentity is the rule for when the shared-claim writer
+// may run as root: only when the live CSIDriver says the pod fsGroup will not
+// be applied to a ReadWriteMany claim, or the catalog says so outright.
+func TestSharedClaimWriterIdentity(t *testing.T) {
+	auto := storageDriverSpec{Provider: "shared", AccessModes: accessModes("ReadWriteMany"), ReaderMountOptions: readerMountOptions()}
+	forbidRoot := auto
+	forbidRoot.WriterIdentity = ModelCacheWriterIdentityFSGroup
+	requireRoot := auto
+	requireRoot.WriterIdentity = ModelCacheWriterIdentityRoot
+
+	tests := []struct {
+		name   string
+		driver storageDriverSpec
+		csi    *storagev1.CSIDriver
+		want   string
+	}{
+		{"File applies fsGroup, writer stays non-root", auto,
+			csiDriverWithPolicy("d", fsGroupPolicy(storagev1.FileFSGroupPolicy)), ModelCacheWriterIdentityFSGroup},
+		{"ReadWriteOnceWithFSType skips RWX claims, writer needs root", auto,
+			csiDriverWithPolicy("d", fsGroupPolicy(storagev1.ReadWriteOnceWithFSTypeFSGroupPolicy)), ModelCacheWriterIdentityRoot},
+		{"None never applies fsGroup, writer needs root", auto,
+			csiDriverWithPolicy("d", fsGroupPolicy(storagev1.NoneFSGroupPolicy)), ModelCacheWriterIdentityRoot},
+		{"unset field is the API default ReadWriteOnceWithFSType", auto,
+			csiDriverWithPolicy("d", nil), ModelCacheWriterIdentityRoot},
+		{"no CSIDriver registered keeps the non-root writer", auto, nil, ModelCacheWriterIdentityFSGroup},
+		{"catalog fsGroup forbids root even where the driver would need it", forbidRoot,
+			csiDriverWithPolicy("d", fsGroupPolicy(storagev1.ReadWriteOnceWithFSTypeFSGroupPolicy)), ModelCacheWriterIdentityFSGroup},
+		{"catalog root wins over a File driver", requireRoot,
+			csiDriverWithPolicy("d", fsGroupPolicy(storagev1.FileFSGroupPolicy)), ModelCacheWriterIdentityRoot},
+		{"catalog root covers an unregistered CSIDriver", requireRoot, nil, ModelCacheWriterIdentityRoot},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, sharedClaimWriterIdentity(tt.driver, tt.csi))
+		})
+	}
+}
+
+// TestSelectionRecordsWriterIdentity checks the identity lands on the
+// selection for the shared-claim shape, and that the CSIDriver is consulted
+// only when it can change the answer.
+func TestSelectionRecordsWriterIdentity(t *testing.T) {
+	const provisioner = "shared.csi.example.com"
+	catalog := validStorageCapabilityCatalog()
+	catalog.Drivers[provisioner] = storageDriverSpec{
+		Provider: "someVendor", AccessModes: accessModes("ReadWriteMany"), ReaderMountOptions: readerMountOptions(),
+	}
+	require.NoError(t, validateStorageCapabilityCatalog(catalog))
+	sc := testModelCacheStorageClass()
+	sc.Provisioner = provisioner
+
+	calls := 0
+	lookup := func(name string) (*storagev1.CSIDriver, error) {
+		calls++
+		assert.Equal(t, provisioner, name, "the CSIDriver is looked up by the class's provisioner")
+		return csiDriverWithPolicy(name, fsGroupPolicy(storagev1.ReadWriteOnceWithFSTypeFSGroupPolicy)), nil
+	}
+	selection, err := selectModelCacheStorageFromObjects(sc, catalog, "sha256:catalog", ModelCacheWorkflowRegular, lookup)
+	require.NoError(t, err)
+	assert.Equal(t, ModelCacheTransitionRWXReadOnly, selection.Transition)
+	assert.Equal(t, ModelCacheWriterIdentityRoot, selection.WriterIdentity)
+	assert.Equal(t, 1, calls)
+
+	// A nil lookup reads as no registered CSIDriver: non-root.
+	selection, err = selectModelCacheStorageFromObjects(sc, catalog, "sha256:catalog", ModelCacheWorkflowRegular, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ModelCacheWriterIdentityFSGroup, selection.WriterIdentity)
+
+	// A lookup failure is an error, not a silent identity choice.
+	_, err = selectModelCacheStorageFromObjects(sc, catalog, "sha256:catalog", ModelCacheWorkflowRegular,
+		func(string) (*storagev1.CSIDriver, error) { return nil, errors.New("apiserver unavailable") })
+	require.ErrorContains(t, err, "get CSIDriver")
+
+	// An explicit catalog identity needs no lookup at all.
+	explicit := catalog.Drivers[provisioner]
+	explicit.WriterIdentity = ModelCacheWriterIdentityFSGroup
+	catalog.Drivers[provisioner] = explicit
+	calls = 0
+	selection, err = selectModelCacheStorageFromObjects(sc, catalog, "sha256:catalog", ModelCacheWorkflowRegular, lookup)
+	require.NoError(t, err)
+	assert.Equal(t, ModelCacheWriterIdentityFSGroup, selection.WriterIdentity)
+	assert.Equal(t, 0, calls, "the catalog override is final")
+
+	// The ReadWriteOnce plus ReadOnlyMany shape has no shared-claim writer and
+	// never consults the CSIDriver.
+	calls = 0
+	rox, err := selectModelCacheStorageFromObjects(testModelCacheStorageClass(), catalog, "sha256:catalog",
+		ModelCacheWorkflowRegular, lookup)
+	require.NoError(t, err)
+	assert.Equal(t, ModelCacheTransitionROXReadOnly, rox.Transition)
+	assert.Empty(t, rox.WriterIdentity)
+	assert.Equal(t, 0, calls)
+}
+
+func TestResolveModelCacheStorageWithClientsetReadsCSIDriver(t *testing.T) {
+	const provisioner = "csi.weka.io"
+	sc := testModelCacheStorageClass()
+	sc.Provisioner = provisioner
+
+	k8s := fakek8sclient.NewSimpleClientset(sc,
+		csiDriverWithPolicy(provisioner, fsGroupPolicy(storagev1.FileFSGroupPolicy)))
+	selection, err := ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.NoError(t, err)
+	assert.Equal(t, ModelCacheTransitionRWXReadOnly, selection.Transition)
+	assert.Equal(t, ModelCacheWriterIdentityFSGroup, selection.WriterIdentity,
+		"Weka's chart defaults fsGroupPolicy to File, so the non-root writer can populate the claim")
+
+	k8s = fakek8sclient.NewSimpleClientset(sc,
+		csiDriverWithPolicy(provisioner, fsGroupPolicy(storagev1.ReadWriteOnceWithFSTypeFSGroupPolicy)))
+	selection, err = ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.NoError(t, err)
+	assert.Equal(t, ModelCacheWriterIdentityRoot, selection.WriterIdentity)
+
+	k8s = fakek8sclient.NewSimpleClientset(sc)
+	selection, err = ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.NoError(t, err, "an unregistered CSIDriver is not an error")
+	assert.Equal(t, ModelCacheWriterIdentityFSGroup, selection.WriterIdentity)
+}
+
+func TestResolveModelCacheStorageReadsCSIDriver(t *testing.T) {
+	const provisioner = "fss.csi.oraclecloud.com"
+	sc := testModelCacheStorageClass()
+	sc.Provisioner = provisioner
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, storagev1.AddToScheme(scheme))
+	// No catalog ConfigMap: the built-in catalog, which lists this driver, is used.
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sc,
+		csiDriverWithPolicy(provisioner, fsGroupPolicy(storagev1.ReadWriteOnceWithFSTypeFSGroupPolicy))).Build()
+	selection, err := ResolveModelCacheStorage(context.Background(), c, testCatalogNamespace, ModelCacheWorkflowHelm)
+	require.NoError(t, err)
+	assert.Equal(t, ModelCacheTransitionRWXReadOnly, selection.Transition)
+	assert.Equal(t, ModelCacheWriterIdentityRoot, selection.WriterIdentity)
+}
+
+func TestValidateStorageCapabilityCatalogWriterIdentity(t *testing.T) {
+	catalog := validStorageCapabilityCatalog()
+	shared := storageDriverSpec{Provider: "shared", AccessModes: accessModes("ReadWriteMany"), ReaderMountOptions: readerMountOptions()}
+
+	for _, identity := range []string{"", ModelCacheWriterIdentityFSGroup, ModelCacheWriterIdentityRoot} {
+		shared.WriterIdentity = identity
+		catalog.Drivers["shared.example.com"] = shared
+		require.NoError(t, validateStorageCapabilityCatalog(catalog), identity)
+	}
+
+	shared.WriterIdentity = "sudo"
+	catalog.Drivers["shared.example.com"] = shared
+	require.ErrorContains(t, validateStorageCapabilityCatalog(catalog), "invalid writerIdentity")
+	delete(catalog.Drivers, "shared.example.com")
+
+	// Only the shared-claim shape has a writer whose identity NVCA sets.
+	rox := catalog.Drivers[NVMeshStorageClassProvisioner]
+	rox.WriterIdentity = ModelCacheWriterIdentityRoot
+	catalog.Drivers[NVMeshStorageClassProvisioner] = rox
+	require.ErrorContains(t, validateStorageCapabilityCatalog(catalog), "does not qualify ReadWriteMany")
+}
+
+func TestDigestDriverProfileWriterIdentity(t *testing.T) {
+	driver := storageDriverSpec{Provider: "shared", AccessModes: accessModes("ReadWriteMany"), ReaderMountOptions: readerMountOptions()}
+	base := digestDriverProfile("shared.example.com", driver, ModelCacheWorkflowRegular, ModelCacheTransitionRWXReadOnly)
+	assert.Equal(t, base, digestDriverProfile("shared.example.com", driver, ModelCacheWorkflowRegular, ModelCacheTransitionRWXReadOnly))
+	driver.WriterIdentity = ModelCacheWriterIdentityRoot
+	assert.NotEqual(t, base, digestDriverProfile("shared.example.com", driver, ModelCacheWorkflowRegular, ModelCacheTransitionRWXReadOnly),
+		"an explicit writer identity is part of the qualified profile")
 }

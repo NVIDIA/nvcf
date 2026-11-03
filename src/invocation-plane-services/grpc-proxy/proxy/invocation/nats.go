@@ -38,7 +38,7 @@ import (
 	"nvcf-grpc-proxy/proxy/metrics"
 )
 
-func NewNatsConnection(natsFqdn, nKeySeed, serviceName, ssaFqdn, secretsPath string) (*nats.Conn, error) {
+func NewNatsConnection(natsFqdn, nKeySeed, serviceName, oauth2Fqdn, secretsPath string) (*nats.Conn, error) {
 	var natsAuthOption nats.Option
 	if nKeySeed != "" {
 		var err error
@@ -49,7 +49,7 @@ func NewNatsConnection(natsFqdn, nKeySeed, serviceName, ssaFqdn, secretsPath str
 		}
 	} else {
 		var err error
-		natsAuthOption, err = newAuthCalloutAuthOption(ssaFqdn, secretsPath)
+		natsAuthOption, err = newAuthCalloutAuthOption(oauth2Fqdn, secretsPath)
 		if err != nil {
 			recordNatsStartupFailure("nats auth callout setup failed", err)
 			return nil, err
@@ -182,8 +182,8 @@ func newNkeyAuthOption(nKeySeed string) (nats.Option, error) {
 	}), nil
 }
 
-func newAuthCalloutAuthOption(ssaFqdn, secretsPath string) (nats.Option, error) {
-	oauthTokenProvider, err := newOAuthTokenProvider(ssaFqdn, secretsPath)
+func newAuthCalloutAuthOption(oauth2Fqdn, secretsPath string) (nats.Option, error) {
+	oauthTokenProvider, err := newOAuthTokenProvider(oauth2Fqdn, secretsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -195,10 +195,10 @@ type oauthTokenProvider struct {
 	tokenSource credentials.PerRPCCredentials
 }
 
-func newOAuthTokenProvider(ssaFqdn, secretsPath string) (*oauthTokenProvider, error) {
+func newOAuthTokenProvider(oauth2Fqdn, secretsPath string) (*oauthTokenProvider, error) {
 	authnConfig := &auth.AuthnConfig{
 		OIDCConfig: &auth.ProviderConfig{
-			Host:            ssaFqdn,
+			Host:            oauth2Fqdn,
 			CredentialsFile: secretsPath,
 			Scopes:          []string{"admin:nats:Worker"},
 		},

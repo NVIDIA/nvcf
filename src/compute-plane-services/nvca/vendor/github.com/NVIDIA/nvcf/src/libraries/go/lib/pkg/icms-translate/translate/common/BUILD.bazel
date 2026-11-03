@@ -15,7 +15,6 @@ go_library(
     ],
     embedsrcs = [
         "manifests/fluent-bit.conf.tmpl",
-        "manifests/parsers.conf",
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",

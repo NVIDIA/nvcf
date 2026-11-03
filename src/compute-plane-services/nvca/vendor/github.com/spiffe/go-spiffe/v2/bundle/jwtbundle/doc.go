@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package jwtbundle provides JWT bundle related functionality.
 //
 // A bundle represents a collection of JWT authorities, i.e., those that

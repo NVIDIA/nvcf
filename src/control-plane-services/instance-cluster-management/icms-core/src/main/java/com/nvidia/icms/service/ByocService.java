@@ -19,17 +19,10 @@ package com.nvidia.icms.service;
 import com.nvidia.icms.errors.IcmsNotFoundException;
 import com.nvidia.icms.inbound.rest.model.CloudProvider;
 import com.nvidia.icms.inbound.rest.model.TerminateInstancesResponse;
-import com.nvidia.icms.inbound.rest.model.byoc.BartRegistrationCredentialsResponse;
-import com.nvidia.icms.inbound.rest.model.byoc.BartRegistrationRequest;
-import com.nvidia.icms.inbound.rest.model.byoc.BartRegistrationResponse;
-import com.nvidia.icms.inbound.rest.model.byoc.ClusterHeartbeatRequest;
 import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
 import com.nvidia.icms.service.byoc.ByocTerminateService;
-import com.nvidia.icms.service.byoc.ClusterHealthService;
-import com.nvidia.icms.service.byoc.ClusterQueueAccessCredsService;
-import com.nvidia.icms.service.byoc.ClusterRegistrationService;
 import jakarta.validation.constraints.NotNull;
 import java.util.Map;
 import java.util.Optional;
@@ -43,34 +36,9 @@ import org.springframework.stereotype.Service;
 @AllArgsConstructor
 public class ByocService {
 
-    private final ClusterQueueAccessCredsService clusterQueueAccessCredsService;
-    private final ClusterRegistrationService clusterRegistrationService;
-    private final ClusterHealthService clusterHeartbeatService;
     private final ClusterRepository clusterRepository;
 
     private final ByocTerminateService byocTerminateService;
-
-    public BartRegistrationResponse registerCluster(
-            BartRegistrationRequest bartRegistrationRequest,
-            String clusterId,
-            Map<String, Object> auditProps) {
-        return clusterRegistrationService.registerCluster(bartRegistrationRequest, clusterId,
-                                                          auditProps);
-    }
-
-    public void deleteCluster(String clusterId, Map<String, Object> auditProps) {
-        clusterRegistrationService.deleteCluster(clusterId, auditProps);
-    }
-
-    public BartRegistrationCredentialsResponse getClusterQueuesInfo(String clusterId) {
-        return clusterQueueAccessCredsService.getClusterQueuesInfo(clusterId);
-    }
-
-    public void registerClusterHeartbeat(
-            ClusterHeartbeatRequest heartbeatRequest,
-            String clusterId) {
-        clusterHeartbeatService.registerClusterHeartbeat(heartbeatRequest, clusterId);
-    }
 
     public CloudProvider getCloudProviderForByocCluster(String clusterId) {
 

@@ -22,17 +22,22 @@ global:
   image:
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
 
-  # These service DNS names resolve to real control-plane Services in
-  # the single-cluster topology and to compute-cluster alias Services
-  # in the multi-cluster topology.
   nvcaOperator:
+    # NVCA subtracts the utils reservation plus small sidecars from every
+    # instance type. The default Helm resource limit gates keep that
+    # accounting on. This smaller local reservation keeps NCP.GPU.H100_1x
+    # registered on hosts with about 8 CPUs.
+    utils:
+      resources:
+        cpu: "1"
+        memory: 2Gi
     selfManaged:
-      # The simulated GPU density exceeds laptop CPU and memory ratios. Keep
-      # dynamic discovery's 1x type so NVCA can report local GPU capacity.
       featureGateValues:
-        - -InfraResourceOverhead
         - -EnforceContainerFunctionResourceLimits
         - -EnforceContainerTaskResourceLimits
+      # These service DNS names resolve to real control-plane Services in
+      # the single-cluster topology and to compute-cluster alias Services
+      # in the multi-cluster topology.
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
       revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
       natsURL: nats://nats.nats-system.svc.cluster.local:4222

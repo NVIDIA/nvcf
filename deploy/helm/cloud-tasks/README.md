@@ -25,6 +25,28 @@ Use `make template` or `make lint` to render and validate the chart locally.
 - Image registry, repository, and tag: `nvct-api/values.yaml` under `nvctApi.image`
 - Runtime environment: `nvctApi.env` (Spring relaxed binding / `NVCT_*`, `SPRING_*`, `KAIZEN_*`, etc.)
 - Vault-injected secrets template: `nvct-api/vault-agent-templates/secrets.json.tmpl` (paths under `/services/nvct-service/kv/...` and shared `services/all/...` keys)
+- Worker sidecar image tags: `nvctApi.remoteConfig.workerImageTags` (see below)
+
+## Worker sidecar image tags
+
+The chart composes the task worker references in
+`nvctApi.remoteConfig.configData.nvct.sidecars` from one tag per worker:
+
+| Key | Sidecar entry | Image |
+|-----|---------------|-------|
+| `nvctApi.remoteConfig.workerImageTags.init` | `init-container` | `nvcf-worker-init-oss` |
+| `nvctApi.remoteConfig.workerImageTags.task` | `utils-container` | `nvcf-worker-task-oss` |
+
+Each reference renders as
+`${nvct.sidecars.hostname}/${nvct.sidecars.repository}/<image>:<tag>`, and the
+service resolves the placeholders at runtime. A worker release moves its key
+through `tools/chart-version-bumper`, which reads the `deploys` entries in
+`tools/ci/github-release-subprojects.json`. To replace a whole reference, for
+example to use another image name, set the matching
+`nvctApi.remoteConfig.configData.nvct.sidecars` entry. It takes precedence over
+the composed value, and the matching tag is then optional. That keeps
+`helm upgrade --reuse-values` working for a release whose stored values predate
+`workerImageTags`.
 
 ## Remote Config RBAC
 

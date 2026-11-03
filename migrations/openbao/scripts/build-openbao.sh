@@ -4,14 +4,15 @@
 
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 
-bao_version=${BAO_VERSION:-2.6.2}
-bao_source_commit=${BAO_SOURCE_COMMIT:-dd9c19c37a878cf4a81b18efb8d6f0599c7da923}
-bao_source_sha256=${BAO_SOURCE_SHA256:-a7784550a9db16f24e99d65a18c9b12a433707c79ef4c1f34262d3f48171c7a9}
-bao_commit_date=${BAO_COMMIT_DATE:-2026-08-18T15:43:05Z}
-x_crypto_version=${X_CRYPTO_VERSION:-v0.56.0}
+bao_version=${BAO_VERSION:-2.6.3}
+bao_source_commit=${BAO_SOURCE_COMMIT:-63a65e6b907589dbb952c371a70260a065bf8bd7}
+bao_source_sha256=${BAO_SOURCE_SHA256:-471a2c2e3a156a833704f43335ed5e66476a90719ce692b80c3f541e346cda69}
+bao_commit_date=${BAO_COMMIT_DATE:-2026-09-23T16:37:53Z}
+x_net_version=${X_NET_VERSION:-v0.60.0}
+x_crypto_version=${X_CRYPTO_VERSION:-v0.57.0}
 grpc_version=${GRPC_VERSION:-v1.83.2}
 go_archive_version=${GO_ARCHIVE_VERSION:-v0.3.0}
 output_dir=${OUTPUT_DIR:-"$repo_root/files/openbao"}
@@ -44,12 +45,13 @@ tar -xJf "$archive" --strip-components=1 -C "$source_dir"
 
 (
   cd "$source_dir"
-  GOFLAGS=-mod=mod go get \
+  GOTOOLCHAIN=local GOFLAGS=-mod=mod go get \
+    "golang.org/x/net@${x_net_version}" \
     "golang.org/x/crypto@${x_crypto_version}" \
     "google.golang.org/grpc@${grpc_version}" \
     "github.com/moby/go-archive@${go_archive_version}"
-  GOFLAGS=-mod=mod go mod tidy
-  GOFLAGS=-mod=mod go mod verify
+  GOTOOLCHAIN=local GOFLAGS=-mod=mod go mod tidy
+  GOTOOLCHAIN=local GOFLAGS=-mod=mod go mod verify
 
   if [ -n "${TARGETARCH:-}" ]; then
     arches=$TARGETARCH
@@ -58,7 +60,7 @@ tar -xJf "$archive" --strip-components=1 -C "$source_dir"
   fi
 
   for arch in $arches; do
-    CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
+    CGO_ENABLED=0 GOOS=linux GOARCH="$arch" GOTOOLCHAIN=local go build \
       -mod=mod \
       -buildvcs=false \
       -trimpath \

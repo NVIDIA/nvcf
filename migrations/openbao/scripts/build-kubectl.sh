@@ -4,11 +4,13 @@
 
 set -eu
 
-kubectl_version=${KUBECTL_VERSION:-v1.36.4}
-kubectl_source_commit=${KUBECTL_SOURCE_COMMIT:-bb826b1d48562f110659e64e8ec444327433db95}
-kubectl_source_sha256=${KUBECTL_SOURCE_SHA256:-3c28f11492472df48e658551bf268fd92938b127b0f9dcef7090ac800318c821}
-kubectl_build_date=${KUBECTL_BUILD_DATE:-2026-08-20T03:09:25Z}
-kubectl_source_date_epoch=${KUBECTL_SOURCE_DATE_EPOCH:-1787195365}
+kubectl_version=${KUBECTL_VERSION:-v1.37.2}
+kubectl_source_commit=${KUBECTL_SOURCE_COMMIT:-c50e5395f1ae2d4a2c05f28fdcc38c0916cc1a32}
+kubectl_source_sha256=${KUBECTL_SOURCE_SHA256:-d4c61f7fd7adeb0bdfcc58add0ec929646b19314c316a524b2e3c7d3d4c4ff3f}
+kubectl_build_date=${KUBECTL_BUILD_DATE:-2026-10-27T12:01:04Z}
+kubectl_source_date_epoch=${KUBECTL_SOURCE_DATE_EPOCH:-1793102464}
+x_net_version=${X_NET_VERSION:-v0.60.0}
+otel_version=${OTEL_VERSION:-v1.44.0}
 target_arch=${TARGETARCH:?TARGETARCH must be set}
 output_dir=${OUTPUT_DIR:-/out}
 source_url=${KUBECTL_SOURCE_URL:-"https://dl.k8s.io/${kubectl_version}/kubernetes-src.tar.gz"}
@@ -35,18 +37,40 @@ curl --fail --location --silent --show-error "$source_url" --output "$archive"
 printf '%s  %s\n' "$kubectl_source_sha256" "$archive" | sha256sum -c -
 tar -xzf "$archive" -C "$source_dir"
 
+version=${kubectl_version#v}
+major=${version%%.*}
+minor_patch=${version#*.}
+minor=${minor_patch%%.*}
 version_ldflags=""
 for package in k8s.io/client-go/pkg/version k8s.io/component-base/version; do
   version_ldflags="$version_ldflags -X ${package}.gitVersion=${kubectl_version}"
   version_ldflags="$version_ldflags -X ${package}.gitCommit=${kubectl_source_commit}"
-  version_ldflags="$version_ldflags -X ${package}.gitTreeState=clean"
+  version_ldflags="$version_ldflags -X ${package}.gitTreeState=dirty"
   version_ldflags="$version_ldflags -X ${package}.buildDate=${kubectl_build_date}"
-  version_ldflags="$version_ldflags -X ${package}.gitMajor=1"
-  version_ldflags="$version_ldflags -X ${package}.gitMinor=36"
+  version_ldflags="$version_ldflags -X ${package}.gitMajor=${major}"
+  version_ldflags="$version_ldflags -X ${package}.gitMinor=${minor}"
 done
 
 (
   cd "$source_dir"
+  # Update the workspace dependency graph before regenerating vendor. Building
+  # offline below then uses exactly this patched graph, including staging modules.
+  GOTOOLCHAIN=local go mod edit -require="golang.org/x/net@${x_net_version}"
+  # GO-2026-5158 affects 1.41.0 and regresses in 1.43.0. Align the stable
+  # OpenTelemetry modules before syncing Kubernetes staging dependencies.
+  for module in \
+    go.opentelemetry.io/otel \
+    go.opentelemetry.io/otel/metric \
+    go.opentelemetry.io/otel/trace \
+    go.opentelemetry.io/otel/sdk \
+    go.opentelemetry.io/otel/sdk/metric \
+    go.opentelemetry.io/otel/exporters/otlp/otlptrace \
+    go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc \
+    go.opentelemetry.io/otel/exporters/stdout/stdouttrace; do
+    GOTOOLCHAIN=local go mod edit -require="${module}@${otel_version}"
+  done
+  GOTOOLCHAIN=local GOWORK="$source_dir/go.work" go work sync
+  GOTOOLCHAIN=local GOWORK="$source_dir/go.work" go work vendor
   CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH="$target_arch" \

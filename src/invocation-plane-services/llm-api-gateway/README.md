@@ -1,7 +1,8 @@
 # llm-api-gateway
 
 `llm-api-gateway` is an OpenAI-compatible gateway for routing chat,
-responses, and embeddings traffic to NVCF functions through Stargate.
+responses, embeddings, and decision model traffic to NVCF functions through
+Stargate.
 
 Requests reach this gateway as OpenAI-compatible payloads. The gateway does
 not render Hugging Face or Jinja chat templates, does not tokenize prompts, and
@@ -34,6 +35,8 @@ The gateway currently serves:
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/embeddings`
+- `POST /v1/decisions`
+- `POST /v1/systemone`
 
 ## Request Routing
 
@@ -71,6 +74,144 @@ persist the response header and send it on later requests for the same
 conversation. The gateway preserves the raw body field for the model backend.
 It forwards only a SHA-256-derived value in the internal
 `x-cache-affinity-key` header to Stargate.
+
+### Decision routes
+
+`POST /v1/decisions` and `POST /v1/systemone` forward requests to a decision
+model and do not translate between the two formats. The gateway reads only
+`model` and replaces its value with the function's model name. The request
+body is forwarded unchanged except for the model value: key order, spacing,
+escapes, numbers, and duplicate keys are kept. The response body is relayed
+unchanged. Responses are not streamed; `stream` is ignored.
+
+- A model is enabled for a route only when its function declares the route in
+  the model's `uris`, for example `--llm-model name=<model>,uris=/v1/decisions`.
+  A model with no `uris`, or without the route in them, gets a 404 in the
+  route's own error shape. These routes have no default-allow and are not
+  affected by `MODEL_URI_ALLOWLIST_ENABLED`.
+- Admission counts one request and the estimated input tokens, and the
+  estimate is sent to Stargate as `x-input-tokens` and `x-token-estimate`. The
+  estimate counts every string in the body as text. Each image counts a flat
+  `NVCF_DECISION_IMAGE_TOKENS` (default `1024`) and its base64 is never
+  counted. An image is an element of `images`, a value of `assets`, or any
+  string that is `data:image/<type>;base64,` followed only by base64
+  characters, where `<type>` is 1 to 64 characters from `A-Z`, `a-z`, `0-9`,
+  `.`, `+`, and `-`. Any other text counts as text. A nested object with
+  `type` set to `input_image` counts one image in place of its `image_url`
+  and `base64` fields; its other strings still count as text. The top-level
+  object is never counted as an image.
+- Client headers, including `TypeSafe-Danger-Zone-Images`, reach the model
+  server, with these exceptions. `Authorization`, `X-Api-Key`,
+  `Proxy-Authorization`, and `Cookie` are removed, because caller credentials
+  authorize NVCF, not the model server. Client copies of the Stargate control
+  headers `x-input-tokens`, `x-token-estimate`, `x-max-wait-ms`,
+  `x-request-slo-ms`, and `x-cache-affinity-key` are removed; the gateway
+  always sends `x-input-tokens` and `x-token-estimate` as the estimate, at
+  least `1`. `Accept-Encoding` is set to `identity` so the gateway can read
+  the reported usage.
+- The gateway holds the whole request body in memory and reads it a few
+  times. Images make these bodies large, so set
+  `NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES` when you enable these routes.
+- `/v1/decisions` returns errors in the OpenAI shape. `/v1/systemone` returns
+  `{"error":{"code","message","request_id"},"request_id"}`, where `request_id`
+  equals the `X-Request-ID` response header. Both routes use the same codes,
+  shared with the vanity gateway:
+
+  | Status | `/v1/decisions` | `/v1/systemone` |
+  |---|---|---|
+  | 400, body is not valid JSON | `invalid_json` | `invalid_json` |
+  | 400, other | `invalid_request` | `invalid_request` |
+  | 401 | `invalid_api_key` | `invalid_api_key` |
+  | 403 | `forbidden` | `forbidden` |
+  | 404 | `model_not_found` | `not_found` |
+  | 410 | `model_expired` | `not_found` |
+  | 413 | `request_too_large` | `request_too_large` |
+  | 415 | `unsupported_media_type` | `unsupported_media_type` |
+  | 429 | `rate_limit_exceeded` | `rate_limit_exceeded` |
+  | 499 | `request_cancelled` | `request_cancelled` |
+  | 502, 503, 529 | `provider_unavailable` | `provider_unavailable` |
+  | 504 | `provider_timeout` | `provider_timeout` |
+  | Other 5xx | `internal_error` | `internal_error` |
+  | Other 4xx, including 422 | `invalid_request` | `invalid_request` |
+
+- An error from the model server is relayed byte for byte, whatever its shape,
+  size, or encoding. Only errors the gateway or the request router generates
+  use the shapes above. The router marks its own errors with
+  `X-Stargate-Error-Code`.
+- When a 2xx response reports `usage.input_tokens`, the gateway records it on
+  `llm_api_gateway_llm_tokens_total` and counts the response in
+  `llm_api_gateway_decision_usage_observations_total` with `status="observed"`.
+  A response without it counts as `absent`. The estimate stays the admission
+  value.
+
+### Last-cluster hints
+
+With `STARGATE_LAST_CLUSTER_ENABLED=true`, the gateway remembers which
+Stargate cluster served each session's last successful request and sends it
+back on the session's next request as `x-stargate-last-cluster-id`. Stargate
+uses the hint only for models whose routing algorithm sets
+`last_cluster_affinity`.
+
+- A session is the tuple of routing key, model, and cache affinity key.
+- Sessions from `prompt_cache_key`, `conversation_id`, or the
+  `x-multi-turn-session-id` or `x-claude-code-session-id` header are eligible.
+  Payload-derived sessions are also eligible. No extra setting is needed.
+- A payload-derived affinity key hashes the full message list, which changes
+  every turn. For these sessions the gateway keys the store by a prefix chain
+  instead:
+  - It writes the cluster under a hash of the full conversation.
+  - It looks up under a hash of the conversation before the last contiguous
+    run of model-output items. For chat and Messages these are assistant
+    messages. For Responses they are assistant `message`, `reasoning`,
+    `function_call`, `custom_tool_call`, `web_search_call`,
+    `code_interpreter_call`, `mcp_call`, `mcp_list_tools`, and
+    `mcp_approval_request` items.
+  - Messages hashes `system` first. Responses hashes `instructions` and
+    `prompt` first.
+  - Values come from the raw request JSON. Object key order and whitespace
+    outside strings do not change them. They are scoped by endpoint, org and
+    project, routing key, and model.
+  - Clients that append to their history and resend it verbatim, including tool
+    loops, find the cluster that served the previous turn. Edited, truncated,
+    or summarized history misses and routes as a new session when the change
+    falls in the part hashed for lookup. Assistant prefill continuation is
+    outside this guarantee and usually misses. Responses requests with
+    `previous_response_id` or an `item_reference` item are skipped.
+  - A first turn has no lookup value. It skips the store read, counts as
+    `miss`, and is written on 2xx.
+  - Delivery is best-effort. A turn that arrives before the previous write
+    lands, reaches a replica with a different local store, or arrives after
+    the TTL routes as a new session.
+  - `CacheAffinityKey`, the `x-cache-affinity-key` header, and hash-ring and
+    Pulsar placement do not change.
+- The gateway writes the `x-stargate-cluster-id` of a 2xx Stargate response
+  when the response headers arrive, before a stream ends. Non-2xx responses and
+  transport errors never change the stored value. Writes run in the background
+  and never delay or fail the client response.
+- On a lookup miss, error, or timeout, the request proceeds without the hint.
+- At most 1024 lookups and 1024 writes may wait on the store at once, counting
+  calls that outlived their timeout. Past the cap, a lookup returns without the
+  hint (`timeout`) and a write is dropped (`error`).
+- On shutdown the gateway stops serving, waits for in-flight requests, drains
+  pending writes, and then stops the Olric node. The drain and the Olric
+  shutdown are each bounded by `OLRIC_SHUTDOWN_TIMEOUT`.
+- Store keys are `lc:v1:` plus the hex SHA-256 of the length-prefixed routing
+  key, model, and cache affinity key or payload prefix-chain value. Raw routing
+  keys never appear in store keys. Affinity keys, session IDs, and message
+  content never appear in store keys or logs. Cluster IDs over 256 bytes are
+  not stored.
+- With `OLRIC_ENABLED=true`, entries live in the `stargate-last-cluster` DMap
+  of the embedded Olric cluster, so every replica sees them. With Olric off,
+  each replica keeps its own LRU capped at
+  `STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES`.
+- Header-keyed sessions overwrite one entry each. Payload chains add roughly
+  one entry per successful payload request per TTL window, so 100 requests per
+  second with the default `10m` TTL hold about 60,000 entries. Olric has no
+  entry cap. The local store keeps its
+  `STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES` cap.
+- The gateway always strips a client-supplied `x-stargate-last-cluster-id`,
+  whether or not the feature is enabled, and keeps stripping `x-stargate-*`
+  response headers from client responses.
 
 When `NVCF_GRPC_ADDR` is configured, the gateway authenticates each request
 through the NVCF LLM gRPC auth service, derives the per-caller rate-limit key
@@ -142,8 +283,25 @@ the default local config, that is `default/bootstrap-echo`.
 Useful overrides:
 
 - `NVCF_GATEWAY_ADDR` to bind a specific listen address
+- `NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES` to reject larger request bodies with
+  413 (default `0`, no limit)
+- `NVCF_DECISION_IMAGE_TOKENS` for the flat input token estimate of each image
+  on the decision routes (default `1024`, must be `0` or more). The Helm
+  chart sets it with `llmApiGateway.config.decisionImageTokens`.
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
+- `STARGATE_LAST_CLUSTER_ENABLED=true` to send session last-cluster hints to
+  Stargate (default `false`)
+- `STARGATE_LAST_CLUSTER_TTL` for the last-cluster entry lifetime, reset on
+  every write (default `10m`)
+- `STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT` for the lookup deadline on the
+  request path (default `20ms`)
+- `STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES` for the per-replica store size
+  when Olric is off (default `100000`)
+- `NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT` to cap how long one response write
+  may stall on a client that stopped reading (default `60s`, `0s` disables).
+  It applies only while a write is in progress, so long streams, long
+  generations, and upstream pauses are not cut off.
 - `NVCF_GRPC_ADDR` to enable NVCF gRPC auth
 - `SECRETS_PATH` for the gateway-to-NVCF secrets file. Use `nvcfApiToken` for
   fixed bearer-token auth, or `id` and `secret` with `OAUTH2_PROVIDER_HOST` for
@@ -154,7 +312,9 @@ Useful overrides:
 - `NVCF_GRPC_TIMEOUT` to cap each gRPC auth or policy call
 - `RATE_LIMIT_ENABLED=false` to disable rate limiting locally
 - `RATE_LIMIT_FAIL_OPEN=false` to make Olric or limiter failures fatal
-- `OLRIC_ENABLED=false` to skip starting the embedded Olric node
+- `OLRIC_ENABLED=false` to skip starting the embedded Olric node. When it is
+  `true`, the node starts even if rate limiting is off, and it also holds
+  last-cluster hints
 - `OLRIC_BIND_PORT`, `OLRIC_MEMBERLIST_BIND_PORT`, and `OLRIC_PEERS` for
   multi-instance Olric clustering
 - `OTEL_SERVICE_NAME` to override the emitted service name
@@ -171,6 +331,12 @@ The label is present on HTTP request, upstream request, token usage, provider
 time, first-token time, and stream duration metrics. Infrastructure metrics for
 authentication, pub/sub, rate-limit synchronization, and Olric remain
 function-independent.
+
+Last-cluster store lookups and writes record `llm_api_gateway_last_cluster_*`
+metrics, listed in the
+[metrics reference](../../../docs/observability/metrics/llm-api-gateway/metrics.md),
+and create the `llm-api-gateway.last_cluster_lookup` and
+`llm-api-gateway.last_cluster_write` spans.
 
 Example request-rate query:
 

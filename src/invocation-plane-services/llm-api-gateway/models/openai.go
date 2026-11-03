@@ -26,7 +26,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/must"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 )
 
 type UnmarshalError struct {
@@ -77,8 +76,8 @@ func (t ChatResponseFormatType) String() string {
 type JSONSchema struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
-	Schema      map[string]any `json:"schema"`
-	Strict      bool           `json:"strict"`
+	Schema      map[string]any `json:"schema,omitzero"`
+	Strict      *bool          `json:"strict,omitempty"`
 }
 
 const (
@@ -148,9 +147,32 @@ type ChatToolCall struct {
 
 type ChatFunctionSpec struct {
 	Name        string          `json:"name"`
-	Description *string         `json:"description"`
-	Parameters  *map[string]any `json:"parameters"`
-	Strict      *bool           `json:"strict"`
+	Description *string         `json:"description,omitempty"`
+	Parameters  *map[string]any `json:"parameters,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
+	// Raw holds a function that fails to decode. It is forwarded as is.
+	Raw json.RawMessage `json:"-"`
+}
+
+func (*ChatFunctionSpec) DecodesMembers() {}
+
+func (f *ChatFunctionSpec) UnmarshalJSON(data []byte) error {
+	type alias ChatFunctionSpec
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		*f = ChatFunctionSpec{Raw: append(json.RawMessage(nil), data...)}
+		return nil
+	}
+	*f = ChatFunctionSpec(decoded)
+	return nil
+}
+
+func (f ChatFunctionSpec) MarshalJSON() ([]byte, error) {
+	if f.Raw != nil {
+		return f.Raw, nil
+	}
+	type alias ChatFunctionSpec
+	return json.Marshal(alias(f))
 }
 
 type ChatTool struct {
@@ -164,6 +186,29 @@ type ChatTool struct {
 	AllowedTools    []string          `json:"allowed_tools,omitempty"`
 	RequireApproval any               `json:"require_approval,omitempty"`
 	Authorization   string            `json:"-"`
+	// Raw holds a tool that fails to decode. It is forwarded as is.
+	Raw json.RawMessage `json:"-"`
+}
+
+func (*ChatTool) DecodesMembers() {}
+
+func (t *ChatTool) UnmarshalJSON(data []byte) error {
+	type alias ChatTool
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		*t = ChatTool{Raw: append(json.RawMessage(nil), data...)}
+		return nil
+	}
+	*t = ChatTool(decoded)
+	return nil
+}
+
+func (t ChatTool) MarshalJSON() ([]byte, error) {
+	if t.Raw != nil {
+		return t.Raw, nil
+	}
+	type alias ChatTool
+	return json.Marshal(alias(t))
 }
 
 type ChatFunctionChoice struct {
@@ -178,9 +223,12 @@ type ChatToolChoice struct {
 type ContentPartType string
 
 const (
-	ContentPartTypeText     ContentPartType = "text"
-	ContentPartTypeImageURL ContentPartType = "image_url"
-	ContentPartTypeDocument ContentPartType = "document"
+	ContentPartTypeText       ContentPartType = "text"
+	ContentPartTypeImageURL   ContentPartType = "image_url"
+	ContentPartTypeAudioURL   ContentPartType = "audio_url"
+	ContentPartTypeInputAudio ContentPartType = "input_audio"
+	ContentPartTypeVideoURL   ContentPartType = "video_url"
+	ContentPartTypeDocument   ContentPartType = "document"
 )
 
 func (t ContentPartType) String() string {
@@ -190,6 +238,9 @@ func (t ContentPartType) String() string {
 var SupportedContentType = []ContentPartType{
 	ContentPartTypeText,
 	ContentPartTypeImageURL,
+	ContentPartTypeAudioURL,
+	ContentPartTypeInputAudio,
+	ContentPartTypeVideoURL,
 	ContentPartTypeDocument,
 }
 
@@ -219,6 +270,31 @@ func (cp ContentPartImageURL) ContentType() ContentPartType {
 	return ContentPartTypeImageURL
 }
 
+type ContentPartAudioURL struct {
+	URL string `json:"url"`
+}
+
+func (cp ContentPartAudioURL) ContentType() ContentPartType {
+	return ContentPartTypeAudioURL
+}
+
+type ContentPartInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
+}
+
+func (cp ContentPartInputAudio) ContentType() ContentPartType {
+	return ContentPartTypeInputAudio
+}
+
+type ContentPartVideoURL struct {
+	URL string `json:"url"`
+}
+
+func (cp ContentPartVideoURL) ContentType() ContentPartType {
+	return ContentPartTypeVideoURL
+}
+
 type ContentPartDocument struct {
 	Data map[string]any `json:"data"`
 	ID   *string        `json:"id,omitempty"`
@@ -226,6 +302,18 @@ type ContentPartDocument struct {
 
 func (cp ContentPartDocument) ContentType() ContentPartType {
 	return ContentPartTypeDocument
+}
+
+// ContentPartRaw is a content part that the gateway does not model or that
+// fails its checks. It is forwarded as is, and the backend validates it.
+type ContentPartRaw json.RawMessage
+
+func (cp ContentPartRaw) ContentType() ContentPartType {
+	var part struct {
+		Type ContentPartType `json:"type"`
+	}
+	_ = json.Unmarshal(cp, &part) // a part without a string type has no type
+	return part.Type
 }
 
 func (content *ChatMessageContent) HasNoMultimodalContent() bool {
@@ -278,10 +366,33 @@ type ChatMessage struct {
 	FunctionCall *ChatCompletionFunctionCall `json:"function_call,omitempty"`
 	ToolCallID   *string                     `json:"tool_call_id,omitempty"`
 	Channel      string                      `json:"channel,omitempty"`
+	// Raw holds a message that fails to decode. It is forwarded as is.
+	Raw json.RawMessage `json:"-"`
+}
+
+func (*ChatMessage) DecodesMembers() {}
+
+func (m *ChatMessage) UnmarshalJSON(data []byte) error {
+	type alias ChatMessage
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		*m = ChatMessage{Raw: append(json.RawMessage(nil), data...)}
+		return nil
+	}
+	*m = ChatMessage(decoded)
+	return nil
+}
+
+func (m ChatMessage) MarshalJSON() ([]byte, error) {
+	if m.Raw != nil {
+		return m.Raw, nil
+	}
+	type alias ChatMessage
+	return json.Marshal(alias(m))
 }
 
 type ChatResponseFormat struct {
-	Type       *ChatResponseFormatType `json:"type"`
+	Type       *ChatResponseFormatType `json:"type,omitempty"`
 	JSONSchema *JSONSchema             `json:"json_schema,omitempty"`
 }
 
@@ -301,38 +412,52 @@ type ChatCompletionRequest struct {
 	Messages            *[]ChatMessage                    `json:"messages"`
 	Model               string                            `json:"model"`
 	Debug               bool                              `json:"-"`
-	ServiceTier         servicetier.Tier                  `json:"service_tier"`
-	FrequencyPenalty    *float32                          `json:"frequency_penalty"`
-	IncludeReasoning    *bool                             `json:"include_reasoning"`
-	LogitBias           *map[string]int                   `json:"logit_bias"`
-	Logprobs            *bool                             `json:"logprobs"`
-	TopLogprobs         *uint32                           `json:"top_logprobs"`
-	MaxTokens           *uint32                           `json:"max_tokens"`
-	MaxCompletionTokens *uint32                           `json:"max_completion_tokens"`
-	N                   *uint32                           `json:"n"`
-	PresencePenalty     *float32                          `json:"presence_penalty"`
-	ResponseFormat      *ChatResponseFormat               `json:"response_format"`
-	Seed                *int64                            `json:"seed"`
-	Stop                ChatCompletionStopField           `json:"stop"`
-	Stream              *bool                             `json:"stream"`
-	Temperature         *float32                          `json:"temperature"`
-	TopP                *float32                          `json:"top_p"`
-	Tools               *[]ChatTool                       `json:"tools"`
-	Functions           *[]ChatFunctionSpec               `json:"functions"`
+	ServiceTier         *string                           `json:"service_tier,omitempty"`
+	FrequencyPenalty    *float32                          `json:"frequency_penalty,omitempty"`
+	IncludeReasoning    *bool                             `json:"include_reasoning,omitempty"`
+	LogitBias           *map[string]int                   `json:"logit_bias,omitempty"`
+	Logprobs            *bool                             `json:"logprobs,omitempty"`
+	TopLogprobs         *uint32                           `json:"top_logprobs,omitempty"`
+	MaxTokens           *uint32                           `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *uint32                           `json:"max_completion_tokens,omitempty"`
+	N                   *uint32                           `json:"n,omitempty"`
+	PresencePenalty     *float32                          `json:"presence_penalty,omitempty"`
+	ResponseFormat      *ChatResponseFormat               `json:"response_format,omitempty"`
+	Seed                *int64                            `json:"seed,omitempty"`
+	Stop                ChatCompletionStopField           `json:"stop,omitzero"`
+	Stream              *bool                             `json:"stream,omitempty"`
+	Temperature         *float32                          `json:"temperature,omitempty"`
+	TopP                *float32                          `json:"top_p,omitempty"`
+	Tools               *[]ChatTool                       `json:"tools,omitempty"`
+	Functions           *[]ChatFunctionSpec               `json:"functions,omitempty"`
 	ToolChoice          ChatCompletionToolChoiceField     `json:"tool_choice,omitzero"`
 	FunctionChoice      ChatCompletionFunctionChoiceField `json:"function_call,omitzero"`
-	ParallelToolCalls   *bool                             `json:"parallel_tool_calls"`
-	PromptCacheKey      *string                           `json:"prompt_cache_key"`
-	User                *string                           `json:"user"`
-	ReasoningFormat     *string                           `json:"reasoning_format"`
-	ReasoningEffort     *string                           `json:"reasoning_effort"`
-	StreamOptions       *ChatCompletionStreamOptions      `json:"stream_options"`
-	Metadata            *map[string]string                `json:"metadata"`
-	Store               *bool                             `json:"store"`
+	ParallelToolCalls   *bool                             `json:"parallel_tool_calls,omitempty"`
+	PromptCacheKey      *string                           `json:"prompt_cache_key,omitempty"`
+	User                *string                           `json:"user,omitempty"`
+	ReasoningFormat     *string                           `json:"reasoning_format,omitempty"`
+	ReasoningEffort     *string                           `json:"reasoning_effort,omitempty"`
+	StreamOptions       *ChatCompletionStreamOptions      `json:"stream_options,omitempty"`
+	Metadata            *map[string]string                `json:"metadata,omitempty"`
+	Store               *bool                             `json:"store,omitempty"`
+	// UndecodedMembers holds declared members that fail to decode. The gateway
+	// does not need them, so it forwards them for the backend to validate.
+	UndecodedMembers map[string]json.RawMessage `json:"-"`
+}
+
+func (*ChatCompletionRequest) DecodesMembers() {}
+
+// UnmarshalJSON checks only the members that the gateway needs for routing,
+// relay mode, admission and session affinity.
+func (r *ChatCompletionRequest) UnmarshalJSON(data []byte) error {
+	failed, err := DecodeMembers(data, r,
+		"model", "stream", "max_completion_tokens", "max_tokens", "prompt_cache_key", "stream_options", "messages")
+	r.UndecodedMembers = failed
+	return err
 }
 
 type ChatCompletionStreamOptions struct {
-	IncludeUsage *bool `json:"include_usage"`
+	IncludeUsage *bool `json:"include_usage,omitempty"`
 }
 
 type ChatCompletionFunctionCall struct {
@@ -354,21 +479,35 @@ type ChatCompletionToolCallChunk struct {
 }
 
 type ChatCompletionMessage struct {
-	Role         string                      `json:"role"`
-	Content      *string                     `json:"content,omitempty"`
-	Reasoning    *string                     `json:"reasoning,omitempty"`
-	ToolCalls    *[]ChatCompletionToolCall   `json:"tool_calls,omitempty"`
-	FunctionCall *ChatCompletionFunctionCall `json:"function_call,omitempty"`
+	Role      string  `json:"role"`
+	Content   *string `json:"content,omitempty"`
+	Reasoning *string `json:"reasoning,omitempty"`
+	// ReasoningContent is the field name vLLM-compatible reasoning parsers use.
+	ReasoningContent *string                     `json:"reasoning_content,omitempty"`
+	ToolCalls        *[]ChatCompletionToolCall   `json:"tool_calls,omitempty"`
+	FunctionCall     *ChatCompletionFunctionCall `json:"function_call,omitempty"`
+	// Extensions holds upstream members this struct does not declare.
+	Extensions map[string]json.RawMessage `json:"-"`
+}
+
+func (m ChatCompletionMessage) MarshalJSON() ([]byte, error) {
+	type alias ChatCompletionMessage
+	encoded, err := json.Marshal((*alias)(&m))
+	if err != nil {
+		return nil, err
+	}
+	return MergeJSONMembers(encoded, m.Extensions)
 }
 
 type ChatCompletionChunkDelta struct {
-	Role           *string                        `json:"role,omitempty"`
-	Content        *string                        `json:"content,omitempty"`
-	Reasoning      *string                        `json:"reasoning,omitempty"`
-	SendNilContent bool                           `json:"-"`
-	ToolCalls      *[]ChatCompletionToolCallChunk `json:"tool_calls,omitempty"`
-	FunctionCall   *ChatCompletionFunctionCall    `json:"function_call,omitempty"`
-	Channel        string                         `json:"channel,omitempty"`
+	Role             *string                        `json:"role,omitempty"`
+	Content          *string                        `json:"content,omitempty"`
+	Reasoning        *string                        `json:"reasoning,omitempty"`
+	ReasoningContent *string                        `json:"reasoning_content,omitempty"`
+	SendNilContent   bool                           `json:"-"`
+	ToolCalls        *[]ChatCompletionToolCallChunk `json:"tool_calls,omitempty"`
+	FunctionCall     *ChatCompletionFunctionCall    `json:"function_call,omitempty"`
+	Channel          string                         `json:"channel,omitempty"`
 }
 
 func (ccd *ChatCompletionChunkDelta) MarshalJSON() ([]byte, error) {
@@ -389,15 +528,46 @@ func (ccd *ChatCompletionChunkDelta) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// ChatCompletionLogprobs keeps token entries as raw JSON so backend-specific
+// members survive stream aggregation.
+type ChatCompletionLogprobs struct {
+	Content []json.RawMessage `json:"content"`
+	Refusal []json.RawMessage `json:"refusal,omitempty"`
+	// Extensions holds upstream members this struct does not declare.
+	Extensions map[string]json.RawMessage `json:"-"`
+}
+
+func (l ChatCompletionLogprobs) MarshalJSON() ([]byte, error) {
+	type alias ChatCompletionLogprobs
+	encoded, err := json.Marshal((*alias)(&l))
+	if err != nil {
+		return nil, err
+	}
+	return MergeJSONMembers(encoded, l.Extensions)
+}
+
 type ChatCompletionChoice struct {
-	Index        uint32                `json:"index"`
-	Message      ChatCompletionMessage `json:"message"`
-	FinishReason string                `json:"finish_reason"`
+	Index        uint32                  `json:"index"`
+	Message      ChatCompletionMessage   `json:"message"`
+	Logprobs     *ChatCompletionLogprobs `json:"logprobs,omitempty"`
+	FinishReason string                  `json:"finish_reason"`
+	// Extensions holds upstream members this struct does not declare.
+	Extensions map[string]json.RawMessage `json:"-"`
+}
+
+func (c ChatCompletionChoice) MarshalJSON() ([]byte, error) {
+	type alias ChatCompletionChoice
+	encoded, err := json.Marshal((*alias)(&c))
+	if err != nil {
+		return nil, err
+	}
+	return MergeJSONMembers(encoded, c.Extensions)
 }
 
 type ChatCompletionChunkChoice struct {
 	Index        uint32                   `json:"index"`
 	Delta        ChatCompletionChunkDelta `json:"delta"`
+	Logprobs     *ChatCompletionLogprobs  `json:"logprobs,omitempty"`
 	FinishReason *string                  `json:"finish_reason"`
 }
 
@@ -419,6 +589,17 @@ type ChatCompletionUsage struct {
 	TotalTime               float64                  `json:"total_time"`
 	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+	// Raw is the upstream usage object. When set it is written as is, so
+	// members this struct does not declare, including nested ones, survive.
+	Raw json.RawMessage `json:"-"`
+}
+
+func (u ChatCompletionUsage) MarshalJSON() ([]byte, error) {
+	if len(u.Raw) > 0 {
+		return u.Raw, nil
+	}
+	type alias ChatCompletionUsage
+	return json.Marshal((*alias)(&u))
 }
 
 type ChatCompletionResponse struct {
@@ -429,7 +610,19 @@ type ChatCompletionResponse struct {
 	Choices           []ChatCompletionChoice `json:"choices"`
 	Usage             ChatCompletionUsage    `json:"usage"`
 	SystemFingerprint *string                `json:"system_fingerprint,omitempty"`
-	ServiceTier       servicetier.Tier       `json:"service_tier,omitempty"`
+	// ServiceTier is a plain string: the gateway relays any tier the backend returns.
+	ServiceTier string `json:"service_tier,omitempty"`
+	// Extensions holds upstream members this struct does not declare.
+	Extensions map[string]json.RawMessage `json:"-"`
+}
+
+func (c ChatCompletionResponse) MarshalJSON() ([]byte, error) {
+	type alias ChatCompletionResponse
+	encoded, err := json.Marshal((*alias)(&c))
+	if err != nil {
+		return nil, err
+	}
+	return MergeJSONMembers(encoded, c.Extensions)
 }
 
 func (c *ChatCompletionResponse) FirstFinishReason() string {
@@ -452,7 +645,8 @@ type ChatCompletionChunk struct {
 	SystemFingerprint *string                     `json:"system_fingerprint,omitempty"`
 	Choices           []ChatCompletionChunkChoice `json:"choices"`
 	Usage             *ChatCompletionUsage        `json:"usage,omitempty"`
-	ServiceTier       servicetier.Tier            `json:"service_tier,omitempty"`
+	// ServiceTier is a plain string: the gateway relays any tier the backend returns.
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 func (sf *ChatCompletionStopField) UnmarshalJSON(data []byte) error {
@@ -477,10 +671,13 @@ func (sf *ChatCompletionStopField) UnmarshalJSON(data []byte) error {
 }
 
 type outboundContentPart struct {
-	Type     ContentPartType      `json:"type"`
-	Text     string               `json:"text,omitempty"`
-	ImageURL *ContentPartImageURL `json:"image_url,omitempty"`
-	Document *ContentPartDocument `json:"document,omitempty"`
+	Type       ContentPartType        `json:"type"`
+	Text       string                 `json:"text,omitempty"`
+	ImageURL   *ContentPartImageURL   `json:"image_url,omitempty"`
+	AudioURL   *ContentPartAudioURL   `json:"audio_url,omitempty"`
+	InputAudio *ContentPartInputAudio `json:"input_audio,omitempty"`
+	VideoURL   *ContentPartVideoURL   `json:"video_url,omitempty"`
+	Document   *ContentPartDocument   `json:"document,omitempty"`
 }
 
 // Decoding always yields a part slice, so rebuild the union on the way out.
@@ -494,7 +691,7 @@ func (content ChatMessageContent) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	parts := make([]outboundContentPart, 0, len(content))
+	parts := make([]any, 0, len(content))
 	for _, part := range content {
 		switch typed := part.(type) {
 		case ContentPartText:
@@ -506,6 +703,27 @@ func (content ChatMessageContent) MarshalJSON() ([]byte, error) {
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeImageURL, ImageURL: typed})
 		case ContentPartImageURL:
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeImageURL, ImageURL: &typed})
+		case *ContentPartAudioURL:
+			if typed == nil {
+				return nil, errors.New("marshal content: nil audio_url content part")
+			}
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeAudioURL, AudioURL: typed})
+		case ContentPartAudioURL:
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeAudioURL, AudioURL: &typed})
+		case *ContentPartInputAudio:
+			if typed == nil {
+				return nil, errors.New("marshal content: nil input_audio content part")
+			}
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeInputAudio, InputAudio: typed})
+		case ContentPartInputAudio:
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeInputAudio, InputAudio: &typed})
+		case *ContentPartVideoURL:
+			if typed == nil {
+				return nil, errors.New("marshal content: nil video_url content part")
+			}
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeVideoURL, VideoURL: typed})
+		case ContentPartVideoURL:
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeVideoURL, VideoURL: &typed})
 		case *ContentPartDocument:
 			if typed == nil {
 				return nil, errors.New("marshal content: nil document content part")
@@ -513,6 +731,8 @@ func (content ChatMessageContent) MarshalJSON() ([]byte, error) {
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeDocument, Document: typed})
 		case ContentPartDocument:
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeDocument, Document: &typed})
+		case ContentPartRaw:
+			parts = append(parts, json.RawMessage(typed))
 		default:
 			return nil, fmt.Errorf("marshal content: unsupported content part %T", part)
 		}
@@ -550,58 +770,11 @@ func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 			}
 		}
 
-		type union struct {
-			Type     ContentPartType      `json:"type"`
-			Text     string               `json:"text,omitempty"`
-			ImageURL *ContentPartImageURL `json:"image_url,omitempty"`
-			Document *ContentPartDocument `json:"document,omitempty"`
-		}
-
-		var raw []union
-		result := ptr.Deref(content)
+		var raw []json.RawMessage
 		if err := json.Unmarshal(data, &raw); err == nil {
+			result := ptr.Deref(content)
 			for _, rawPart := range raw {
-				switch rawPart.Type {
-				case ContentPartTypeText:
-					if rawPart.ImageURL != nil {
-						return &UnmarshalError{
-							Field: "image_url",
-							Msg:   "image_url not supported with content type = text",
-						}
-					}
-					if rawPart.Document != nil {
-						return &UnmarshalError{
-							Field: "document",
-							Msg:   "document not supported with content type = text",
-						}
-					}
-					result = append(result, ContentPartText(rawPart.Text))
-				case ContentPartTypeImageURL:
-					if rawPart.ImageURL == nil || rawPart.ImageURL.URL == "" {
-						return &UnmarshalError{
-							Field: "image_url.url",
-							Msg:   "no image_url supplied in content of type image_url",
-						}
-					}
-					result = append(result, rawPart.ImageURL)
-				case ContentPartTypeDocument:
-					if rawPart.Document == nil || rawPart.Document.Data == nil {
-						return &UnmarshalError{
-							Field: "document.data",
-							Msg:   "no document data supplied in content of type document",
-						}
-					}
-					result = append(result, rawPart.Document)
-				default:
-					return &UnmarshalError{
-						Field: "content",
-						Msg: fmt.Sprintf(
-							"unknown content type %v. Supported content types are: %v",
-							rawPart.Type,
-							SupportedContentType,
-						),
-					}
-				}
+				result = append(result, decodeContentPart(rawPart))
 			}
 			*content = result
 			return nil
@@ -612,6 +785,54 @@ func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 		Field: "content",
 		Msg:   "Must be either a string or an array of ContentPart",
 	}
+}
+
+// decodeContentPart returns the typed part, or the raw part when its type is
+// unknown or it fails the checks for its type.
+func decodeContentPart(data json.RawMessage) ContentPart {
+	var part struct {
+		Type       ContentPartType        `json:"type"`
+		Text       string                 `json:"text,omitempty"`
+		ImageURL   *ContentPartImageURL   `json:"image_url,omitempty"`
+		AudioURL   *ContentPartAudioURL   `json:"audio_url,omitempty"`
+		InputAudio *ContentPartInputAudio `json:"input_audio,omitempty"`
+		VideoURL   *ContentPartVideoURL   `json:"video_url,omitempty"`
+		Document   *ContentPartDocument   `json:"document,omitempty"`
+	}
+	raw := ContentPartRaw(append(json.RawMessage(nil), data...))
+	if err := json.Unmarshal(data, &part); err != nil {
+		return raw
+	}
+
+	switch part.Type {
+	case ContentPartTypeText:
+		if part.ImageURL != nil || part.Document != nil || part.AudioURL != nil || part.VideoURL != nil ||
+			part.InputAudio != nil {
+			return raw
+		}
+		return ContentPartText(part.Text)
+	case ContentPartTypeImageURL:
+		if part.ImageURL != nil && part.ImageURL.URL != "" {
+			return part.ImageURL
+		}
+	case ContentPartTypeAudioURL:
+		if part.AudioURL != nil && part.AudioURL.URL != "" {
+			return part.AudioURL
+		}
+	case ContentPartTypeInputAudio:
+		if part.InputAudio != nil && part.InputAudio.Data != "" && part.InputAudio.Format != "" {
+			return part.InputAudio
+		}
+	case ContentPartTypeVideoURL:
+		if part.VideoURL != nil && part.VideoURL.URL != "" {
+			return part.VideoURL
+		}
+	case ContentPartTypeDocument:
+		if part.Document != nil && part.Document.Data != nil {
+			return part.Document
+		}
+	}
+	return raw
 }
 
 // Without this encoding/json writes the Go field names onto the wire.

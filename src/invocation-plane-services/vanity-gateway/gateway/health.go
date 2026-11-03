@@ -20,10 +20,12 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"github.com/hellofresh/health-go/v5"
 	"net/http"
 	"net/url"
 	"time"
+
+	"ai-api-gateway-service/middleware"
+	"github.com/hellofresh/health-go/v5"
 )
 
 // healthManager probes the NVCF API, plus the LLM Gateway when any vanity route
@@ -42,9 +44,10 @@ func healthManager(nvcfApiHost string, llmGatewayEndpoint string, transport http
 		if err != nil {
 			return nil, err
 		}
-		// /health is wired to both probes, so a gating check here would restart
-		// every pod and drop invocation-service routing when only the LLM
-		// Gateway is down. SkipOnErr reports the failure without the 503.
+		// /health backs the readiness probe, so a gating check here would take
+		// every pod out of the Service and drop invocation-service routing when
+		// only the LLM Gateway is down. SkipOnErr reports the failure without
+		// the 503.
 		llmCheck.SkipOnErr = true
 		options = append(options, health.WithChecks(llmCheck))
 	}
@@ -64,7 +67,7 @@ func upstreamHealthCheck(client http.Client, name string, endpoint string, path 
 		Name:    name,
 		Timeout: 5 * time.Second,
 		Check: func(ctx context.Context) error {
-			request, err := http.NewRequestWithContext(ctx, http.MethodGet, healthUrl, nil)
+			request, err := http.NewRequestWithContext(middleware.ContextWithCallKind(ctx, middleware.CallKindHealth), http.MethodGet, healthUrl, nil)
 			if err != nil {
 				return err
 			}

@@ -111,7 +111,7 @@ API keys are used for general user operations.
 | `delete_function` | Function deletion | Delete functions (requires JWT token) |
 | `update_function` | Function updates | Modify function metadata (requires JWT token) |
 | `manage_registry_credentials` | Registry management | Manage container registry credentials (requires JWT token) |
-| `manage_telemetries` | Telemetry management | Configure telemetry settings (requires JWT token) |
+| `manage_telemetries` | Telemetry management | Create, list, get, and delete telemetry endpoints |
 | `authorize_clients` | Authorization management | Manage function access authorizations (requires JWT token) |
 
 #### Default Scopes
@@ -122,8 +122,9 @@ When no `--scopes` flag is provided, API keys are generated with these **default
 - `list_functions`
 - `queue_details`
 - `list_functions_details`
+- `manage_telemetries`
 
-These default scopes are sufficient for most read-only user operations (invoking functions, monitoring queues, and viewing function information). For write operations, you need to use JWT tokens (NVCF_TOKEN).
+These default scopes cover invoking functions, monitoring queues, viewing function information, and managing telemetry endpoints. For other write operations, use JWT tokens (NVCF_TOKEN).
 
 #### Custom Scopes Use Cases
 
@@ -146,16 +147,16 @@ For monitoring and discovery without invocation privileges.
 **Extended User Access:**
 
 ```bash
---scopes "invoke_function,list_functions,queue_details,list_functions_details"
+--scopes "invoke_function,list_functions,queue_details,list_functions_details,manage_telemetries"
 ```
 
 Default scopes for extended access.
 
 #### Important Notes on Custom Scopes
 
-**Scope Limitations**: API keys are intended for read-only operations. Write operations (create, deploy, update, delete functions) require JWT tokens (NVCF_TOKEN) with appropriate scopes.
+Scope limitations: default API keys cover read, invoke, and telemetry endpoint operations. Function write operations (create, deploy, update, delete) require JWT tokens (NVCF_TOKEN) with appropriate scopes.
 
-**Principle of Least Privilege**: Always use the minimum scopes necessary for your use case. The default read-only scopes are sufficient for most applications.
+Principle of least privilege: always use the minimum scopes necessary for your use case. The default scopes are sufficient for most applications.
 
 **Default Recommendation**: For most applications, the default scopes are sufficient and provide a good balance of functionality and security. Use JWT tokens for function management operations.
 
@@ -719,6 +720,12 @@ Registry credentials allow NVCF to pull container images from private registries
   --registry "docker.io" \
   --username "myusername" \
   --password "mypassword"
+
+# Add registry credentials securely using a secret file (or '-' for standard input)
+./nvcf-cli registry-credential add \
+  --hostname "docker.io" \
+  --secret-file "/path/to/secret.b64" \
+  --artifact-type CONTAINER
 ```
 
 #### Method C: Using curl directly
@@ -861,10 +868,14 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 }
 ```
 
-For LLM models, `llmConfig.routingMethod` accepts the API/auth spellings
-`round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`. The
-CLI validates these values before sending the create request.
-Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
+For LLM models, `llmConfig.routingMethod` is a routing algorithm name,
+optionally followed by `;name=value` tuning parameters, such as
+`pulsar;seed=stable-a`. The CLI sends the value unchanged; the API checks it
+and the CLI prints the API error.
+Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`,
+and native Anthropic `/v1/messages`. Messages requires a compatible gateway,
+Stargate, and Pylon build and a backend that serves that protocol. Published
+stack releases must qualify and include those builds before use.
 
 ### 5. List Functions
 
@@ -1021,7 +1032,7 @@ curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/embeddings" \
   -d "{\"model\":\"${FUNCTION_ID}/${MODEL_NAME}\",\"input\":\"NVCF embeddings check\"}"
 ```
 
-For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/user/llm-gateway.md).
+For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/overview/llm-gateway.md).
 
 #### Sample Invocation JSON (`examples/invoke-function.json`)
 

@@ -1,0 +1,106 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1090" height="968" viewBox="0 0 1090 968" role="img" aria-labelledby="title desc">
+<title id="title">Write Durability: Who Syncs, and When</title>
+<desc id="desc">Every write API takes a SyncMode: None leaves bytes in the page cache, Data is fdatasync, Full is fsync. NFS unstable writes and NBD writes use None and rely on the protocol's barrier (COMMIT, FUA, FLUSH). The S3-over-RDMA and S3-over-TCP fast paths sync per the fast_path_sync setting, data by default. S3 HTTP PUT writes chunks with Full and its rows through RocksDB, then in cluster mode waits for every replica (at least min_write_nodes must succeed) and proposes the manifest through Raft.</desc>
+<defs>
+<symbol id="icon-actor" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#2f78c4"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="13" y="14" width="22" height="15" rx="2"/><path d="M24 29v5M17 34h14"/></g></symbol>
+<symbol id="icon-data" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#e07b1f"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 12h11l6 6v18H16z"/><path d="M27 12v6h6M20 24h9M20 29h9"/></g></symbol>
+<symbol id="icon-db" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#e07b1f"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="24" cy="15" rx="10" ry="3.5"/><path d="M14 15v18c0 2 4.5 3.5 10 3.5s10-1.5 10-3.5V15"/><path d="M14 24c0 2 4.5 3.5 10 3.5s10-1.5 10-3.5"/></g></symbol>
+<symbol id="icon-hardware" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="16" height="16" rx="1.5"/><path d="M20 12v4M24 12v4M28 12v4M20 32v4M24 32v4M28 32v4M12 20h4M12 24h4M12 28h4M32 20h4M32 24h4M32 28h4"/></g></symbol>
+<symbol id="icon-service" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#76b900"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M24 12l11 6v12l-11 6-11-6V18z"/><path d="M13 18l11 6 11-6M24 24v12"/></g></symbol>
+<symbol id="icon-third" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#d0453f"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12v7M29 12v7"/><path d="M15 19h18v4a9 9 0 0 1-18 0z"/><path d="M24 32v5"/></g></symbol>
+<marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#000000"/></marker>
+<marker id="arrow-opt" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#999999"/></marker>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#000000}.title{font-size:20px;font-weight:600}.sub{font-size:12px;fill:#333333}.group{fill:#ffffff;stroke:#cccccc;stroke-width:1}.group-nv{fill:#ffffff;stroke:#76b900;stroke-width:1.5}.group-partner{fill:#f4f7f7;stroke:#cccccc;stroke-width:1}.group-label{font-size:12px;font-weight:600}.card{fill:#ffffff;stroke:#cccccc;stroke-width:1}.label{font-size:12px}.small{font-size:10px;fill:#333333}.plabel{font-size:10px;font-weight:500}.path{fill:none;stroke:#000000;stroke-width:1;stroke-linejoin:round}.opt{fill:none;stroke:#999999;stroke-width:1;stroke-dasharray:5 3;stroke-linejoin:round}.callout{fill:#000000}.callout-text{font-size:11px;font-weight:600;fill:#ffffff}.note{font-size:11px;fill:#333333}.note-b{font-size:11px;font-weight:600}</style></defs>
+<rect x="0" y="0" width="1090" height="968" fill="#ffffff"/>
+<text x="40" y="44" class="title">Write Durability: Who Syncs, and When</text>
+<text x="40" y="64" class="sub">SyncMode: None = page cache, caller flushes later; Data = fdatasync; Full = fsync (crates/nvstor-storage/src/durability.rs).</text>
+<rect x="30" y="110" width="330" height="470" rx="10" class="group"/>
+<text x="44" y="132" class="group-label" text-anchor="start">Write requests</text>
+<rect id="w-nfs" x="45" y="160" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-third" x="55" y="168" width="48" height="48"/>
+<text x="113" y="189" class="label" data-fit="w-nfs" data-fit-padding="4">NFS WRITE, UNSTABLE4</text>
+<text x="113" y="204" class="small" data-fit="w-nfs" data-fit-padding="4">SyncMode::None; reply UNSTABLE4</text>
+<rect id="w-commit" x="45" y="244" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-third" x="55" y="252" width="48" height="48"/>
+<text x="113" y="273" class="label" data-fit="w-commit" data-fit-padding="4">NFS COMMIT, stable WRITE</text>
+<text x="113" y="288" class="small" data-fit="w-commit" data-fit-padding="4">fdatasync before the reply</text>
+<rect id="w-nbd" x="45" y="328" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-third" x="55" y="336" width="48" height="48"/>
+<text x="113" y="357" class="label" data-fit="w-nbd" data-fit-padding="4">NBD WRITE / FUA / FLUSH</text>
+<text x="113" y="372" class="small" data-fit="w-nbd" data-fit-padding="4">None / Data / flush(Data)</text>
+<rect id="w-fast" x="45" y="412" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-actor" x="55" y="420" width="48" height="48"/>
+<text x="113" y="441" class="label" data-fit="w-fast" data-fit-padding="4">S3-RDMA PERSIST, S3-TCP PUT</text>
+<text x="113" y="456" class="small" data-fit="w-fast" data-fit-padding="4">fast_path_sync, default data</text>
+<rect id="w-s3" x="45" y="496" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-third" x="55" y="504" width="48" height="48"/>
+<text x="113" y="525" class="label" data-fit="w-s3" data-fit-padding="4">S3 HTTP PUT</text>
+<text x="113" y="540" class="small" data-fit="w-s3" data-fit-padding="4">object_write: SyncMode::Full</text>
+<rect x="410" y="110" width="650" height="620" rx="10" class="group-nv"/>
+<text x="424" y="132" class="group-label" text-anchor="start">nvstor-server, one node</text>
+<rect id="d-pm" x="450" y="160" width="260" height="316" rx="8" class="card"/>
+<use href="#icon-data" x="556" y="168" width="48" height="48"/>
+<text x="580" y="232" class="label" text-anchor="middle" data-fit="d-pm" data-fit-padding="4">PmStore</text>
+<text x="580" y="247" class="small" text-anchor="middle" data-fit="d-pm" data-fit-padding="4">write(id, off, data, SyncMode)</text>
+<text x="580" y="260" class="small" text-anchor="middle" data-fit="d-pm" data-fit-padding="4">flush(id, SyncMode)</text>
+<text x="580" y="292" class="small" text-anchor="middle">io_uring: write + fsync as</text>
+<text x="580" y="305" class="small" text-anchor="middle">linked SQEs on one ring shard</text>
+<rect id="d-ca" x="450" y="496" width="260" height="112" rx="8" class="card"/>
+<use href="#icon-data" x="556" y="504" width="48" height="48"/>
+<text x="580" y="568" class="label" text-anchor="middle" data-fit="d-ca" data-fit-padding="4">ChunkManager</text>
+<text x="580" y="583" class="small" text-anchor="middle" data-fit="d-ca" data-fit-padding="4">chunks fsynced (Full)</text>
+<text x="580" y="596" class="small" text-anchor="middle" data-fit="d-ca" data-fit-padding="4">None: row unsealed until flush</text>
+<rect id="d-nvme" x="780" y="244" width="250" height="148" rx="8" class="card"/>
+<use href="#icon-hardware" x="881" y="252" width="48" height="48"/>
+<text x="905" y="316" class="label" text-anchor="middle" data-fit="d-nvme" data-fit-padding="4">Local NVMe</text>
+<text x="905" y="331" class="small" text-anchor="middle" data-fit="d-nvme" data-fit-padding="4">sparse file per inode,</text>
+<text x="905" y="344" class="small" text-anchor="middle" data-fit="d-nvme" data-fit-padding="4">volume or object</text>
+<rect id="d-meta" x="780" y="496" width="250" height="112" rx="8" class="card"/>
+<use href="#icon-db" x="881" y="504" width="48" height="48"/>
+<text x="905" y="568" class="label" text-anchor="middle" data-fit="d-meta" data-fit-padding="4">MetadataStore</text>
+<text x="905" y="583" class="small" text-anchor="middle" data-fit="d-meta" data-fit-padding="4">commit_batch(batch, Full)</text>
+<text x="905" y="596" class="small" text-anchor="middle" data-fit="d-meta" data-fit-padding="4">chunk rows, manifest, inodes</text>
+<rect id="d-repl" x="450" y="640" width="260" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="460" y="648" width="48" height="48"/>
+<text x="518" y="669" class="label" data-fit="d-repl" data-fit-padding="4">Replicate, wait for all</text>
+<text x="518" y="684" class="small" data-fit="d-repl" data-fit-padding="4">≥ min_write_nodes, else 503</text>
+<rect id="d-raft" x="780" y="640" width="250" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="790" y="648" width="48" height="48"/>
+<text x="848" y="669" class="label" data-fit="d-raft" data-fit-padding="4">Raft</text>
+<text x="848" y="684" class="small" data-fit="d-raft" data-fit-padding="4">manifest proposed</text>
+<path class="path" d="M345 192 L450 192" marker-end="url(#arrow)"/>
+<circle cx="385" cy="192" r="9" class="callout"/><text x="385" y="196" class="callout-text" text-anchor="middle">1</text>
+<path class="path" d="M345 276 L450 276" marker-end="url(#arrow)"/>
+<circle cx="385" cy="276" r="9" class="callout"/><text x="385" y="280" class="callout-text" text-anchor="middle">2</text>
+<path class="path" d="M345 360 L450 360" marker-end="url(#arrow)"/>
+<circle cx="385" cy="360" r="9" class="callout"/><text x="385" y="364" class="callout-text" text-anchor="middle">3</text>
+<path class="path" d="M345 444 L450 444" marker-end="url(#arrow)"/>
+<circle cx="385" cy="444" r="9" class="callout"/><text x="385" y="448" class="callout-text" text-anchor="middle">4</text>
+<path class="path" d="M345 528 L450 528" marker-end="url(#arrow)"/>
+<circle cx="385" cy="528" r="9" class="callout"/><text x="385" y="532" class="callout-text" text-anchor="middle">5</text>
+<path class="path" d="M710 318 L780 318" marker-end="url(#arrow)"/>
+<path class="path" d="M710 552 L780 552" marker-end="url(#arrow)"/>
+<path class="opt" d="M195 560 L195 672 L450 672" marker-end="url(#arrow-opt)"/>
+<circle cx="300" cy="672" r="9" class="callout"/><text x="300" y="676" class="callout-text" text-anchor="middle">6</text>
+<path class="opt" d="M710 672 L780 672" marker-end="url(#arrow-opt)"/>
+<circle cx="39" cy="768" r="9" class="callout"/><text x="39" y="772" class="callout-text" text-anchor="middle">1</text>
+<text x="56" y="772" class="note" text-anchor="start">An UNSTABLE4 WRITE lands in PmStore with SyncMode::None and is acknowledged as UNSTABLE4; the client keeps its copy until COMMIT. Inode metadata rides the per-COMPOUND</text>
+<text x="56" y="787" class="note" text-anchor="start">RocksDB batch (commit_batch, Full).</text>
+<circle cx="39" cy="804" r="9" class="callout"/><text x="39" y="808" class="callout-text" text-anchor="middle">2</text>
+<text x="56" y="808" class="note" text-anchor="start">COMMIT, and DATA_SYNC4 or FILE_SYNC4 WRITEs, fdatasync the inode's file before the reply. If the sync fails the reply says UNSTABLE4, so the client must COMMIT.</text>
+<circle cx="39" cy="825" r="9" class="callout"/><text x="39" y="829" class="callout-text" text-anchor="middle">3</text>
+<text x="56" y="829" class="note" text-anchor="start">NBD WRITE uses None, FUA uses Data, and FLUSH flushes the volume with Data. On io_uring a Data or Full write is a write SQE linked to an fsync SQE.</text>
+<circle cx="39" cy="846" r="9" class="callout"/><text x="39" y="850" class="callout-text" text-anchor="middle">4</text>
+<text x="56" y="850" class="note" text-anchor="start">PERSIST and S3-over-TCP PUT go through PmObjectStore with storage.fast_path_sync: "data" by default (fdatasync before the reply); "none" is for replication-before-ACK</text>
+<text x="56" y="865" class="note" text-anchor="start">or regenerable data.</text>
+<circle cx="39" cy="882" r="9" class="callout"/><text x="39" y="886" class="callout-text" text-anchor="middle">5</text>
+<text x="56" y="886" class="note" text-anchor="start">S3 HTTP PUT writes chunks with Full, then chunk rows and the manifest in RocksDB. A chunk written with None has an unsealed row until ChunkManager::flush; a dedup hit</text>
+<text x="56" y="901" class="note" text-anchor="start">never trusts an unsealed row from an earlier process.</text>
+<circle cx="39" cy="918" r="9" class="callout"/><text x="39" y="922" class="callout-text" text-anchor="middle">6</text>
+<text x="56" y="922" class="note" text-anchor="start">Cluster mode only: the PUT then writes every replica in parallel and waits for all of them (REPLICATE over RDMA, else or on failure the TCP RPC); if fewer than</text>
+<text x="56" y="937" class="note" text-anchor="start">min_write_nodes succeeded it deletes the local and replica copies and returns 503. Then the manifest is proposed through Raft.</text>
+</svg>

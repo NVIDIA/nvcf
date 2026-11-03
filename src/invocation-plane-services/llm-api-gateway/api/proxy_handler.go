@@ -44,6 +44,8 @@ var hopByHopHeaders = map[string]struct{}{
 
 func (h *OpenAIProxyHandlers) RegisterRoutes(group *echo.Group) {
 	group.POST("/v1/embeddings", h.Embeddings)
+	group.POST(decisionsEndpointPath, h.Decisions)
+	group.POST(systemOneEndpointPath, h.SystemOne)
 }
 
 func (h *OpenAIProxyHandlers) forwardJSONRequest(
@@ -62,7 +64,16 @@ func (h *OpenAIProxyHandlers) forwardJSONRequest(
 			outboundBody = rewrittenBody
 		}
 	}
+	return h.forwardBody(c, reqCtx, outboundBody, inputTokens)
+}
 
+// forwardBody sends outboundBody as is and writes the response to the client.
+func (h *OpenAIProxyHandlers) forwardBody(
+	c *GatewayContext,
+	reqCtx *requestctx.RequestContext,
+	outboundBody []byte,
+	inputTokens int,
+) error {
 	resp, err := h.dispatchProxyRequest(
 		c,
 		reqCtx,
@@ -78,10 +89,22 @@ func (h *OpenAIProxyHandlers) forwardJSONRequest(
 		return echo.NewHTTPError(http.StatusBadGateway, "proxy provider returned no response")
 	}
 
-	return writeProxyResponse(c, resp)
+	var tee io.Writer
+	var observer *decisionUsageObserver
+	if observesDecisionUsage(c.Request(), resp) {
+		observer = &decisionUsageObserver{}
+		tee = observer
+	}
+	if err := writeProxyResponseObserved(c, resp, tee); err != nil {
+		return err
+	}
+	if observer != nil {
+		h.recordDecisionUsage(c, observer)
+	}
+	return nil
 }
 
-func (h *OpenAIProxyHandlers) requireFunctionRequestContext(
+func (h *Handlers) requireFunctionRequestContext(
 	c *GatewayContext,
 ) (*requestctx.RequestContext, error) {
 	if c == nil {
@@ -104,7 +127,19 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 	contentLength int64,
 	inputTokens int,
 ) (*provider.ProxyResponse, error) {
-	if h.handlers.proxyProvider == nil {
+	return h.handlers.dispatchEstimatedProxyRequest(c, reqCtx, headers, body, contentLength, inputTokens, inputTokens)
+}
+
+func (h *Handlers) dispatchEstimatedProxyRequest(
+	c *GatewayContext,
+	reqCtx *requestctx.RequestContext,
+	headers http.Header,
+	body io.ReadCloser,
+	contentLength int64,
+	inputTokens int,
+	tokenEstimate int,
+) (*provider.ProxyResponse, error) {
+	if h.proxyProvider == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "proxy endpoint is not configured")
 	}
 
@@ -117,7 +152,7 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 		headers.Del(echo.HeaderContentLength)
 	}
 
-	resp, err := h.handlers.proxyProvider.Proxy(
+	resp, err := h.proxyProvider.Proxy(
 		c.UserContext(),
 		reqCtx,
 		&provider.ProxyRequest{
@@ -126,8 +161,9 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 			RawQuery:      c.Request().URL.RawQuery,
 			Header:        headers,
 			Body:          body,
+			ContentLength: contentLength,
 			InputTokens:   inputTokens,
-			TokenEstimate: inputTokens,
+			TokenEstimate: tokenEstimate,
 		},
 	)
 	if err != nil {
@@ -140,6 +176,12 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 }
 
 func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
+	return writeProxyResponseObserved(c, resp, nil)
+}
+
+// writeProxyResponseObserved writes resp to the client. When tee is not nil,
+// every body byte written to the client is also written to it.
+func writeProxyResponseObserved(c *GatewayContext, resp *provider.ProxyResponse, tee io.Writer) error {
 	if resp == nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "proxy provider returned no response")
 	}
@@ -148,20 +190,121 @@ func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
 	}
 
 	copyProxyHeaders(c.Response().Header(), resp.Header)
+	if isDecisionRoute(c.Request()) && resp.StatusCode >= http.StatusBadRequest {
+		if isBackendErrorOnDecisionRoute(resp) {
+			// The model server's own error is part of its API: relay it as is.
+			c.Set(contextKeyBackendErrorRelayed, true)
+		} else {
+			// Gateway-written errors carry no backend X-System-One-* headers.
+			for name := range c.Response().Header() {
+				if strings.HasPrefix(strings.ToLower(name), "x-system-one-") {
+					c.Response().Header().Del(name)
+				}
+			}
+			return proxyUpstreamError(resp)
+		}
+	} else if err := proxyUpstreamError(resp); err != nil {
+		return err
+	}
 	c.Response().WriteHeader(resp.StatusCode)
 	if resp.Body == nil {
 		return nil
 	}
-	_, err := io.Copy(c.Response().Writer, resp.Body)
+	var body io.Reader = resp.Body
+	if tee != nil {
+		body = io.TeeReader(body, tee)
+	}
+	_, err := io.Copy(c.Response().Writer, body)
 	return err
 }
 
+func isDecisionRoute(r *http.Request) bool {
+	return r.URL.Path == decisionsEndpointPath || r.URL.Path == systemOneEndpointPath
+}
+
+// bareRouterErrorStatuses are the statuses Stargate answers with no body and
+// no X-Stargate-Error-Code when the router itself fails: a replay buffer
+// overflow (413), a client that went away (499) and tunnel or transport
+// failures (502, 503, 504). Builds that mark only routing rejections and
+// overload with the header need this fallback. 400 is left out, so an empty
+// 400 is treated as the backend's. Stargate also answers a bare 400 for a
+// missing or malformed control header (X-Input-Tokens, X-Max-Wait-Ms,
+// X-Request-Slo-Ms) or a missing cache affinity key when the load balancer
+// policy requires one. On decision routes the provider deletes client copies
+// of those headers and always sets X-Input-Tokens, so only the affinity key
+// policy can still produce one; such a 400 is relayed as an empty backend 400.
+var bareRouterErrorStatuses = map[int]bool{
+	http.StatusRequestEntityTooLarge: true,
+	499:                              true,
+	http.StatusBadGateway:            true,
+	http.StatusServiceUnavailable:    true,
+	http.StatusGatewayTimeout:        true,
+}
+
+// isBackendErrorOnDecisionRoute reports whether the non-2xx resp on a decision
+// route is a model server error. Stargate marks the errors it generates with
+// X-Stargate-Error-Code, except a bare status with an empty body for the
+// statuses in bareRouterErrorStatuses. Anything else, including an empty 401,
+// 404 or 429, is the backend's answer. Those routes relay backend errors
+// untouched, because the backend defines the error shapes of its own API (for
+// example a FastAPI detail list).
+func isBackendErrorOnDecisionRoute(resp *provider.ProxyResponse) bool {
+	if provider.IsRouterRejection(resp.Header) {
+		return false
+	}
+	if bareRouterErrorStatuses[resp.StatusCode] && emptyBody(resp) {
+		return false
+	}
+	return true
+}
+
+// emptyBody reports whether resp has no body, reading at most one byte. A
+// byte that is read is put back in front of the stream. Stargate answers some
+// router failures, such as a replay buffer overflow or a failed tunnel, with a
+// bare status and no body or error code header; those are router errors, not
+// backend errors.
+func emptyBody(resp *provider.ProxyResponse) bool {
+	if resp.Body == nil {
+		return true
+	}
+	var first [1]byte
+	for {
+		n, err := resp.Body.Read(first[:])
+		if n == 1 {
+			resp.Body = &prefixedBody{Reader: io.MultiReader(bytes.NewReader(first[:]), resp.Body), Closer: resp.Body}
+			return false
+		}
+		if err != nil {
+			return err == io.EOF
+		}
+	}
+}
+
+type prefixedBody struct {
+	io.Reader
+	io.Closer
+}
+
 func copyProxyHeaders(dst http.Header, src http.Header) {
+	connectionHeaders := make(map[string]struct{})
+	for key, values := range src {
+		if !strings.EqualFold(key, "Connection") {
+			continue
+		}
+		for _, value := range values {
+			for _, name := range strings.Split(value, ",") {
+				connectionHeaders[http.CanonicalHeaderKey(strings.TrimSpace(name))] = struct{}{}
+			}
+		}
+	}
 	for key, values := range src {
 		if _, skip := hopByHopHeaders[http.CanonicalHeaderKey(key)]; skip {
 			continue
 		}
-		if strings.EqualFold(key, echo.HeaderContentLength) {
+		if _, skip := connectionHeaders[http.CanonicalHeaderKey(key)]; skip {
+			continue
+		}
+		if strings.EqualFold(key, echo.HeaderContentLength) || isInternalResponseHeader(key) {
 			continue
 		}
 		dst.Del(key)
@@ -169,4 +312,10 @@ func copyProxyHeaders(dst http.Header, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
+}
+
+func isInternalResponseHeader(name string) bool {
+	name = strings.ToLower(name)
+	return strings.HasPrefix(name, "x-stargate-") ||
+		name == "x-inference-server-id" || name == "x-inference-server-url"
 }

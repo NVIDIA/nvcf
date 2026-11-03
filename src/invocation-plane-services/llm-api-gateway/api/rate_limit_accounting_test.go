@@ -70,7 +70,7 @@ func TestNormalizeChatRequestRunsAdmissionBeforeFinalize(t *testing.T) {
 		MaxCompletionTokens: ptr.To(uint32(12)),
 	}
 
-	normalized, err := handlers.normalizeChatRequest(gc, request)
+	normalized, err := handlers.normalizeChatRequest(gc, request, nil)
 	if err != nil {
 		t.Fatalf("normalize chat request: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestNormalizeChatRequestUsesMinimumOutputReservationWithoutMaxTokens(t *tes
 		},
 	}
 
-	normalized, err := handlers.normalizeChatRequest(gc, request)
+	normalized, err := handlers.normalizeChatRequest(gc, request, nil)
 	if err != nil {
 		t.Fatalf("normalize chat request: %v", err)
 	}
@@ -476,7 +476,7 @@ func TestNormalizeChatRequestDoesNotConsumeRequestsWhenTokenAdmissionFails(t *te
 		MaxCompletionTokens: ptr.To(uint32(12)),
 	}
 
-	_, err := handlers.normalizeChatRequest(gc, request)
+	_, err := handlers.normalizeChatRequest(gc, request, nil)
 	if err == nil {
 		t.Fatal("normalize chat request unexpectedly succeeded")
 	}
@@ -530,7 +530,7 @@ func TestNormalizeChatRequestCommitsEstimatedPromptTokens(t *testing.T) {
 		MaxCompletionTokens: ptr.To(uint32(4)),
 	}
 
-	normalized, err := handlers.normalizeChatRequest(gc, request)
+	normalized, err := handlers.normalizeChatRequest(gc, request, nil)
 	if err != nil {
 		t.Fatalf("normalize chat request: %v", err)
 	}
@@ -726,7 +726,7 @@ func TestNormalizeChatRequestParsesSingleTokenRateLimitUnits(t *testing.T) {
 				MaxCompletionTokens: ptr.To(uint32(12)),
 			}
 
-			normalized, err := handlers.normalizeChatRequest(gc, request)
+			normalized, err := handlers.normalizeChatRequest(gc, request, nil)
 			if err != nil {
 				t.Fatalf("normalize chat request: %v", err)
 			}
@@ -770,7 +770,7 @@ func TestNormalizeChatRequestParsesCombinedTokenRateLimitUnits(t *testing.T) {
 		MaxCompletionTokens: ptr.To(uint32(12)),
 	}
 
-	normalized, err := handlers.normalizeChatRequest(gc, request)
+	normalized, err := handlers.normalizeChatRequest(gc, request, nil)
 	if err != nil {
 		t.Fatalf("normalize chat request: %v", err)
 	}

@@ -35,6 +35,6 @@ export interface LlmConfigDto {
 	tokenRateLimit?: string;
 	/** Tokenizer identifier for this model. */
 	tokenizer?: string;
-	/** Routing method for this model. */
+	/** Routing method for this model: a request router algorithm name, optionally followed by ';name=value' tuning parameters, for example pulsar;seed=stable-a. The API checks only the format. The request router checks the algorithm and parameters on each request. */
 	routingMethod?: string;
 }

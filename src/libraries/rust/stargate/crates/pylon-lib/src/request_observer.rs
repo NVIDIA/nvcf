@@ -172,6 +172,8 @@ pub(crate) struct RequestObserver {
     request_input_tokens: u64,
     input_tokens: u64,
     input_tokens_explicit: bool,
+    cached_input_tokens: Option<u64>,
+    input_usage_expected: bool,
     generation: Option<ModelGeneration>,
     embedding_items: Option<u64>,
     chat_calibration: Option<ChatCalibrationState>,
@@ -206,6 +208,8 @@ impl RequestObserver {
             request_input_tokens: input_tokens,
             input_tokens,
             input_tokens_explicit: false,
+            cached_input_tokens: None,
+            input_usage_expected: false,
             generation,
             embedding_items: None,
             chat_calibration: (output_token_calibration_enabled
@@ -220,6 +224,10 @@ impl RequestObserver {
 
     pub(crate) fn output_token_calibration_enabled(&self) -> bool {
         self.runtime_state.output_token_calibration_enabled()
+    }
+
+    pub(crate) fn set_input_usage_expected(&mut self, expected: bool) {
+        self.input_usage_expected = expected;
     }
 
     pub(super) fn update_embedding_items(&mut self, embedding_items: Option<u64>) {
@@ -291,7 +299,14 @@ impl RequestObserver {
         );
     }
 
-    pub(crate) fn observe_input_tokens_total(&mut self, input_tokens: u64) {
+    // Usage that omits cached-token details keeps the earlier cached count, so a
+    // later larger prompt total recomputes the uncached remainder.
+    pub(crate) fn observe_input_usage(
+        &mut self,
+        input_tokens: u64,
+        cached_input_tokens: Option<u64>,
+    ) {
+        let cached_input_tokens = cached_input_tokens.or(self.cached_input_tokens);
         if self.input_tokens_explicit {
             if input_tokens < self.input_tokens {
                 tracing::warn!(
@@ -302,12 +317,14 @@ impl RequestObserver {
                 );
                 return;
             }
-            if input_tokens == self.input_tokens {
+            if input_tokens == self.input_tokens && cached_input_tokens == self.cached_input_tokens
+            {
                 return;
             }
         }
         self.input_tokens = input_tokens;
         self.input_tokens_explicit = true;
+        self.cached_input_tokens = cached_input_tokens;
         self.emit();
     }
 
@@ -545,6 +562,8 @@ impl RequestObserver {
                 changed_generations: Vec::new(),
                 input_interval,
                 input_tokens_explicit: self.input_tokens_explicit,
+                cached_input_tokens: self.cached_input_tokens,
+                input_usage_expected: self.input_usage_expected,
                 output_calibration: backend
                     .map_or_else(OutputCalibrationFacts::default, |backend| {
                         backend.output_calibration
@@ -1279,7 +1298,7 @@ mod tests {
         observer.on_upstream_response_headers(200);
         recv_observation(&rx, "response-header observation should be emitted").await;
 
-        observer.observe_input_tokens_total(7);
+        observer.observe_input_usage(7, None);
         let usage = rx
             .recv_async()
             .await
@@ -1300,18 +1319,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn omitted_cached_details_keep_the_earlier_cached_count() {
+        let (mut observer, rx, _) = responding_observer("req-cached-count").await;
+        for (input_tokens, cached, expected) in [
+            (128, Some(0), Some(0)),
+            (8_000, None, Some(0)),
+            (8_000, Some(300), Some(300)),
+        ] {
+            observer.observe_input_usage(input_tokens, cached);
+            let event = rx
+                .recv_async()
+                .await
+                .expect("input usage should be emitted");
+            assert_eq!(event.cached_input_tokens(), expected);
+            assert_eq!(event.into_observation().input_tokens, input_tokens);
+        }
+        observer.observe_input_usage(8_000, None);
+        assert!(rx.is_empty(), "unchanged usage should not emit");
+    }
+
+    #[tokio::test]
     async fn exact_input_usage_does_not_regress() {
         let (mut observer, rx, _) = responding_observer("req-input-regression").await;
 
-        observer.observe_input_tokens_total(7);
+        observer.observe_input_usage(7, None);
         let first = recv_observation(&rx, "first input usage should be emitted").await;
         assert_eq!(first.input_tokens, 7);
 
-        observer.observe_input_tokens_total(9);
+        observer.observe_input_usage(9, None);
         let increased = recv_observation(&rx, "increased input usage should be emitted").await;
         assert_eq!(increased.input_tokens, 9);
 
-        observer.observe_input_tokens_total(8);
+        observer.observe_input_usage(8, None);
         assert!(rx.is_empty(), "regressing input usage should not emit");
         assert_eq!(observer.input_tokens, 9);
     }

@@ -39,6 +39,11 @@ import (
 
 // CaptureRequest describes a pod the agent should capture.
 type CaptureRequest struct {
+	// Hash, when set, is the content hash to store the capture under
+	// (stamped on the pod at admission by the election webhook). Empty
+	// means compute it from HashInput.
+	Hash string
+
 	// PodUID is metadata.uid — used by the PIDResolver and to compute
 	// the kubelet host paths for emptyDir volumes.
 	PodUID string
@@ -207,7 +212,13 @@ func (c *Capturer) Capture(ctx context.Context, req CaptureRequest) (checkpoints
 		return checkpointstore.Manifest{}, errors.New("rootfsonly: CaptureRequest.Spec is nil")
 	}
 
-	hash := checkpointstore.ComputeHash(req.HashInput)
+	// The admission webhook stamps the hash it composed onto elected pods
+	// (nvsnap.io/hash) and the watcher passes it through; honour it so the
+	// capture lands under the hash the followers were decorated against.
+	hash := req.Hash
+	if hash == "" {
+		hash = checkpointstore.ComputeHash(req.HashInput)
+	}
 	log := c.logger().WithFields(logrus.Fields{
 		"hash":    checkpointstore.ShortHash(hash),
 		"pod":     req.Namespace + "/" + req.Name,

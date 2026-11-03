@@ -19,6 +19,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -32,9 +33,15 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
@@ -925,6 +932,160 @@ func TestDoSharedStorageSMB(t *testing.T) {
 	}
 }
 
+func TestDoSharedStorageSMB_TaskDataStorageClass(t *testing.T) {
+	ctx := newTestContext()
+	storageClassName := "task-data"
+
+	for _, tt := range []struct {
+		name                string
+		storageClassName    string
+		storageClassPresent bool
+		wantPhase           nvcav1new.StoragePhase
+		wantCondition       bool
+		wantStatus          metav1.ConditionStatus
+		wantReason          string
+		wantErrContains     string
+	}{
+		{
+			name:             "missing",
+			storageClassName: storageClassName,
+			wantPhase:        nvcav1new.StorageFailed,
+			wantCondition:    true,
+			wantStatus:       metav1.ConditionFalse,
+			wantReason:       conditionReasonStorageClassNotFound,
+			wantErrContains:  `task-data StorageClass "task-data" not found`,
+		},
+		{
+			name:                "available",
+			storageClassName:    storageClassName,
+			storageClassPresent: true,
+			wantPhase:           nvcav1new.StorageInitRunning,
+			wantCondition:       true,
+			wantStatus:          metav1.ConditionTrue,
+			wantReason:          conditionReasonStorageClassFound,
+		},
+		{
+			name:      "explicit empty class",
+			wantPhase: nvcav1new.StorageInitRunning,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sch := newTestScheme()
+			namespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: "task-data-" + strings.ReplaceAll(tt.name, " ", "-")},
+			}
+			objects := []client.Object{namespace}
+			if tt.storageClassPresent {
+				objects = append(objects, &storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{Name: tt.storageClassName},
+				})
+			}
+			k8sClient := newFakeClient(sch, objects...)
+			configuredStorageClassName := tt.storageClassName
+			stReq := &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "shared-storage",
+					Namespace: namespace.Name,
+					Labels:    map[string]string{"function-version-id": "test-function"},
+				},
+				Spec: nvcav1new.StorageRequestSpec{
+					Type: nvcav1new.SharedStorageRequest,
+					SharedStorage: &nvcav1new.SharedStorageSpec{
+						SMBContainerImage: "smb:latest",
+						Size:              resource.MustParse("1Gi"),
+						TaskData: &nvcav1new.SharedStorageTaskDataSpec{
+							StorageClassName: &configuredStorageClassName,
+							Size:             resource.MustParse("1Gi"),
+						},
+					},
+				},
+				Status: nvcav1new.StorageRequestStatus{Phase: nvcav1new.StoragePending},
+			}
+			stCopy := stReq.DeepCopy()
+			r := &Reconciler{Client: k8sClient, fff: &featureflagmock.Fetcher{}}
+
+			_, err := r.doSharedStorageSMB(ctx, stReq, stCopy)
+			if tt.wantErrContains == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tt.wantErrContains)
+				assert.True(t, isTerminal(err))
+			}
+			assert.Equal(t, tt.wantPhase, stCopy.Status.Phase)
+			condition := meta.FindStatusCondition(
+				stCopy.Status.Conditions, conditionTypeTaskDataStorageClassAvailable)
+			if tt.wantCondition {
+				require.NotNil(t, condition)
+				assert.Equal(t, tt.wantStatus, condition.Status)
+				assert.Equal(t, tt.wantReason, condition.Reason)
+				assert.Contains(t, condition.Message, tt.storageClassName)
+			} else {
+				assert.Nil(t, condition)
+			}
+
+			if tt.wantPhase == nvcav1new.StorageFailed {
+				err := k8sClient.Get(ctx, client.ObjectKey{
+					Name:      SharedStorageTaskDataSMBServerPVCName,
+					Namespace: namespace.Name,
+				}, &corev1.PersistentVolumeClaim{})
+				assert.Error(t, err, "a missing StorageClass must fail before creating the task-data PVC")
+			}
+		})
+	}
+}
+
+func TestDoSharedStorageSMB_TaskDataStorageClassTransientLookupError(t *testing.T) {
+	ctx := newTestContext()
+	sch := newTestScheme()
+	namespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "task-data-transient-lookup"},
+	}
+	storageClassName := "task-data"
+	k8sClient := clientfake.NewClientBuilder().
+		WithScheme(sch).
+		WithRESTMapper(newTestRESTMapper(sch)).
+		WithObjects(namespace).
+		WithStatusSubresource(&nvcav1new.StorageRequest{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey,
+				obj client.Object, opts ...client.GetOption,
+			) error {
+				if _, ok := obj.(*storagev1.StorageClass); ok && key.Name == storageClassName {
+					return apierrors.NewServiceUnavailable("storageclass lookup failed")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	stReq := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "shared-storage",
+			Namespace: namespace.Name,
+			Labels:    map[string]string{"function-version-id": "test-function"},
+		},
+		Spec: nvcav1new.StorageRequestSpec{
+			Type: nvcav1new.SharedStorageRequest,
+			SharedStorage: &nvcav1new.SharedStorageSpec{
+				SMBContainerImage: "smb:latest",
+				Size:              resource.MustParse("1Gi"),
+				TaskData: &nvcav1new.SharedStorageTaskDataSpec{
+					StorageClassName: &storageClassName,
+					Size:             resource.MustParse("1Gi"),
+				},
+			},
+		},
+		Status: nvcav1new.StorageRequestStatus{Phase: nvcav1new.StoragePending},
+	}
+	stCopy := stReq.DeepCopy()
+	r := &Reconciler{Client: k8sClient, fff: &featureflagmock.Fetcher{}}
+
+	result, err := r.doSharedStorageSMB(ctx, stReq, stCopy)
+	require.NoError(t, err)
+	assert.Equal(t, defaultRequeueDelay, result.RequeueAfter)
+	assert.Equal(t, nvcav1new.StoragePending, stCopy.Status.Phase)
+	assert.Empty(t, stCopy.Status.Conditions)
+}
+
 // TestDoSharedStorageSMB_GetError_Requeues verifies that transient Get errors
 // when checking SMB pod return requeue without error (to avoid counting as reconcile failure).
 func TestDoSharedStorageSMB_GetError_Requeues(t *testing.T) {
@@ -972,4 +1133,242 @@ func TestDoSharedStorageSMB_GetError_Requeues(t *testing.T) {
 	// Should return nil error with RequeueAfter (pod not found triggers requeue)
 	assert.NoError(t, err, "SMB pod Get error should not return an error")
 	assert.NotZero(t, res.RequeueAfter, "Should requeue after transient Get error")
+}
+
+func newPodCreateErrorClient(createErr error, objs ...client.Object) client.Client {
+	sch := newTestScheme()
+	return clientfake.NewClientBuilder().
+		WithScheme(sch).
+		WithRESTMapper(newTestRESTMapper(sch)).
+		WithObjects(objs...).
+		WithStatusSubresource(&nvcav1new.StorageRequest{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, cl client.WithWatch, obj client.Object,
+				opts ...client.CreateOption,
+			) error {
+				if _, ok := obj.(*corev1.Pod); ok {
+					return createErr
+				}
+				return cl.Create(ctx, obj, opts...)
+			},
+		}).
+		Build()
+}
+
+func TestApplyControlledOne_PreservesAPIErrorClass(t *testing.T) {
+	ctx := newTestContext()
+	podGK := schema.GroupKind{Kind: "Pod"}
+	podGR := schema.GroupResource{Resource: "pods"}
+
+	for _, tt := range []struct {
+		name    string
+		err     error
+		matcher func(error) bool
+	}{
+		{
+			name:    "invalid",
+			err:     apierrors.NewInvalid(podGK, "nvcf-smb-server", nil),
+			matcher: apierrors.IsInvalid,
+		},
+		{
+			name:    "forbidden",
+			err:     apierrors.NewForbidden(podGR, "nvcf-smb-server", errors.New("exceeded quota")),
+			matcher: apierrors.IsForbidden,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "apply-controlled-" + tt.name}}
+			r := &Reconciler{Client: newPodCreateErrorClient(tt.err, namespace), fff: &featureflagmock.Fetcher{}}
+			st := &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "shared-storage",
+					Namespace: namespace.Name,
+					Labels:    map[string]string{"function-version-id": "test-function"},
+				},
+			}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "nvcf-smb-server", Namespace: namespace.Name}}
+
+			_, err := r.applyControlledOne(ctx, st, pod)
+			require.Error(t, err)
+			assert.True(t, tt.matcher(err), "wrapper must keep the API error class, got: %v", err)
+			assert.Contains(t, err.Error(), "nvcf-smb-server")
+		})
+	}
+}
+
+func TestDoSharedStorageSMB_PodCreateRejected(t *testing.T) {
+	ctx := newTestContext()
+	podGK := schema.GroupKind{Kind: "Pod"}
+
+	for _, tt := range []struct {
+		name                string
+		err                 error
+		wantPhase           nvcav1new.StoragePhase
+		wantMessageContains []string
+	}{
+		{
+			// For example: requests.cpu 500m above limits.cpu 100m.
+			name: "invalid fails the request",
+			err: apierrors.NewInvalid(podGK, "nvcf-smb-server", field.ErrorList{
+				field.Invalid(field.NewPath("spec", "containers").Index(0).Child("resources", "requests"), "500m",
+					"must be less than or equal to cpu limit of 100m"),
+			}),
+			wantPhase:           nvcav1new.StorageFailed,
+			wantMessageContains: []string{"500m", "100m"},
+		},
+		{
+			name: "forbidden fails the request",
+			err: apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "nvcf-smb-server",
+				errors.New("exceeded quota")),
+			wantPhase:           nvcav1new.StorageFailed,
+			wantMessageContains: []string{"exceeded quota"},
+		},
+		{
+			name:      "transient error keeps retrying",
+			err:       apierrors.NewServiceUnavailable("apiserver unavailable"),
+			wantPhase: nvcav1new.StoragePending,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			namespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: "pod-rejected-" + strings.ReplaceAll(tt.name, " ", "-")},
+			}
+			stReq := &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "shared-storage",
+					Namespace: namespace.Name,
+					Labels:    map[string]string{"function-version-id": "test-function"},
+				},
+				Spec: nvcav1new.StorageRequestSpec{
+					Type: nvcav1new.SharedStorageRequest,
+					SharedStorage: &nvcav1new.SharedStorageSpec{
+						SMBContainerImage: "smb:latest",
+						Size:              resource.MustParse("1Gi"),
+					},
+				},
+				Status: nvcav1new.StorageRequestStatus{Phase: nvcav1new.StoragePending},
+			}
+			stCopy := stReq.DeepCopy()
+			r := &Reconciler{Client: newPodCreateErrorClient(tt.err, namespace), fff: &featureflagmock.Fetcher{}}
+
+			_, err := r.doSharedStorageSMB(ctx, stReq, stCopy)
+			require.Error(t, err)
+			assert.Equal(t, tt.wantPhase, stCopy.Status.Phase)
+			cond := meta.FindStatusCondition(stCopy.Status.Conditions, ConditionTypeSharedStorageResourcesCreated)
+			if tt.wantPhase != nvcav1new.StorageFailed {
+				assert.False(t, isTerminal(err), "transient errors must keep retrying")
+				assert.Nil(t, cond)
+				return
+			}
+			assert.True(t, isTerminal(err))
+			assert.ErrorContains(t, err, "nvcf-smb-server")
+			require.NotNil(t, cond)
+			assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			assert.Equal(t, ConditionReasonAdmissionRejected, cond.Reason)
+			assert.Contains(t, cond.Message, "nvcf-smb-server")
+			for _, want := range tt.wantMessageContains {
+				assert.Contains(t, cond.Message, want)
+			}
+		})
+	}
+}
+
+func TestDoSharedStorageSMB_CreatingPVCRejected(t *testing.T) {
+	ctx := newTestContext()
+
+	for _, tt := range []struct {
+		name         string
+		err          error
+		wantPhase    nvcav1new.StoragePhase
+		wantTerminal bool
+	}{
+		{
+			name: "invalid fails the request",
+			err: apierrors.NewInvalid(schema.GroupKind{Kind: "PersistentVolumeClaim"}, "ro-pvc",
+				field.ErrorList{field.Invalid(field.NewPath("spec", "resources", "requests"), "0", "must be positive")}),
+			wantPhase:    nvcav1new.StorageFailed,
+			wantTerminal: true,
+		},
+		{
+			name: "forbidden fails the request",
+			err: apierrors.NewForbidden(schema.GroupResource{Resource: "persistentvolumeclaims"}, "ro-pvc",
+				errors.New("exceeded quota")),
+			wantPhase:    nvcav1new.StorageFailed,
+			wantTerminal: true,
+		},
+		{
+			name:      "transient error keeps retrying",
+			err:       apierrors.NewServiceUnavailable("apiserver unavailable"),
+			wantPhase: nvcav1new.StorageCreating,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sch := newTestScheme()
+			namespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: "creating-pvc-" + strings.ReplaceAll(tt.name, " ", "-")},
+			}
+			pv := &corev1.PersistentVolume{
+				ObjectMeta: metav1.ObjectMeta{Name: "ro-pv"},
+				Status:     corev1.PersistentVolumeStatus{Phase: corev1.VolumeAvailable},
+			}
+			k8sClient := clientfake.NewClientBuilder().
+				WithScheme(sch).
+				WithRESTMapper(newTestRESTMapper(sch)).
+				WithObjects(namespace, pv).
+				WithStatusSubresource(&nvcav1new.StorageRequest{}).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Create: func(ctx context.Context, cl client.WithWatch, obj client.Object,
+						opts ...client.CreateOption,
+					) error {
+						if _, ok := obj.(*corev1.PersistentVolumeClaim); ok {
+							return tt.err
+						}
+						return cl.Create(ctx, obj, opts...)
+					},
+				}).
+				Build()
+			stReq := &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "shared-storage",
+					Namespace: namespace.Name,
+					Labels:    map[string]string{"function-version-id": "test-function"},
+				},
+				Spec: nvcav1new.StorageRequestSpec{
+					Type: nvcav1new.SharedStorageRequest,
+					SharedStorage: &nvcav1new.SharedStorageSpec{
+						SMBContainerImage: "smb:latest",
+						Size:              resource.MustParse("1Gi"),
+					},
+				},
+				Status: nvcav1new.StorageRequestStatus{
+					Phase: nvcav1new.StorageCreating,
+					SharedStorage: &nvcav1new.SharedStorageStatus{
+						Secrets: nvcav1new.SharedStorageTypeStatus{
+							ReadOnlyPVCName:      "ro-pvc",
+							ReadOnlyPVName:       "ro-pv",
+							StorageClassName:     "sc",
+							ReadOnlyAccessMode:   corev1.ReadOnlyMany,
+							StorageCapacity:      resource.MustParse("1Gi"),
+							CreatePVCIfNotExists: true,
+						},
+					},
+				},
+			}
+			stCopy := stReq.DeepCopy()
+			r := &Reconciler{Client: k8sClient, fff: &featureflagmock.Fetcher{}}
+
+			_, err := r.doSharedStorageSMB(ctx, stReq, stCopy)
+			require.Error(t, err)
+			assert.Equal(t, tt.wantPhase, stCopy.Status.Phase)
+			assert.Equal(t, tt.wantTerminal, isTerminal(err))
+			cond := meta.FindStatusCondition(stCopy.Status.Conditions, ConditionTypeSharedStorageResourcesCreated)
+			if !tt.wantTerminal {
+				assert.Nil(t, cond)
+				return
+			}
+			require.NotNil(t, cond)
+			assert.Equal(t, ConditionReasonAdmissionRejected, cond.Reason)
+			assert.Contains(t, cond.Message, "ro-pvc")
+		})
+	}
 }

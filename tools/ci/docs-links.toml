@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Fern validates source paths and routes. Lychee validates public HTTP targets.
+scheme = ["https", "http"]
+# Resolve root-relative routes as file URLs so the HTTP-only filter can skip them.
+root_dir = "."
+exclude_all_private = true
+include_verbatim = false
+no_progress = true
+max_concurrency = 4
+host_concurrency = 2
+max_retries = 2
+timeout = 30
+# These exact account pages require an interactive NGC sign-in.
+# Do not accept 401/403 globally or exclude entire domains.
+exclude = [
+  '^https://org\.ngc\.nvidia\.com/profile/?$',
+  '^https://org\.ngc\.nvidia\.com/service-keys/?$',
+  '^https://ngc\.nvidia\.com/setup/api-key/?$',
+  '^https://org\.ngc\.nvidia\.com/setup/api-keys/?$',
+]

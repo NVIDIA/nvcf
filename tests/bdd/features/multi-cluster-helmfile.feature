@@ -284,34 +284,66 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
     # issue #1032 is consumed by the self-managed stack.
     @nvct-task-api
     Scenario: Operator launches an NVCT task and waits for it to complete
-      When I run command:
-        """
-        env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x tests/bdd/scripts/run-nvct-task-smoke.sh
-        """
-      Then the command exit code should be 0
-      And the command output should contain "COMPLETED"
+      Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
+
+      When I successfully generate a task API key with CLI options:
+        | option        | value                                |
+        | --description | bdd-nvct-task-smoke                  |
+        | --scopes      | launch_task,task_details,delete_task |
+
+      And I successfully create task "bdd-nvct-task-smoke" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/task-simple-sample:local" with CLI options:
+        | option              | value                              |
+        | --gpu               | H100                               |
+        | --instance-type     | NCP.GPU.H100_1x                    |
+        | --backend           | ncp-local-compute-1                |
+        | --result-strategy   | NONE                               |
+        | --max-runtime       | PT10M                              |
+        | --max-queued        | PT10M                              |
+        | --termination-grace | PT1M                               |
+        | --container-env     | NUM_OF_RESULTS=1                   |
+        | --container-env     | DELAY_BETWEEN_RESULTS_IN_MINUTES=0 |
+        | --container-env     | FILE_SIZE_BYTES=8192               |
+        | --container-env     | INCLUDE_METADATA=false             |
+
+      Then the task selected by NVCF CLI should reach status "COMPLETED" within "900" seconds, polling every "10" seconds
+
+      And I successfully delete the task selected by NVCF CLI
 
     @nvct-task-api @helm-task
     Scenario: Operator sees a Helm task without resource limits fail
       Given environment variable "SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES" is set
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
 
-      When I run command:
+      When I successfully generate a task API key with CLI options:
+        | option        | value                                |
+        | --description | bdd-nvct-helm-task-missing-resources |
+        | --scopes      | launch_task,task_details,delete_task |
+
+      And I run command:
         """
-        env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local-compute-1 NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=${SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES} NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-missing-resources tests/bdd/scripts/run-nvct-task-smoke.sh
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml task create --name bdd-nvct-helm-task-missing-resources --helm-chart ${SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES} --gpu H100 --instance-type NCP.GPU.H100_1x --backend ncp-local-compute-1 --result-strategy NONE --max-runtime PT10M --max-queued PT10M --termination-grace PT1M
         """
-      Then the command should fail
-      And the command output should contain "ERRORED"
+      Then the command exit code should be 0
+
+      And the task selected by NVCF CLI should reach status "ERRORED" within "900" seconds, polling every "10" seconds
 
     @nvct-task-api @helm-task
     Scenario: Operator launches an NVCT Helm task and waits for it to complete
       Given environment variable "SAMPLE_HELM_TASK_CHART" is set
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
 
-      When I run command:
+      When I successfully generate a task API key with CLI options:
+        | option        | value                                |
+        | --description | bdd-nvct-helm-task-smoke             |
+        | --scopes      | launch_task,task_details,delete_task |
+
+      And I run command:
         """
-        env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local-compute-1 NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=${SAMPLE_HELM_TASK_CHART} NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-smoke tests/bdd/scripts/run-nvct-task-smoke.sh
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml task create --name bdd-nvct-helm-task-smoke --helm-chart ${SAMPLE_HELM_TASK_CHART} --gpu H100 --instance-type NCP.GPU.H100_1x --backend ncp-local-compute-1 --result-strategy NONE --max-runtime PT10M --max-queued PT10M --termination-grace PT1M
         """
       Then the command exit code should be 0
-      And the command output should contain "COMPLETED"
+
+      And the task selected by NVCF CLI should reach status "COMPLETED" within "900" seconds, polling every "10" seconds
 
     @function-lifecycle
     Scenario: Operator creates, deploys, and invokes the Load Tester Supreme sample function
@@ -354,10 +386,14 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       Given environment variable "SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES" is set
       And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
 
-      When I successfully run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-multi-helm-function-missing-resources --helm-chart ${SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES} --helm-chart-service entrypoint --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
-        """
+      When I successfully create function "bdd-multi-helm-function-missing-resources" from Helm chart "${SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES}" with CLI options:
+        | option               | value      |
+        | --helm-chart-service | entrypoint |
+        | --inference-url      | /echo      |
+        | --inference-port     | 8000       |
+        | --health-uri         | /health    |
+        | --health-port        | 8000       |
+        | --health-timeout     | PT30S      |
 
       When I run command:
         """
@@ -376,12 +412,14 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       # ReVal renders the chart on the control plane before NVCA deploys the
       # workload in the separate compute cluster. Successful invocation proves
       # that the complete chart-backed path works across the cluster boundary.
-      # TODO(#1871): Replace this raw command with a table-backed Helm function
-      # create step so the options remain readable.
-      When I successfully run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-multi-helm-function --helm-chart ${SAMPLE_HELM_FUNCTION_CHART} --helm-chart-service entrypoint --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
-        """
+      When I successfully create function "bdd-multi-helm-function" from Helm chart "${SAMPLE_HELM_FUNCTION_CHART}" with CLI options:
+        | option               | value      |
+        | --helm-chart-service | entrypoint |
+        | --inference-url      | /echo      |
+        | --inference-port     | 8000       |
+        | --health-uri         | /health    |
+        | --health-port        | 8000       |
+        | --health-timeout     | PT30S      |
 
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
@@ -461,7 +499,9 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | --health-uri     | /health                                                                                             |
         | --health-port    | 8000                                                                                                |
         | --health-timeout | PT30S                                                                                               |
-        | --llm-model      | name=openai-compatible-sample,uris=/v1/chat/completions\|/v1/embeddings,routingMethod=round_robin |
+        | --llm-model      | name=openai-compatible-sample,uris=/v1/chat/completions\|/v1/responses\|/v1/embeddings,routingMethod=round_robin |
+
+      And the function selected by NVCF CLI is undeployed at scenario teardown
 
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
@@ -484,6 +524,86 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         """
       Then the command output should contain "chat.completion"
       And the command output should contain "fixed 128-byte response"
+
+      And I export the function selected by NVCF CLI to environment variables "BDD_LLM_FUNCTION_ID" and "BDD_LLM_VERSION_ID"
+
+      # Use the same authenticated function through each public entry point.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/chat/completions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","messages":[{"role":"user","content":"bdd-stream"}],"stream":true}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "chat.completion.chunk"
+      And the HTTP response body should end with "data: [DONE]"
+      And the HTTP response body should not contain "error"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/responses" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","input":"bdd-responses","stream":false}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "object" should equal "response"
+      And the HTTP response JSON field "status" should equal "completed"
+      And the HTTP response JSON field "output.0.content.0.type" should equal "output_text"
+      And the HTTP response body should contain "fixed 128-byte response"
+
+      # The sample body controls hold non-streaming output for 90s and
+      # stream its 18 words over 76.5s, crossing the 60s regression boundary.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/chat/completions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","messages":[{"role":"user","content":"bdd-long-nonstream"}],"stream":false,"ttft_ms":90000,"repeat_count":1}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response should take at least "60s"
+      And the HTTP response JSON field "object" should equal "chat.completion"
+      And the HTTP response JSON field "choices.0.finish_reason" should equal "stop"
+      And the HTTP response body should contain "fixed 128-byte response"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/chat/completions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","messages":[{"role":"user","content":"bdd-long-stream"}],"stream":true,"ttft_ms":0,"inter_token_delay_ms":4500,"repeat_count":1}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response should take at least "60s"
+      And the HTTP response body should contain "chat.completion.chunk"
+      And the HTTP response body should end with "data: [DONE]"
+      And the HTTP response body should not contain "error"
+
+      # A client deadline well below 60s also rejects the old hanging behavior.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "Function-ID" is "${BDD_LLM_FUNCTION_ID}"
+      And the HTTP request header "Function-Version-ID" is "${BDD_LLM_VERSION_ID}"
+      When I send a "POST" request to "http://invocation.localhost:8080/v1/chat/completions" with timeout 10 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","messages":[{"role":"user","content":"bdd-classic"}],"stream":false}
+        """
+      Then the HTTP status should be 404
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://api.localhost:8080/v2/nvcf/pexec/functions/${BDD_LLM_FUNCTION_ID}" with timeout 10 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","messages":[{"role":"user","content":"bdd-pexec"}],"stream":false}
+        """
+      Then the HTTP status should be 404
+
+      # The declared model succeeded above, so this cannot pass on a cold route.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/chat/completions" with timeout 10 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/not-a-model","messages":[{"role":"user","content":"bdd-unlisted"}],"stream":false}
+        """
+      Then the HTTP status should be 404
 
       # Authentication remains enforced at the LLM gateway in the split
       # topology. Only the status code is captured for a stable assertion.

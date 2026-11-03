@@ -122,3 +122,86 @@ func TestNewPromoterFromProfile(t *testing.T) {
 		t.Error("unknown strategy should error")
 	}
 }
+
+// Built-in defaults: prewarm on everywhere; NVMesh uses eight readers
+// because its throughput scales with parallel streams.
+func TestStorageProfile_BuiltinPrewarmDefaults(t *testing.T) {
+	nv, _, ok := ResolveStorageProfile("nvmesh-csi.excelero.com", "", nil)
+	if !ok || !nv.PrewarmEnabled() || nv.PrewarmWorkers() != 8 {
+		t.Errorf("NVMesh built-in must prewarm with 8 readers: ok=%v enabled=%v workers=%d", ok, nv.PrewarmEnabled(), nv.PrewarmWorkers())
+	}
+	hd, _, ok := ResolveStorageProfile("pd.csi.storage.gke.io", "hyperdisk-ml", nil)
+	if !ok || !hd.PrewarmEnabled() {
+		t.Errorf("Hyperdisk ML built-in must keep prewarm on: ok=%v enabled=%v", ok, hd.PrewarmEnabled())
+	}
+	// An overlay entry still wins either way.
+	off := false
+	ov := map[string]StorageProfile{"nvmesh-csi.excelero.com": {Strategy: StrategySharedVolume, VolumeHandleTransform: "nvmesh", Prewarm: &off}}
+	if p, _, _ := ResolveStorageProfile("nvmesh-csi.excelero.com", "", ov); p.PrewarmEnabled() {
+		t.Error("overlay prewarm: false must disable it on NVMesh")
+	}
+}
+
+// The prewarm policy defaults to on with six readers when a profile says
+// nothing, and a ConfigMap entry can turn it off or resize it.
+func TestStorageProfile_PrewarmPolicy(t *testing.T) {
+	var unset StorageProfile
+	if !unset.PrewarmEnabled() || unset.PrewarmWorkers() != DefaultPrewarmParallelism {
+		t.Errorf("zero profile: enabled=%v workers=%d, want on/%d", unset.PrewarmEnabled(), unset.PrewarmWorkers(), DefaultPrewarmParallelism)
+	}
+	off := false
+	if (StorageProfile{Prewarm: &off}).PrewarmEnabled() {
+		t.Error("prewarm: false must disable")
+	}
+	on := true
+	if !(StorageProfile{Prewarm: &on}).PrewarmEnabled() {
+		t.Error("prewarm: true must enable")
+	}
+	if got := (StorageProfile{PrewarmParallelism: 12}).PrewarmWorkers(); got != 12 {
+		t.Errorf("parallelism 12 -> %d", got)
+	}
+	if got := (StorageProfile{PrewarmParallelism: -3}).PrewarmWorkers(); got != DefaultPrewarmParallelism {
+		t.Errorf("negative parallelism must fall back to the default, got %d", got)
+	}
+
+	m, err := ParseConfigMapProfiles(`
+nvmesh-csi.excelero.com:
+  strategy: shared-volume
+  volumeHandleTransform: nvmesh
+  prewarm: false
+pd.csi.storage.gke.io/hyperdisk-ml:
+  strategy: snapshot-clone
+  snapshotClass: hdml-images-snapshot-class
+  readOnlyMany: true
+  prewarmParallelism: 16
+`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m["nvmesh-csi.excelero.com"].PrewarmEnabled() {
+		t.Error("ConfigMap prewarm: false not honoured")
+	}
+	hd := m["pd.csi.storage.gke.io/hyperdisk-ml"]
+	if !hd.PrewarmEnabled() || hd.PrewarmWorkers() != 16 {
+		t.Errorf("hyperdisk entry: enabled=%v workers=%d, want on/16", hd.PrewarmEnabled(), hd.PrewarmWorkers())
+	}
+	// Every built-in ships with the prewarm on; only the reader count
+	// differs per volume type.
+	for k, p := range builtinProfiles {
+		if !p.PrewarmEnabled() {
+			t.Errorf("built-in %s ships with prewarm off", k)
+		}
+	}
+}
+
+func TestStorageProfile_PrewarmLimit(t *testing.T) {
+	if got := (StorageProfile{}).PrewarmLimit(); got != DefaultPrewarmMaxBytes {
+		t.Errorf("default = %d", got)
+	}
+	if got := (StorageProfile{PrewarmMaxBytes: "2Ti"}).PrewarmLimit(); got != int64(2)<<40 {
+		t.Errorf("2Ti = %d", got)
+	}
+	if got := (StorageProfile{PrewarmMaxBytes: "nonsense"}).PrewarmLimit(); got != DefaultPrewarmMaxBytes {
+		t.Errorf("bad value falls back to the default, got %d", got)
+	}
+}

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package document provides interface definitions and error types for document types.
 //
 // A document is a protocol-agnostic type which supports a JSON-like data-model. You can use this type to send

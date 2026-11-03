@@ -340,7 +340,7 @@ public interface IcmsStubService {
     }
 
     @GetExchange(
-            "/v1/si/accounts/{ncaId}/clusters?includeAuthorizedClusters=true&includeGfnInAuthorizedClusters=true")
+            "/v1/si/accounts/{ncaId}/clusters?includeAuthorizedClusters=true&includeNonByocInAuthorizedClusters=true")
     List<ClusterResponse> getClusters(
             @PathVariable("ncaId") String ncaId,
             @RequestParam("instanceTypeUsage") InstanceUsageTypeEnum instanceUsage);

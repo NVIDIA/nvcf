@@ -35,7 +35,7 @@ struct Metric {
 /// client. Defined once here and reused so the value stays consistent.
 pub const CLIENT_EARLY_DISCONNECT_STATUS: &str = "499";
 
-const COUNTERS: [Metric; 19] = [
+const COUNTERS: [Metric; 20] = [
     FUNCTION_INVOCATION_ERROR,
     FUNCTION_REQUEST,
     NATS_IN_BYTES,
@@ -55,6 +55,7 @@ const COUNTERS: [Metric; 19] = [
     HTTP_CLIENT_RESPONSES,
     NATS_STREAM_PUBLISHES,
     AWS_REQUESTS_STATUS,
+    POLLING_OWNER_CHECKS,
 ];
 const HISTOGRAMS: [Metric; 1] = [FUNCTION_REQUEST_LATENCY];
 
@@ -65,9 +66,8 @@ const SECONDS_DURATION_BUCKETS: &[f64; 15] = &[
 // Reduces each (function_id, function_version_id) histogram from 18 to 12 series
 // (15 to 9 finite buckets, plus +Inf, sum, and count), a 33.3% reduction, while
 // preserving useful resolution for AI inference latency.
-const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 9] = &[
-    0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0,
-];
+const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 9] =
+    &[0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0];
 
 const FUNCTION_REQUEST_LATENCY: Metric = Metric {
     name: "function.request.latency",
@@ -169,6 +169,52 @@ const AWS_REQUESTS_STATUS: Metric = Metric {
     description: "status of requests to aws.",
 };
 
+const POLLING_OWNER_CHECKS: Metric = Metric {
+    name: "nvcf_http_invocation_polling_owner_checks_total",
+    description: "Polling ownership outcomes during preparation and enforcement.",
+};
+
+/// Bounded outcomes for the caller-ownership check on a status request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PollingOwnerCheck {
+    Matched,
+    LegacyAccepted,
+    MissingRejected,
+    InvalidRejected,
+    MismatchRejected,
+}
+
+impl PollingOwnerCheck {
+    /// Use stable labels without caller, request, or function identifiers.
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Matched => "matched",
+            Self::LegacyAccepted => "legacy_accepted",
+            Self::MissingRejected => "missing_rejected",
+            Self::InvalidRejected => "invalid_rejected",
+            Self::MismatchRejected => "mismatch_rejected",
+        }
+    }
+}
+
+/// Expose every bounded outcome before the first poll for rollout monitoring.
+fn initialize_polling_owner_counters() {
+    for check in [
+        PollingOwnerCheck::Matched,
+        PollingOwnerCheck::LegacyAccepted,
+        PollingOwnerCheck::MissingRejected,
+        PollingOwnerCheck::InvalidRejected,
+        PollingOwnerCheck::MismatchRejected,
+    ] {
+        counter!(POLLING_OWNER_CHECKS.name, "outcome" => check.label()).increment(0);
+    }
+}
+
+/// Count an ownership decision independently of the worker response status.
+pub fn record_polling_owner_check(check: PollingOwnerCheck) {
+    counter!(POLLING_OWNER_CHECKS.name, "outcome" => check.label()).increment(1);
+}
+
 pub fn init_metrics(settings: &MetricsSettings) -> anyhow::Result<()> {
     let mut metrics_endpoint = "127.0.0.1:41337";
     // Find the prometheus exporter and retrieve the endpoint
@@ -208,6 +254,7 @@ pub fn init_metrics(settings: &MetricsSettings) -> anyhow::Result<()> {
     for name in HISTOGRAMS {
         register_histogram(name);
     }
+    initialize_polling_owner_counters();
 
     // Pre-init the client-early-disconnect series so it reports 0 before the
     // first disconnect.
@@ -355,6 +402,31 @@ mod tests {
     use super::*;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use metrics_util::MetricKind;
+
+    #[test]
+    fn polling_owner_counters_are_initialized_with_bounded_labels() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, || {
+            initialize_polling_owner_counters();
+            record_polling_owner_check(PollingOwnerCheck::LegacyAccepted);
+        });
+        let values = snapshotter.snapshot().into_vec();
+        let values: Vec<_> = values
+            .iter()
+            .filter(|(key, _, _, _)| key.key().name() == POLLING_OWNER_CHECKS.name)
+            .collect();
+        assert_eq!(values.len(), 5);
+        for (key, _, _, value) in values {
+            let labels: Vec<_> = key.key().labels().collect();
+            assert_eq!(labels.len(), 1);
+            assert_eq!(labels[0].key(), "outcome");
+            assert_eq!(
+                value,
+                &DebugValue::Counter(u64::from(labels[0].value() == "legacy_accepted"))
+            );
+        }
+    }
 
     #[test]
     fn function_request_latency_uses_expected_buckets() {

@@ -131,7 +131,7 @@ public class FunctionDeploymentReconciliationService {
     private FunctionEntity reconcileRunningFunction(
             FunctionEntity function,
             FunctionDeploymentContext deploymentContext) {
-        Map<UUID, Set<Instance>> gpuSpecIdToInstances = new HashMap<>();
+        Map<UUID, Set<Instance>> gpuSpecIdToInstances;
         try {
             gpuSpecIdToInstances = manageRunningFunctionInstances(function, deploymentContext);
         } catch (Exception ex) {
@@ -140,6 +140,10 @@ public class FunctionDeploymentReconciliationService {
                       function.getFunctionVersionId(),
                       ex.getMessage(),
                       ex);
+            // The instance state is unknown, not empty. Evaluating the status against an empty
+            // list would mark a healthy function DEGRADED and reject its invocations, so keep
+            // the current status and retry on the next reconciliation pass.
+            return function;
         }
         return updateRunningFunctionStatus(function, deploymentContext, gpuSpecIdToInstances);
     }

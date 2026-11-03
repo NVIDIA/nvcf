@@ -13,6 +13,8 @@ go_library(
         "//src/compute-plane-services/nvca/cmd/internal",
         "//src/compute-plane-services/nvca/internal/clustervalidator",
         "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
     ],
 )
 
@@ -35,6 +37,7 @@ go_oci_image(
     },
     registry = "nvcr.io/qtfpt1h0bieu/byocdev/cluster-validator",
     tags = ["nvca-cluster-validator"],
+    user = "1000:1000",
     visibility = ["//visibility:public"],
 )
 
@@ -42,4 +45,17 @@ go_test(
     name = "cluster-validator_test",
     srcs = ["main_test.go"],
     embed = [":cluster-validator_lib"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/clustervalidator",
+    ],
+)
+
+go_test(
+    name = "image_numeric_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":image_index"],
 )

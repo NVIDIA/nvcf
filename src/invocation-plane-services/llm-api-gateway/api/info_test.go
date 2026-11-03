@@ -25,8 +25,8 @@ import (
 
 	echo "github.com/labstack/echo/v4"
 
-	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 )
 
 func newInfoEngine() *echo.Echo {

@@ -101,6 +101,51 @@ func TestNewInitializerInvalidOTELEndpoint(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewInitializerWithoutOTELEndpointDisablesTracing(t *testing.T) {
+	for name, endpoint := range map[string]string{"unset": "", "whitespace": "  "} {
+		t.Run(name, func(t *testing.T) {
+			core, logs := observer.New(zap.InfoLevel)
+			defer zap.ReplaceGlobals(zap.New(core))()
+
+			c := configs.InitConfig{}
+			c.OTELExporterOTLPEndpoint = endpoint
+			_, err := NewInitializer(c)
+			require.NoError(t, err)
+			require.Equal(t, 1, logs.FilterMessage("OTEL_EXPORTER_OTLP_ENDPOINT is not set, tracing is disabled").Len())
+		})
+	}
+}
+
+func TestOtlpTraceTarget(t *testing.T) {
+	tests := []struct {
+		name         string
+		endpoint     string
+		wantHost     string
+		wantInsecure bool
+		wantErr      bool
+	}{
+		{name: "unset disables tracing", endpoint: ""},
+		{name: "whitespace disables tracing", endpoint: "  "},
+		{name: "http endpoint is insecure", endpoint: "http://otel-collector:4317", wantHost: "otel-collector:4317", wantInsecure: true},
+		{name: "https endpoint uses TLS", endpoint: "https://collector.example.invalid:8282", wantHost: "collector.example.invalid:8282"},
+		{name: "surrounding whitespace is trimmed", endpoint: " http://otel-collector:4317 ", wantHost: "otel-collector:4317", wantInsecure: true},
+		{name: "endpoint without a scheme has no host", endpoint: "otel-collector:4317", wantErr: true},
+		{name: "unparseable endpoint", endpoint: "://bad", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, insecure, err := otlpTraceTarget(tt.endpoint)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.wantHost, host)
+			require.Equal(t, tt.wantInsecure, insecure)
+		})
+	}
+}
+
 func TestLogArtifactsForDebugRedactsURL(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
 	undo := zap.ReplaceGlobals(zap.New(core))

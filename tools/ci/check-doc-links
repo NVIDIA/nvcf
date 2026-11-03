@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+if [ "$#" -ne 2 ]; then
+  echo 'Usage: check-doc-links <base-ref> <report.md>' >&2
+  exit 2
+fi
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$repo_root"
+base_ref="$1"
+# A newly pushed branch has no previous remote commit.
+if [ "$base_ref" = 0000000000000000000000000000000000000000 ]; then
+  base_ref=HEAD^
+fi
+base="$(git rev-parse --verify --end-of-options "${base_ref}^{commit}")"
+report="$2"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+# Do not hide git failures in process substitution or split filenames on spaces.
+git diff --name-only --diff-filter=ACMRT -z "$base" -- docs fern > "$workdir/changed"
+files=()
+while IFS= read -r -d '' file; do
+  case "$file" in
+    *.md|*.mdx) files+=("$file") ;;
+  esac
+done < "$workdir/changed"
+if [ "${#files[@]}" -eq 0 ]; then
+  printf 'No added or modified docs Markdown files.\n' | tee "$report"
+  exit 0
+fi
+printf 'Checking external links in %s changed Markdown files.\n' "${#files[@]}"
+code=0
+./tools/ci/run-lychee --no-ignore --config tools/ci/docs-links.toml \
+  --format markdown --output "$report" -- "${files[@]}" || code=$?
+if [ -f "$report" ]; then
+  cat "$report"
+fi
+exit "$code"

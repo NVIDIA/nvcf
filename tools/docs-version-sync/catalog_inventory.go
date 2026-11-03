@@ -28,7 +28,10 @@ func updateCatalogFromGitHub(repoRoot, sourceRef string, base *Catalog) (*Catalo
 	return buildCatalogFromResolvedStackInventory(inventory, snapshot, base)
 }
 
-func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]string, qualificationVersion string, base *Catalog) (*Catalog, error) {
+func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]string, base *Catalog) (*Catalog, error) {
+	if base != nil && base.DocsEdition != nil && base.DocsEdition.Status == ReleaseSetQualified {
+		return nil, fmt.Errorf("cannot refresh a qualified docs edition; prepare a new edition from development sources")
+	}
 	client := newGitHubClientFromEnvironment()
 	inventories := make(map[string]resolvedStackInventory, len(stackInventorySpecs))
 	for _, spec := range stackInventorySpecs {
@@ -63,21 +66,22 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 	if err != nil {
 		return nil, err
 	}
-	status := ReleaseSetDevelopment
-	documentationVersion := "dev"
-	if qualificationVersion != "" {
-		status = ReleaseSetQualified
-		documentationVersion = strings.TrimPrefix(qualificationVersion, "v")
-	}
-	releaseSet, err := releaseSetFromInventories(inventories, documentationVersion, status)
+	releaseSet, err := releaseSetFromInventories(inventories)
 	if err != nil {
 		return nil, err
 	}
-	if qualificationVersion == "" && base != nil && base.ReleaseSet.Status == ReleaseSetQualified && releaseSet.sameStackReleases(base.ReleaseSet) {
-		releaseSet.DocumentationVersion = base.ReleaseSet.DocumentationVersion
-		releaseSet.Status = base.ReleaseSet.Status
+	if base != nil {
+		if err := preserveQualifiedDocumentation(&releaseSet, base.ReleaseSet); err != nil {
+			return nil, err
+		}
 	}
 	catalog.ReleaseSet = releaseSet
+	if base != nil && base.DocsEdition != nil {
+		edition := *base.DocsEdition
+		edition.Status = ReleaseSetDevelopment
+		edition.Qualification = ""
+		catalog.DocsEdition = &edition
+	}
 	for _, spec := range stackInventorySpecs[1:] {
 		version := inventories[spec.Key].Source.Version
 		if !setArtifactVersionByNameAndType(catalog, spec.ResourceName, ArtifactTypeResource, version) {
@@ -96,9 +100,6 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
 	catalog.pruneUnusedRegistries()
-	if qualificationVersion != "" && len(catalog.PublicationPending) > 0 {
-		return nil, fmt.Errorf("qualified release set has unpublished artifacts: %s", strings.Join(catalog.PublicationPending, ", "))
-	}
 	if err := ValidateCatalog(catalog); err != nil {
 		return nil, err
 	}
@@ -143,7 +144,7 @@ func mergeResolvedStackInventories(inventories map[string]resolvedStackInventory
 	}
 	releases := make(map[string]struct{})
 	artifacts := make(map[string]*resolvedInventoryArtifact)
-	artifactIdentities := make(map[string]string)
+	artifactIdentities := make(map[string][]resolvedInventoryArtifact)
 	artifactOwners := make(map[string]string)
 	for _, spec := range stackInventorySpecs {
 		inventory, exists := inventories[spec.Key]
@@ -163,10 +164,21 @@ func mergeResolvedStackInventories(inventories map[string]resolvedStackInventory
 		}
 		for _, artifact := range inventory.Artifacts {
 			identity := artifact.Type + "\x00" + artifact.Name
-			if reference, exists := artifactIdentities[identity]; exists && reference != artifact.Reference {
-				return resolvedStackInventory{}, fmt.Errorf("stack inventory version conflict for %s %s: %s uses %s and %s uses %s", artifact.Type, artifact.Name, artifactOwners[identity], reference, spec.Key, artifact.Reference)
+			for _, previous := range artifactIdentities[identity] {
+				if previous.Reference == artifact.Reference {
+					continue
+				}
+				// A single stack can consume different helper versions in separate
+				// hooks. Preserve both facts, but retain the cross-stack conflict
+				// gate and reject changed repositories or digests for the same tag.
+				if artifactOwners[identity] == spec.Key && artifact.Type == "container-image" &&
+					previous.Repository == artifact.Repository && previous.Version != "" &&
+					artifact.Version != "" && previous.Version != artifact.Version {
+					continue
+				}
+				return resolvedStackInventory{}, fmt.Errorf("stack inventory version conflict for %s %s: %s uses %s and %s uses %s", artifact.Type, artifact.Name, artifactOwners[identity], previous.Reference, spec.Key, artifact.Reference)
 			}
-			artifactIdentities[identity] = artifact.Reference
+			artifactIdentities[identity] = append(artifactIdentities[identity], artifact)
 			if _, exists := artifactOwners[identity]; !exists {
 				artifactOwners[identity] = spec.Key
 			}
@@ -283,14 +295,26 @@ func catalogArtifactsFromResolvedStackInventory(inventory resolvedStackInventory
 		}
 		sort.Strings(owningStacks)
 		artifacts = append(artifacts, Artifact{
-			Name:        resolved.Name,
-			Type:        artifactType,
-			Registry:    publicRegistryForArtifactType(artifactType),
-			Version:     resolved.Version,
-			Digest:      resolved.Digest,
-			Stacks:      owningStacks,
-			Requirement: requirement,
+			Name:               resolved.Name,
+			Type:               artifactType,
+			Registry:           publicRegistryForArtifactType(artifactType),
+			UpstreamRepository: publicUpstreamRepository(resolved.Repository, artifactType),
+			Version:            resolved.Version,
+			Digest:             resolved.Digest,
+			Stacks:             owningStacks,
+			Requirement:        requirement,
 		})
+	}
+	if base != nil {
+		counts := make(map[string]int)
+		for _, artifact := range artifacts {
+			counts[artifactNameAndTypeKey(artifact)]++
+		}
+		for _, override := range base.VersionOverrides {
+			if counts[artifactNameAndTypeIdentityKey(override.Name, override.Type)] > 1 {
+				return nil, fmt.Errorf("version override for %s:%s is ambiguous across multiple inventory versions", override.Name, override.Type)
+			}
+		}
 	}
 	preserveCatalogArtifactIdentity(artifacts, base)
 	assignCatalogArtifactIDs(artifacts)
@@ -337,17 +361,29 @@ func preserveCatalogArtifactIdentity(artifacts []Artifact, base *Catalog) {
 	candidates := make([]Artifact, 0, len(base.Artifacts)+len(base.SupplementalArtifacts))
 	candidates = append(candidates, base.Artifacts...)
 	candidates = append(candidates, base.SupplementalArtifacts...)
+	counts := make(map[string]int)
+	for _, artifact := range artifacts {
+		counts[artifactNameAndTypeKey(artifact)]++
+	}
 	for i := range artifacts {
-		var matches []Artifact
+		var matches, exact []Artifact
 		for _, candidate := range candidates {
 			if candidate.Name == artifacts[i].Name && candidate.Type == artifacts[i].Type {
 				matches = append(matches, candidate)
+				if candidate.Version == artifacts[i].Version && candidate.UpstreamRepository == artifacts[i].UpstreamRepository {
+					exact = append(exact, candidate)
+				}
 			}
 		}
-		if len(matches) != 1 {
+		if counts[artifactNameAndTypeKey(artifacts[i])] > 1 || len(matches) > 1 {
+			if len(exact) == 1 {
+				artifacts[i].ID = exact[0].catalogKey()
+			}
 			continue
 		}
-		artifacts[i].ID = matches[0].ID
+		if len(matches) == 1 {
+			artifacts[i].ID = matches[0].ID
+		}
 	}
 }
 
@@ -409,14 +445,14 @@ func resolvedInventoryManifestPlanes(inventory resolvedStackInventory) map[Manif
 // retainCurrentPublications keeps exact public availability records for the
 // versions represented by the refreshed catalog.
 func retainCurrentPublications(catalog *Catalog) {
-	current := make(map[string]struct{}, len(catalog.Artifacts)+len(catalog.SupplementalArtifacts)+1)
+	current := make(map[string]bool, len(catalog.Artifacts)+len(catalog.SupplementalArtifacts)+1)
 	for _, artifact := range append(append([]Artifact{catalog.stackArtifact()}, catalog.Artifacts...), catalog.SupplementalArtifacts...) {
-		current[publicationIdentityKey(artifact.Name, artifact.Type, artifact.Version)] = struct{}{}
+		current[publicationIdentityKey(artifact.Name, artifact.Type, artifact.Version)] = artifact.UpstreamRepository == ""
 	}
 
 	publications := catalog.Publications[:0]
 	for _, publication := range catalog.Publications {
-		if _, ok := current[publicationIdentityKey(publication.Name, publication.Type, publication.Version)]; !ok {
+		if retain, ok := current[publicationIdentityKey(publication.Name, publication.Type, publication.Version)]; !ok || !retain {
 			continue
 		}
 		registry, ok := catalog.Registries[publication.Registry]
@@ -434,6 +470,8 @@ func isPublicCatalogRegistry(registry Registry) bool {
 	switch host {
 	case "nvcr.io", "https://helm.ngc.nvidia.com":
 		return namespace == "nvidia" || strings.HasPrefix(namespace, "nvidia/")
+	case "https://open-telemetry.github.io", "https://prometheus-community.github.io", "https://victoriametrics.github.io":
+		return true
 	case "docker.io", "ghcr.io", "quay.io", "registry.k8s.io":
 		return true
 	default:
@@ -441,11 +479,90 @@ func isPublicCatalogRegistry(registry Registry) bool {
 	}
 }
 
+func publicUpstreamRepository(repository string, artifactType ArtifactType) string {
+	repository = canonicalPublicRepository(repository, artifactType)
+	if _, ok := publicUpstreamRegistry(repository, artifactType); !ok || isNVCFPublicationRepository(repository) {
+		return ""
+	}
+	return repository
+}
+
+func canonicalPublicRepository(repository string, artifactType ArtifactType) string {
+	if artifactType != ArtifactTypeImage || strings.Contains(repository, "://") {
+		return repository
+	}
+	host, _, found := strings.Cut(repository, "/")
+	if found && !strings.ContainsAny(host, ".:") && host != "localhost" {
+		return "docker.io/" + repository
+	}
+	return repository
+}
+
+func publicUpstreamRegistry(repository string, artifactType ArtifactType) (Registry, bool) {
+	if repository == "" || repository != strings.TrimSpace(repository) || strings.HasSuffix(repository, "/") ||
+		strings.ContainsAny(repository, "@?# \t\r\n") {
+		return Registry{}, false
+	}
+	value := repository
+	hostPrefix := ""
+	switch artifactType {
+	case ArtifactTypeImage:
+		if strings.Contains(value, "://") {
+			return Registry{}, false
+		}
+	case ArtifactTypeChart:
+		switch {
+		case strings.HasPrefix(value, "oci://"):
+			value = strings.TrimPrefix(value, "oci://")
+		case strings.HasPrefix(value, "https://"):
+			value = strings.TrimPrefix(value, "https://")
+			hostPrefix = "https://"
+		default:
+			return Registry{}, false
+		}
+	default:
+		return Registry{}, false
+	}
+	host, namespace, found := strings.Cut(value, "/")
+	if !found || host == "" || namespace == "" || strings.Contains(namespace, "//") ||
+		(artifactType == ArtifactTypeImage && strings.Contains(namespace, ":")) {
+		return Registry{}, false
+	}
+	registry := Registry{Host: hostPrefix + host, Namespace: namespace}
+	return registry, isPublicCatalogRegistry(registry)
+}
+
+func isNVCFPublicationRepository(repository string) bool {
+	value := strings.TrimSuffix(repository, "/")
+	value = strings.TrimPrefix(value, "oci://")
+	return value == "nvcr.io/nvidia/nvcf" || strings.HasPrefix(value, "nvcr.io/nvidia/nvcf/") ||
+		value == "https://helm.ngc.nvidia.com/nvidia/nvcf" || strings.HasPrefix(value, "https://helm.ngc.nvidia.com/nvidia/nvcf/")
+}
+
+func upstreamArtifactPath(artifact Artifact) string {
+	repository := strings.TrimSuffix(artifact.UpstreamRepository, "/")
+	reference := repository
+	if artifact.Type == ArtifactTypeChart {
+		name := artifact.RepositoryName
+		if name == "" {
+			name = artifact.Name
+		}
+		reference += "/" + name
+	}
+	reference += ":" + artifact.Version
+	if artifact.Digest != "" {
+		reference += "@" + artifact.Digest
+	}
+	return reference
+}
+
 func assignCatalogArtifactIDs(artifacts []Artifact) {
 	counts := make(map[string]int, len(artifacts))
+	typedCounts := make(map[string]int, len(artifacts))
 	used := make(map[string]struct{}, len(artifacts))
 	for _, artifact := range artifacts {
 		counts[artifact.Name]++
+		typedCounts[artifactNameAndTypeKey(artifact)]++
 		if artifact.ID != "" {
 			used[artifact.ID] = struct{}{}
 		}
@@ -460,6 +577,9 @@ func assignCatalogArtifactIDs(artifacts []Artifact) {
 			continue
 		}
 		baseID := artifacts[i].Name + "-" + string(artifacts[i].Type)
+		if typedCounts[artifactNameAndTypeKey(artifacts[i])] > 1 {
+			baseID += "-" + artifacts[i].Version
+		}
 		candidate := baseID
 		for ordinal := 2; ; ordinal++ {
 			if _, exists := used[candidate]; !exists {
