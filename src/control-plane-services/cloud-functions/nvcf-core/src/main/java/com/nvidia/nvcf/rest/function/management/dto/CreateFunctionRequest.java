@@ -65,6 +65,10 @@ import tools.jackson.databind.util.StdConverter;
 public class CreateFunctionRequest {
 
     private static final String FUNCTION_NAME_REGEX = "^[a-z0-9A-Z][a-z0-9A-Z\\-_]*$";
+    // Empty stays valid: container functions may send it, and the class validator pairs it
+    // with helmChart.
+    private static final String HELM_CHART_SERVICE_NAME_REGEX =
+            "^([a-z0-9A-Z]([a-z0-9A-Z\\-]*[a-z0-9A-Z])?)?$";
     public static final String GO = "GO";
 
     @Schema(description = "Function name must start with lowercase/uppercase/digit and can " +
@@ -136,8 +140,13 @@ public class CreateFunctionRequest {
 
     @Nullable
     @Schema(description = """
-            Helm Chart Service Name is required when helmChart property is specified
+            Helm Chart Service Name is required when helmChart property is specified. It must be
+            a DNS label: letters, digits, and hyphens, starting and ending with a letter or digit.
             """)
+    @Pattern(regexp = HELM_CHART_SERVICE_NAME_REGEX,
+            message = "Invalid helmChartServiceName: Must conform to regex "
+                    + HELM_CHART_SERVICE_NAME_REGEX)
+    @Size(max = 63, message = "Invalid helmChartServiceName: must be at most 63 characters long")
     private String helmChartServiceName;
 
     @Nullable

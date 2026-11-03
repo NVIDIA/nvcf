@@ -511,9 +511,29 @@ public class IcmsClient {
         }
 
         var env = envStream
-                .map(pair -> pair.getFirst() + "=" + pair.getSecond())
+                .map(pair -> pair.getFirst() + "=" + environmentValue(pair.getSecond()))
                 .collect(Collectors.joining("\n"));
         return Base64.getEncoder().encodeToString(env.getBytes(StandardCharsets.UTF_8));
+    }
+
+    // The worker reads one KEY=value entry per line and unquotes Go double-quoted values, so a
+    // value with a control character is quoted to stay one entry. Other values stay unchanged.
+    static String environmentValue(Object value) {
+        var text = String.valueOf(value);
+        if (text.chars().noneMatch(Character::isISOControl)) {
+            return text;
+        }
+        var quoted = new StringBuilder("\"");
+        text.chars().forEach(c -> {
+            if (c == '"' || c == '\\') {
+                quoted.append('\\').append((char) c);
+            } else if (Character.isISOControl(c)) {
+                quoted.append("\\u%04x".formatted(c));
+            } else {
+                quoted.append((char) c);
+            }
+        });
+        return quoted.append('"').toString();
     }
 
     private String getFunctionModels(FunctionEntity function) {
