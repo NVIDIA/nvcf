@@ -26,6 +26,7 @@ use tracing::info;
 use crate::AppState;
 use crate::engine_driver::EngineRequest;
 use crate::kv_cache::{KvCacheAccess, KvCacheStats, insert_kv_cache_headers};
+use crate::relay::RequestProgress;
 use crate::stats_stream::StatsStreamEvent;
 use crate::test_control::{TestEndpoint, TestRequestClass, is_canary_request, request_class};
 use crate::timing::{
@@ -489,14 +490,7 @@ pub(crate) async fn health(State(state): State<AppState>) -> &'static str {
 }
 
 pub(crate) async fn kv_cache_stats(State(state): State<AppState>) -> Json<KvCacheStats> {
-    if let Some(engine) = &state.engine {
-        let workers = engine.worker_stats().await;
-        return Json(KvCacheStats::from_engine_workers(
-            &state.model_name,
-            &workers,
-        ));
-    }
-    Json(state.kv_cache.lock().await.stats(&state.model_name))
+    Json(state.kv_cache_stats().await)
 }
 
 impl AppState {
@@ -513,7 +507,7 @@ impl AppState {
     ) -> (KvCacheAccess, TokenPacing) {
         if let Some(engine) = &self.engine {
             let mut request = engine.submit(cache_affinity_key, input_tokens, output_tokens);
-            self.emit_counters(request_id, model, 0, 0, false);
+            self.emit_admitted(request_id, model, input_tokens);
             // The engine never reports more reuse than the prompt length.
             let reused = request.first_token().await;
             self.emit_counters(request_id, model, input_tokens, 0, false);
@@ -526,7 +520,7 @@ impl AppState {
             return (access, TokenPacing::Engine(request));
         }
         let request_slot = self.acquire_request_slot().await;
-        self.emit_counters(request_id, model, 0, 0, false);
+        self.emit_admitted(request_id, model, input_tokens);
         let kv_cache_access = self
             .process_input_with_cache(cache_affinity_key, input_tokens)
             .await;
@@ -579,6 +573,19 @@ impl AppState {
         }
     }
 
+    /// Reports an admitted request: no input processed yet on the stats
+    /// stream, while the Relay counts its prompt from admission.
+    fn emit_admitted(&self, request_id: &str, model: &str, input_tokens: usize) {
+        self.relay.observe(RequestProgress {
+            request_id,
+            model,
+            input_tokens: input_tokens as u64,
+            output_tokens: 0,
+            finished: false,
+        });
+        self.send_stats_event(request_id, model, 0, Some(0), false);
+    }
+
     fn emit_counters(
         &self,
         request_id: &str,
@@ -587,14 +594,41 @@ impl AppState {
         output_tokens: impl Into<Option<usize>>,
         finished: bool,
     ) {
+        let output_tokens = output_tokens.into();
+        self.relay.observe(RequestProgress {
+            request_id,
+            model,
+            input_tokens: input_tokens as u64,
+            output_tokens: output_tokens.unwrap_or_default() as u64,
+            finished,
+        });
+        self.send_stats_event(request_id, model, input_tokens, output_tokens, finished);
+    }
+
+    fn send_stats_event(
+        &self,
+        request_id: &str,
+        model: &str,
+        input_tokens: usize,
+        output_tokens: Option<usize>,
+        finished: bool,
+    ) {
         let _ = self.stats_events.send(StatsStreamEvent::Stats {
             v: 1,
             request_id: request_id.to_string(),
             model: model.to_string(),
             tokens_processed: Some(input_tokens as u64),
-            tokens_generated: output_tokens.into().map(|tokens| tokens as u64),
+            tokens_generated: output_tokens.map(|tokens| tokens as u64),
             finished,
         });
+    }
+
+    pub(crate) async fn kv_cache_stats(&self) -> KvCacheStats {
+        if let Some(engine) = &self.engine {
+            let workers = engine.worker_stats().await;
+            return KvCacheStats::from_engine_workers(&self.model_name, &workers);
+        }
+        self.kv_cache.lock().await.stats(&self.model_name)
     }
 }
 
@@ -797,4 +831,8 @@ fn rand_id() -> String {
 
 fn current_unix_timestamp() -> u64 {
     time_since_epoch().as_secs()
+}
+
+pub(crate) fn unix_millis() -> u64 {
+    u64::try_from(time_since_epoch().as_millis()).unwrap_or(u64::MAX)
 }

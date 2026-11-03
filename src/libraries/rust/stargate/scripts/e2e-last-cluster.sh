@@ -43,6 +43,9 @@ Options:
 
 Environment:
   E2E_PORT_BASE     First loopback port, default 27100. Uses 32 ports.
+  E2E_PYLON_STATS   Where the Pylons take model stats: kv-poll (default; the
+                    engine stats stream plus KV polling) or relay (each
+                    mock-dynamo's KV DC Relay over gRPC).
   E2E_WORK_DIR      Logs and configs, kept after the run. Default: a new
                     mktemp directory, removed on success.
 
@@ -56,6 +59,12 @@ case "${1:-}" in
     --no-build) build=0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+esac
+
+pylon_stats="${E2E_PYLON_STATS:-kv-poll}"
+case "${pylon_stats}" in
+    kv-poll|relay) ;;
+    *) echo "E2E_PYLON_STATS must be kv-poll or relay" >&2; exit 2 ;;
 esac
 
 for tool in curl jq; do
@@ -271,6 +280,11 @@ EOF
     for index in 0 1; do
         name="${cluster_names[${index}]}"
         wait_for "mock-dynamo ${name}" curl -sf "http://127.0.0.1:$(mock_port "${index}")/health"
+        if [[ "${pylon_stats}" == relay ]]; then
+            stats_args=(--dynamo-relay-grpc-url "http://127.0.0.1:$(mock_port "${index}")")
+        else
+            stats_args=(--kv-cache-stats-path /kv-cache/stats)
+        fi
         start "${run_dir}/pylon-${name}.log" env RUST_LOG=info \
             "${release_dir}/pylon" \
             --upstream-http-base-url "http://127.0.0.1:$(mock_port "${index}")" \
@@ -281,7 +295,7 @@ EOF
             --auth-token "${worker_token}" \
             --backend-connectivity reverse \
             --quic-insecure \
-            --kv-cache-stats-path /kv-cache/stats \
+            "${stats_args[@]}" \
             --min-update-interval-ms 100 \
             --disable-bringup \
             --active-canary-interval-ms=0 \

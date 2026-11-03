@@ -37,7 +37,7 @@ use pylon_lib::{
     CurrentModelStats, InferenceServerRegistrationClient, InferenceServerRegistrationConfig,
     PylonQueueMismatchRetryConfig, PylonRuntimeState, QuicHttpTunnelConfig, QuicHttpTunnelHandle,
     RequestObservation, RequestObservationEndpoint, RequestObservationState,
-    TunnelTransportProtocol, start_quic_http_tunnel,
+    TunnelTransportProtocol, UpstreamBackend, start_quic_http_tunnel,
 };
 use stargate::proxy::ProxyRetryConfig;
 use stargate::routing::RoutingTargetKey;
@@ -701,12 +701,14 @@ async fn start_embeddings_inst(
         axum::serve(listener, app).await.unwrap();
     });
 
-    let tunnel = start_quic_http_tunnel(QuicHttpTunnelConfig::new(
-        "127.0.0.1:0".parse().unwrap(),
-        format!("http://{addr}"),
-    ))
-    .await
-    .expect("embedding tunnel failed to start");
+    // The capture asserts the platform headers, which a Dynamo upstream never
+    // receives.
+    let mut config =
+        QuicHttpTunnelConfig::new("127.0.0.1:0".parse().unwrap(), format!("http://{addr}"));
+    config.forwarding.upstream_backend = UpstreamBackend::Passthrough;
+    let tunnel = start_quic_http_tunnel(config)
+        .await
+        .expect("embedding tunnel failed to start");
     let quic_url = format!("quic://{}", tunnel.listen_addr());
     (addr, quic_url, tunnel, capture)
 }
@@ -804,6 +806,7 @@ async fn start_direct_endpoint_contract_inst(
     let mut config =
         QuicHttpTunnelConfig::new("127.0.0.1:0".parse().unwrap(), format!("http://{addr}"));
     config.tunnel_protocol = protocol;
+    config.forwarding.upstream_backend = UpstreamBackend::Passthrough;
     let tunnel = start_quic_http_tunnel(config)
         .await
         .expect("direct endpoint contract tunnel failed to start");

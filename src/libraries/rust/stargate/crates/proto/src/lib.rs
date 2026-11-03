@@ -17,6 +17,15 @@ pub mod gateway_pb {
     tonic::include_proto!("llm_gateway");
 }
 
+pub mod dynamo_kvrelay {
+    tonic::include_proto!("dynamo.kvrelay.v1");
+
+    /// Value of `contract_marker` (field 127) on every v1 request and response.
+    pub const CONTRACT_MARKER: u32 = 0x4B56_5231;
+    /// `protocol_version` every v1 response carries.
+    pub const PROTOCOL_VERSION: u32 = 1;
+}
+
 pub const REGISTRATION_HEARTBEAT_MS_METADATA: &str = "x-stargate-registration-heartbeat-ms";
 
 pub mod pb {

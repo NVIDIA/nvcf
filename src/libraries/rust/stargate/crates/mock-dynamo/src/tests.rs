@@ -55,6 +55,7 @@ fn test_state() -> AppState {
         kv_cache: Arc::new(Mutex::new(KvCacheState::new(0))),
         engine: None,
         stats_events: test_stats_events(),
+        relay: crate::relay::RelayState::new(),
         test_control: TestControlState::with_discovered_models(["dummy-model".to_string()]),
     }
 }
@@ -1523,4 +1524,66 @@ async fn dropping_an_engine_request_frees_its_slot() {
     tokio::time::timeout(Duration::from_millis(100), waiting.first_token())
         .await
         .expect("the cancelled request's slot serves the waiting request");
+}
+
+#[tokio::test]
+async fn relay_serves_load_windows_over_grpc_until_disabled() {
+    use stargate_proto::dynamo_kvrelay as proto;
+
+    let state = test_state();
+    let (addr, server) = spawn_test_app(crate::relay::grpc_router(state.clone())).await;
+    let mut client =
+        proto::kv_event_relay_client::KvEventRelayClient::connect(format!("http://{addr}"))
+            .await
+            .expect("mock Relay should accept gRPC");
+    let info = client
+        .get_relay_info(proto::RelayInfoRequest::default())
+        .await
+        .expect("relay info should be served")
+        .into_inner();
+    assert_eq!(info.protocol_version, proto::PROTOCOL_VERSION);
+    assert_eq!(info.contract_marker, proto::CONTRACT_MARKER);
+
+    state.relay.observe(crate::relay::RequestProgress {
+        request_id: "req-1",
+        model: "dummy-model",
+        input_tokens: 7,
+        output_tokens: 0,
+        finished: false,
+    });
+    let mut windows = client
+        .subscribe_serving_load(proto::SubscribeServingLoadRequest::default())
+        .await
+        .expect("serving load should be served")
+        .into_inner();
+    let window = windows
+        .message()
+        .await
+        .expect("window should decode")
+        .expect("stream should send a window");
+    assert_eq!(window.window_sequence, 1);
+    assert_eq!(window.relay, info.relay);
+    let load = window.models[0].load.expect("model load should be present");
+    assert_eq!(window.models[0].canonical_model_id, "dummy-model");
+    assert_eq!(
+        load.tokens
+            .and_then(|tokens| tokens.awaiting_first_token_input_tokens),
+        Some(7)
+    );
+
+    state.relay.set_enabled(false);
+    assert!(
+        windows
+            .message()
+            .await
+            .expect("stream should end cleanly")
+            .is_none(),
+        "disabling the Relay ends open streams"
+    );
+    let error = client
+        .subscribe_serving_load(proto::SubscribeServingLoadRequest::default())
+        .await
+        .expect_err("a disabled Relay refuses subscriptions");
+    assert_eq!(error.code(), tonic::Code::Unavailable);
+    server.abort();
 }

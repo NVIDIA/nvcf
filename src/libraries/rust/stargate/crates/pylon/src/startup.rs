@@ -22,15 +22,16 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use pylon_lib::{
-    AuthTokenProvider, BringupConfig, CalibrationConfig, EngineStatsStreamConfig,
-    EngineStatsStreamHandle, EngineStatsStreamMode, InferenceServerRegistrationClient,
-    InferenceServerRegistrationConfig, MetricsServerHandle, ModelDiscoveryConfig,
-    ModelInitialization, ModelLifecycleConfig, ModelLifecycleHandle, ModelSource, PylonMetrics,
-    PylonQueueMismatchRetryConfig, PylonRetryConfig, PylonRuntimeState, QuicHttpTunnelConfig,
-    QuicHttpTunnelHandle, RequestQualityMonitorConfig, StatsCollectorConfig, StatsCollectorHandle,
-    TunnelForwardingConfig, UpstreamBackend, UpstreamHealthPaths, start_engine_stats_stream,
-    start_metrics_server, start_model_lifecycle, start_quic_http_tunnel,
-    start_stats_collector_with_engine_stats, stats_aggregator_update_channel,
+    AuthTokenProvider, BringupConfig, CalibrationConfig, DynamoRelayConfig, DynamoRelayHandle,
+    EngineStatsStreamConfig, EngineStatsStreamHandle, EngineStatsStreamMode,
+    InferenceServerRegistrationClient, InferenceServerRegistrationConfig, MetricsServerHandle,
+    ModelDiscoveryConfig, ModelInitialization, ModelLifecycleConfig, ModelLifecycleHandle,
+    ModelSource, PylonMetrics, PylonQueueMismatchRetryConfig, PylonRetryConfig, PylonRuntimeState,
+    QuicHttpTunnelConfig, QuicHttpTunnelHandle, RequestQualityMonitorConfig, StatsCollectorConfig,
+    StatsCollectorHandle, TunnelForwardingConfig, UpstreamBackend, UpstreamHealthPaths,
+    start_dynamo_relay, start_engine_stats_stream, start_metrics_server, start_model_lifecycle,
+    start_quic_http_tunnel, start_stats_collector_with_engine_stats,
+    stats_aggregator_update_channel,
 };
 use reqwest::header::HeaderName;
 use stargate_proto::pb::InferenceServerStatus;
@@ -120,6 +121,7 @@ pub(crate) struct PylonStartupPlan {
     auth_token_provider: Option<Arc<AuthTokenProvider>>,
     backend_tunnel: BackendTunnelStartup,
     tls_reload_interval: Duration,
+    dynamo_relay_url: Option<String>,
 }
 
 enum BackendTunnelStartup {
@@ -179,6 +181,7 @@ impl PylonStartupPlan {
             auth_token_provider: auth_token_provider_from_args(args),
             backend_tunnel: BackendTunnelStartup::from_args(args)?,
             tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
+            dynamo_relay_url: dynamo_relay_url_from_args(args)?,
         })
     }
 
@@ -193,6 +196,23 @@ impl PylonStartupPlan {
             ModelSource::Discovered(_) => None,
         }
     }
+}
+
+fn dynamo_relay_url_from_args(args: &Args) -> Result<Option<String>> {
+    let Some(url) = &args.dynamo_relay_grpc_url else {
+        return Ok(None);
+    };
+    ensure!(
+        args.pylon_upstream_backend == UpstreamBackend::Dynamo,
+        "--dynamo-relay-grpc-url requires the dynamo upstream backend"
+    );
+    let parsed = reqwest::Url::parse(url)
+        .with_context(|| format!("invalid --dynamo-relay-grpc-url {url:?}"))?;
+    ensure!(
+        matches!(parsed.scheme(), "http" | "https") && parsed.has_host(),
+        "--dynamo-relay-grpc-url must be an http or https URL with a host, got {url:?}"
+    );
+    Ok(Some(normalize_base_url(url)))
 }
 
 fn auth_token_provider_from_args(args: &Args) -> Option<Arc<AuthTokenProvider>> {
@@ -233,6 +253,7 @@ fn model_source_from_args(args: &Args) -> Result<ModelSource> {
 struct RunningPylon {
     registration_client: InferenceServerRegistrationClient,
     engine_stats_stream: Option<RunningEngineStatsStream>,
+    dynamo_relay: Option<DynamoRelayHandle>,
     stats_collector: StatsCollectorHandle,
     model_lifecycle: ModelLifecycleHandle,
     metrics_server: MetricsServerHandle,
@@ -279,6 +300,12 @@ impl RunningPylon {
                     }
                     critical_task_exit_error("engine stats stream", result)
                 }
+                result = async {
+                    match self.dynamo_relay.as_mut() {
+                        Some(relay) => relay.wait_for_exit().await,
+                        None => std::future::pending().await,
+                    }
+                } => critical_task_exit_error("Dynamo Relay session", result),
                 result = self.stats_collector.wait_for_exit() => critical_task_exit_error("stats collector", result),
                 result = async {
                     self.model_lifecycle.wait_for_exit().await
@@ -303,6 +330,7 @@ impl RunningPylon {
         let Self {
             mut registration_client,
             engine_stats_stream,
+            dynamo_relay,
             stats_collector,
             model_lifecycle,
             metrics_server,
@@ -314,6 +342,11 @@ impl RunningPylon {
             async move {
                 if let Some(stream) = engine_stats_stream {
                     stream.handle.shutdown().await;
+                }
+            },
+            async move {
+                if let Some(relay) = dynamo_relay {
+                    relay.shutdown().await;
                 }
             },
             stats_collector.shutdown(),
@@ -367,14 +400,24 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
     } else {
         runtime_state
     };
-    let (engine_stats_stream, stats_update_rx) = start_engine_stats_runtime(
-        args,
-        plan,
-        metrics.clone(),
-        &stats_config,
-        runtime_state.clone(),
-    )
-    .unzip();
+    let (engine_stats_stream, dynamo_relay, stats_update_rx) = match &plan.dynamo_relay_url {
+        Some(url) => {
+            let (relay, stats_update_rx) =
+                start_dynamo_relay_runtime(args, url, metrics.clone(), &stats_config);
+            (None, Some(relay), Some(stats_update_rx))
+        }
+        None => {
+            let (engine_stats_stream, stats_update_rx) = start_engine_stats_runtime(
+                args,
+                plan,
+                metrics.clone(),
+                &stats_config,
+                runtime_state.clone(),
+            )
+            .unzip();
+            (engine_stats_stream, None, stats_update_rx)
+        }
+    };
     let stats_collector = start_stats_collector_with_engine_stats(
         stats_config,
         request_observation_rx,
@@ -464,6 +507,7 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
     Ok(RunningPylon {
         registration_client,
         engine_stats_stream,
+        dynamo_relay,
         stats_collector,
         model_lifecycle,
         metrics_server,
@@ -494,6 +538,25 @@ fn start_engine_stats_runtime(
     let mode = config.mode;
     start_engine_stats_stream(config, stats_update_tx)
         .map(|handle| (RunningEngineStatsStream { mode, handle }, stats_update_rx))
+}
+
+fn start_dynamo_relay_runtime(
+    args: &Args,
+    url: &str,
+    metrics: Arc<PylonMetrics>,
+    stats_config: &StatsCollectorConfig,
+) -> (
+    DynamoRelayHandle,
+    flume::Receiver<pylon_lib::StatsAggregatorUpdate>,
+) {
+    let (stats_update_tx, stats_update_rx) = stats_aggregator_update_channel(stats_config);
+    let mut config = DynamoRelayConfig::new(url, &args.inference_server_id);
+    config.metrics = Some(metrics);
+    info!(
+        url,
+        "taking model load, KV usage and readiness from the Dynamo Relay"
+    );
+    (start_dynamo_relay(config, stats_update_tx), stats_update_rx)
 }
 
 async fn start_direct_tunnel_from_plan(
@@ -628,6 +691,7 @@ pub(crate) fn stats_collector_config_from_args(
     upstream: &str,
 ) -> StatsCollectorConfig {
     StatsCollectorConfig {
+        relay_enabled: args.dynamo_relay_grpc_url.is_some(),
         openai_fallback_stats_enabled: args.engine_stats_stream == EngineStatsStreamMode::Off,
         fallback_max_engine_concurrency: args.max_engine_concurrency,
         // Mock benchmark backends can expose live KV-cache occupancy over HTTP;
@@ -797,6 +861,19 @@ mod tests {
         let args = <Args as Parser>::try_parse_from(args).expect("args should parse");
         let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
         (args, plan)
+    }
+
+    fn try_startup_plan(extra: &[&str]) -> Result<PylonStartupPlan> {
+        let mut args = vec![
+            "pylon",
+            "--upstream-http-base-url",
+            "http://127.0.0.1:8090/",
+            "--model-name",
+            "model-a",
+        ];
+        args.extend_from_slice(extra);
+        let args = <Args as Parser>::try_parse_from(args).expect("args should parse");
+        PylonStartupPlan::from_args(&args)
     }
 
     fn runtime_args(
@@ -1162,6 +1239,7 @@ mod tests {
         RunningPylon {
             registration_client: InferenceServerRegistrationClient::default(),
             engine_stats_stream: None,
+            dynamo_relay: None,
             stats_collector,
             model_lifecycle,
             metrics_server: start_metrics_server(
@@ -1258,6 +1336,40 @@ mod tests {
 
         assert!(registration_url(&plan, Some(&tunnel)).starts_with("quic://127.0.0.1:"));
         tunnel.shutdown().await;
+    }
+
+    #[test]
+    fn dynamo_relay_url_is_validated_and_normalized() {
+        let plan = try_startup_plan(&["--dynamo-relay-grpc-url", "http://relay:50051/"])
+            .expect("an http Relay URL should be accepted");
+        assert_eq!(plan.dynamo_relay_url.as_deref(), Some("http://relay:50051"));
+        let plan = try_startup_plan(&[]).expect("the Relay is optional");
+        assert!(plan.dynamo_relay_url.is_none());
+
+        for url in [
+            "relay:50051",
+            "ftp://relay:50051",
+            "unix:/tmp/relay.sock",
+            "",
+        ] {
+            assert!(
+                try_startup_plan(&["--dynamo-relay-grpc-url", url]).is_err(),
+                "{url:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamo_relay_requires_the_dynamo_upstream_backend() {
+        assert!(
+            try_startup_plan(&[
+                "--pylon-upstream-backend",
+                "passthrough",
+                "--dynamo-relay-grpc-url",
+                "http://relay:50051",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

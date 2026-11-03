@@ -26,6 +26,7 @@ use crate::{CurrentModelStats, PylonRuntimeState, RequestObservationEvent};
 use stargate_runtime::OwnedTask;
 
 use super::aggregator::{ENGINE_STATS_SOURCE, KvCacheStatsSnapshot, StatsAggregator};
+use super::relay_update::{RelayKvUpdate, RelayLoadUpdate};
 
 const DEFAULT_OBSERVATION_CHANNEL_CAPACITY: usize = 1024;
 const DEFAULT_SMOOTHING_WINDOW_SIZE: usize = 8;
@@ -40,6 +41,8 @@ const DEFAULT_ENGINE_STATS_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct StatsCollectorConfig {
+    /// Relay windows own load and KV stats; local observations still track requests.
+    pub relay_enabled: bool,
     pub observation_channel_capacity: usize,
     pub smoothing_window_size: usize,
     pub min_input_tokens: u64,
@@ -59,6 +62,7 @@ pub struct StatsCollectorConfig {
 impl Default for StatsCollectorConfig {
     fn default() -> Self {
         Self {
+            relay_enabled: false,
             observation_channel_capacity: DEFAULT_OBSERVATION_CHANNEL_CAPACITY,
             smoothing_window_size: DEFAULT_SMOOTHING_WINDOW_SIZE,
             min_input_tokens: DEFAULT_MIN_INPUT_TOKENS,
@@ -127,6 +131,10 @@ enum StatsCollectorCommand {
         generation: ModelGeneration,
         reply: oneshot::Sender<Option<CurrentModelStats>>,
     },
+    CalibrationSnapshot {
+        generation: ModelGeneration,
+        reply: oneshot::Sender<Option<CurrentModelStats>>,
+    },
     Retire {
         generation: ModelGeneration,
         reply: oneshot::Sender<bool>,
@@ -169,6 +177,20 @@ impl StatsCollectorControl {
         acknowledged.await.map_err(|_| StatsCollectorStopped)
     }
 
+    /// Flushes events and returns local calibration data, independent of Relay load.
+    pub(crate) async fn flush_calibration_snapshot(
+        &self,
+        generation: &ModelGeneration,
+    ) -> Result<Option<CurrentModelStats>, StatsCollectorStopped> {
+        let (reply, acknowledged) = oneshot::channel();
+        self.send(StatsCollectorCommand::CalibrationSnapshot {
+            generation: generation.clone(),
+            reply,
+        })
+        .await?;
+        acknowledged.await.map_err(|_| StatsCollectorStopped)
+    }
+
     pub(crate) async fn retire_generation(
         &self,
         generation: &ModelGeneration,
@@ -202,6 +224,12 @@ pub enum StatsAggregatorUpdate {
     EngineConcurrency(EngineConcurrencyUpdate),
     FinalizeRequest(FinalizeRequestUpdate),
     EnableOpenAiFallback,
+    /// Replaces the Relay's model load (relay mode only).
+    RelayLoad(RelayLoadUpdate),
+    /// Replaces the Relay's KV usage (relay mode only).
+    RelayKv(RelayKvUpdate),
+    /// The Relay went silent past its timeout: clear its view and readiness.
+    RelayLost,
 }
 
 #[derive(Debug, Clone)]
@@ -350,6 +378,35 @@ async fn run_stats_collector(
     let mut stats_aggregator_latest_models = IndexMap::with_capacity(2);
 
     'collector: loop {
+        if config.relay_enabled {
+            if stop.is_cancelled() {
+                break 'collector;
+            }
+            if let Some(rx) = &stats_update_rx {
+                // Consume the currently queued prefix before taking another local event.
+                // drain_ready is bounded, so neither source can monopolize this loop.
+                stats_aggregator_updated_models.clear();
+                drain_stats_updates(
+                    &mut aggregator,
+                    rx,
+                    &mut stats_aggregator_updated_models,
+                    &mut stats_aggregator_latest_models,
+                );
+                if rx.is_disconnected() && rx.is_empty() {
+                    publish_relay_loss(
+                        &mut aggregator,
+                        &runtime_state,
+                        &mut stats_aggregator_updated_models,
+                    );
+                    stats_update_rx = None;
+                } else {
+                    publish_model_stats_updates(
+                        &runtime_state,
+                        std::mem::take(&mut stats_aggregator_updated_models),
+                    );
+                }
+            }
+        }
         tokio::select! {
             biased;
             _ = stop.cancelled() => break 'collector,
@@ -357,7 +414,7 @@ async fn run_stats_collector(
                 let Ok(command) = command else {
                     break 'collector;
                 };
-                if matches!(command, StatsCollectorCommand::Snapshot { .. }) {
+                if matches!(command, StatsCollectorCommand::Snapshot { .. } | StatsCollectorCommand::CalibrationSnapshot { .. }) {
                     if let Some(rx) = &stats_update_rx {
                         drain_stats_updates(
                             &mut aggregator,
@@ -389,6 +446,13 @@ async fn run_stats_collector(
                 }
             } => {
                 let Some(update) = update else {
+                    if config.relay_enabled {
+                        publish_relay_loss(
+                            &mut aggregator,
+                            &runtime_state,
+                            &mut stats_aggregator_updated_models,
+                        );
+                    }
                     stats_update_rx = None;
                     continue;
                 };
@@ -460,6 +524,16 @@ async fn run_stats_collector(
     }
 }
 
+fn publish_relay_loss(
+    aggregator: &mut StatsAggregator,
+    runtime_state: &PylonRuntimeState,
+    updates: &mut Vec<(ModelGeneration, CurrentModelStats)>,
+) {
+    updates.clear();
+    aggregator.apply_update_into(StatsAggregatorUpdate::RelayLost, updates);
+    publish_model_stats_updates(runtime_state, std::mem::take(updates));
+}
+
 fn publish_observation_event(
     aggregator: &mut StatsAggregator,
     runtime_state: &PylonRuntimeState,
@@ -508,6 +582,9 @@ fn apply_collector_command(
         }
         StatsCollectorCommand::Snapshot { generation, reply } => {
             let _ = reply.send(aggregator.snapshot_generation(&generation));
+        }
+        StatsCollectorCommand::CalibrationSnapshot { generation, reply } => {
+            let _ = reply.send(aggregator.calibration_snapshot_generation(&generation));
         }
         StatsCollectorCommand::Retire { generation, reply } => {
             let retired = aggregator.retire_generation(&generation);
@@ -4351,5 +4428,606 @@ mod tests {
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(body.contains(r#"pylon_model_last_mean_input_tps{model="model-a"} 10"#));
         assert!(!body.contains(r#"pylon_model_last_mean_input_tps{model="model-a"} 999"#));
+    }
+
+    // Dynamo KV DC Relay as a stats source (nvcf#1277 re-port). Relay
+    // payloads are built only through `relay_load` and `relay_kv`, and the
+    // relay-mode collector only through `spawn_relay`, so contract changes
+    // stay local to these helpers.
+    mod relay {
+        use std::collections::BTreeMap;
+
+        use super::super::super::relay_update::{
+            RelayKvUpdate, RelayLoadUpdate, RelayModelGauges, RelayModelKv, RelayModelLoad,
+        };
+        use super::*;
+        use crate::runtime_state::RequestGenerationAdmission;
+
+        /// Load one `SubscribeServingLoad` window reports for a model: ready,
+        /// and with trusted gauges only when `queue_size` is `Some`.
+        struct Load {
+            model: &'static str,
+            ready: bool,
+            queue_size: Option<u64>,
+            num_running_queries: u64,
+        }
+
+        fn relay_load(observed_at_unix_ms: u64, models: &[Load]) -> StatsAggregatorUpdate {
+            StatsAggregatorUpdate::RelayLoad(RelayLoadUpdate {
+                observed_at_unix_ms,
+                models: models
+                    .iter()
+                    .map(|load| {
+                        (
+                            load.model.to_string(),
+                            RelayModelLoad {
+                                ready: load.ready,
+                                load: load.queue_size.map(|queue_size| RelayModelGauges {
+                                    output_tps: Some(40.0),
+                                    queue_size,
+                                    num_running_queries: load.num_running_queries,
+                                    ..RelayModelGauges::default()
+                                }),
+                            },
+                        )
+                    })
+                    .collect(),
+            })
+        }
+
+        fn relay_kv(
+            observed_at_unix_ms: u64,
+            models: &[(&str, u64, u64)],
+        ) -> StatsAggregatorUpdate {
+            StatsAggregatorUpdate::RelayKv(RelayKvUpdate {
+                observed_at_unix_ms,
+                models: models
+                    .iter()
+                    .map(|&(model, capacity_tokens, used_tokens)| {
+                        (
+                            model.to_string(),
+                            RelayModelKv {
+                                capacity_tokens,
+                                used_tokens,
+                            },
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>(),
+            })
+        }
+
+        fn busy(model: &'static str) -> Load {
+            Load {
+                model,
+                ready: true,
+                queue_size: Some(7),
+                num_running_queries: 3,
+            }
+        }
+
+        async fn spawn_relay() -> RunningCollector {
+            let collector = RunningCollector::spawn_empty(
+                config!(observation_channel_capacity: 16, relay_enabled: true),
+                None,
+                true,
+            );
+            collector.begin_configured_model("model-a", 1.0).await;
+            let generation = collector
+                .runtime_state
+                .current_generation("model-a")
+                .unwrap();
+            assert!(collector.runtime_state.publish_generation(&generation));
+            collector
+                .runtime_state
+                .set_status(stargate_proto::pb::InferenceServerStatus::Active);
+            collector
+        }
+
+        fn queued_locally(request_id: &str) -> RequestObservation {
+            observation(
+                RequestObservationEndpoint::ChatCompletions,
+                request_id,
+                RequestObservationState::Queued,
+            )
+        }
+
+        #[tokio::test]
+        async fn relay_concurrency_uses_configured_fallback_until_an_engine_limit_arrives() {
+            let collector = RunningCollector::spawn(
+                config!(relay_enabled: true, fallback_max_engine_concurrency: NonZeroU64::new(9)),
+                None,
+                true,
+            );
+            for (observed_at, limit, expected) in [
+                (1_000, None, Some(9)),
+                (2_000, Some(4), Some(4)),
+                (3_000, None, Some(9)),
+            ] {
+                let StatsAggregatorUpdate::RelayLoad(mut update) =
+                    relay_load(observed_at, &[busy("model-a")])
+                else {
+                    unreachable!()
+                };
+                update
+                    .models
+                    .get_mut("model-a")
+                    .unwrap()
+                    .load
+                    .as_mut()
+                    .unwrap()
+                    .max_engine_concurrency = limit;
+                collector
+                    .send_update(StatsAggregatorUpdate::RelayLoad(update))
+                    .await;
+                let stats = collector
+                    .wait_for_stats("Relay limit should be applied", |stats| {
+                        stats.stats_observed_at_unix_ms == observed_at
+                    })
+                    .await;
+                assert_eq!(stats.max_engine_concurrency, expected);
+
+                let generation = collector
+                    .runtime_state
+                    .current_generation("model-a")
+                    .unwrap();
+                let snapshot = collector
+                    .handle
+                    .control()
+                    .flush_and_snapshot(&generation)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(snapshot.max_engine_concurrency, expected);
+            }
+            collector
+                .send_update(StatsAggregatorUpdate::RelayLost)
+                .await;
+            let stats = collector
+                .wait_for_stats("Relay loss clears its observation", |stats| {
+                    stats.stats_observed_at_unix_ms == 0
+                })
+                .await;
+            assert_eq!(stats.max_engine_concurrency, Some(9));
+        }
+
+        #[tokio::test]
+        async fn a_closed_relay_update_channel_clears_stats_and_readiness() {
+            let mut collector = spawn_relay().await;
+            collector
+                .send_update(relay_load(1_000, &[busy("model-a")]))
+                .await;
+            collector
+                .send_update(relay_kv(1_000, &[("model-a", 1_000, 400)]))
+                .await;
+            collector
+                .wait_for_stats("Relay views should arrive before disconnect", |stats| {
+                    stats.queue_size == 7 && stats.kv_cache_capacity_tokens == 1_000
+                })
+                .await;
+
+            drop(collector.stats_update_tx.take());
+            let stats = collector
+                .wait_for_stats("a closed update channel loses the Relay view", |stats| {
+                    stats.queue_size == 0 && stats.kv_cache_capacity_tokens == 0
+                })
+                .await;
+            assert_eq!(stats.stats_observed_at_unix_ms, 0);
+            assert_eq!(
+                collector
+                    .runtime_state
+                    .request_generation_admission("model-a"),
+                RequestGenerationAdmission::Unavailable
+            );
+        }
+
+        #[tokio::test]
+        async fn relay_mode_is_closed_before_its_first_window() {
+            let collector = spawn_relay().await;
+            assert_eq!(
+                collector
+                    .runtime_state
+                    .request_generation_admission("model-a"),
+                RequestGenerationAdmission::Unavailable
+            );
+            assert_eq!(
+                collector.runtime_state.advertised_models()["model-a"].status,
+                stargate_proto::pb::InferenceServerStatus::Inactive as i32
+            );
+            let generation = collector
+                .runtime_state
+                .current_generation("model-a")
+                .unwrap();
+            observe_request_with_test_metadata(&collector.runtime_state, queued_locally("local-1"));
+            let stats = collector
+                .handle
+                .control()
+                .flush_and_snapshot(&generation)
+                .await
+                .unwrap()
+                .unwrap();
+            // Load waits for the Relay; capacity is the configured local value.
+            assert_stats!(stats; queue_size: 0, num_running_queries: 0, last_mean_input_tps: 1.0);
+        }
+
+        /// 8: with the Relay as the load source, a local request observation
+        /// keeps its request accounting but does not overwrite Relay gauges.
+        #[tokio::test]
+        async fn relay_gauges_survive_a_local_request_observation() {
+            let collector = spawn_relay().await;
+            collector
+                .send_update(relay_load(1_000, &[busy("model-a")]))
+                .await;
+            collector
+                .wait_for_stats("Relay gauges should be published", |stats| {
+                    stats.queue_size == 7 && stats.num_running_queries == 3
+                })
+                .await;
+
+            observe_request_with_test_metadata(&collector.runtime_state, queued_locally("local-1"));
+            let generation = collector
+                .runtime_state
+                .current_generation("model-a")
+                .unwrap();
+            collector
+                .handle
+                .control()
+                .flush_and_snapshot(&generation)
+                .await
+                .unwrap();
+
+            let stats = collector
+                .runtime_state
+                .model_stats("model-a")
+                .expect("model-a should stay advertised");
+            assert_eq!(
+                (stats.queue_size, stats.num_running_queries),
+                (7, 3),
+                "a local observation must not replace Relay gauges"
+            );
+            // Capacity stays the configured local value: the Relay's rates
+            // measure demand.
+            assert_stats!(stats;
+                last_mean_input_tps: 1.0,
+                output_tps: 40.0,
+                stats_observed_at_unix_ms: 1_000,
+            );
+        }
+
+        /// 9: each Relay update replaces the Relay's whole view, so a model
+        /// missing from the next window, or without complete KV, reads as
+        /// cleared rather than keeping its previous values.
+        #[tokio::test]
+        async fn relay_view_replacement_clears_missing_load_and_incomplete_kv() {
+            let collector = spawn_relay().await;
+            collector
+                .send_update(relay_load(1_000, &[busy("model-a")]))
+                .await;
+            collector
+                .send_update(relay_kv(1_000, &[("model-a", 1_000, 400)]))
+                .await;
+            collector
+                .wait_for_stats("Relay load and KV should be published", |stats| {
+                    stats.queue_size == 7 && stats.kv_cache_capacity_tokens == 1_000
+                })
+                .await;
+
+            collector.send_update(relay_load(2_000, &[])).await;
+            collector.send_update(relay_kv(2_000, &[])).await;
+            let stats = collector
+                .wait_for_stats("an empty Relay view should clear load and KV", |stats| {
+                    stats.queue_size == 0 && stats.kv_cache_capacity_tokens == 0
+                })
+                .await;
+            assert_stats!(stats;
+                num_running_queries: 0,
+                kv_cache_used_tokens: 0,
+                kv_cache_free_tokens: 0,
+            );
+        }
+
+        /// 9b: a ready model whose window is incomplete keeps its readiness
+        /// but has its gauges cleared rather than reported or kept.
+        #[tokio::test]
+        async fn an_incomplete_window_clears_gauges_but_keeps_the_model_ready() {
+            let collector = spawn_relay().await;
+            collector
+                .send_update(relay_load(1_000, &[busy("model-a")]))
+                .await;
+            collector
+                .wait_for_stats("Relay load should be published", |stats| {
+                    stats.queue_size == 7
+                })
+                .await;
+
+            let untrusted = Load {
+                model: "model-a",
+                ready: true,
+                queue_size: None,
+                num_running_queries: 0,
+            };
+            collector.send_update(relay_load(2_000, &[untrusted])).await;
+            collector
+                .wait_for_stats("an incomplete window should clear the gauges", |stats| {
+                    stats.queue_size == 0 && stats.num_running_queries == 0
+                })
+                .await;
+            assert!(matches!(
+                collector
+                    .runtime_state
+                    .request_generation_admission("model-a"),
+                RequestGenerationAdmission::Admitted(_)
+            ));
+        }
+
+        /// 10: losing the Relay notifies registration watchers and stops the
+        /// model admitting requests, since its readiness can no longer be
+        /// confirmed.
+        #[tokio::test]
+        async fn relay_loss_notifies_watchers_and_blocks_admission() {
+            let collector = spawn_relay().await;
+            collector
+                .send_update(relay_load(1_000, &[busy("model-a")]))
+                .await;
+            collector
+                .wait_for_stats("Relay load should be published", |stats| {
+                    stats.queue_size == 7
+                })
+                .await;
+            assert!(matches!(
+                collector
+                    .runtime_state
+                    .request_generation_admission("model-a"),
+                RequestGenerationAdmission::Admitted(_)
+            ));
+
+            let mut changes = collector.runtime_state.subscribe_registration_changes();
+            changes.borrow_and_update();
+            collector
+                .send_update(StatsAggregatorUpdate::RelayLost)
+                .await;
+            tokio::time::timeout(MODEL_STATS_TEST_TIMEOUT, changes.changed())
+                .await
+                .expect("Relay loss should notify registration watchers")
+                .expect("registration watch should stay open");
+            assert_eq!(
+                collector
+                    .runtime_state
+                    .request_generation_admission("model-a"),
+                RequestGenerationAdmission::Unavailable
+            );
+        }
+
+        /// 11: Relay updates apply only to a live generation; they never
+        /// create one or bring a retired one back.
+        #[tokio::test]
+        async fn relay_updates_never_create_or_revive_a_generation() {
+            let collector = spawn_relay().await;
+            collector
+                .send_update(relay_load(1_000, &[busy("model-a")]))
+                .await;
+            collector
+                .wait_for_stats("initial Relay view should arrive", |stats| {
+                    stats.queue_size == 7
+                })
+                .await;
+            let generation = collector
+                .runtime_state
+                .current_generation("model-a")
+                .expect("model-a should have a live generation");
+            assert!(
+                collector
+                    .handle
+                    .control()
+                    .retire_generation(&generation)
+                    .await
+                    .expect("collector should acknowledge retirement")
+            );
+            assert!(
+                collector
+                    .runtime_state
+                    .retire_generation(&generation)
+                    .is_some()
+            );
+
+            collector
+                .send_update(relay_load(1_000, &[busy("model-a"), busy("model-b")]))
+                .await;
+            assert!(
+                collector
+                    .handle
+                    .control()
+                    .flush_and_snapshot(&generation)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+
+            assert!(collector.runtime_state.model_stats("model-b").is_none());
+            assert!(!matches!(
+                collector
+                    .runtime_state
+                    .request_generation_admission("model-a"),
+                RequestGenerationAdmission::Admitted(_)
+            ));
+            assert!(
+                collector
+                    .runtime_state
+                    .model_stats("model-a")
+                    .is_none_or(|stats| stats.queue_size != 7),
+                "a retired generation must not take Relay load"
+            );
+
+            let replacement = ModelGeneration::new("model-a", generation.sequence() + 1);
+            assert!(
+                collector
+                    .runtime_state
+                    .begin_generation(replacement.clone())
+            );
+            assert!(
+                collector
+                    .handle
+                    .control()
+                    .begin_generation(replacement.clone(), ModelStatsInitialization::Empty,)
+                    .await
+                    .unwrap()
+            );
+            assert!(collector.runtime_state.publish_generation(&replacement));
+            assert_eq!(
+                collector
+                    .runtime_state
+                    .request_generation_admission("model-a"),
+                RequestGenerationAdmission::Unavailable
+            );
+            assert_eq!(
+                collector
+                    .runtime_state
+                    .model_stats("model-a")
+                    .unwrap()
+                    .queue_size,
+                0
+            );
+
+            collector
+                .send_update(relay_load(2_000, &[busy("model-a")]))
+                .await;
+            collector
+                .wait_for_stats("a new view applies to the live successor", |stats| {
+                    stats.queue_size == 7
+                })
+                .await;
+            assert_eq!(
+                collector
+                    .runtime_state
+                    .request_generation_admission("model-a"),
+                RequestGenerationAdmission::Admitted(replacement)
+            );
+        }
+
+        /// 14: bring-up calibration measures this pylon's own capacity, so in
+        /// relay mode its snapshot still comes from local observations, and
+        /// the published stats advertise that capacity, as without the Relay.
+        #[tokio::test]
+        async fn relay_mode_calibration_sees_local_capacity() {
+            let config = StatsCollectorConfig {
+                duration_floor: Duration::ZERO,
+                openai_fallback_stats_enabled: true,
+                relay_enabled: true,
+                ..StatsCollectorConfig::default()
+            };
+            let (runtime_state, observation_rx) = PylonRuntimeState::observed(
+                stargate_proto::pb::InferenceServerStatus::Active,
+                &["model-a".to_string()],
+                config.observation_channel_capacity,
+                None,
+            );
+            let generation = runtime_state
+                .current_generation("model-a")
+                .expect("test generation should exist");
+            for _ in 0..5 {
+                observe_request_with_test_metadata(
+                    &runtime_state,
+                    identified(
+                        completed_observation(100, 1, 1, seconds(1), seconds(2)),
+                        next_generated_request_id(GeneratedRequestKind::Calibration, &generation),
+                    ),
+                );
+            }
+            let collector = start_stats_collector(config, observation_rx, runtime_state);
+
+            let calibration = collector
+                .control()
+                .flush_calibration_snapshot(&generation)
+                .await
+                .expect("calibration snapshot request should complete")
+                .expect("current generation should have stats");
+            assert!(
+                calibration.last_mean_input_tps > 0.0,
+                "calibration must see the local capacity evidence"
+            );
+
+            let published = collector
+                .control()
+                .flush_and_snapshot(&generation)
+                .await
+                .expect("snapshot request should complete")
+                .expect("current generation should have stats");
+            assert_eq!(
+                published.last_mean_input_tps, calibration.last_mean_input_tps,
+                "published stats must advertise the local capacity"
+            );
+            assert_eq!(
+                published.max_input_tps, calibration.max_input_tps,
+                "published stats must advertise the local peak capacity"
+            );
+            assert!(
+                calibration.output_tps > 0.0,
+                "calibration must see its own output rate"
+            );
+            assert_eq!(
+                published.output_tps, 0.0,
+                "without a Relay window, published load must not take local rates"
+            );
+            collector.shutdown().await;
+        }
+
+        /// 13: a queued Relay update is applied ahead of queued local request
+        /// observations. The observation channel ends after its backlog, so
+        /// a collector that worked off every observation before polling for
+        /// Relay updates would stop without ever applying the Relay view.
+        #[tokio::test]
+        async fn a_relay_update_is_applied_ahead_of_queued_observations() {
+            let config = StatsCollectorConfig {
+                relay_enabled: true,
+                ..StatsCollectorConfig::default()
+            };
+            let runtime_state = PylonRuntimeState::new(
+                stargate_proto::pb::InferenceServerStatus::Active,
+                &["model-a".to_string()],
+            );
+            let generation = runtime_state.current_generation("model-a");
+            let (observation_tx, observation_rx) = flume::unbounded();
+            for sequence in 0..32 {
+                observation_tx
+                    .send(RequestObservationEvent {
+                        observation: queued_locally(&format!("queued-{sequence}")),
+                        generation: generation.clone(),
+                        changed_generations: Vec::new(),
+                        input_interval: None,
+                        input_tokens_explicit: false,
+                        cached_input_tokens: None,
+                        input_usage_expected: false,
+                        output_calibration: crate::runtime_state::OutputCalibrationFacts::default(),
+                        upstream_duration: None,
+                    })
+                    .unwrap();
+            }
+            drop(observation_tx);
+            let (stats_update_tx, stats_update_rx) = stats_aggregator_update_channel(&config);
+            stats_update_tx
+                .send_async(relay_load(1_000, &[busy("model-a")]))
+                .await
+                .unwrap();
+
+            let mut collector = start_stats_collector_with_engine_stats(
+                config,
+                observation_rx,
+                Some(stats_update_rx),
+                runtime_state.clone(),
+            );
+            tokio::time::timeout(seconds(5), collector.wait_for_exit())
+                .await
+                .expect("the collector should stop once observations end")
+                .expect("the collector should not panic");
+            drop(stats_update_tx);
+
+            let stats = runtime_state
+                .model_stats("model-a")
+                .expect("model-a should stay advertised");
+            assert_eq!(
+                (stats.queue_size, stats.num_running_queries),
+                (7, 3),
+                "the queued Relay update was never applied"
+            );
+        }
     }
 }

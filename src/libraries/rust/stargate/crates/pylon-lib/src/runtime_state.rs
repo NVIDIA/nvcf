@@ -157,10 +157,18 @@ struct AdvertisedRuntimeState {
     base_status: InferenceServerStatus,
     require_admitted_generation: bool,
     models: HashMap<String, RuntimeModelState>,
+    // None keeps local readiness; an enabled Relay starts with no ready generations.
+    relay_ready: Option<HashMap<String, u64>>,
     last_upstream_progress_at: Option<Instant>,
 }
 
 impl AdvertisedRuntimeState {
+    fn relay_allows(&self, model_id: &str, generation: u64) -> bool {
+        self.relay_ready
+            .as_ref()
+            .is_none_or(|ready| ready.get(model_id) == Some(&generation))
+    }
+
     fn current(&self, generation: &ModelGeneration) -> Option<&RuntimeModelState> {
         self.models
             .get(generation.model_id())
@@ -217,6 +225,7 @@ impl PylonRuntimeState {
                 base_status: initial_status,
                 require_admitted_generation: true,
                 models,
+                relay_ready: None,
                 last_upstream_progress_at: None,
             })),
             registration_changes: RegistrationChanges::default(),
@@ -234,6 +243,32 @@ impl PylonRuntimeState {
 
     pub(crate) fn output_token_calibration_enabled(&self) -> bool {
         self.output_token_calibration_enabled
+    }
+
+    pub(crate) fn enable_relay_readiness(&self) {
+        self.advertised.lock().relay_ready = Some(HashMap::new());
+        self.registration_changes.notify();
+    }
+
+    pub(crate) fn replace_relay_readiness<'a>(
+        &self,
+        generations: impl IntoIterator<Item = &'a ModelGeneration>,
+    ) {
+        let mut advertised = self.advertised.lock();
+        if advertised.relay_ready.is_none() {
+            return;
+        }
+        let ready = generations
+            .into_iter()
+            .filter(|generation| advertised.current(generation).is_some())
+            .map(|generation| (generation.model_id.clone(), generation.sequence))
+            .collect();
+        if advertised.relay_ready.as_ref() == Some(&ready) {
+            return;
+        }
+        advertised.relay_ready = Some(ready);
+        drop(advertised);
+        self.registration_changes.notify();
     }
 
     pub fn observed(
@@ -305,14 +340,17 @@ impl PylonRuntimeState {
     ) -> RequestGenerationAdmission {
         let advertised = self.advertised.lock();
         match advertised.models.get(model_id) {
-            Some(model) if matches!(model.publication, ModelPublication::Admitted { .. }) => {
+            Some(model)
+                if matches!(model.publication, ModelPublication::Admitted { .. })
+                    && advertised.relay_allows(model_id, model.generation) =>
+            {
                 RequestGenerationAdmission::Admitted(ModelGeneration::new(
                     model_id,
                     model.generation,
                 ))
             }
             Some(_) => RequestGenerationAdmission::Unavailable,
-            None if advertised.require_admitted_generation => {
+            None if advertised.require_admitted_generation || advertised.relay_ready.is_some() => {
                 RequestGenerationAdmission::Unavailable
             }
             None => RequestGenerationAdmission::Ungated,
@@ -349,6 +387,9 @@ impl PylonRuntimeState {
             .models
             .remove(generation.model_id())
             .expect("validated generation should still exist");
+        if let Some(ready) = advertised.relay_ready.as_mut() {
+            ready.remove(generation.model_id());
+        }
         self.live_requests.retire_generation(generation);
         drop(advertised);
         self.registration_changes.notify();
@@ -492,7 +533,11 @@ impl PylonRuntimeState {
                         stats_capabilities: stats.stats_capabilities.clone(),
                         stats_sources: stats.stats_sources.clone(),
                     }),
-                    status: gated_model_status(advertised.base_status, bringup_ready).into(),
+                    status: gated_model_status(
+                        advertised.base_status,
+                        bringup_ready && advertised.relay_allows(model_id, model.generation),
+                    )
+                    .into(),
                 };
                 Some((model_id.clone(), registration))
             })

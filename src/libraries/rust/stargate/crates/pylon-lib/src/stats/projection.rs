@@ -93,6 +93,20 @@ impl StatsAggregator {
     }
 
     pub(super) fn snapshot(&self, model_id: &str) -> CurrentModelStats {
+        if self.config.relay_enabled {
+            return self
+                .per_model
+                .get(model_id)
+                .map_or_else(CurrentModelStats::default, |state| {
+                    state
+                        .metrics
+                        .relay_stats(self.config.fallback_max_engine_concurrency)
+                });
+        }
+        self.local_snapshot(model_id)
+    }
+
+    pub(super) fn local_snapshot(&self, model_id: &str) -> CurrentModelStats {
         let queue = self.runtime_state.snapshot_live_model(model_id);
         let inputs = ModelStatsSnapshotInputs {
             active_chat_output_tps: queue.active_chat_output_tps,

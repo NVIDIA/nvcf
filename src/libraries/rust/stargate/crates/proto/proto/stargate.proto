@@ -76,7 +76,9 @@ message ModelStats {
   // For active backends that share a cluster_id, Stargate sums request-local
   // rates and gauges, takes the maximum max_output_tps, combines priority queue
   // estimates using input-throughput weighting, and sources shared engine state
-  // from one backend.
+  // from one backend. A complete Dynamo Relay load view (stats_sources
+  // "dynamo_relay_load") is shared engine state: the cluster takes the freshest
+  // one for its rates, gauges, and max_engine_concurrency instead of a sum.
 
   // Sticky last valid mean input TPS for this backend observation. Stargate
   // never receives live/raw input TPS. For shared clusters, active backend

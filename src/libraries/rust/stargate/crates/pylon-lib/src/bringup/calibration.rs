@@ -67,7 +67,7 @@ pub(crate) async fn run_calibration(
             }
             Ok(CalibrationStepOutcome::Saturated) => {
                 let stats = stats_control
-                    .flush_and_snapshot(generation)
+                    .flush_calibration_snapshot(generation)
                     .await
                     .map_err(|_| BringupError::StatsCollectorStopped)?
                     .ok_or(BringupError::RetiredGeneration)?;
