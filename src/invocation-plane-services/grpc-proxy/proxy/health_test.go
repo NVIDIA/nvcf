@@ -20,28 +20,47 @@ package proxy
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/require"
+
+	"nvcf-grpc-proxy/proxy/internal/test"
 )
 
-func TestHealthFailsWhenNatsIsDisconnected(t *testing.T) {
-	manager, err := healthManager(&nats.Conn{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	recorder := httptest.NewRecorder()
-	manager.HandlerFunc(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+// /livez must stay up while NATS is connected or reconnecting, and fail only
+// once the connection is closed and a restart is the only recovery.
+func TestLivenessFailsOnlyWhenNatsIsClosed(t *testing.T) {
+	server, err := test.NewFakeNatsServer(test.NatsAcceptThenDrop)
+	require.NoError(t, err)
 
-	if recorder.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	nc, err := nats.Connect(server.URL,
+		nats.Token("token"),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(10*time.Millisecond),
+		nats.ReconnectJitter(0, 0))
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+
+	livez := httptest.NewServer(livenessHandler(nc))
+	t.Cleanup(livez.Close)
+	get := func() int {
+		response, err := http.Get(livez.URL + "/livez")
+		require.NoError(t, err)
+		_ = response.Body.Close()
+		return response.StatusCode
 	}
-	body := recorder.Body.String()
-	if !strings.Contains(body, "nats") {
-		t.Fatalf("body %q does not report the nats check", body)
-	}
-	if strings.Contains(body, "nvcf") {
-		t.Fatalf("body %q reports an nvcf-api check; readiness must not depend on nvcf-api", body)
-	}
+
+	require.Equal(t, http.StatusOK, get())
+
+	// The server drops the connection and stops listening, so the client keeps
+	// reconnecting.
+	require.NoError(t, server.Close())
+	require.Eventually(t, func() bool { return nc.Status() == nats.RECONNECTING },
+		5*time.Second, 10*time.Millisecond, "status %s", nc.Status())
+	require.Equal(t, http.StatusOK, get())
+
+	nc.Close()
+	require.Equal(t, http.StatusServiceUnavailable, get())
 }

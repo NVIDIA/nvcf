@@ -68,8 +68,11 @@ func NewNatsConnection(natsFqdn, nKeySeed, serviceName, oauth2Fqdn, secretsPath 
 func connectOptions(serviceName string, authOption nats.Option) []nats.Option {
 	return []nats.Option{nats.PingInterval(10 * time.Second), authOption,
 		// Nothing replaces a closed connection, and readiness stays down while it is
-		// closed, so keep reconnecting through long outages.
+		// closed, so keep reconnecting through long outages. Without
+		// IgnoreAuthErrorAbort, nats.go closes the connection after the same
+		// authentication error twice, even with unlimited reconnects.
 		nats.MaxReconnects(-1),
+		nats.IgnoreAuthErrorAbort(),
 		nats.LameDuckModeHandler(func(conn *nats.Conn) {
 			metrics.NatsLameDuckCounter.Inc()
 			go func() {

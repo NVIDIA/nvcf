@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"net"
@@ -38,6 +39,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"nvcf-grpc-proxy/proxy/internal/test"
 	"nvcf-grpc-proxy/proxy/metrics"
 )
 
@@ -297,11 +299,46 @@ func TestNewNatsConnectionRecordsNkeySetupFailure(t *testing.T) {
 	assert.Empty(t, logs.FilterMessage("nats initial connection failed").All())
 }
 
-func TestConnectOptionsReconnectWithoutLimit(t *testing.T) {
-	opts := nats.GetDefaultOptions()
-	for _, option := range connectOptions("test-service", nats.Token("unused")) {
-		require.NoError(t, option(&opts))
-	}
+// A reconnect rejected twice with the same auth error, as when the auth callout
+// is briefly unavailable, must not close the connection: nothing replaces a
+// closed connection. The control shows nats.go closing it without
+// IgnoreAuthErrorAbort, so the test fails if that option is dropped.
+func TestConnectOptionsReconnectAfterRepeatedAuthRejections(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		ignoreAuthErrorAbort bool
+	}{
+		{name: "connect options", ignoreAuthErrorAbort: true},
+		{name: "control without IgnoreAuthErrorAbort", ignoreAuthErrorAbort: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, err := test.NewFakeNatsServer(test.NatsAcceptThenDrop, test.NatsRejectAuth, test.NatsRejectAuth)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = server.Close() })
 
-	assert.Equal(t, -1, opts.MaxReconnect)
+			options := append(connectOptions("test-service", nats.Token("token")),
+				nats.ReconnectWait(10*time.Millisecond),
+				nats.ReconnectJitter(0, 0))
+			if !tc.ignoreAuthErrorAbort {
+				options = append(options, func(o *nats.Options) error {
+					o.IgnoreAuthErrorAbort = false
+					return nil
+				})
+			}
+			nc, err := nats.Connect(server.URL, options...)
+			require.NoError(t, err)
+			t.Cleanup(nc.Close)
+
+			if tc.ignoreAuthErrorAbort {
+				// Reconnects counts each attempt that reached the server: two
+				// rejections, then the accepted one.
+				require.Eventually(t, func() bool {
+					return nc.Status() == nats.CONNECTED && nc.Stats().Reconnects >= 3
+				}, 10*time.Second, 10*time.Millisecond, "status %s after %d reconnects", nc.Status(), nc.Stats().Reconnects)
+				return
+			}
+			require.Eventually(t, nc.IsClosed, 10*time.Second, 10*time.Millisecond, "status %s", nc.Status())
+			assert.ErrorIs(t, nc.LastError(), nats.ErrAuthorization)
+		})
+	}
 }
