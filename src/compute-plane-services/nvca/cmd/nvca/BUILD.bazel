@@ -4,17 +4,17 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//rules/oci:defs.bzl", "go_oci_multi_binary_image")
 
-MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+MODULE_PATH = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca"
 
 go_library(
     name = "nvca_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/nvca",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/cmd/nvca",
     visibility = ["//visibility:private"],
     deps = [
         "//src/compute-plane-services/nvca/pkg/nvca",
         "//src/compute-plane-services/nvca/pkg/nvca/errors",
-        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core",
     ],
 )
 
@@ -24,10 +24,10 @@ go_binary(
     visibility = ["//visibility:public"],
     # Mirrors ldflags.
     x_defs = {
-        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvca",
-        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
-        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
-        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
+        MODULE_PATH + "/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version.Service": "nvca",
+        MODULE_PATH + "/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        MODULE_PATH + "/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
+        MODULE_PATH + "/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
         "github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version": "{STABLE_DRA_DRIVER_GPU_VERSION}",
     },
 )

@@ -22,7 +22,7 @@ go_library(
         "nvcf_init.go",
         "nvct_init.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/internal/workerinit",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/internal/workerinit",
     visibility = ["//src/compute-plane-services/worker-init:__subpackages__"],
     deps = [
         "//src/compute-plane-services/worker-init/configs",

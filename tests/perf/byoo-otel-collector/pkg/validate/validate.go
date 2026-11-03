@@ -29,10 +29,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/render"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/render"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
 )
 
 // Expectations describes what the collector container must look like.

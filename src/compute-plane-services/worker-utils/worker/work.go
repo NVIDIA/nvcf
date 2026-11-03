@@ -46,17 +46,17 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/httpstream"
-	utilsMetrics "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/polling"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/progress"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/response"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/consumer"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
-	nvcfMetrics "github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/tracing"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker/httpstream"
+	utilsMetrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker/polling"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker/progress"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker/response"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/consumer"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metering"
+	nvcfMetrics "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 )
 
 const (

@@ -26,10 +26,10 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
-	autobind "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/cobraautobind"
+	autobind "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/cobraautobind"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
 )
 
 const (

@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/nvct"
-	pb "github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvct"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/nvct"
+	pb "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvct"
 )
 
 func TestNew(t *testing.T) {

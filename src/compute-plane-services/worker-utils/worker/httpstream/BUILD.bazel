@@ -7,7 +7,7 @@ go_library(
         "hop_headers.go",
         "request_stream.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/httpstream",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker/httpstream",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_nvidia_nvcf_src_libraries_go_worker//ca",

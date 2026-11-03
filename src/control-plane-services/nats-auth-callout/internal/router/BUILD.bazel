@@ -21,7 +21,7 @@ go_library(
         "metrics.go",
         "router.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/router",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/router",
     visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
     deps = [
         "//src/control-plane-services/nats-auth-callout/api",

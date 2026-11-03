@@ -50,9 +50,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	sigsyaml "sigs.k8s.io/yaml"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/db"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
 )
 
 var (

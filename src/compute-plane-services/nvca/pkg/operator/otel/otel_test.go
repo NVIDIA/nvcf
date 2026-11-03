@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	otelattr "go.opentelemetry.io/otel/attribute"
 
-	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvidiaiov1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
 
 func TestOTel_NewTracer(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper
+module github.com/dsx-ai-factory/nvcf/src/compute-plane-services/image-credential-helper
 
 go 1.26.10
 
@@ -36,7 +36,7 @@ replace (
 	k8s.io/client-go => k8s.io/client-go v0.35.3
 )
 
-require github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00
+require github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00
 
 require (
 	dario.cat/mergo v1.0.2 // indirect

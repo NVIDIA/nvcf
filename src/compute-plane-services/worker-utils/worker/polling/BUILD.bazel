@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "polling",
     srcs = ["polling.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/polling",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker/polling",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_cenkalti_backoff_v4//:backoff",

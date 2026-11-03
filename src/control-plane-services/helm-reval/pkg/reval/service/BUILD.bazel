@@ -9,7 +9,7 @@ go_library(
         "models.go",
         "service.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/service",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/service",
     visibility = ["//visibility:public"],
     deps = [
         "//src/control-plane-services/helm-reval/pkg/httpapi",

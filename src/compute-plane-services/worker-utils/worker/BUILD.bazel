@@ -12,7 +12,7 @@ go_library(
         "worker.go",
         "worker_unix.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker",
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/worker-utils/worker/httpstream",

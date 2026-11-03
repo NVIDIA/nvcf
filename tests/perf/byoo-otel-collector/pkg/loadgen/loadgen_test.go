@@ -27,7 +27,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/labels"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/labels"
 )
 
 func findBySuffix(jobs []*batchv1.Job, suffix string) *batchv1.Job {

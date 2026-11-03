@@ -1,10 +1,10 @@
-module github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway
+module github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway
 
 go 1.26.10
 
 require (
 	cloud.google.com/go/pubsub/v2 v2.4.0
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/google/uuid v1.6.0
 	github.com/kaptinlin/jsonrepair v0.2.6

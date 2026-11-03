@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/internal/utils"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nvcf-ui/backend/internal/utils"
 )
 
 const (

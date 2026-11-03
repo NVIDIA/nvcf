@@ -21,7 +21,7 @@ go_library(
         "keygenerator.go",
         "root.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/utils/jwe-utils/cli",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/utils/jwe-utils/cli",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/lib/pkg/nvkit/encrypt",

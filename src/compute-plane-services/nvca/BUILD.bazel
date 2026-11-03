@@ -15,7 +15,7 @@
 
 load("@gazelle//:def.bzl", "gazelle")
 
-# gazelle:prefix github.com/NVIDIA/nvcf/src/compute-plane-services/nvca
+# gazelle:prefix github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca
 # gazelle:proto disable_global
 # gazelle:go_naming_convention import_alias
 

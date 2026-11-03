@@ -1,10 +1,10 @@
-module github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init
+module github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init
 
 go 1.26.10
 
 require (
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260807010315-d791d3c11262
-	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20261015164739-acd237d2f0af
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260807010315-d791d3c11262
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/worker v0.0.0-20261015164739-acd237d2f0af
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.10
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.10

@@ -6,7 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "kaischeduler",
     srcs = ["kaischeduler.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler",
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/nvca/pkg/nvca/health",

@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "pdp_types",
     srcs = ["pdp_types.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types",
     visibility = ["//visibility:public"],
     deps = ["@org_golang_google_protobuf//types/known/structpb"],
 )

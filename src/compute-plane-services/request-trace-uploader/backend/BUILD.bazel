@@ -6,7 +6,7 @@ go_library(
         "client.go",
         "registry.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/backend",
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/request-trace-uploader/config",

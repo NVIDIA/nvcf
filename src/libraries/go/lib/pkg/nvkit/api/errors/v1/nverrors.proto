@@ -3,7 +3,7 @@
 
 syntax = "proto3";
 
-option go_package = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1;nverrors";
+option go_package = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1;nverrors";
 
 package nvkit.api;
 

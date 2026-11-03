@@ -20,7 +20,7 @@ package configs
 import (
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/internal/downloader"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/internal/downloader"
 )
 
 const (

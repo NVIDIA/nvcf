@@ -21,7 +21,7 @@ go_library(
         "metrics.go",
         "metrics_utils.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/metrics",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/metrics",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_go_kit_kit//metrics",

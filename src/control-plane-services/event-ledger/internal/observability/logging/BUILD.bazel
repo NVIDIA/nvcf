@@ -8,7 +8,7 @@ go_library(
         "logger.go",
         "setup.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/logging",
     visibility = ["//:__subpackages__"],
     deps = [
         "//src/control-plane-services/event-ledger/internal/observability/common",

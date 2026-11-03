@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "downloader",
     srcs = ["downloader.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/internal/downloader",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/internal/downloader",
     visibility = ["//src/compute-plane-services/worker-init:__subpackages__"],
     deps = [
         "//src/compute-plane-services/worker-init/internal/metrics",

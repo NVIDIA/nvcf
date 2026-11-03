@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	workermetrics "github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics"
+	workermetrics "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"

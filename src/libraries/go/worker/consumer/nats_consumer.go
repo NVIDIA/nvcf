@@ -37,7 +37,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/semaphore"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/semaphore"
 )
 
 var tracer = otel.Tracer("nats-consumer")

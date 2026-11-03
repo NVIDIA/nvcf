@@ -1,10 +1,10 @@
-module github.com/NVIDIA/nvcf/src/compute-plane-services/worker-llm-credentials
+module github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-llm-credentials
 
 go 1.26.10
 
 require (
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3
-	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20261015164739-acd237d2f0af
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/worker v0.0.0-20261015164739-acd237d2f0af
 	github.com/samber/lo v1.51.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10

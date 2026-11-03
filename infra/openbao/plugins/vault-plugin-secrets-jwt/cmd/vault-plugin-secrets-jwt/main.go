@@ -22,7 +22,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/sdk/plugin"
-	jwtsecrets "github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt/plugin"
+	jwtsecrets "github.com/dsx-ai-factory/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt/plugin"
 )
 
 func main() {

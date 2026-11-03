@@ -6,7 +6,7 @@ go_library(
         "api_keys_client.go",
         "authz_client.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/policy",
     visibility = ["//:__subpackages__"],
     deps = [
         "//src/control-plane-services/event-ledger/internal/credentials",

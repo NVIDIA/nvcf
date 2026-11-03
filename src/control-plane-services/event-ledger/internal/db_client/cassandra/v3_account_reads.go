@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/data_access"
 )
 
 // The account reads filter inside the partition being read. Rows written

@@ -20,7 +20,7 @@ load("//rules/oci:defs.bzl", "go_oci_image")
 go_library(
     name = "image-credential-helper_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper/cmd/image-credential-helper",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/image-credential-helper/cmd/image-credential-helper",
     visibility = ["//visibility:private"],
     deps = [
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/icms-translate/translate/common",

@@ -30,7 +30,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/models"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/models"
 )
 
 const metadataErrorBodyLimit = 64 << 10

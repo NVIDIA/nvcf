@@ -169,12 +169,12 @@ go_deps.gazelle_override(
 go_deps.gazelle_override(
     build_file_generation = "clean",
     directives = ["gazelle:proto disable_global"],
-    path = "github.com/NVIDIA/nvcf/src/libraries/go/lib",
+    path = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib",
 )
 go_deps.gazelle_override(
     build_file_generation = "clean",
     directives = ["gazelle:proto disable_global"],
-    path = "github.com/NVIDIA/nvcf/src/libraries/go/worker",
+    path = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker",
 )
 
 # vault/api and its vault/sdk dependency also load @rules_go without a

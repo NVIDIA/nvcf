@@ -6,7 +6,7 @@ go_library(
         "root_cmd.go",
         "run_service.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/api/startup",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/cmd/api/startup",
     visibility = ["//visibility:public"],
     deps = [
         "//src/control-plane-services/event-ledger/cmd/api/service",

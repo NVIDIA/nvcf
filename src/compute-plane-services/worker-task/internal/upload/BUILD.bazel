@@ -6,7 +6,7 @@ go_library(
         "mock_uploader.go",
         "upload.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/upload",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/upload",
     visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
     deps = [
         "//src/compute-plane-services/worker-task/internal/metrics",

@@ -53,12 +53,12 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/servers/utils"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/shutdown"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/servers/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/shutdown"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 )
 
 const (

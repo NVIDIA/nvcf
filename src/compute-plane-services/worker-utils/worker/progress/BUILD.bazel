@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "progress",
     srcs = ["progress.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/progress",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker/progress",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_fsnotify_fsnotify//:fsnotify",
