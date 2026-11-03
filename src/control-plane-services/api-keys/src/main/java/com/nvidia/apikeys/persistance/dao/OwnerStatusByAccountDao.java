@@ -24,6 +24,7 @@ import com.nvidia.apikeys.persistance.repositories.OwnerStatusByAccountRepositor
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyOwnerType;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -48,6 +49,37 @@ public class OwnerStatusByAccountDao {
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
         return serviceRepository.findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceId(
                 ncaId, ownerType, ownerId, issuerServiceId);
+    }
+
+    /**
+     * The owner's account-scoped status in every account that has one. Only owner_id is indexed,
+     * so the owner type is matched after the read.
+     */
+    public List<OwnerStatusByAccountModel> listOwnerStatusByAccount(
+            KeyOwnerType ownerType, String ownerId) {
+        return accountRepository.findByOwnerId(ownerId).stream()
+                .filter(status -> status.getOwnerType() == ownerType)
+                .toList();
+    }
+
+    /**
+     * The owner's service-scoped status in every account that has one.
+     */
+    public List<OwnerStatusByAccountAndServiceModel> listOwnerStatusByAccountAndService(
+            KeyOwnerType ownerType, String ownerId) {
+        return serviceRepository.findByOwnerId(ownerId).stream()
+                .filter(status -> status.getOwnerType() == ownerType)
+                .toList();
+    }
+
+    /**
+     * The owner's service-scoped status in one account.
+     */
+    public List<OwnerStatusByAccountAndServiceModel> listOwnerStatusByAccountAndService(
+            String ncaId, KeyOwnerType ownerType, String ownerId) {
+        return listOwnerStatusByAccountAndService(ownerType, ownerId).stream()
+                .filter(status -> status.getNcaId().equals(ncaId))
+                .toList();
     }
 
     public OwnerStatusByAccountModel saveOwnerStatusByAccount(

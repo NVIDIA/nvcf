@@ -52,6 +52,10 @@ public class LegacyAccountTranslator {
         return Strings.CS.equals(nakProperties.getNcaId(), ncaId);
     }
 
+    public String legacyNcaId() {
+        return nakProperties.getNcaId();
+    }
+
     public Optional<String> findLegacyIssuerServiceId(String serviceId) {
         return Optional.ofNullable(serviceIdMap().get(serviceId));
     }

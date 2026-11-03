@@ -30,6 +30,7 @@ import com.nvidia.apikeys.config.IntegrationTestConfiguration.TestCleanerExtensi
 import com.nvidia.apikeys.utils.TestClock;
 import com.nvidia.apikeys.vo.KeysByAccountSliceVo;
 import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
+import com.nvidia.apikeys.vo.KeysByScopeFilterVo;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyV2Vo;
 import java.time.Duration;
@@ -349,6 +350,143 @@ class KeysV2DaoIntegrationTest {
         assertThat(countRows("keys_by_owner_and_service")).isZero();
     }
 
+    @Test
+    void listByFilterOwnerSpansAccounts() {
+        dao.save(key(NCA_1, OWNER_1, SERVICE_A, "key-1"));
+        dao.save(key(NCA_1, OWNER_1, SERVICE_B, "key-2"));
+        dao.save(key(NCA_2, OWNER_1, SERVICE_A, "key-3"));
+        dao.save(key(NCA_1, OWNER_2, SERVICE_A, "key-4"));
+
+        var slice = dao.list(filter().ownerType(USER).ownerId(OWNER_1).build(), 100, null);
+
+        assertThat(slice.keys())
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
+                .containsExactlyInAnyOrder("key-1", "key-2", "key-3");
+        assertThat(slice.cursor()).isNull();
+    }
+
+    @Test
+    void listByFilterOwnerAndServiceSpansAccounts() {
+        dao.save(key(NCA_1, OWNER_1, SERVICE_A, "key-1"));
+        dao.save(key(NCA_1, OWNER_1, SERVICE_B, "key-2"));
+        dao.save(key(NCA_2, OWNER_1, SERVICE_A, "key-3"));
+        dao.save(key(NCA_2, OWNER_2, SERVICE_A, "key-4"));
+
+        var slice = dao.list(
+                filter().ownerType(USER).ownerId(OWNER_1).issuerServiceId(SERVICE_A).build(),
+                100, null);
+
+        assertThat(slice.keys())
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
+                .containsExactlyInAnyOrder("key-1", "key-3");
+    }
+
+    @Test
+    void listByFilterServiceSpansAccountsAndOwners() {
+        dao.save(key(NCA_1, OWNER_1, SERVICE_A, "key-1"));
+        dao.save(key(NCA_2, OWNER_2, SERVICE_A, "key-2"));
+        dao.save(key(NCA_2, OWNER_2, SERVICE_B, "key-3"));
+
+        var slice = dao.list(filter().issuerServiceId(SERVICE_A).build(), 100, null);
+
+        assertThat(slice.keys())
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
+                .containsExactlyInAnyOrder("key-1", "key-2");
+    }
+
+    @Test
+    void listByFilterStatusNarrowsEveryScope() {
+        dao.save(key(NCA_1, OWNER_1, SERVICE_A, "key-1"));
+        dao.save(key(NCA_1, OWNER_1, SERVICE_A, "key-2").toBuilder()
+                         .keyStatus(KeyStatus.SUSPENDED).build());
+        dao.save(key(NCA_2, OWNER_2, SERVICE_B, "key-3").toBuilder()
+                         .keyStatus(KeyStatus.SUSPENDED).build());
+
+        assertThat(keyIds(dao.list(filter().keyStatus(KeyStatus.SUSPENDED).build(), 100, null)))
+                .containsExactlyInAnyOrder("key-2", "key-3");
+        assertThat(keyIds(dao.list(
+                filter().ncaId(NCA_1).keyStatus(KeyStatus.SUSPENDED).build(), 100, null)))
+                .containsExactly("key-2");
+        assertThat(keyIds(dao.list(
+                filter().ncaId(NCA_1).ownerType(USER).ownerId(OWNER_1)
+                        .keyStatus(KeyStatus.ACTIVE).build(), 100, null)))
+                .containsExactly("key-1");
+        assertThat(keyIds(dao.list(
+                filter().ownerType(USER).ownerId(OWNER_1)
+                        .keyStatus(KeyStatus.REVOKED).build(), 100, null)))
+                .isEmpty();
+    }
+
+    @Test
+    void listByFilterAccountAndOwnerWithoutOwnerTypeMatchesTheOwner() {
+        dao.save(key(NCA_1, OWNER_1, SERVICE_A, "key-1"));
+        dao.save(key(NCA_1, OWNER_2, SERVICE_A, "key-2"));
+        dao.save(key(NCA_2, OWNER_1, SERVICE_A, "key-3"));
+
+        assertThat(keyIds(dao.list(filter().ncaId(NCA_1).ownerId(OWNER_1).build(), 100, null)))
+                .containsExactly("key-1");
+    }
+
+    @Test
+    void listByEmptyFilterPagesEveryKey() {
+        dao.save(key(NCA_1, OWNER_1, SERVICE_A, "key-1"));
+        dao.save(key(NCA_1, OWNER_2, SERVICE_B, "key-2"));
+        dao.save(key(NCA_2, OWNER_1, SERVICE_A, "key-3"));
+        dao.save(key(NCA_2, OWNER_2, SERVICE_B, "key-4"));
+        dao.save(key(NCA_2, "owner-3@example.com", SERVICE_A, "key-5"));
+
+        List<KeysByAccountSliceVo> slices = readAll(
+                (limit, cursor) -> dao.list(filter().build(), limit, cursor), 2);
+
+        assertThat(keyIds(slices))
+                .containsExactlyInAnyOrder("key-1", "key-2", "key-3", "key-4", "key-5");
+        assertThat(slices).hasSizeGreaterThan(1);
+        slices.forEach(slice -> assertThat(slice.keys()).hasSizeLessThanOrEqualTo(2));
+    }
+
+    @Test
+    void listByFilterPagesWithCursor() {
+        for (int i = 1; i <= 5; i++) {
+            dao.save(key("nca-" + i, OWNER_1, SERVICE_A, "key-" + i));
+        }
+        dao.save(key(NCA_1, OWNER_2, SERVICE_A, "other"));
+
+        List<KeysByAccountSliceVo> slices = readAll(
+                (limit, cursor) -> dao.list(
+                        filter().ownerType(USER).ownerId(OWNER_1).build(), limit, cursor),
+                2);
+
+        assertThat(keyIds(slices))
+                .containsExactlyInAnyOrder("key-1", "key-2", "key-3", "key-4", "key-5");
+        assertThat(slices).hasSizeGreaterThan(1);
+        assertThat(slices.getLast().cursor()).isNull();
+    }
+
+    @Test
+    void listByFilterReturnsEmptySliceWhenNothingMatches() {
+        dao.save(key(NCA_1, OWNER_1, SERVICE_A, "key-1"));
+
+        var slice = dao.list(filter().ownerType(USER).ownerId(OWNER_2).build(), 10, null);
+
+        assertThat(slice.keys()).isEmpty();
+        assertThat(slice.cursor()).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"not-hex", "0xzz", "0xdeadbeef"})
+    void listByFilterRejectsInvalidCursor(String cursor) {
+        dao.save(key(NCA_1, OWNER_1, SERVICE_A, "key-1"));
+
+        assertThatThrownBy(() -> dao.list(
+                filter().ownerType(USER).ownerId(OWNER_1).build(), 10, cursor))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Invalid cursor: '" + cursor + "'");
+    }
+
+    private static KeysByScopeFilterVo.KeysByScopeFilterVoBuilder filter() {
+        return KeysByScopeFilterVo.builder();
+    }
+
     private static long countRows(String table) {
         return IntegrationTestConfiguration.CQL_SESSION.execute(
                 "SELECT COUNT(*) FROM " + KEY_SPACE + "." + table).one().getLong(0);
@@ -365,6 +503,10 @@ class KeysV2DaoIntegrationTest {
         } while (cursor != null && slices.size() < MAX_SLICES);
         assertThat(cursor).as("paging did not terminate").isNull();
         return slices;
+    }
+
+    private static List<String> keyIds(KeysByAccountSliceVo slice) {
+        return keyIds(List.of(slice));
     }
 
     private static List<String> keyIds(List<KeysByAccountSliceVo> slices) {
