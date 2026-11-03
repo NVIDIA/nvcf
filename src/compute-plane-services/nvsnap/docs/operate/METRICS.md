@@ -26,6 +26,8 @@ function or checkpoint label: those are in the summary lines.
 | `nvsnap_capture_outcomes_total` | counter | `method`, `outcome`, `reason`, `gpu`, `ranks` |
 | `nvsnap_capture_bytes` | histogram | `method`, `part`, `gpu` |
 | `nvsnap_admissions_total` | counter | `decision`, `reason` |
+| `nvsnap_webhook_requests_total` | counter | `code` |
+| `nvsnap_webhook_request_seconds` | histogram | |
 | `nvsnap_build_info` | gauge | `version` |
 
 Labels:
@@ -69,7 +71,17 @@ What is measured:
   `failed`, `restore-failed`, `gpushare-failed`) or `cold` (reason:
   `size-mismatch`, `not-restorable-as-group`, `checkpoint-blocked`,
   `own-instance`, `prepare-failed`, `model-unavailable`). A pod of a
-  configuration with no capture is not counted.
+  configuration with no capture is not counted. The agents add `missed`:
+  a rank of an instance the webhook never mutated (reason `not-admitted`:
+  the API server admitted it unchanged, as its failure policy lets it when
+  the webhook cannot be reached; `opted-out`: the pod carries
+  `nvsnap.io/inject=false`). Such an instance cannot be captured while that
+  rank runs; it is captured once the rank's replacement is admitted.
+- **Webhook requests**: what each agent's webhook answered, by HTTP status,
+  and its time. Compared with the API server's own
+  `apiserver_admission_webhook_request_total` and
+  `apiserver_admission_webhook_fail_open_count` for `rootfs-restore.nvsnap.io`,
+  a gap is calls that never reached an agent.
 - **Agent bundle** (`build_info`): 1 for the bundle each agent serves; join
   on it, or compare time ranges around a rollout.
 
@@ -101,7 +113,7 @@ the log store by namespace or pod for one function's history.
   `NvsnapCaptureRefused` (on the captured instance's first rank),
   `NvsnapRestored`, `NvsnapRestoreFailed` (on the restore's first rank),
   `NvsnapStarted` (on each GPU pod, with its time to Ready and how it
-  started).
+  started), `NvsnapNotAdmitted` (on a rank the webhook never mutated, once).
 - A capture's group record (`nvsnap-criu-group-<key>` ConfigMap) keeps its
   last 10 restores under `restores`, newest last, as `RFC3339=seconds`.
 
