@@ -214,6 +214,10 @@ func (c ModelCapabilities) SupportsSpeechToSpeech() bool {
 // decision model owners set a measured value with NVCF_DECISION_IMAGE_TOKENS.
 const defaultDecisionImageTokens = 1024
 
+// defaultMaxRequestBodyBytes matches the 50 MB request payload cap OpenAI
+// documents for image inputs.
+const defaultMaxRequestBodyBytes int64 = 50 << 20
+
 func Default() *Config {
 	return &Config{
 		Telemetry: TelemetryConfig{
@@ -228,6 +232,7 @@ func Default() *Config {
 			InferenceWriteTimeout: 60 * time.Second,
 			IdleTimeout:           60 * time.Second,
 			Region:                "global",
+			MaxRequestBodyBytes:   defaultMaxRequestBodyBytes,
 		},
 		Stargate: StargateConfig{
 			URL:            "http://127.0.0.1:8000",

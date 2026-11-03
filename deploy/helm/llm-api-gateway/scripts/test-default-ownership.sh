@@ -38,12 +38,15 @@ for kv in ENABLED=false TTL=10m LOOKUP_TIMEOUT=20ms LOCAL_MAX_ENTRIES=100000; do
 done
 test "$(read_config "$default_manifest" NVCF_DECISION_IMAGE_TOKENS)" = 1024 ||
   fail "NVCF_DECISION_IMAGE_TOKENS default must be 1024"
+test "$(read_config "$default_manifest" NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES)" = 52428800 ||
+  fail "NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES default must be 52428800"
 
 helm template llm-api-gateway "$chart_dir" \
   --namespace nvcf \
   --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
   --set llmApiGateway.config.nvcfGrpcInsecure=true \
   --set llmApiGateway.config.decisionImageTokens=2048 \
+  --set llmApiGateway.config.maxRequestBodyBytes=0 \
   --set llmApiGateway.metrics.enabled=true \
   --set llmApiGateway.metrics.serviceMonitor.enabled=true \
   --set llmApiGateway.config.lastCluster.enabled=true \
@@ -54,6 +57,8 @@ test "$(read_config "$override_manifest" NVCF_GRPC_INSECURE)" = true ||
   fail "explicit plaintext transport override did not reach the ConfigMap"
 test "$(read_config "$override_manifest" NVCF_DECISION_IMAGE_TOKENS)" = 2048 ||
   fail "decisionImageTokens override must render as NVCF_DECISION_IMAGE_TOKENS"
+test "$(read_config "$override_manifest" NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES)" = 0 ||
+  fail "maxRequestBodyBytes=0 must render as NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES 0"
 # 1000000 checks that a large cap renders as a plain integer.
 for kv in ENABLED=true LOCAL_MAX_ENTRIES=1000000; do
   test "$(read_config "$override_manifest" "STARGATE_LAST_CLUSTER_${kv%%=*}")" = "${kv#*=}" ||
@@ -83,6 +88,30 @@ if helm template llm-api-gateway "$chart_dir" \
 fi
 grep -Fq 'llmApiGateway.config.decisionImageTokens must be 0 or more' "$invalid_error" ||
   fail "negative decisionImageTokens returned the wrong error"
+
+if helm template llm-api-gateway "$chart_dir" \
+  --namespace nvcf \
+  --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
+  --set llmApiGateway.config.maxRequestBodyBytes=-1 \
+  >/dev/null 2>"$invalid_error"; then
+  fail "a negative maxRequestBodyBytes should fail to render"
+fi
+grep -Fq 'llmApiGateway.config.maxRequestBodyBytes must be a whole number 0 or more' "$invalid_error" ||
+  fail "negative maxRequestBodyBytes returned the wrong error"
+
+for bad in "--set-string llmApiGateway.config.maxRequestBodyBytes=50Mi" \
+  "--set llmApiGateway.config.maxRequestBodyBytes=null" \
+  "--set llmApiGateway.config.maxRequestBodyBytes=1.5"; do
+  # shellcheck disable=SC2086
+  if helm template llm-api-gateway "$chart_dir" \
+    --namespace nvcf \
+    --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
+    $bad >/dev/null 2>"$invalid_error"; then
+    fail "maxRequestBodyBytes must reject: $bad"
+  fi
+  grep -Fq 'llmApiGateway.config.maxRequestBodyBytes must be a whole number 0 or more' "$invalid_error" ||
+    fail "maxRequestBodyBytes ($bad) returned the wrong error"
+done
 
 if ! helm template llm-api-gateway "$chart_dir" \
   --namespace nvcf \
