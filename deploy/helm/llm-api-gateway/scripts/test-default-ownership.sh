@@ -99,9 +99,10 @@ fi
 grep -Fq 'llmApiGateway.config.maxRequestBodyBytes must be a whole number from 0 to 9223372036854775807' "$invalid_error" ||
   fail "negative maxRequestBodyBytes returned the wrong error"
 
+printf 'llmApiGateway:\n  config:\n    maxRequestBodyBytes: 9223372036854775808\n' >"$work_dir/over-int64.yaml"
 for bad in "--set-string llmApiGateway.config.maxRequestBodyBytes=50Mi" \
   "--set llmApiGateway.config.maxRequestBodyBytes=1.5" \
-  "--set-json llmApiGateway.config.maxRequestBodyBytes=9223372036854775808"; do
+  "--values $work_dir/over-int64.yaml"; do
   # shellcheck disable=SC2086
   if helm template llm-api-gateway "$chart_dir" \
     --namespace nvcf \
