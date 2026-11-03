@@ -538,6 +538,19 @@ kubectl logs -n nats-system -l app.kubernetes.io/instance=nats-auth-callout-serv
 | `Authentication denied`, with `status_code` 401 or 403 | The NVCF API refused the worker's token or account. Check the API's logs |
 | `webhook request failed` | The auth callout can't reach the NVCF API at the webhook URL |
 
+The auth callout samples its logs: per message, the first 100 lines a second, then 1 in 100, so a burst of worker logins can drop lines. While debugging, log every login and turn on debug logs, which include each webhook request to the NVCF API, in `environments/<environment-name>.yaml`:
+
+```yaml
+natsAuthCalloutService:
+  serviceConfig:
+    logging:
+      level: debug
+      sampling:
+        initial: 0
+```
+
+`natsAuthCalloutService.serviceConfig` is merged into the auth callout chart's `serviceConfig`, and the stack still sets `service.nats_url`. A change restarts the auth callout.
+
 If the auth callout logged nothing for a worker, its login didn't reach the auth callout. Check the worker's own logs for its NATS connection error.
 
 ## Observability

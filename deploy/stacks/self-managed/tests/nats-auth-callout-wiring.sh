@@ -131,4 +131,18 @@ plugin_config_arg="$(yq -r '.spec.template.spec.containers[0].args[] | select(. 
 test "$plugin_config_arg" = "/etc/plugin-config/plugin.yaml" ||
   fail "plugin configuration path is ${plugin_config_arg:-<none>}"
 
+test "$(yq -r '.serviceConfig.logging' "$values_file")" = null ||
+  fail "serviceConfig.logging must stay chart-owned when unset"
+
+# natsAuthCalloutService.serviceConfig merges into the chart's serviceConfig,
+# and the stack's nats_url still wins.
+service_config_values_file="$work_dir/nats-auth-callout-service-config-values.yaml"
+write_values "$service_config_values_file" \
+  --state-values-set natsAuthCalloutService.serviceConfig.logging.sampling.initial=0 \
+  --state-values-set natsAuthCalloutService.serviceConfig.service.nats_url=nats://elsewhere.example.com:4222
+test "$(yq -r '.serviceConfig.logging.sampling.initial' "$service_config_values_file")" = 0 ||
+  fail "serviceConfig.logging.sampling.initial did not reach the chart"
+test "$(yq -r '.serviceConfig.service.nats_url' "$service_config_values_file")" = "$expected_nats_url" ||
+  fail "serviceConfig.service.nats_url must stay the stack's"
+
 echo "nats-auth-callout-wiring: ok"
