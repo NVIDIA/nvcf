@@ -8,6 +8,11 @@ migrations image. Upgrade deployments on the `2.6.3-nv-1.3.6` image to the
 published `2.6.3-nv-1.3.7` patch first. Do not substitute a pre-bridge image
 during rollback.
 
+Before resuming normal self-managed stack applies, update the stack's
+`openbao-server` chart pin to a published chart with the JWT lifecycle modes
+and align its image pins with the qualified bridge release. An older pinned
+chart cannot preserve the lifecycle mode from the stack environment.
+
 The bridge packages the exact plugin from the digest-pinned public
 `2.6.3-nv-1.3.7` image as both the original command and the explicit old
 version. It builds the target from repository source. Catalog identities are
@@ -175,7 +180,8 @@ helm upgrade openbao-server "$BRIDGE_CHART" -n vault-system \
 The preflight checks every member's target binary before migrations can
 create version-pinned mounts. Migrations read the target version from the
 server image manifest. Existing mounts stay untouched; the upgrade driver
-owns tuning. Repeat the normal stack apply in `versioned` mode to check
+owns tuning. Once the stack pins the qualified lifecycle chart and images,
+repeat the normal stack apply in `versioned` mode to check
 idempotence. Test an existing consumer and create a separate test consumer
 before declaring the upgrade complete. Do not revert to `legacy` or `bridge`
 after enabling versioned mount creation.

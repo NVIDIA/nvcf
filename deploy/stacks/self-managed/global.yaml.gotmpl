@@ -424,6 +424,10 @@ openbao:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
   {{- end }}
+  {{- with dig "openbao" "jwtPluginLifecycle" "mode" "" .Values }}
+  jwtPluginLifecycle:
+    mode: {{ . | quote }}
+  {{- end }}
   migrations:
     image:
       registry: {{ .Values.global.image.registry }}
