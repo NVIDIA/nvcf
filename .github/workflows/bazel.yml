@@ -622,16 +622,6 @@ jobs:
           restore-keys: |
             byoo-gomod-
 
-      # nvstor-rdma links libibverbs (rdma-core), which the bazel-ci image does
-      # not carry. This row builds and tests for the runner's own architecture,
-      # so the native development package is enough; nvstor's own workflow
-      # cross-builds arm64.
-      - name: Install rdma-core development files (nvstor)
-        if: matrix.subtree.id == 'nvstor' && steps.precheck.outputs.skip == 'false'
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends libibverbs-dev
-
       # Decide the remote cache to use. The public EC2 Buildbarn is reachable
       # from GitHub-hosted runners over grpcs with a bearer token. When the
       # token secret is present

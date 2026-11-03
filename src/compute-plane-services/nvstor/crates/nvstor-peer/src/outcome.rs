@@ -28,8 +28,9 @@ use nvstor_rdma::object::GetError;
 
 use crate::fetch::{FetchError, FetchReport, OpenError};
 
-/// This build's version (the crate's).
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// This build's version: the release version it was built for, else the
+/// crate's (see `build.rs`).
+pub const VERSION: &str = env!("NVSTOR_PEER_VERSION");
 /// The git commit this build came from, or "unknown" (see `build.rs`).
 pub const COMMIT: &str = env!("NVSTOR_PEER_COMMIT");
 

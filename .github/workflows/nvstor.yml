@@ -4,10 +4,11 @@
 # nvstor checks that the Bazel row does not cover. The nvstor row in bazel.yml
 # builds and tests nvstor-peer and the crates it depends on for amd64; this
 # workflow adds rustfmt, clippy and the Cargo tests of those crates, the
-# dependency license policy, the NOTICE and publication-hygiene checks, and an
-# arm64 cross-build of nvstor-peer (the Bazel row builds for the runner's own
-# architecture only). No RDMA device is needed: tests that need one are
-# #[ignore]d and run by hand on RDMA hardware.
+# dependency license policy, the NOTICE and publication-hygiene checks, and the
+# multi-arch nvstor-peer image (the Bazel row builds for the runner's own
+# architecture only, and skips image targets, which are tagged manual). No
+# RDMA device is needed: tests that need one are #[ignore]d and run by hand on
+# RDMA hardware.
 
 name: nvstor
 
@@ -17,13 +18,15 @@ on:
     paths: &paths
       - 'src/compute-plane-services/nvstor/**'
       - '.github/workflows/nvstor.yml'
-      # The Bazel scaffold the arm64 cross-build depends on: rules_rust and
-      # the Rust toolchain, the zig cross toolchain and the platforms.
+      # The Bazel scaffold the image build depends on: rules_rust and the
+      # Rust toolchain, the zig cross toolchain, the platforms and the OCI
+      # image rules.
       - 'MODULE.bazel'
       - 'MODULE.bazel.lock'
       - '.bazelrc'
       - '.bazelversion'
       - 'platforms/**'
+      - 'rules/oci/**'
       - 'tools/bazel/**'
   pull_request:
     branches: [main, 'release-**', 'release/**']
@@ -86,27 +89,44 @@ jobs:
       - name: Check publication hygiene
         run: python3 scripts/check-hygiene.py
 
-  arm64:
-    name: nvstor-peer arm64 cross-build
+  image:
+    name: nvstor-peer image (amd64 + arm64)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Fetch arm64 rdma-core
-        run: src/compute-plane-services/nvstor/scripts/fetch-rdma-core.sh arm64 "$RUNNER_TEMP/rdma-core-arm64"
+      # One build of the image index: nvstor-peer for both architectures,
+      # optimised by the image's own opt_binary whatever the compilation
+      # mode, with rdma-core from the pinned packages for each architecture.
+      - name: bazel build nvstor-peer-image_index
+        env:
+          TARGET: //src/compute-plane-services/nvstor/crates/nvstor-peer:nvstor-peer-image_index
+        run: bazel build "$TARGET"
 
-      # --config=release (-c opt): the repository default, fastbuild, compiles
-      # Rust without optimisation, and this is the binary that is shipped.
-      - name: bazel build (linux_arm64, release)
+      - name: Check the index holds amd64 and arm64 images
+        env:
+          TARGET: //src/compute-plane-services/nvstor/crates/nvstor-peer:nvstor-peer-image_index
         run: |
-          bazel build \
-            --config=release \
-            --platforms=//platforms:linux_arm64 \
-            --action_env=RDMA_CORE_PREFIX="$RUNNER_TEMP/rdma-core-arm64/usr" \
-            //src/compute-plane-services/nvstor/crates/nvstor-peer:nvstor-peer
-          file -L bazel-bin/src/compute-plane-services/nvstor/crates/nvstor-peer/nvstor-peer \
-            | grep -q 'ARM aarch64' \
-            || { echo "nvstor-peer is not an arm64 binary" >&2; exit 1; }
+          index="$(bazel cquery --output=files "$TARGET" 2>/dev/null)"
+          python3 - "$index" <<'PY'
+          import json, sys
+          root = sys.argv[1]
+          def blob(digest):
+              with open(f"{root}/blobs/sha256/{digest.split(':', 1)[1]}") as f:
+                  return json.load(f)
+          with open(f"{root}/index.json") as f:
+              top = json.load(f)
+          archs = set()
+          stack = [m["digest"] for m in top["manifests"]]
+          while stack:
+              m = blob(stack.pop())
+              if "manifests" in m:
+                  stack += [x["digest"] for x in m["manifests"]]
+              else:
+                  archs.add(blob(m["config"]["digest"])["architecture"])
+          print("architectures:", sorted(archs))
+          sys.exit(0 if archs == {"amd64", "arm64"} else 1)
+          PY

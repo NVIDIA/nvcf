@@ -124,8 +124,9 @@ version).
   --connections N`, with the meanings in the tables above. Other flags
   may change in a minor version.
 - **`nvstor-peer --version`** prints `nvstor-peer VERSION (commit
-  SHA)`: the crate version and the git commit it was built from. The
-  commit is `NVSTOR_PEER_COMMIT` from the build environment when set
+  SHA)`: the version and the git commit it was built from. The version
+  is the release version for a release build (the Bazel build stamps the
+  release tag's version), else the crate version. The commit is `NVSTOR_PEER_COMMIT` from the build environment when set
   (the cross-build script `deploy/nfs-rdma/build-aarch64.sh` passes the
   checkout's commit, with `-dirty` when it has uncommitted changes), else
   `git rev-parse HEAD`, else `unknown`.
@@ -671,8 +672,8 @@ transfer (exit 1): the GPU copy is all or nothing. The JSON line fills
 `gpu`, `gpu_bytes` and `gpu_ready_seconds`.
 
 The container needs the CUDA driver library: with the NVIDIA container
-runtime, set `NVIDIA_DRIVER_CAPABILITIES=compute,utility` (the image in
-`deploy/nvstor-peer/` does).
+runtime, set `NVIDIA_DRIVER_CAPABILITIES=compute,utility` (the
+`nvstor-peer-image` Bazel target does, see the README).
 
 ## Protocol in brief
 

@@ -194,10 +194,8 @@ cargo build --release --bin nvstor-peer              # node-to-node copy
 If the rdma-core development files are in a custom prefix, set
 `RDMA_CORE_PREFIX` to the directory containing `include` and `lib` during
 the build. Runtime hosts need `libibverbs` and `librdmacm`.
-`scripts/fetch-rdma-core.sh amd64|arm64 DEST` unpacks the `libibverbs`
-files from pinned Ubuntu packages without root; build with
-`RDMA_CORE_PREFIX=DEST/usr`. `rust-toolchain.toml` pins the compiler the
-Bazel build uses, so `rustup` picks it for Cargo too.
+`rust-toolchain.toml` pins the compiler the Bazel build uses, so `rustup`
+picks it for Cargo too.
 
 ### Bazel
 
@@ -210,14 +208,12 @@ bazel build //src/compute-plane-services/nvstor/...
 bazel test //src/compute-plane-services/nvstor/...
 ```
 
-The link needs `libibverbs` for the target architecture: either
-`libibverbs-dev` installed on the build host, or an unpacked tree passed to
-the build script. An arm64 binary cross-builds on an x86_64 host this way:
+Bazel links `libibverbs` from pinned Ubuntu noble packages for the target
+architecture (`bazel/rdma_core.bzl`), so the build host needs no rdma-core and
+an arm64 binary cross-builds on an x86_64 host:
 
 ```bash
-src/compute-plane-services/nvstor/scripts/fetch-rdma-core.sh arm64 /tmp/rdma-arm64
 bazel build --config=release --platforms=//platforms:linux_arm64 \
-  --action_env=RDMA_CORE_PREFIX=/tmp/rdma-arm64/usr \
   //src/compute-plane-services/nvstor/crates/nvstor-peer:nvstor-peer
 ```
 
@@ -229,6 +225,31 @@ the default, which is fine for checking that the code builds and its tests
 pass.
 
 `nvstor-peer --version` reports the nvcf commit the binary was built from.
+
+#### nvstor-peer image
+
+`nvstor-peer-image` is a multi-arch image (amd64 and arm64) on Ubuntu noble:
+nvstor-peer at `/usr/local/bin/nvstor-peer`, built optimised whatever the
+compilation mode, and a layer with `libibverbs`, the verbs providers
+(`libmlx5` among them) and `libnl` from the same pinned packages, listed in
+`/var/lib/dpkg/status.d` for image scanners (apt and dpkg do not read it, so
+an image built on this one must not install rdma-core again). There is no
+`iproute2`: inspect a pod's rails with `kubectl debug` or from the node. It
+runs as root (a fetch
+applies source owners only with `CAP_CHOWN`, `CAP_DAC_OVERRIDE` and
+`CAP_FOWNER`) and sets `NVIDIA_DRIVER_CAPABILITIES=compute,utility` for
+`--gpu`.
+
+```bash
+# both architectures, as an OCI image index
+bazel build //src/compute-plane-services/nvstor/crates/nvstor-peer:nvstor-peer-image_index
+# the host architecture's image into the local Docker
+bazel run //src/compute-plane-services/nvstor/crates/nvstor-peer:nvstor-peer-image_load
+```
+
+For pre-merge testing, the `image-push (manual)` workflow
+(`.github/workflows/image-push-manual.yml`) pushes the `nvstor-peer` image;
+release publishing is configured outside this repository.
 
 ## Testing
 
@@ -314,8 +335,8 @@ max_object_size = 5368709120
 (`deploy/helm/`), CSI manifests (`deploy/csi/`), bare-metal configs
 (`deploy/bare-metal/`), a Grafana dashboard for the NFS server, the
 NFS-over-RDMA deployment example with the `nvstor-peer` fan-out manifest
-([`deploy/nfs-rdma/README.md`](deploy/nfs-rdma/README.md)), and the
-`nvstor-peer` image build (`deploy/nvstor-peer/`).
+([`deploy/nfs-rdma/README.md`](deploy/nfs-rdma/README.md)). The
+`nvstor-peer` image is built with Bazel (see [Bazel](#bazel)).
 
 ## Documentation
 

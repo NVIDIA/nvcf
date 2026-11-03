@@ -13,8 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Embed the git commit this build came from as `NVSTOR_PEER_COMMIT`
-//! (`nvstor-peer --version`, the `--json` line).
+//! Embed the git commit this build came from as `NVSTOR_PEER_COMMIT`, and
+//! the version it reports as `NVSTOR_PEER_VERSION` (`nvstor-peer
+//! --version`, the `--json` line).
+//!
+//! The version is the release version given in `NVSTOR_PEER_RELEASE` when
+//! that is a SemVer version (the Bazel build stamps it from the release
+//! tag; an unreleased build stamps a non-version, `mr-<sha>`), else the
+//! crate version.
 //!
 //! The commit comes from, in order: the `NVSTOR_PEER_COMMIT` environment
 //! variable (a container build, where the repository is mounted without
@@ -44,7 +50,41 @@ fn valid_commit(c: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// A SemVer version without build metadata: MAJOR.MINOR.PATCH, each a
+/// number without leading zeros, optionally followed by `-` and dot-separated
+/// prerelease identifiers of ASCII letters, digits and `-`.
+fn valid_version(v: &str) -> bool {
+    let (core, pre) = match v.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (v, None),
+    };
+    let numbers: Vec<&str> = core.split('.').collect();
+    let number = |n: &&str| {
+        !n.is_empty()
+            && n.bytes().all(|b| b.is_ascii_digit())
+            && (n.len() == 1 || !n.starts_with('0'))
+    };
+    numbers.len() == 3
+        && numbers.iter().all(number)
+        && pre.is_none_or(|p| {
+            p.split('.').all(|id| {
+                !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            })
+        })
+}
+
 fn main() {
+    println!("cargo:rerun-if-env-changed=NVSTOR_PEER_RELEASE");
+    let version = std::env::var("NVSTOR_PEER_RELEASE")
+        .ok()
+        .filter(|v| valid_version(v))
+        // Read when the script runs, not compiled in: Cargo (and the Bazel
+        // build, from Cargo.toml) set the package's CARGO_PKG_VERSION for the
+        // run, while the script binary's own may differ.
+        .or_else(|| std::env::var("CARGO_PKG_VERSION").ok())
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=NVSTOR_PEER_VERSION={version}");
+
     println!("cargo:rerun-if-env-changed=NVSTOR_PEER_COMMIT");
     println!("cargo:rerun-if-env-changed=GIT_DIR");
     let given = std::env::var("NVSTOR_PEER_COMMIT")

@@ -16,28 +16,47 @@ load("@aspect_bazel_lib//lib:expand_template.bzl", "expand_template")
 load("@nvstor_crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script", "cargo_toml_env_vars")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//rules/oci:defs.bzl", "rust_oci_image")
+load("//src/compute-plane-services/nvstor/bazel:opt.bzl", "opt_binary")
 
 package(default_visibility = ["//src/compute-plane-services/nvstor:__subpackages__"])
 
 _NVSTOR = "//src/compute-plane-services/nvstor"
 
+# The test binaries load libibverbs.so.1 at start; the build host or CI image
+# need not have rdma-core, so the pinned runtime libraries are put on
+# LD_LIBRARY_PATH.
+_RDMA_CORE_LIBDIR = _NVSTOR + "/bazel:rdma_core_runtime_libdir"
+
 # CARGO_PKG_* from Cargo.toml (version.workspace = true resolves against the
-# workspace manifest), so `nvstor-peer --version` reports the crate version.
+# workspace manifest): the crate version, which `nvstor-peer --version`
+# reports when the build is not for a release.
 cargo_toml_env_vars(
     name = "cargo_env",
     src = "Cargo.toml",
     workspace = _NVSTOR + ":Cargo.toml",
 )
 
-# The commit `nvstor-peer --version` and `fetch --json` report. build.rs takes
-# NVSTOR_PEER_COMMIT when it is set (the sandbox has no .git to ask); stamped
-# from the workspace status even under --nostamp, as the stargate binary is.
+# The commit and version `nvstor-peer --version` and `fetch --json` report.
+# build.rs takes NVSTOR_PEER_COMMIT when it is set (the sandbox has no .git to
+# ask), and NVSTOR_PEER_RELEASE when it is a SemVer version: a release build
+# sets NVCF_VERSION to the tag's version, which tools/workspace_status.sh
+# reports as STABLE_VERSION (otherwise mr-<sha>, and the crate version is
+# kept). Stamped from the workspace status even under --nostamp, as the
+# stargate binary is.
 expand_template(
     name = "commit_env",
     out = "commit.env",
     stamp = 1,
-    stamp_substitutions = {"{COMMIT}": "{{STABLE_GIT_COMMIT_FULL}}"},
-    template = ["NVSTOR_PEER_COMMIT={COMMIT}"],
+    stamp_substitutions = {
+        "{COMMIT}": "{{STABLE_GIT_COMMIT_FULL}}",
+        "{VERSION}": "{{STABLE_VERSION}}",
+    },
+    template = [
+        "NVSTOR_PEER_COMMIT={COMMIT}",
+        "NVSTOR_PEER_RELEASE={VERSION}",
+    ],
 )
 
 cargo_build_script(
@@ -89,6 +108,8 @@ rust_test(
     size = "medium",
     aliases = aliases(normal_dev = True),
     crate = ":nvstor-peer_lib",
+    data = [_RDMA_CORE_LIBDIR],
+    env = {"LD_LIBRARY_PATH": "$(rootpath %s)" % _RDMA_CORE_LIBDIR},
     proc_macro_deps = all_crate_deps(proc_macro_dev = True),
     deps = [_NVSTOR + "/crates/nvstor-core"] + all_crate_deps(normal_dev = True),
 )
@@ -100,7 +121,9 @@ rust_test(
     srcs = ["tests/fanout_rdma.rs"],
     aliases = aliases(normal_dev = True),
     crate_name = "fanout_rdma",
+    data = [_RDMA_CORE_LIBDIR],
     edition = "2021",
+    env = {"LD_LIBRARY_PATH": "$(rootpath %s)" % _RDMA_CORE_LIBDIR},
     proc_macro_deps = all_crate_deps(proc_macro_dev = True),
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
@@ -111,4 +134,43 @@ rust_test(
         normal = True,
         normal_dev = True,
     ),
+)
+
+# The image's binary: built -c opt whatever the command line says, because
+# nvcf builds fastbuild (no optimisation) by default and the image push
+# workflows do not pass --config=release.
+opt_binary(
+    name = "nvstor-peer-opt",
+    binary = ":nvstor-peer",
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+# Multi-arch image (amd64 + arm64): nvstor-peer at /usr/local/bin/nvstor-peer
+# on Ubuntu noble, which callers need for a shell (`ulimit -l` before exec),
+# with rdma-core's libibverbs, verbs providers and libnl in their own layer
+# (//src/compute-plane-services/nvstor/bazel:rdma_core.bzl). Runs as the
+# image's default user, root: a fetch applies source owners only with
+# CAP_CHOWN, CAP_DAC_OVERRIDE and CAP_FOWNER. The NVIDIA container runtime
+# mounts libcuda for `--gpu` (compute) when the pod requests a GPU.
+rust_oci_image(
+    name = "nvstor-peer-image",
+    base = "@ubuntu_noble",
+    binary = ":nvstor-peer-opt",
+    binary_path = "/usr/local/bin/nvstor-peer",
+    env = {"NVIDIA_DRIVER_CAPABILITIES": "compute,utility"},
+    extra_layers = [_NVSTOR + "/bazel:rdma_core_runtime_layer"],
+    tags = ["nvstor-peer"],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "nvstor-peer-image_entrypoint_test",
+    size = "small",
+    srcs = [_NVSTOR + "/bazel:image_layer_test.sh"],
+    args = [
+        "binary",
+        "$(rootpath :nvstor-peer-image_layer)",
+        "/usr/local/bin/nvstor-peer",
+    ],
+    data = [":nvstor-peer-image_layer"],
 )
