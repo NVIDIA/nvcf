@@ -87,7 +87,7 @@ func NewServer(cfg ServerConfig, handler *Handler) *Server {
 		cfg.WriteTimeout = 10 * time.Second
 	}
 	mux := http.NewServeMux()
-	mux.Handle(cfg.Path, handler)
+	mux.Handle(cfg.Path, countRequests(handler))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

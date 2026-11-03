@@ -4,6 +4,7 @@
 package metrics
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,11 +41,14 @@ const (
 	RestoreRefused  = "refused" // the pod may not restore what it names
 )
 
-// Admission decisions.
+// Admission decisions. AdmitMissed is counted by the agents, not the
+// webhook: a pod of an instance that the webhook never mutated (it failed
+// open, or the pod opts out).
 const (
 	AdmitRestore  = "restore"
 	AdmitFallback = "fallback"
 	AdmitCold     = "cold"
+	AdmitMissed   = "missed"
 )
 
 var (
@@ -134,6 +138,24 @@ var (
 		Help:      "Webhook decisions for GPU pods of captured configurations, and why.",
 	}, []string{"decision", "reason"})
 
+	// WebhookRequests counts the admission requests this agent's webhook
+	// answered, by HTTP status, and WebhookSeconds their time. Against the
+	// API server's own count of its calls, a gap is calls that never
+	// reached an agent.
+	WebhookRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "webhook_requests_total",
+		Help:      "Admission requests this agent's webhook answered, by HTTP status.",
+	}, []string{"code"})
+
+	// WebhookSeconds is the time this agent's webhook took to answer.
+	WebhookSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: namespace,
+		Name:      "webhook_request_seconds",
+		Help:      "Time this agent's webhook took to answer an admission request.",
+		Buckets:   []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+	})
+
 	// BuildInfo is 1 for the agent bundle this agent serves; join on it to
 	// compare releases.
 	BuildInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -147,7 +169,7 @@ var (
 var lifecycleCollectors = []prometheus.Collector{
 	CaptureOutcomes, CapturePhaseSeconds, CaptureBytes,
 	RestoreOutcomes, RestorePhaseSeconds, RestoreFetches, RestoreFetchSeconds,
-	PodReadySeconds, Admissions, BuildInfo,
+	PodReadySeconds, Admissions, WebhookRequests, WebhookSeconds, BuildInfo,
 }
 
 // Ranks buckets an instance size: the label stays bounded for instances of
@@ -268,6 +290,12 @@ func ObservePodReady(method, gpu string, ranks int, d time.Duration) {
 // CountAdmission counts a webhook decision.
 func CountAdmission(decision, reason string) {
 	Admissions.WithLabelValues(decision, reason).Inc()
+}
+
+// ObserveWebhook records an admission request answered with code in d.
+func ObserveWebhook(code int, d time.Duration) {
+	WebhookRequests.WithLabelValues(strconv.Itoa(code)).Inc()
+	WebhookSeconds.Observe(d.Seconds())
 }
 
 // SetBuildInfo marks version as the bundle this agent serves.

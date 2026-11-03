@@ -377,6 +377,13 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		log.WithError(err).Warn("CRIU group capture: cannot list the instance's pods")
 		return true
 	}
+	// A rank the webhook never mutated is never one of the instance's ranks
+	// below: say so once, rather than wait for it as "not ready"
+	// (missed_ranks.go). Its replacement is admitted anew, so the capture
+	// is tried again on a later event.
+	if c.considerMissed(pods.Items, leader, size, log) {
+		return true
+	}
 	// The ranks need not share one configuration: a Grove leader and its
 	// workers come from different templates. Pods of one template must.
 	ranks, err := instanceRanks(pods.Items, leader, size, modelvolume.CacheOrdinalAnnotation, modelvolume.CacheGroupSizeAnnotation, func(p *corev1.Pod) bool {
