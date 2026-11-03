@@ -48,7 +48,7 @@ For a repeatable component or isolated-container setup, use
 From this component, with an appropriate Go toolchain/workspace:
 
 ```sh
-go test ./worker/httpstream
+go test -v ./worker/httpstream
 go test -race -count=10 ./worker/httpstream
 go test ./worker ./service
 go vet ./worker/httpstream ./worker ./service

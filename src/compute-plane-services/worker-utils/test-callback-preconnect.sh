@@ -29,7 +29,7 @@ export GOTOOLCHAIN=local
 go_bin=${NVCF_TEST_GO:-go}
 cd -- "$component"
 "$go_bin" version
-"$go_bin" test -count=1 -p 1 -timeout 5m "${packages[@]}"
+"$go_bin" test -v -count=1 -p 1 -timeout 5m "${packages[@]}"
 "$go_bin" test -race -count=3 -short -timeout 3m ./worker/httpstream
 "$go_bin" vet "${packages[@]}"
 # This is a disposable compile check, not a release artifact. Read-only source
