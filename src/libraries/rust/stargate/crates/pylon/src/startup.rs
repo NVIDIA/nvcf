@@ -250,7 +250,9 @@ fn resolve_startup_health_wait(
         None => (DEFAULT_STARTUP_HEALTH_WAIT, None),
         Some(value) => match parse_go_duration(value) {
             Some(wait) if !wait.is_zero() => (wait, None),
-            _ => (DEFAULT_STARTUP_HEALTH_WAIT, Some(value.to_string())),
+            // NVCA renders an unset WorkerStartupTimeout as "0s".
+            Some(_) => (DEFAULT_STARTUP_HEALTH_WAIT, None),
+            None => (DEFAULT_STARTUP_HEALTH_WAIT, Some(value.to_string())),
         },
     }
 }
@@ -1455,9 +1457,11 @@ mod tests {
         assert_eq!(plan.startup_health_wait, Duration::from_secs(7200));
         assert_eq!(plan.ignored_inference_ready_timeout, None);
 
-        let plan = startup_with_inference_ready_timeout(&[], None);
-        assert_eq!(plan.startup_health_wait, DEFAULT_STARTUP_HEALTH_WAIT);
-        assert_eq!(plan.ignored_inference_ready_timeout, None);
+        for value in [None, Some("0s")] {
+            let plan = startup_with_inference_ready_timeout(&[], value);
+            assert_eq!(plan.startup_health_wait, DEFAULT_STARTUP_HEALTH_WAIT);
+            assert_eq!(plan.ignored_inference_ready_timeout, None);
+        }
     }
 
     #[test]
@@ -1476,7 +1480,7 @@ mod tests {
 
     #[test]
     fn invalid_inference_ready_timeout_falls_back_to_the_default_wait() {
-        for value in ["2 hours", "7200", "0s", "-5m"] {
+        for value in ["2 hours", "7200", "-5m"] {
             let plan = startup_with_inference_ready_timeout(&[], Some(value));
             assert_eq!(
                 plan.startup_health_wait, DEFAULT_STARTUP_HEALTH_WAIT,

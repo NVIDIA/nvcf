@@ -504,10 +504,7 @@ async fn open_engine_stats_response(
             .send() => response,
     };
     let response = match response {
-        Ok(response) => {
-            *connect_failure_reported = false;
-            response
-        }
+        Ok(response) => response,
         Err(error) => {
             if *connect_failure_reported {
                 tracing::debug!(url = config.url, error = %error, "engine stats stream connect failed");
@@ -537,6 +534,7 @@ async fn open_engine_stats_response(
         );
         return Err(StreamReadOutcome::Retry("http_status"));
     }
+    *connect_failure_reported = false;
     Ok(response)
 }
 
@@ -1417,8 +1415,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn connect_failure_warns_again_after_a_successful_connection() {
+    async fn connect_failure_levels_around_one_response(
+        response: &'static [u8],
+    ) -> Vec<tracing::Level> {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
@@ -1439,13 +1438,22 @@ mod tests {
             let mut request = [0_u8; 1024];
             let _ = socket.read(&mut request).await;
             socket
-                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                .write_all(response)
                 .await
                 .expect("response should be written");
         });
 
         let levels = run_until_connect_failures(&base_url, 4).await;
         server.await.expect("server task should finish");
+        levels
+    }
+
+    #[tokio::test]
+    async fn connect_failure_warns_again_after_a_successful_connection() {
+        let levels = connect_failure_levels_around_one_response(
+            b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+        )
+        .await;
         assert_eq!(
             levels[..3],
             [
@@ -1453,6 +1461,21 @@ mod tests {
                 tracing::Level::WARN,
                 tracing::Level::DEBUG
             ],
+            "{levels:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_status_does_not_reset_connect_failure_warning() {
+        let levels = connect_failure_levels_around_one_response(
+            b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+        )
+        .await;
+        assert_eq!(levels[0], tracing::Level::WARN);
+        assert!(
+            levels[1..]
+                .iter()
+                .all(|level| *level == tracing::Level::DEBUG),
             "{levels:?}"
         );
     }
