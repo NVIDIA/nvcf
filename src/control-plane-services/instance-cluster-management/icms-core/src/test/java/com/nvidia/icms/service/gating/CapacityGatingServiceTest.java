@@ -148,6 +148,29 @@ class CapacityGatingServiceTest {
                 .collect(Collectors.toSet());
     }
 
+    private static Set<String> groupClusterIds(ClusterGroups group) {
+        return group.getClusters().stream()
+                .map(ClustersResponse::getId)
+                .collect(Collectors.toSet());
+    }
+
+    /**
+     * Builds a group whose cluster set cannot be mutated, which is the shape other services
+     * actually send. The fixtures above all use {@link LinkedHashSet}, so they cannot catch a
+     * filter that prunes the caller's collection in place.
+     */
+    private static ClusterGroups groupWithImmutableClusters(String groupName,
+                                                            String... clusterIds) {
+        ClusterGroups group = clusterGroup(groupName);
+        group.setClusters(Arrays.stream(clusterIds)
+                                  .map(clusterId -> ClustersResponse.builder()
+                                          .id(clusterId)
+                                          .name(clusterId)
+                                          .build())
+                                  .collect(Collectors.toUnmodifiableSet()));
+        return group;
+    }
+
     private static ClusterGroups clusterGroup(String groupName, String... clusterIds) {
         return ClusterGroups.builder()
                 .id(groupName + "-id")
@@ -451,6 +474,35 @@ class CapacityGatingServiceTest {
         gatingForAllowedCluster().removeGatedClusterGroups(groups, GATED_NCA_ID);
 
         assertEquals(1, groups.size());
+    }
+
+    /**
+     * A GPU-only policy withholds no clusters, so it has no cluster list to apply and must leave
+     * the group's clusters exactly as it found them. Pruning in place failed here even though
+     * nothing matched, because an immutable set refuses the call itself rather than the removal.
+     */
+    @Test
+    void removeGatedClusterGroups_whenClustersAreImmutableAndPolicyGatesOnlyGpus_keepsThemAll() {
+        Set<ClusterGroups> groups = new LinkedHashSet<>(Set.of(
+                groupWithImmutableClusters("group-1", CLUSTER_ALLOWED, CLUSTER_DENIED)));
+
+        gatingForAllowedTypes().removeGatedClusterGroups(groups, GATED_NCA_ID);
+
+        assertEquals(1, groups.size());
+        assertEquals(Set.of(CLUSTER_ALLOWED, CLUSTER_DENIED),
+                     groupClusterIds(groups.iterator().next()));
+    }
+
+    /** The same immutable set, under a policy that does have a cluster to withhold. */
+    @Test
+    void removeGatedClusterGroups_whenClustersAreImmutable_stillFiltersThem() {
+        Set<ClusterGroups> groups = new LinkedHashSet<>(Set.of(
+                groupWithImmutableClusters("group-1", CLUSTER_ALLOWED, CLUSTER_DENIED)));
+
+        gatingForAllowedCluster().removeGatedClusterGroups(groups, GATED_NCA_ID);
+
+        assertEquals(1, groups.size());
+        assertEquals(Set.of(CLUSTER_ALLOWED), groupClusterIds(groups.iterator().next()));
     }
 
     @Test
