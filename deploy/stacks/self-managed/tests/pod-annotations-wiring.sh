@@ -81,6 +81,9 @@ for entry in "${releases[@]}"; do
   values="$work_dir/$release-set.yaml"
   render_values "$release" "$values"
   assert_yaml_value "$values" "$path.\"example.com/owner\"" "$release" "set $release: $key"
+  if [[ "$release" != nats-auth-callout-service ]]; then
+    assert_yaml_value "$values" '.podAnnotations' null "set $release: callout annotations must stay in the callout release"
+  fi
 done
 
 # 3. The callout's token-mode restart annotations merge with the operator's,
