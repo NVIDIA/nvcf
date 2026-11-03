@@ -364,14 +364,11 @@ bazel build //src/clis/nvcf-cli:image_index
 # Load the host-arch image into your local docker daemon.
 bazel run //src/clis/nvcf-cli:image_load
 docker images | grep nvcf-cli
-
-# Push the multi-arch index to the project registry (manual; needs docker login).
-bazel run --stamp //src/clis/nvcf-cli:image_push
 ```
 
-The image push uses `tools/workspace_status.sh` to compute tags. With
-`--stamp` enabled, the index is published with `latest`, the version
-(`$NVCF_VERSION` on release builds, else `mr-<sha>`), and the short commit.
+For source versions and image publication, use the
+[release workflow](docs/dev/github-release-process.md). Local image builds and
+loads do not publish a release.
 
 ### Generate or refresh BUILD files
 
@@ -429,11 +426,11 @@ bazel query 'rdeps(//..., //src/libraries/go/lib/pkg/auth:auth)'
 
 Three layers, in priority order from fastest to slowest:
 
-1. **Local action cache** under `~/.cache/bazel/`. Incremental, per-target.
-2. **Local repository cache** under `~/.cache/bazel/`. External module
+1. Local action cache under `~/.cache/bazel/`. Incremental, per-target.
+2. Local repository cache under `~/.cache/bazel/`. External module
    downloads (Go modules, OCI base images, Zig toolchain). Survives
    `bazel clean`.
-3. **Remote cache**. Enabled by default via `.bazelrc` as a read-only cache;
+3. Remote cache. Enabled by default via `.bazelrc` as a read-only cache;
    CI layers on `--config=remote-write` after probing the cache endpoint.
 
 `bazel clean` purges local build outputs but keeps the repo cache.
@@ -502,14 +499,14 @@ only after their preflight probe confirms that the remote cache is reachable.
 
 ### Lifecycle and ownership
 
-- **Host**: managed by the NVCF team and reviewed on the team's normal
+- Host: managed by the NVCF team and reviewed on the team's normal
   infrastructure cadence.
-- **Provisioning**: managed by the NVCF team through the internal
+- Provisioning: managed by the NVCF team through the internal
   remote-cache automation.
-- **Storage**: starts modest; expansion happens out-of-band as cache
+- Storage: starts modest; expansion happens out-of-band as cache
   size grows. If you observe high cache-miss rates after large ingestion
   windows, check the cache browser for eviction patterns.
-- **Failure mode**: builds with `--config=remote --remote_local_fallback`
+- Failure mode: builds with `--config=remote --remote_local_fallback`
   degrade to local execution on action errors but hard-fail on initial
   Capabilities RPC failure (e.g., backend storage shards down).
   CI guards against this in two layers (see `.bazel-remote-probe` in
@@ -522,7 +519,7 @@ only after their preflight probe confirms that the remote cache is reachable.
      `0` in GitLab project settings to force local-only across all
      Bazel jobs without a code push. Useful when the remote cache is degraded
      in a way the TCP probe can't detect (port open, gRPC wedged).
-- **End of lease**: either renew, migrate to longer-term host, or roll
+- End of lease: either renew, migrate to longer-term host, or roll
   back to local-only caching. The per-service opt-in pattern means
   the rollback footprint is small.
 
@@ -562,24 +559,9 @@ Run this after refreshing `nv-boot-parent` or an onboarded Java service. It
 fails when a standalone Bazel root file, lockfile, workspace file, or migration
 directory is reintroduced under an imported subtree.
 
-The existing internal Bazel jobs include:
-
-- `bazel-smoke`: pulls the image, runs `bazel info release`, then
-  `bazel build --config=remote //src/libraries/go/lib/...
-  //src/clis/nvcf-cli:image_index` and `bazel mod graph`. It does not
-  rebuild `//src/clis/nvcf-cli/...` because the per-CLI child pipeline
-  (`nvcf-cli-ci` -> `go-test`/`go-build`) already covers that against
-  the same remote cache. Adding CLI targets back here just burns
-  bandwidth and runner time without improving signal.
-- `bazel-image-push` (manual): runs `bazel run --stamp --config=remote
-  //src/clis/nvcf-cli:image_push`. With the remote cache warm from the
-  per-CLI build, the image layers come straight out of the remote cache.
-
-Per-service jobs in `tools/ci/nvcf-cli.yml` (`go-test`, `go-build`)
-were rewritten to use Bazel; the legacy `Makefile` was deleted. Downstream
-archive/package/publish/ngc-push stages still consume
-`src/clis/nvcf-cli/build/nvcf-cli-{platform}` files, which the bazel-driven
-`go-build` job now populates by copying out of `bazel-bin`.
+Product release dispatch and producer jobs are separate from build validation.
+See the [release workflow](docs/dev/github-release-process.md) for the source
+tag and GitHub Release handoff.
 
 ## Stamping (release metadata)
 
@@ -623,54 +605,17 @@ lockfiles, `.bazelrc`, `.bazelversion`, downloader config, dependency hub,
 and `bazel-enablement` content. Root-module BUILD adaptations and monorepo
 agent/documentation overlays must be preserved during refreshes.
 
-## Per-service publish cadence
+## Release and publication
 
-Each subtree publishes on its own terms. The umbrella stack release lives
-in `deploy/stacks/self-managed/` and is independent. Before copy-pasting
-the `nvcf-cli` Bazel publish pattern onto a new service, check that
-service's existing `.gitlab-ci.yml` for its current cadence and mirror
-it in the rules of the Bazel-driven publish job:
+Services and charts use their registered path-scoped release lanes. Component
+stacks use explicit maintenance trains. An umbrella release selects all three
+released stacks and qualifies their combination. Local Bazel targets do not
+replace source release automation or artifact publication gates.
 
-| Cadence | Example services | Rule |
-|---|---|---|
-| Tag only | `nvcf-cli` (current Bazel CLI) | `if: '$CI_COMMIT_TAG'` (manual gate optional) |
-| Every merge to main | Several control-plane and invocation-plane services | `if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` |
-| Scheduled or manual | Niche services and tools | `when: manual` or pipeline schedule |
-
-Knock-on choices that follow from the cadence:
-
-- Version derivation (`tools/workspace_status.sh`). The version is
-  `$NVCF_VERSION` when set (release builds pass the clean semver) and
-  `mr-<sha>` otherwise, so every non-release build produces a distinct
-  SHA-style OCI tag without semver implication.
-
-- OCI tag set on push. Tag-driven services typically push
-  `:latest`, `:<semver>`, `:<short-sha>`. Per-merge services usually
-  push `:latest` and `:<short-sha>` only.
-
-- GitLab cache pressure. Per-merge services trigger Bazel on every main
-  commit, so the project-scoped cache (`MODULE.bazel.lock` keyed) sees
-  more churn. The cache strategy still works; expect more frequent
-  cache repopulations after `MODULE.bazel.lock` updates.
-
-- Image push job rules. Reuse the cadence rule at the job level rather
-  than gating via job stage; this keeps the publish stage flexible per
-  service without restructuring the parent pipeline. Example for a
-  per-merge service:
-
-  ```yaml
-  oci-image-push:
-    extends: .bazel-cli
-    stage: publish
-    script:
-      - bazel run --stamp //path/to/service:image_push
-    rules:
-      - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-  ```
-
-Do not unify these into a single helper template across services. The
-cadence is intentionally per-service and is owned by that service's
-maintainers; centralising it would couple unrelated release decisions.
+Use the [release workflow](docs/dev/github-release-process.md) for versions,
+maintenance branches and source releases, and the
+[umbrella workflow](docs/dev/umbrella-releases.md) for candidate assembly and
+promotion. Do not copy retired per-service GitLab publish jobs into this tree.
 
 ## Troubleshooting
 

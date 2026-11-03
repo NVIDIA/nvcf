@@ -349,6 +349,7 @@ func (d *VanityDirector) ServePolling(writer http.ResponseWriter, request *http.
 	request.URL = nvcfUrl
 	request.Host = ""
 	setPollingHeaderIfNotPresent(request, 0)
+	request = request.WithContext(middleware.ContextWithCallKind(request.Context(), middleware.CallKindPoll))
 
 	requestProxy(d.rp, request, nil).ServeHTTP(writer, request)
 }

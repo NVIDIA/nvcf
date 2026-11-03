@@ -53,6 +53,10 @@ spec:
         - name: check-migrations-and-members
           image: "{{ include "openbao.image" (dict "image" .Values.openbao.migrations.image "name" "openbao.migrations.image") }}"
           imagePullPolicy: {{ .Values.openbao.migrations.image.pullPolicy }}
+          {{- with (include "nvcf-openbao.kubectlEnv" .) }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

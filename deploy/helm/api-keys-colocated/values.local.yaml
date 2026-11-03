@@ -17,4 +17,4 @@ apikeys:
   image:
     registry: ""
     repository: ""
-    tag: "1.9.1"
+    tag: "1.10.9"

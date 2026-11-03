@@ -1,0 +1,146 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="961" viewBox="0 0 1400 961" role="img" aria-labelledby="title desc">
+<title id="title">nvstor System Context: Clients, Front Ends, Two Data Planes</title>
+<desc id="desc">Clients reach nvstor-server through five protocol front ends. NFS file content, NBD volumes and the S3-over-RDMA and S3-over-TCP fast paths store bytes in PmStore, one sparse file per inode, volume or object. The S3 HTTP gateway and the native wire protocol store content-addressed chunks through ChunkManager, whose rows live in the RocksDB metadata store. In cluster mode an S3 PUT is replicated to peer nodes after the local write, over RDMA when possible and the TCP RPC otherwise, and its manifest is proposed through Raft. Standalone binaries run without the metadata store.</desc>
+<defs>
+<symbol id="icon-actor" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#2f78c4"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="13" y="14" width="22" height="15" rx="2"/><path d="M24 29v5M17 34h14"/></g></symbol>
+<symbol id="icon-data" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#e07b1f"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 12h11l6 6v18H16z"/><path d="M27 12v6h6M20 24h9M20 29h9"/></g></symbol>
+<symbol id="icon-db" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#e07b1f"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="24" cy="15" rx="10" ry="3.5"/><path d="M14 15v18c0 2 4.5 3.5 10 3.5s10-1.5 10-3.5V15"/><path d="M14 24c0 2 4.5 3.5 10 3.5s10-1.5 10-3.5"/></g></symbol>
+<symbol id="icon-folder" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v16h24V20H24l-3-3z"/></g></symbol>
+<symbol id="icon-guard" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M24 12l10 4v7c0 7-4.5 11-10 13-5.5-2-10-6-10-13v-7z"/><path d="M19.5 24l3 3 6-6"/></g></symbol>
+<symbol id="icon-server" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="13" y="13" width="22" height="9" rx="1.5"/><rect x="13" y="26" width="22" height="9" rx="1.5"/><path d="M17 17.5h2M17 30.5h2M25 17.5h6M25 30.5h6"/></g></symbol>
+<symbol id="icon-service" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#76b900"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M24 12l11 6v12l-11 6-11-6V18z"/><path d="M13 18l11 6 11-6M24 24v12"/></g></symbol>
+<symbol id="icon-third" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#d0453f"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12v7M29 12v7"/><path d="M15 19h18v4a9 9 0 0 1-18 0z"/><path d="M24 32v5"/></g></symbol>
+<marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#000000"/></marker>
+<marker id="arrow-opt" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#999999"/></marker>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#000000}.title{font-size:20px;font-weight:600}.sub{font-size:12px;fill:#333333}.group{fill:#ffffff;stroke:#cccccc;stroke-width:1}.group-nv{fill:#ffffff;stroke:#76b900;stroke-width:1.5}.group-partner{fill:#f4f7f7;stroke:#cccccc;stroke-width:1}.group-label{font-size:12px;font-weight:600}.card{fill:#ffffff;stroke:#cccccc;stroke-width:1}.label{font-size:12px}.small{font-size:10px;fill:#333333}.plabel{font-size:10px;font-weight:500}.path{fill:none;stroke:#000000;stroke-width:1;stroke-linejoin:round}.opt{fill:none;stroke:#999999;stroke-width:1;stroke-dasharray:5 3;stroke-linejoin:round}.callout{fill:#000000}.callout-text{font-size:11px;font-weight:600;fill:#ffffff}.note{font-size:11px;fill:#333333}.note-b{font-size:11px;font-weight:600}</style></defs>
+<rect x="0" y="0" width="1400" height="961" fill="#ffffff"/>
+<text x="40" y="44" class="title">nvstor System Context: Clients, Front Ends, Two Data Planes</text>
+<text x="40" y="64" class="sub">Solid: data path. Dashed: cluster mode only. Ports are nvstor-server defaults (bins/nvstor-server/src/config.rs).</text>
+<rect x="30" y="110" width="250" height="480" rx="10" class="group"/>
+<text x="44" y="132" class="group-label" text-anchor="start">Clients</text>
+<rect id="c-nfs" x="45" y="160" width="220" height="64" rx="8" class="card"/>
+<use href="#icon-third" x="55" y="168" width="48" height="48"/>
+<text x="113" y="189" class="label" data-fit="c-nfs" data-fit-padding="4">Linux NFS client</text>
+<text x="113" y="204" class="small" data-fit="c-nfs" data-fit-padding="4">kernel; kubelet via nvstor-csi</text>
+<rect id="c-nbd" x="45" y="244" width="220" height="64" rx="8" class="card"/>
+<use href="#icon-third" x="55" y="252" width="48" height="48"/>
+<text x="113" y="273" class="label" data-fit="c-nbd" data-fit-padding="4">nbd-client</text>
+<text x="113" y="288" class="small" data-fit="c-nbd" data-fit-padding="4">Linux NBD</text>
+<rect id="c-fast" x="45" y="328" width="220" height="64" rx="8" class="card"/>
+<use href="#icon-actor" x="55" y="336" width="48" height="48"/>
+<text x="113" y="357" class="label" data-fit="c-fast" data-fit-padding="4">Fast-path clients</text>
+<text x="113" y="372" class="small" data-fit="c-fast" data-fit-padding="4">s3_hydrate, S3RdmaClient</text>
+<rect id="c-s3" x="45" y="412" width="220" height="64" rx="8" class="card"/>
+<use href="#icon-third" x="55" y="420" width="48" height="48"/>
+<text x="113" y="441" class="label" data-fit="c-s3" data-fit-padding="4">S3 clients</text>
+<text x="113" y="456" class="small" data-fit="c-s3" data-fit-padding="4">aws CLI, SDKs</text>
+<rect id="c-wire" x="45" y="496" width="220" height="64" rx="8" class="card"/>
+<use href="#icon-actor" x="55" y="504" width="48" height="48"/>
+<text x="113" y="525" class="label" data-fit="c-wire" data-fit-padding="4">Native Rust client</text>
+<text x="113" y="540" class="small" data-fit="c-wire" data-fit-padding="4">nvstor-client</text>
+<rect x="310" y="110" width="820" height="590" rx="10" class="group-nv"/>
+<text x="324" y="132" class="group-label" text-anchor="start">nvstor-server</text>
+<text x="324" y="147" class="small" text-anchor="start">one process per node</text>
+<rect id="s-nfs" x="330" y="160" width="230" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="340" y="168" width="48" height="48"/>
+<text x="398" y="189" class="label" data-fit="s-nfs" data-fit-padding="4">NFS v4.2 server</text>
+<text x="398" y="204" class="small" data-fit="s-nfs" data-fit-padding="4">TCP 2049, RDMA 20049</text>
+<rect id="s-nbd" x="330" y="244" width="230" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="340" y="252" width="48" height="48"/>
+<text x="398" y="273" class="label" data-fit="s-nbd" data-fit-padding="4">NBD server</text>
+<text x="398" y="288" class="small" data-fit="s-nbd" data-fit-padding="4">10809</text>
+<rect id="s-fast" x="330" y="328" width="230" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="340" y="336" width="48" height="48"/>
+<text x="398" y="357" class="label" data-fit="s-fast" data-fit-padding="4">S3-over-RDMA / TCP</text>
+<text x="398" y="372" class="small" data-fit="s-fast" data-fit-padding="4">9877 + rails, 9879</text>
+<rect id="s-s3" x="330" y="412" width="230" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="340" y="420" width="48" height="48"/>
+<text x="398" y="441" class="label" data-fit="s-s3" data-fit-padding="4">S3 HTTP gateway</text>
+<text x="398" y="456" class="small" data-fit="s-s3" data-fit-padding="4">9000, SigV4, IAM, SSE</text>
+<rect id="s-wire" x="330" y="496" width="230" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="340" y="504" width="48" height="48"/>
+<text x="398" y="525" class="label" data-fit="s-wire" data-fit-padding="4">Native wire protocol</text>
+<text x="398" y="540" class="small" data-fit="s-wire" data-fit-padding="4">9100; volumes go to PmStore</text>
+<rect id="d-pm" x="620" y="160" width="230" height="232" rx="8" class="card"/>
+<use href="#icon-data" x="711" y="168" width="48" height="48"/>
+<text x="735" y="232" class="label" text-anchor="middle" data-fit="d-pm" data-fit-padding="4">PmStore</text>
+<text x="735" y="247" class="small" text-anchor="middle" data-fit="d-pm" data-fit-padding="4">one sparse file per inode,</text>
+<text x="735" y="260" class="small" text-anchor="middle" data-fit="d-pm" data-fit-padding="4">volume or object (PmObjectStore)</text>
+<text x="735" y="290" class="small" text-anchor="middle">POSIX or io_uring backend</text>
+<text x="735" y="305" class="small" text-anchor="middle">no chunking, no hashing</text>
+<rect id="d-ca" x="620" y="412" width="230" height="148" rx="8" class="card"/>
+<use href="#icon-data" x="711" y="420" width="48" height="48"/>
+<text x="735" y="484" class="label" text-anchor="middle" data-fit="d-ca" data-fit-padding="4">ChunkManager</text>
+<text x="735" y="499" class="small" text-anchor="middle" data-fit="d-ca" data-fit-padding="4">sha256 chunks, 16 MiB, dedup</text>
+<text x="735" y="512" class="small" text-anchor="middle" data-fit="d-ca" data-fit-padding="4">objects up to 64 KiB inline</text>
+<rect id="d-meta" x="620" y="610" width="230" height="64" rx="8" class="card"/>
+<use href="#icon-db" x="630" y="618" width="48" height="48"/>
+<text x="688" y="639" class="label" data-fit="d-meta" data-fit-padding="4">MetadataStore</text>
+<text x="688" y="654" class="small" data-fit="d-meta" data-fit-padding="4">RocksDB, 10 column families</text>
+<rect id="x-iam" x="900" y="160" width="210" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-guard" x="910" y="168" width="48" height="48"/>
+<text x="968" y="189" class="label" data-fit="x-iam" data-fit-padding="4">IAM</text>
+<text x="968" y="204" class="small" data-fit="x-iam" data-fit-padding="4">users, groups, policies</text>
+<rect id="x-kms" x="900" y="244" width="210" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-guard" x="910" y="252" width="48" height="48"/>
+<text x="968" y="273" class="label" data-fit="x-kms" data-fit-padding="4">KMS</text>
+<text x="968" y="288" class="small" data-fit="x-kms" data-fit-padding="4">envelope keys for SSE</text>
+<rect id="x-place" x="900" y="412" width="210" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="910" y="420" width="48" height="48"/>
+<text x="968" y="441" class="label" data-fit="x-place" data-fit-padding="4">Placement + replication</text>
+<text x="968" y="456" class="small" data-fit="x-place" data-fit-padding="4">jump hash, rack-aware</text>
+<rect id="x-raft" x="900" y="496" width="210" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="910" y="504" width="48" height="48"/>
+<text x="968" y="525" class="label" data-fit="x-raft" data-fit-padding="4">Raft</text>
+<text x="968" y="540" class="small" data-fit="x-raft" data-fit-padding="4">9102, metadata log</text>
+<rect x="1170" y="390" width="200" height="190" rx="10" class="group"/>
+<text x="1184" y="412" class="group-label" text-anchor="start">Other nodes</text>
+<text x="1184" y="427" class="small" text-anchor="start">cluster mode</text>
+<rect id="p-peer" x="1190" y="440" width="160" height="112" rx="8" class="card"/>
+<use href="#icon-server" x="1246" y="448" width="48" height="48"/>
+<text x="1270" y="512" class="label" text-anchor="middle" data-fit="p-peer" data-fit-padding="4">nvstor-server</text>
+<text x="1270" y="527" class="small" text-anchor="middle" data-fit="p-peer" data-fit-padding="4">REPLICATE, RPC 9878</text>
+<text x="1270" y="540" class="small" text-anchor="middle" data-fit="p-peer" data-fit-padding="4">Raft 9102</text>
+<path class="path" d="M265 192 L330 192" marker-end="url(#arrow)"/>
+<path class="path" d="M265 276 L330 276" marker-end="url(#arrow)"/>
+<path class="path" d="M265 360 L330 360" marker-end="url(#arrow)"/>
+<path class="path" d="M265 444 L330 444" marker-end="url(#arrow)"/>
+<path class="path" d="M265 528 L330 528" marker-end="url(#arrow)"/>
+<path class="path" d="M560 192 L620 192" marker-end="url(#arrow)"/>
+<path class="path" d="M560 276 L620 276" marker-end="url(#arrow)"/>
+<path class="path" d="M560 360 L620 360" marker-end="url(#arrow)"/>
+<path class="path" d="M560 444 L620 444" marker-end="url(#arrow)"/>
+<path class="path" d="M560 528 L620 528" marker-end="url(#arrow)"/>
+<path class="path" d="M735 560 L735 610" marker-end="url(#arrow)"/>
+<path class="opt" d="M850 444 L900 444" marker-end="url(#arrow-opt)"/>
+<path class="opt" d="M1110 444 L1190 444" marker-end="url(#arrow-opt)"/>
+<path class="opt" d="M1110 528 L1190 528" marker-end="url(#arrow-opt)"/>
+<rect x="30" y="730" width="1340" height="124" rx="10" class="group"/>
+<text x="44" y="752" class="group-label" text-anchor="start">Standalone binaries</text>
+<text x="44" y="767" class="small" text-anchor="start">no metadata store; each serves or copies a plain local directory</text>
+<rect id="b-export" x="50" y="780" width="300" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-folder" x="60" y="788" width="48" height="48"/>
+<text x="118" y="809" class="label" data-fit="b-export" data-fit-padding="4">nvstor-nfs-export</text>
+<text x="118" y="824" class="small" data-fit="b-export" data-fit-padding="4">NFS TCP + RDMA export of a directory</text>
+<rect id="b-peer" x="380" y="780" width="300" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-folder" x="390" y="788" width="48" height="48"/>
+<text x="448" y="809" class="label" data-fit="b-peer" data-fit-padding="4">nvstor-peer</text>
+<text x="448" y="824" class="small" data-fit="b-peer" data-fit-padding="4">serve / fetch a directory over RDMA</text>
+<rect id="b-fuse" x="710" y="780" width="300" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-folder" x="720" y="788" width="48" height="48"/>
+<text x="778" y="809" class="label" data-fit="b-fuse" data-fit-padding="4">nvstor-mount + nvstor-fs-serve</text>
+<text x="778" y="824" class="small" data-fit="b-fuse" data-fit-padding="4">FUSE, read-only, TCP</text>
+<rect id="b-csi" x="1040" y="780" width="310" height="64" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="1050" y="788" width="48" height="48"/>
+<text x="1108" y="809" class="label" data-fit="b-csi" data-fit-padding="4">nvstor-csi</text>
+<text x="1108" y="824" class="small" data-fit="b-csi" data-fit-padding="4">CSI v1; provisions NFS subdirectories</text>
+<circle cx="39" cy="890" r="9" class="callout"/><text x="39" y="894" class="callout-text" text-anchor="middle">A</text>
+<text x="56" y="894" class="note" text-anchor="start">NFS file content, NBD volumes and the RDMA/TCP object fast paths write in place in PmStore. NFS inodes are kept in RocksDB; PmObjectStore keys need no metadata (the file id is a hash of the key).</text>
+<circle cx="39" cy="911" r="9" class="callout"/><text x="39" y="915" class="callout-text" text-anchor="middle">B</text>
+<text x="56" y="915" class="note" text-anchor="start">In cluster mode an S3 PUT writes locally, then writes to every replica in parallel, waits for all of them, needs at least min_write_nodes to succeed, and proposes the manifest through Raft. Replication uses the S3-over-</text>
+<text x="56" y="930" class="note" text-anchor="start">RDMA REPLICATE verb when the object fits a pool slot, otherwise (or if REPLICATE fails) the TCP RPC on rdma_port + 1.</text>
+</svg>

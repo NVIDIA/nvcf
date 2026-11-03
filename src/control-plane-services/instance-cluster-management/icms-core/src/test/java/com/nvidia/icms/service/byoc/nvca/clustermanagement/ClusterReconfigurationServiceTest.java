@@ -46,7 +46,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anySet;
 import org.mockito.Mock;
 
 import static org.mockito.ArgumentMatchers.eq;
@@ -160,7 +159,7 @@ class ClusterReconfigurationServiceTest {
                               ClusterCreationService.AUTHORIZED_NCA_ID_REGEX),
                 exception.getBody().getDetail());
         verify(nvcaConfigurationProperties).isAuthorizedNcaIdRegexValidationEnabled();
-        verify(nvcaClusterRepository, never()).updateClusterConfiguration(any(), anySet());
+        verify(nvcaClusterRepository, never()).updateClusterConfiguration(any());
     }
 
     @Test
@@ -191,7 +190,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         ClusterEntity expectedClusterEntity = getDummyClusterEntity();
         expectedClusterEntity.setRegistrationTime(clusterEntity.getRegistrationTime());
@@ -208,8 +207,7 @@ class ClusterReconfigurationServiceTest {
 
         // Assert
         verify(clusterRepository).getClusterInfoByClusterId(clusterEntity.getClusterId(), false);
-        verify(nvcaClusterRepository).updateClusterConfiguration(expectedClusterEntity,
-                                                                 clusterEntity.getAuthorizedNcaIds());
+        verify(nvcaClusterRepository).updateClusterConfiguration(expectedClusterEntity);
         verify(nvcaConfigurationProperties).isAuthorizedNcaIdRegexValidationEnabled();
         verifyNoConfigSave();
     }
@@ -242,7 +240,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(clusterUpdateRequest,
@@ -252,7 +250,7 @@ class ClusterReconfigurationServiceTest {
 
         // Assert
         verify(clusterRepository).getClusterInfoByClusterId(clusterEntity.getClusterId(), false);
-        verify(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        verify(nvcaClusterRepository).updateClusterConfiguration(any());
         verify(auditService).sendAuditEventForClusterEntity(any(), any(), any());
         verify(telemetryEventClient).triggerEvent(anyList());
         verify(nvcaConfigurationProperties).isAuthorizedNcaIdRegexValidationEnabled();
@@ -272,7 +270,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(updateRequest, clusterEntity.getNcaId(),
@@ -299,7 +297,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(updateRequest, clusterEntity.getNcaId(),
@@ -345,7 +343,7 @@ class ClusterReconfigurationServiceTest {
                 .thenReturn(Optional.of(clusterEntity));
         when(instanceServiceHelper.getActiveInstanceEntitiesFromZone(clusterEntity.getClusterId()))
                 .thenReturn(Collections.emptyList());
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(clusterUpdateRequest,
@@ -356,7 +354,7 @@ class ClusterReconfigurationServiceTest {
         // Assert
         verify(clusterRepository).getClusterInfoByClusterId(clusterEntity.getClusterId(), false);
         verify(instanceServiceHelper).getActiveInstanceEntitiesFromZone(clusterEntity.getClusterId());
-        verify(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        verify(nvcaClusterRepository).updateClusterConfiguration(any());
         verify(auditService).sendAuditEventForClusterEntity(any(), any(), any());
         verify(telemetryEventClient).triggerEvent(anyList());
         verifyNoConfigSave();
@@ -653,7 +651,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(clusterUpdateRequest,
@@ -663,7 +661,7 @@ class ClusterReconfigurationServiceTest {
 
         // Assert
         verify(clusterRepository).getClusterInfoByClusterId(clusterEntity.getClusterId(), false);
-        verify(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        verify(nvcaClusterRepository).updateClusterConfiguration(any());
         verify(auditService).sendAuditEventForClusterEntity(any(), any(), any());
         verify(telemetryEventClient).triggerEvent(anyList());
         verifyNoConfigSave();
@@ -682,7 +680,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(clusterUpdateRequest,
@@ -692,7 +690,7 @@ class ClusterReconfigurationServiceTest {
 
         // Assert
         verify(clusterRepository).getClusterInfoByClusterId(clusterEntity.getClusterId(), false);
-        verify(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        verify(nvcaClusterRepository).updateClusterConfiguration(any());
         verify(auditService).sendAuditEventForClusterEntity(any(), any(), any());
         verify(telemetryEventClient).triggerEvent(anyList());
         verifyNoConfigSave();
@@ -711,7 +709,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(clusterUpdateRequest,
@@ -722,7 +720,7 @@ class ClusterReconfigurationServiceTest {
         // Assert - Capture the ClusterEntity and verify clusterSource is lowercase
         org.mockito.ArgumentCaptor<ClusterEntity> clusterEntityCaptor = 
                 org.mockito.ArgumentCaptor.forClass(ClusterEntity.class);
-        verify(nvcaClusterRepository).updateClusterConfiguration(clusterEntityCaptor.capture(), anySet());
+        verify(nvcaClusterRepository).updateClusterConfiguration(clusterEntityCaptor.capture());
         
         ClusterEntity capturedEntity = clusterEntityCaptor.getValue();
         assertEquals("ngc-managed", capturedEntity.getClusterSource());
@@ -828,7 +826,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(
@@ -839,7 +837,7 @@ class ClusterReconfigurationServiceTest {
 
         // Assert
         verify(clusterRepository).getClusterInfoByClusterId(clusterEntity.getClusterId(), false);
-        verify(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        verify(nvcaClusterRepository).updateClusterConfiguration(any());
         verify(auditService).sendAuditEventForClusterEntity(any(), any(), any());
         verify(telemetryEventClient).triggerEvent(anyList());
         verifyNoConfigSave();
@@ -876,7 +874,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(
@@ -887,7 +885,7 @@ class ClusterReconfigurationServiceTest {
 
         // Assert
         verify(clusterRepository).getClusterInfoByClusterId(clusterEntity.getClusterId(), false);
-        verify(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        verify(nvcaClusterRepository).updateClusterConfiguration(any());
         verify(auditService).sendAuditEventForClusterEntity(any(), any(), any());
         verify(telemetryEventClient).triggerEvent(anyList());
         verify(nvcaClusterConfigurationRepository, org.mockito.Mockito.never())
@@ -926,7 +924,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(
@@ -937,7 +935,7 @@ class ClusterReconfigurationServiceTest {
 
         // Assert
         verify(clusterRepository).getClusterInfoByClusterId(clusterEntity.getClusterId(), false);
-        verify(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        verify(nvcaClusterRepository).updateClusterConfiguration(any());
         verify(auditService).sendAuditEventForClusterEntity(any(), any(), any());
         verify(telemetryEventClient).triggerEvent(anyList());
         verify(nvcaClusterConfigurationRepository, org.mockito.Mockito.never())
@@ -1247,7 +1245,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Mock existing configuration in DB
         ClusterConfigurationByClusterIdEntity existingConfig =
@@ -1283,7 +1281,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Mock no existing configuration in DB
         when(nvcaClusterConfigurationRepository.findByClusterId(clusterEntity.getClusterId()))
@@ -1312,7 +1310,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(clusterUpdateRequest,
@@ -1323,7 +1321,7 @@ class ClusterReconfigurationServiceTest {
         // Assert - Capture the ClusterEntity and verify authorizedNcaIds is empty set
         org.mockito.ArgumentCaptor<ClusterEntity> clusterEntityCaptor = 
                 org.mockito.ArgumentCaptor.forClass(ClusterEntity.class);
-        verify(nvcaClusterRepository).updateClusterConfiguration(clusterEntityCaptor.capture(), anySet());
+        verify(nvcaClusterRepository).updateClusterConfiguration(clusterEntityCaptor.capture());
         
         ClusterEntity capturedEntity = clusterEntityCaptor.getValue();
         Assertions.assertNotNull(capturedEntity.getAuthorizedNcaIds());
@@ -1343,7 +1341,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(clusterUpdateRequest,
@@ -1354,7 +1352,7 @@ class ClusterReconfigurationServiceTest {
         // Assert - Capture the ClusterEntity and verify attributes is empty set
         org.mockito.ArgumentCaptor<ClusterEntity> clusterEntityCaptor = 
                 org.mockito.ArgumentCaptor.forClass(ClusterEntity.class);
-        verify(nvcaClusterRepository).updateClusterConfiguration(clusterEntityCaptor.capture(), anySet());
+        verify(nvcaClusterRepository).updateClusterConfiguration(clusterEntityCaptor.capture());
         
         ClusterEntity capturedEntity = clusterEntityCaptor.getValue();
         Assertions.assertNotNull(capturedEntity.getAttributes());
@@ -1374,7 +1372,7 @@ class ClusterReconfigurationServiceTest {
 
         when(clusterRepository.getClusterInfoByClusterId(clusterEntity.getClusterId(), false))
                 .thenReturn(Optional.of(clusterEntity));
-        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any(), anySet());
+        doNothing().when(nvcaClusterRepository).updateClusterConfiguration(any());
 
         // Act
         clusterReconfigurationService.reconfigureCluster(clusterUpdateRequest,
@@ -1385,7 +1383,7 @@ class ClusterReconfigurationServiceTest {
         // Assert - Capture the ClusterEntity passed to updateClusterConfiguration and verify region is lowercase
         org.mockito.ArgumentCaptor<ClusterEntity> clusterEntityCaptor = 
                 org.mockito.ArgumentCaptor.forClass(ClusterEntity.class);
-        verify(nvcaClusterRepository).updateClusterConfiguration(clusterEntityCaptor.capture(), anySet());
+        verify(nvcaClusterRepository).updateClusterConfiguration(clusterEntityCaptor.capture());
         
         ClusterEntity capturedEntity = clusterEntityCaptor.getValue();
         assertEquals("us-east-1", capturedEntity.getRegion());

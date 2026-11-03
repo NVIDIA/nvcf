@@ -228,8 +228,7 @@ public class ClusterReconfigurationService {
         // Save advanced BYOC cluster configuration maps if provided
         updateClusterConfigurationMap(existingClusterEntity.getClusterId(), clusterUpdateRequest);
 
-        nvcaClusterRepository.updateClusterConfiguration(newClusterEntity,
-                                                         entityBefore.getAuthorizedNcaIds());
+        nvcaClusterRepository.updateClusterConfiguration(newClusterEntity);
 
         // Send audit and telemetry events
         sendClusterReconfigurationAuditAndTelemetryEvent(auditProps,

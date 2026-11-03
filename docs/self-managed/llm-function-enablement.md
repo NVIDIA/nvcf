@@ -874,9 +874,9 @@ Use this order for an upgrade from plaintext transport:
 
 4. Schedule a maintenance window and undeploy the existing LLM functions.
    The router does not support a mixed plaintext and TLS transition.
-5. Apply the remaining control-plane stack. The managed router hook prepares
-   the OpenBao signing path before cert-manager reconciles the request-router
-   `Certificate`.
+5. Apply the remaining control-plane stack. The OpenBao migration from the
+   dependency stage has already prepared the signing path that cert-manager
+   uses for the request-router `Certificate`.
 6. Wait for the issuer and the `Certificate` named by
    `addons.llm.pki.secretName` to become ready. The default name is
    `stargate-quic-tls`.

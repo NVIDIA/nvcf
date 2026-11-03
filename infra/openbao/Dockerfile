@@ -18,7 +18,7 @@ ARG BAO_SOURCE_SHA256=471a2c2e3a156a833704f43335ed5e66476a90719ce692b80c3f541e34
 ARG BAO_RUNTIME_IMAGE=openbao/openbao:2.6.3@sha256:a60afafda36337abe833c4a63894bf1095098f29abea4091e7e555a33dd52889
 # Preserve the published bytes, including their build metadata. Rebuilding the
 # old source would not preserve the digest stored in existing catalogs.
-ARG JWT_LEGACY_IMAGE=nvcr.io/nvidia/nvcf/nvcf-openbao:2.6.3-nv-1.3.6@sha256:5a42082907c9b59de31d80a293c06e4faaa47b1dd364f6473b63088eb7af6284
+ARG JWT_LEGACY_IMAGE=nvcr.io/nvidia/nvcf/nvcf-openbao:2.6.3-nv-1.3.7@sha256:0400a19179569c7c718106fccf6b296d169dcf5c6df0f17272f7d2453785337e
 ARG JWT_INCLUDE_LEGACY=true
 
 FROM ${JWT_LEGACY_IMAGE} AS legacy-plugin
@@ -79,7 +79,7 @@ USER root
 # applied even when the upstream image predates them.
 # hadolint ignore=DL3018
 RUN apk upgrade --no-cache && \
-    apk add --no-cache curl jq bash && \
+    apk add --no-cache 'brotli-libs>=1.2.1-r0' curl jq bash && \
     mkdir -p /openbao/plugins
 
 COPY --from=bao-build --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao

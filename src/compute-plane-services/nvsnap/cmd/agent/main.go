@@ -21,7 +21,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -45,6 +47,24 @@ func main() {
 	// still works. New code paths use "capture-write".
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "placeholder-files":
+			if err := placeholderFilesExec(); err != nil {
+				fmt.Fprintln(os.Stderr, "placeholder-files:", err)
+				os.Exit(1)
+			}
+			return
+		case "pidns-dump-exec":
+			if err := pidNSDumpExec(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "pidns-dump-exec:", err)
+				os.Exit(1)
+			}
+			return
+		case "pidns-restore-exec":
+			if err := pidNSRestoreExec(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "pidns-restore-exec:", err)
+				os.Exit(1)
+			}
+			return
 		case "capture-write", "capture-copy":
 			log := logrus.New()
 			log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
@@ -65,7 +85,12 @@ func main() {
 
 	var config agent.Config
 
+	flag.StringVar(&config.TenantLabel, "tenant-label", "",
+		"Namespace label naming the tenant a namespace belongs to, such as an account id the platform stamps; captures and caches are shared only within one tenant (empty = each namespace is its own tenant)")
+
 	flag.StringVar(&config.NodeName, "node-name", os.Getenv("NODE_NAME"), "Node name")
+	kubeQPS := flag.Float64("kube-client-qps", float64(agent.KubeClientQPS), "Requests per second for each Kubernetes client the agent builds")
+	flag.IntVar(&agent.KubeClientBurst, "kube-client-burst", agent.KubeClientBurst, "Request burst for each Kubernetes client the agent builds")
 	// Phase 5d.1: catalog URL + node IP for peer-fanout cascade.
 	flag.StringVar(&config.CatalogURL, "catalog-url", os.Getenv("NVSNAP_CATALOG_URL"),
 		"NvSnap-server base URL for peer-fanout catalog lookups (e.g. http://nvsnap-server.nvsnap-system.svc.cluster.local:8080). Empty disables cross-node cascade.")
@@ -73,8 +98,6 @@ func main() {
 		"This agent's reachable address from peers (downward API status.hostIP when hostNetwork:true). Empty disables peer registration.")
 	flag.StringVar(&config.AdvertiseIP, "advertise-ip", os.Getenv("POD_IP"),
 		"Address peers dial to reach this agent (downward API status.podIP; equals the node IP under hostNetwork). Falls back to --node-ip when empty. See GH #490.")
-	flag.StringVar(&config.BlobStoreURL, "blob-store-url", os.Getenv("NVSNAP_BLOB_STORE_URL"),
-		"NvSnap-blobstore base URL for Phase 5d.2 durable backstop (e.g. http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000). Empty disables capture-side upload AND cascade tier-3 fallback.")
 	// Cross-cluster replication (docs/design/cross-cluster-replication.md).
 	flag.StringVar(&config.Replication.ObjectStore.Provider, "replication-provider", os.Getenv("NVSNAP_REPLICATION_PROVIDER"),
 		"Object-store provider for cross-cluster replication: gcs | s3. Empty (default) disables replication. Replication is enabled only when both --replication-provider and --replication-home-bucket are set.")
@@ -148,27 +171,42 @@ func main() {
 	flag.StringVar(&config.Webhook.Path, "webhook-path", "/mutate",
 		"HTTP path the in-agent webhook listens on")
 
-	// BYOC auto-inject: image refs the webhook stamps into the four
-	// init containers when a pod has nvsnap.io/auto-inject: "true". All
-	// four must be set for the auto-inject branch to fire; otherwise
-	// the webhook fails open (admits the pod unchanged).
-	flag.StringVar(&config.Webhook.AutoInject.Uvloop, "webhook-image-uvloop", "", //nolint:staticcheck // deprecated field intentionally bound for flag back-compat
-		"Image ref for the auto-inject get-uvloop init container (multi-python uvloop wheels)")
-	flag.StringVar(&config.Webhook.AutoInject.LibUV, "webhook-image-libuv", "",
-		"Image ref for the auto-inject get-libuv init container")
-	flag.StringVar(&config.Webhook.AutoInject.LibZMQ, "webhook-image-libzmq", "",
-		"Image ref for the auto-inject get-libzmq init container")
-	flag.StringVar(&config.Webhook.AutoInject.Agent, "webhook-image-agent", "",
-		"Image ref for the auto-inject get-nvsnap init container (nvsnap-agent — must match running agent)")
-
 	// nvsnap#147: nvsnap-l2-wait init container ref. When set, the
 	// webhook prepends a nvsnap-l2-wait init container on restore pods
 	// that polls nvsnap-server until the L2 PVC promote is ready.
 	// Empty disables the inject (back-compat: PVC mount still works
 	// once the rox PVC binds; kubelet may stall in
 	// ContainerCreating in the meantime).
+	// One-downloader-per-hash admission election for chart-shaped model
+	// workloads (docs/design/helm-chart-cache-election.md). Needs L2.
+	flag.BoolVar(&config.Election.Enabled, "election", false,
+		"Elect one capture leader per cache hash at admission and gate the other model workers until the capture is promoted (needs L2)")
+	flag.DurationVar(&config.Election.Deadline, "election-deadline", 0,
+		"Bound on a leader's cold start plus capture; past it nvsnap-server evicts the gated followers for re-election (default 60m)")
+
+	// Write-once model volume for Helm functions
+	// (docs/design/helm-shared-model-volume.md). Needs L2.
+	flag.BoolVar(&config.ModelVolume.Enabled, "model-volume", false,
+		"Download each model once per cluster into a shared volume and attach it to every other pod that names it (needs L2)")
+	flag.StringVar(&config.ModelVolume.HostRoot, "model-volume-host-root", "",
+		"Host directory (mounted Bidirectional into the agent at the same path) where completed model volumes are bound for readers on block storage (default /var/lib/containerd/nvsnap-models)")
+	flag.DurationVar(&config.ModelVolume.ReapInterval, "model-volume-reap-interval", 0,
+		"How often the model volume reaper removes read-only PVs without a claim and abandoned primaries (0 = 10m)")
+	flag.DurationVar(&config.ModelVolume.Retention, "model-volume-retention", 0,
+		"How long a complete model or cache volume is kept after its last use before the reaper frees its storage (0 = keep forever)")
+	flag.DurationVar(&config.ModelVolume.WaitDeadline, "model-volume-wait-deadline", 0,
+		"How long a reader waits for the writer's download before downloading itself (default 1h)")
+	flag.StringVar(&config.ModelVolume.TenantLabel, "model-volume-tenant-label", "",
+		"Namespace label naming the tenant a namespace belongs to; model volumes are shared only between namespaces of one tenant (empty = --tenant-label)")
+	flag.BoolVar(&config.ModelVolume.RefreshDisabled, "cache-set-refresh-disabled", false,
+		"Turn off cache set refresh: warm ranks that gained files no longer propose a new generation of their set")
+	flag.DurationVar(&config.ModelVolume.RefreshCooldown, "cache-set-refresh-cooldown", 0,
+		"Least time between generations of one cache set (default 6h)")
+
 	flag.StringVar(&config.Webhook.L2WaitImage, "webhook-l2-wait-image", "",
 		"Image ref for the nvsnap-l2-wait init container injected onto restore pods (nvsnap#147)")
+	flag.StringVar(&config.Webhook.CacheSalt, "webhook-cache-salt", "",
+		"Operator salt folded into every cache identity; bump it to start fresh captures cluster-wide (empty: identities unchanged)")
 
 	// nvsnap#147 second half: on-host directory where the
 	// nvsnap-agent DaemonSet stages the restore bundle. Function pods
@@ -176,6 +214,21 @@ func main() {
 	// default "/var/lib/nvsnap/bundle" (matches the DaemonSet's
 	// nvsnap-bundle-stage initContainer destination). Tests / dev
 	// overrides only — production should keep the default.
+	flag.StringVar(&config.Webhook.AgentPlacement, "webhook-agent-placement", "",
+		"The agent DaemonSet's nodeSelector and nodeAffinity as JSON; pods nvsnap creates without a GPU request run within it.")
+
+	flag.StringVar(&config.Webhook.DynamoNamespace, "webhook-dynamo-namespace", "",
+		"Fixed Dynamo namespace (DYN_NAMESPACE, DYN_NAMESPACE_PREFIX) for Dynamo components whose etcd and NATS are their instance's own; empty keeps the operator's.")
+
+	flag.Int64Var(&config.CRIUGhostLimit, "criu-ghost-limit", 0,
+		"Largest deleted file, in bytes, a CRIU dump saves (criu --ghost-limit), such as an engine's CPU KV-cache tier in /dev/shm; 0 is 1 TiB.")
+
+	flag.IntVar(&config.Webhook.DynamoLeaseTTL, "webhook-dynamo-lease-ttl", 0,
+		"etcd lease TTL in seconds (ETCD_LEASE_TTL) for the Dynamo components that get the fixed Dynamo namespace, unless they set one; it must outlast a capture's freeze. 0 keeps Dynamo's default.")
+
+	flag.IntVar(&config.Webhook.CaptureLivenessBudget, "webhook-capture-liveness-budget", 0,
+		"Seconds of silence every liveness probe is widened to tolerate (its failureThreshold raised), so a capture's freeze does not get the pod restarted; 0 leaves probes as they are.")
+
 	flag.StringVar(&config.Webhook.HostBundleRoot, "webhook-host-bundle-root", "",
 		"On-host path the nvsnap-agent DaemonSet stages the restore bundle into (default /var/lib/nvsnap/bundle). Function pods mount {root}/nvsnap + {root}/nvsnap-lib via hostPath.")
 
@@ -215,6 +268,13 @@ func main() {
 		"imagePullSecret name for the mount-holder pod (created by operators in the workload namespace). Defaults to nvsnap-agent-pull; set to '-' to disable.")
 
 	flag.Parse()
+	agent.KubeClientQPS = float32(*kubeQPS)
+	if raw := os.Getenv("NVSNAP_CRIU_CAPTURE_OPT_IN"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &config.CaptureOptIn); err != nil {
+			fmt.Fprintln(os.Stderr, "NVSNAP_CRIU_CAPTURE_OPT_IN is not a valid opt-in list; ignoring it:", err)
+			config.CaptureOptIn = nil
+		}
+	}
 
 	// Fail startup on a bad mode rather than falling back to disabled: an
 	// operator who typo'd --auth-mode should hear about it now, not discover

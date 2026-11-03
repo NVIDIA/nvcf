@@ -62,6 +62,7 @@ spec:
             - -c
             - /scripts/deploy.sh {{ include "nvcf-openbao.namespace" . }} {{ $serverFullname }} helm
           env:
+            {{- include "nvcf-openbao.kubectlEnv" . | nindent 12 }}
             - name: JWT_PLUGIN_LIFECYCLE_MODE
               value: {{ include "nvcf-openbao.jwtLifecycleMode" . | quote }}
             - name: AUTO_UNSEAL

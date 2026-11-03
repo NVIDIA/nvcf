@@ -20,11 +20,6 @@ bazel test //... --flaky_test_attempts=3
 # Build the multi-arch OCI image index (linux/amd64 + linux/arm64).
 bazel build //cmd/nvcf-nats-auth-callout-service:image_index
 
-# Push to the legacy NVCF self-managed NGC registry
-# (nvcr.io/0544956542906249/nvcf-nats-auth-callout-service). See
-# nvidia-internal/destinations.bzl for the destination catalog.
-bazel run //nvidia-internal:image_push_nvcf_internal
-
 # Regenerate per-package BUILD files after Go source changes.
 bazel run //:gazelle
 
@@ -32,27 +27,29 @@ bazel run //:gazelle
 bazel mod tidy
 ```
 
+Use the [release workflow](../../../docs/dev/github-release-process.md) for source versions and image publication.
+
 ## Key Features
 
 ### Plugin-Based Authentication
 
 The service supports multiple authentication plugins that can be configured per account:
 
-- **NKey Plugin**: Cryptographic NKey signature verification
-- **OAuth plugin**: OAuth2 JWT Bearer token authentication with JWKS validation
-- **Webhook Plugin**: Delegation to external HTTP authentication services
+- NKey Plugin: Cryptographic NKey signature verification
+- OAuth plugin: OAuth2 JWT Bearer token authentication with JWKS validation
+- Webhook Plugin: Delegation to external HTTP authentication services
 
 ### Observability
 
-- **Distributed Tracing**: OpenTelemetry and Lightstep support
-- **Metrics Collection**: Prometheus metrics with optional ServiceMonitor
-- **Health Checks**: Built-in health and readiness endpoints
+- Distributed Tracing: OpenTelemetry and Lightstep support
+- Metrics Collection: Prometheus metrics with optional ServiceMonitor
+- Health Checks: Built-in health and readiness endpoints
 
 ### Configuration
 
-- **Flexible Configuration**: Environment variables, CLI flags, and YAML config
-- **Secrets Management**: Vault agent integration for secure credential handling
-- **Container Ready**: Docker and Kubernetes deployment support
+- Flexible Configuration: Environment variables, CLI flags, and YAML config
+- Secrets Management: Vault agent integration for secure credential handling
+- Container Ready: Docker and Kubernetes deployment support
 
 ## Quick Start
 
@@ -135,10 +132,10 @@ The application includes build-time version injection:
 
 Version information includes:
 
-- **Version**: Git tag/commit or custom version
-- **Git Commit**: Full commit hash
-- **Build Date**: When the binary was built
-- **Go Version**: Go compiler version used
+- Version: Git tag/commit or custom version
+- Git Commit: Full commit hash
+- Build Date: When the binary was built
+- Go Version: Go compiler version used
 
 ## Local Development
 
@@ -177,10 +174,10 @@ make dev-swagger            # Generate Swagger documentation
 
 DevSpace is recommended because it provides:
 
-- **Zero Setup**: No need to install Air, linting tools, or configure external services
-- **Consistency**: Exact same environment as production and other developers
-- **Complete Stack**: Observability tools pre-configured
-- **Multiple Environments**: Easy switching between basic, tracing, metrics, and observability profiles
+- Zero Setup: No need to install Air, linting tools, or configure external services
+- Consistency: Exact same environment as production and other developers
+- Complete Stack: Observability tools pre-configured
+- Multiple Environments: Easy switching between basic, tracing, metrics, and observability profiles
 
 ```bash
 # Instead of complex local setup, just run:
@@ -312,11 +309,11 @@ make clean-coverage
 
 ### Test Coverage
 
-- **Overall**: Comprehensive test coverage across all packages
-- **Configuration**: Tests for all configuration methods and precedence
-- **Tracing**: 98.7% coverage with tests for auto-detection, endpoints, compression, headers
-- **Router**: Integration tests with tracing middleware
-- **CLI**: Command validation and flag binding tests
+- Overall: Comprehensive test coverage across all packages
+- Configuration: Tests for all configuration methods and precedence
+- Tracing: 98.7% coverage with tests for auto-detection, endpoints, compression, headers
+- Router: Integration tests with tracing middleware
+- CLI: Command validation and flag binding tests
 
 ### Running Specific Tests
 
@@ -333,7 +330,7 @@ go test ./internal/tracing/ -run TestAutoDetectRuntimeAttributes -v
 
 ## Configuration
 
-**📖 For comprehensive configuration documentation, see [Configuration Guide](docs/CONFIGURATION.md).**
+For comprehensive configuration documentation, see [Configuration Guide](docs/CONFIGURATION.md).
 
 ### Quick Configuration
 
@@ -359,11 +356,11 @@ make build && ./nvcf-nats-auth-callout-service server --config my-config.yaml --
 
 The service supports configuration via:
 
-- **CLI Flags**: `--port 8080 --service-name my-service --config config.yaml --secrets-file secrets.json`
-- **Environment Variables**: `NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT=8080 NVCF_NATS_AUTH_CALLOUT_SERVICE_SECRETS_FILE_PATH=secrets.json`
-- **Config Files**: YAML configuration files
-- **Secrets Files**: JSON secrets files for sensitive configuration
-- **Embedded Defaults**: Built-in configuration
+- CLI Flags: `--port 8080 --service-name my-service --config config.yaml --secrets-file secrets.json`
+- Environment Variables: `NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT=8080 NVCF_NATS_AUTH_CALLOUT_SERVICE_SECRETS_FILE_PATH=secrets.json`
+- Config Files: YAML configuration files
+- Secrets Files: JSON secrets files for sensitive configuration
+- Embedded Defaults: Built-in configuration
 
 Common environment variables:
 
@@ -402,9 +399,9 @@ devspace dev
 
 Install Make:
 
-- **Ubuntu/Debian**: `sudo apt-get install make`
-- **macOS**: `brew install make` or install Xcode command line tools
-- **Windows**: Use WSL or install Make for Windows
+- Ubuntu/Debian: `sudo apt-get install make`
+- macOS: `brew install make` or install Xcode command line tools
+- Windows: Use WSL or install Make for Windows
 
 ### Performance Issues
 
@@ -492,8 +489,8 @@ For example, `service.nkey_seed` maps to `SERVICE_NKEY__SEED`.
 
 Access interactive API documentation:
 
-- **Local**: `http://localhost:8080/swagger/index.html`
-- **DevSpace**: `http://nvcf-nats-auth-callout-service.127-0-0-1.nip.io:8080/swagger/index.html`
+- Local: `http://localhost:8080/swagger/index.html`
+- DevSpace: `http://nvcf-nats-auth-callout-service.127-0-0-1.nip.io:8080/swagger/index.html`
 
 ### Generate Documentation
 
@@ -518,12 +515,12 @@ swag init -g cmd/nvcf-nats-auth-callout-service/main.go -o api/
 
 ## Documentation
 
-- **[AGENTS.md](AGENTS.md)** - Comprehensive development guide for AI coding agents
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Contribution guidelines and development workflow
-- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** - Code of conduct for contributors
-- **[SECURITY.md](SECURITY.md)** - Security policy and vulnerability reporting
-- **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)** - Detailed configuration documentation
-- **[SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md)** - Architecture and design documentation
+- [AGENTS.md](AGENTS.md) - Comprehensive development guide for AI coding agents
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines and development workflow
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) - Code of conduct for contributors
+- [SECURITY.md](SECURITY.md) - Security policy and vulnerability reporting
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) - Detailed configuration documentation
+- [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) - Architecture and design documentation
 
 ## Requirements
 

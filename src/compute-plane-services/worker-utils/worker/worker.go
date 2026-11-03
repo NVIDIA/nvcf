@@ -43,6 +43,8 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/httpstream"
 	utilsMetrics "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/metrics"
@@ -552,17 +554,27 @@ func (w *NVCFWorker) workSession(ctx context.Context) error {
 			return nil
 		}
 
-		connectedRegion := *w.nvcfClient.ConnectedRegions.Load()
-		globalNatsConsumer, err := consumer.NewNatsConsumer(ctx, w.nvcfClient.JetStream, func(ctx context.Context, region string) error {
-			_, err := w.nvcfClient.Client.ProvisionRegionalWorker(ctx, &pb.ProvisionWorkerRequest{
-				InstanceId:        w.config.InstanceId,
-				FunctionId:        w.config.FunctionId,
-				FunctionVersionId: w.config.FunctionVersionId,
-				RegionToProvision: region,
-			}, auth.GrpcTokenFromSource(w.nvcfClient.NvcfTokenProvider))
-			return err
-		}, w.config.FunctionVersionId, connectedRegion.Primary, connectedRegion.Secondaries, w.config.MaxRequestConcurrency)
+		// stop retrying setup when the worker starts shutting down
+		setupCtx, cancelSetup := context.WithCancel(ctx)
+		stopSetupAfterFunc := context.AfterFunc(w.shutdownCtx, cancelSetup)
+		globalNatsConsumer, err := newNatsConsumerWithRetry(setupCtx, natsConsumerSetupTimeout, func() (*consumer.GlobalNatsConsumer, error) {
+			connectedRegion := *w.nvcfClient.ConnectedRegions.Load()
+			return consumer.NewNatsConsumer(setupCtx, w.nvcfClient.JetStream, func(ctx context.Context, region string) error {
+				_, err := w.nvcfClient.Client.ProvisionRegionalWorker(ctx, &pb.ProvisionWorkerRequest{
+					InstanceId:        w.config.InstanceId,
+					FunctionId:        w.config.FunctionId,
+					FunctionVersionId: w.config.FunctionVersionId,
+					RegionToProvision: region,
+				}, auth.GrpcTokenFromSource(w.nvcfClient.NvcfTokenProvider))
+				return err
+			}, w.config.FunctionVersionId, connectedRegion.Primary, connectedRegion.Secondaries, w.config.MaxRequestConcurrency)
+		}, zap.String("function_id", w.config.FunctionId), zap.String("nca_id", w.config.NcaId))
+		stopSetupAfterFunc()
+		cancelSetup()
 		if err != nil {
+			if ctx.Err() != nil || w.shutdownCtx.Err() != nil {
+				return nil
+			}
 			return types.NewInternalError(err)
 		}
 		w.nvcfClient.CurrentNatsConsumer.Store(globalNatsConsumer)
@@ -630,6 +642,50 @@ func (w *NVCFWorker) workSession(ctx context.Context) error {
 
 		zap.L().Debug("finished processing work stream")
 	}
+}
+
+// natsConsumerSetupTimeout bounds how long the worker waits for NATS to come
+// back before giving up on consumer setup and exiting. It covers a rolling
+// restart of the NATS cluster, where a member can be unreachable for tens of
+// seconds, and roughly matches how long the NATS client keeps reconnecting.
+const natsConsumerSetupTimeout = 2 * time.Minute
+
+// newNatsConsumerWithRetry retries consumer setup until it succeeds, ctx ends,
+// maxElapsed passes, or setup fails with an error that retrying cannot fix.
+// Without it, a NATS disconnect longer than the consumer lookup's own short
+// retry window exits the worker process.
+func newNatsConsumerWithRetry(ctx context.Context, maxElapsed time.Duration, create func() (*consumer.GlobalNatsConsumer, error), logFields ...zap.Field) (*consumer.GlobalNatsConsumer, error) {
+	// 4s +/- 25% jitter keeps every wait at or under 5s
+	b := backoff.NewExponentialBackOff(
+		backoff.WithMaxInterval(4*time.Second),
+		backoff.WithRandomizationFactor(0.25),
+		backoff.WithMaxElapsedTime(maxElapsed),
+	)
+	attempt := func() (*consumer.GlobalNatsConsumer, error) {
+		c, err := create()
+		if err != nil && isPermanentSetupError(err) {
+			return nil, backoff.Permanent(err)
+		}
+		return c, err
+	}
+	return backoff.RetryNotifyWithData(attempt, backoff.WithContext(b, ctx), func(err error, next time.Duration) {
+		fields := append([]zap.Field{zap.Error(err), zap.Duration("retryIn", next)}, logFields...)
+		zap.L().Warn("failed to set up nats consumer, retrying", fields...)
+	})
+}
+
+// isPermanentSetupError reports whether worker provisioning rejected the
+// request itself, so waiting for NATS to come back will not help.
+func isPermanentSetupError(err error) bool {
+	s, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch s.Code() {
+	case codes.Unauthenticated, codes.PermissionDenied, codes.InvalidArgument:
+		return true
+	}
+	return false
 }
 
 // Shutdown triggers a graceful shutdown of the worker -- This is only used by tests

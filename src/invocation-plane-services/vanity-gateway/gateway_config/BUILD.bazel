@@ -2,10 +2,17 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "gateway_config",
-    srcs = ["gateway_config.go"],
+    srcs = [
+        "gateway_config.go",
+        "model_info.go",
+    ],
     importpath = "ai-api-gateway-service/gateway_config",
     visibility = ["//visibility:public"],
-    deps = ["//src/invocation-plane-services/vanity-gateway/internal/reloadableconfig"],
+    deps = [
+        "//src/invocation-plane-services/vanity-gateway/internal/reloadableconfig",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+        "@io_k8s_sigs_yaml//:yaml",
+    ],
 )
 
 alias(
@@ -16,7 +23,11 @@ alias(
 
 go_test(
     name = "gateway_config_test",
-    srcs = ["gateway_config_test.go"],
+    srcs = [
+        "gateway_config_test.go",
+        "model_info_test.go",
+    ],
+    data = ["//src/invocation-plane-services/vanity-gateway:model_info_testdata"],
     embed = [":gateway_config"],
     deps = [
         "@com_github_stretchr_testify//assert",

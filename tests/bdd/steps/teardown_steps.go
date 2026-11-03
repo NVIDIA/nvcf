@@ -40,6 +40,8 @@ func registerTeardownSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I send an? "([A-Z]+)" request to "([^"]*)" at scenario teardown expecting status (\d+)$`, sc.iSendHTTPRequestAtTeardown)
 	ctx.Step(`^the function selected by NVCF CLI is undeployed at scenario teardown$`, sc.theSelectedFunctionIsUndeployedAtTeardown)
 	ctx.Step(`^the function selected by NVCF CLI is deleted at scenario teardown$`, sc.theSelectedFunctionIsDeletedAtTeardown)
+	ctx.Step(`^function "([^"]*)" version "([^"]*)" is undeployed at scenario teardown$`, sc.theFunctionIsUndeployedAtTeardown)
+	ctx.Step(`^function "([^"]*)" version "([^"]*)" is deleted at scenario teardown$`, sc.theFunctionIsDeletedAtTeardown)
 }
 
 // addTeardown queues cleanup for the end of the current scenario.
@@ -135,4 +137,45 @@ func (sc *ScenarioContext) runTeardown(ctx context.Context) error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// theFunctionIsUndeployedAtTeardown queues an undeploy of one named function
+// version, for scenarios that create more than one function. The IDs are
+// resolved when the step runs, and a function with no deployment counts as
+// done, so it can be registered before the deploy step.
+func (sc *ScenarioContext) theFunctionIsUndeployedAtTeardown(functionID, versionID string) error {
+	id, version, err := namedFunctionVersion(functionID, versionID)
+	if err != nil {
+		return err
+	}
+	return sc.addSelectedFunctionTeardown(
+		"undeploy function "+id,
+		[]string{"function", "delete", "--deployment-only", "--function-id", id, "--version-id", version},
+		functionDeploymentNotFound,
+		func() bool { return false },
+	)
+}
+
+// theFunctionIsDeletedAtTeardown queues a delete of one named function
+// version. Register it before that version's undeploy step so it runs after
+// the undeploy. Any failure fails the scenario.
+func (sc *ScenarioContext) theFunctionIsDeletedAtTeardown(functionID, versionID string) error {
+	id, version, err := namedFunctionVersion(functionID, versionID)
+	if err != nil {
+		return err
+	}
+	return sc.addSelectedFunctionTeardown(
+		"delete function "+id,
+		[]string{"function", "delete", "--function-id", id, "--version-id", version},
+		"",
+		func() bool { return false },
+	)
+}
+
+func namedFunctionVersion(functionID, versionID string) (string, string, error) {
+	id, version := strings.TrimSpace(dsl.Interpolate(functionID)), strings.TrimSpace(dsl.Interpolate(versionID))
+	if id == "" || version == "" {
+		return "", "", fmt.Errorf("function ID %q and version ID %q must both be non-empty", functionID, versionID)
+	}
+	return id, version, nil
 }

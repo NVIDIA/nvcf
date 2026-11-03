@@ -10,6 +10,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/httpstream",
     visibility = ["//visibility:public"],
     deps = [
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//ca",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//tracing",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
@@ -23,9 +24,11 @@ go_test(
     srcs = [
         "coverage_test.go",
         "request_stream_test.go",
+        "tls_test.go",
     ],
     embed = [":httpstream"],
     deps = [
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//ca",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
         "@com_github_samber_lo//:lo",
         "@com_github_stretchr_testify//assert",

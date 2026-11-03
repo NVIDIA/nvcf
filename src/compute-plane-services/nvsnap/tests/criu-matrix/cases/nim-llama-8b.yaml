@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# NIM Llama 3.1 8B: the image's own start script, run as the image's user.
+kind: Deployment
+launch: exec
+engine: command
+command: /opt/nim/start_server.sh
+image: nvcr.io/nim/meta/llama-3.1-8b-instruct:2.0.5
+healthPath: /v1/health/ready
+function:
+  inferenceUrl: /v1/chat/completions
+  healthUri: /v1/health/ready
+  secrets: [NGC_API_KEY]

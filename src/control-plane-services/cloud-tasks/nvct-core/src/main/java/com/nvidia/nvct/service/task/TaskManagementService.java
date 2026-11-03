@@ -55,6 +55,7 @@ import com.nvidia.nvct.service.registry.RegistryArtifactService;
 import com.nvidia.nvct.service.result.ResultService;
 import com.nvidia.nvct.service.reval.RevalClient;
 import com.nvidia.nvct.service.task.TaskService.TasksSliceContext;
+import com.nvidia.nvct.service.telemetry.TelemetryAvailability;
 import com.nvidia.nvct.service.telemetry.TelemetryProviderValidator;
 import com.nvidia.nvct.service.telemetry.dto.TelemetryDto;
 import com.nvidia.nvct.service.telemetry.dto.TelemetryTypeEnum;
@@ -171,6 +172,7 @@ public class TaskManagementService {
     private final JsonMapper jsonMapper;
     private final RevalClient revalClient;
     private final RegistryArtifactService registryArtifactService;
+    private final TelemetryAvailability telemetryAvailability;
 
     @SuppressWarnings("checkstyle:VariableDeclarationUsageDistance")
     public TaskDto createAndLaunchTask(
@@ -583,6 +585,8 @@ public class TaskManagementService {
         if (telemetriesDto == null) {
             return;
         }
+
+        telemetryAvailability.requireEnabled();
 
         // Invalidate cache for the specified account to fetch any new telemetries that may
         // be defined before the Task is created.

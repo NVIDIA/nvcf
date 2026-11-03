@@ -9,6 +9,7 @@ trap 'rm -rf "$test_root"' EXIT
 cp -R "$chart_source" "$test_root/helm"
 helm dependency build "$test_root/helm" >/dev/null
 values="$repo_root/tools/ci/helm-validate-values/openbao.yaml"
+helm lint "$test_root/helm" -f "$values" >/dev/null
 render() {
     helm template openbao "$test_root/helm" -f "$values" "$@"
 }
@@ -124,4 +125,64 @@ tag=$(yq -r '.appVersion' "$chart_source/Chart.yaml")
 upgrade="$repo_root/deploy/helm/openbao/upgrade/values-upgrades.yaml"
 test "$(yq -r '.openbao.server.image.tag' "$upgrade")" = "$tag"
 test "$(yq -r '.openbao.injector.agentImage.tag' "$upgrade")" = "$tag"
+
+# Packaging must keep the pinned image tags and kubectl selector independent
+# of package metadata. The versioned preflight uses the migrations image too.
+helm package "$test_root/helm" --version 99.0.0 --app-version 99.0.0 \
+    -d "$test_root" >/dev/null
+package="$test_root/$(yq -r '.name' "$chart_source/Chart.yaml")-99.0.0.tgz"
+for minor in '' 1.36 1.37; do
+    helm_args=(template openbao "$package" -f "$values" --is-upgrade
+        --set openbao.jwtPluginLifecycle.mode=versioned)
+    if [[ -n $minor ]]; then
+        helm_args+=(--set-string "openbao.migrations.kubectlMinor=$minor")
+    fi
+    helm "${helm_args[@]}" > "$test_root/packaged.yaml"
+    for hook in initialize-cluster migrations; do
+        container="select(.kind == \"Job\" and .metadata.name == \"openbao-server-$hook\") | .spec.template.spec.containers[0]"
+        test "$(yq -r "$container | .image" "$test_root/packaged.yaml")" = "$migrations_image"
+        test "$(yq -r "$container | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "$test_root/packaged.yaml")" = "$minor"
+        if [[ -n $minor ]]; then
+            test "$(yq -r "$container | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value | tag" "$test_root/packaged.yaml")" = '!!str'
+        fi
+    done
+    preflight='select(.kind == "Job" and .metadata.name == "openbao-server-jwt-lifecycle-preflight") | .spec.template.spec.initContainers[] | select(.name == "check-migrations-and-members")'
+    test "$(yq -r "$preflight | .image" "$test_root/packaged.yaml")" = "$migrations_image"
+    test "$(yq -r "$preflight | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "$test_root/packaged.yaml")" = "$minor"
+    if [[ -n $minor ]]; then
+        test "$(yq -r "$preflight | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value | tag" "$test_root/packaged.yaml")" = '!!str'
+    fi
+    test "$(yq -r 'select(.kind == "StatefulSet") | .spec.template.spec.containers[] | select(.name == "openbao") | .image' "$test_root/packaged.yaml")" = "$server_image"
+done
+
+helm template openbao "$package" -f "$values" --is-upgrade \
+    --set openbao.jwtPluginLifecycle.mode=versioned \
+    --set-string openbao.migrations.kubectlMinor=1.36 \
+    --set openbao.migrations.image.registry=mirror.example.com \
+    --set openbao.migrations.image.repository=custom/migrations \
+    --set openbao.migrations.image.tag=override > "$test_root/override.yaml"
+for hook in initialize-cluster migrations; do
+    test "$(yq -r "select(.kind == \"Job\" and .metadata.name == \"openbao-server-$hook\") | .spec.template.spec.containers[0].image" "$test_root/override.yaml")" = mirror.example.com/custom/migrations:override
+done
+test "$(yq -r "$preflight | .image" "$test_root/override.yaml")" = mirror.example.com/custom/migrations:override
+
+for invalid in 1.35 1.38 false; do
+    if render --set-string "openbao.migrations.kubectlMinor=$invalid" \
+        > "$test_root/invalid.log" 2>&1; then
+        echo "Unsupported kubectl minor $invalid was accepted" >&2
+        exit 1
+    fi
+    grep -Fq 'openbao.migrations.kubectlMinor must be empty, 1.36, or 1.37' "$test_root/invalid.log"
+done
+
+legacy_env='openbao.migrations.env=[{"name":"NVCF_KUBECTL_MINOR","value":"1.36"}]'
+render --set-json "$legacy_env" > "$test_root/legacy-client.yaml"
+test "$(yq -r 'select(.kind == "Job" and .metadata.name == "openbao-server-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_KUBECTL_MINOR") | .value' "$test_root/legacy-client.yaml")" = 1.36
+if render --set-json "$legacy_env" \
+    --set-string openbao.migrations.kubectlMinor=1.37 \
+    > "$test_root/conflict.log" 2>&1; then
+    echo 'Conflicting kubectl selector controls were accepted' >&2
+    exit 1
+fi
+grep -Fq 'set openbao.migrations.kubectlMinor or NVCF_KUBECTL_MINOR in openbao.migrations.env, not both' "$test_root/conflict.log"
 echo 'OpenBao declarative JWT chart checks passed'

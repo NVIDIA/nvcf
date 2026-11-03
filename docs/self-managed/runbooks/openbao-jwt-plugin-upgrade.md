@@ -4,10 +4,12 @@ JWT signing mounts store plugin selection in OpenBao storage. Changing a
 Kubernetes image does not change that selection. This procedure introduces
 versioned entries without rewriting the existing unversioned catalog digest.
 Use a published, qualified bridge server image and its matching chart and
-migrations image. Do not substitute a pre-bridge image during rollback.
+migrations image. Upgrade deployments on the `2.6.3-nv-1.3.6` image to the
+published `2.6.3-nv-1.3.7` patch first. Do not substitute a pre-bridge image
+during rollback.
 
 The bridge packages the exact plugin from the digest-pinned public
-`2.6.3-nv-1.3.6` image as both the original command and the explicit old
+`2.6.3-nv-1.3.7` image as both the original command and the explicit old
 version. It builds the target from repository source. Catalog identities are
 recorded in `/openbao/jwt-plugin-versions.env`, independently of the server
 version. If your stored unversioned digest differs, stop. Your bridge must

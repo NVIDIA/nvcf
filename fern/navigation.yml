@@ -77,6 +77,9 @@ navigation:
     - page: CLI
       path: ../docs/overview/cli.md
       slug: cli
+    - page: Event Ledger
+      path: ../docs/overview/event-ledger.md
+      slug: event-ledger
     - page: Task Creation
       path: ../docs/overview/task-creation.md
       slug: task-creation
@@ -211,6 +214,9 @@ navigation:
     - page: Gateway Routing
       path: ../docs/self-managed/gateway-routing.md
       slug: gateway-routing
+    - page: Event Ledger
+      path: ../docs/self-managed/event-ledger.md
+      slug: event-ledger
     - page: Third-Party Registries
       path: ../docs/self-managed/third-party-registries.md
       slug: third-party-registries

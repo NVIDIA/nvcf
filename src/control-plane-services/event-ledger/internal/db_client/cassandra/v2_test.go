@@ -52,9 +52,9 @@ func TestUpsertFilteredStatsV3KeepsLatestEvent(t *testing.T) {
 	latestTimestamp := createdAt.Add(2 * time.Minute)
 	staleTimestamp := createdAt.Add(time.Minute)
 
-	require.NoError(t, handler.UpsertFilteredStatsV3(ctx, "ns-latest", "ctx-1", "pod.pending", createdAt))
-	require.NoError(t, handler.UpsertFilteredStatsV3(ctx, "ns-latest", "ctx-1", "pod.ready", latestTimestamp))
-	require.NoError(t, handler.UpsertFilteredStatsV3(ctx, "ns-latest", "ctx-1", "pod.starting", staleTimestamp))
+	require.NoError(t, handler.UpsertFilteredStatsV3(ctx, "ns-latest", "ctx-1", "pod.pending", createdAt, "", ""))
+	require.NoError(t, handler.UpsertFilteredStatsV3(ctx, "ns-latest", "ctx-1", "pod.ready", latestTimestamp, "", ""))
+	require.NoError(t, handler.UpsertFilteredStatsV3(ctx, "ns-latest", "ctx-1", "pod.starting", staleTimestamp, "", ""))
 
 	var eventName string
 	var storedTimestamp time.Time

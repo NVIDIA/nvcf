@@ -23,6 +23,10 @@ import (
 	"testing"
 
 	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 func TestStartRootfsCapture_DisabledIsNoop(t *testing.T) {
@@ -59,5 +63,30 @@ func TestStartRootfsCapture_EnabledFailsWithoutKubeConfig(t *testing.T) {
 	msg := strings.ToLower(err.Error())
 	if !strings.Contains(msg, "kube") && !strings.Contains(msg, "cluster") && !strings.Contains(msg, "config") {
 		t.Fatalf("expected a kube client construction failure, got something else: %v", err)
+	}
+}
+
+// The capture identity folds in the operator's cache salt and the tenant,
+// and every caller gets the same composer: a capture the watcher files
+// without an election stamp lands under the hash the webhook looks up.
+func TestHashComposer(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Image: "vllm/vllm-openai:v1", Args: []string{"serve", "m"}}}},
+	}
+	hash := func(a *Agent) string { return checkpointstore.ComputeHash(a.hashComposer().Compose(pod, 0)) }
+	plain := &Agent{}
+	salted := &Agent{config: Config{Webhook: WebhookConfig{CacheSalt: "s1"}}}
+	if hash(plain) == hash(salted) {
+		t.Error("the cache salt does not change the capture identity")
+	}
+	if hash(salted) != hash(&Agent{config: Config{Webhook: WebhookConfig{CacheSalt: "s1"}}}) {
+		t.Error("one configuration composes two identities")
+	}
+	if got := plain.hashComposer().CUDADriverMajor; got != 580 {
+		t.Errorf("driver major %d without configuration, want 580", got)
+	}
+	if got := plain.hashComposer().Compose(pod, 0).Tenant; got != "namespace:ns" {
+		t.Errorf("tenant %q without a tenant label", got)
 	}
 }

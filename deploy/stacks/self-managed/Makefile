@@ -14,7 +14,10 @@ test:
 	@tests/gateway-routes-hostname-policy-wiring.sh
 	@tests/gateway-routes-default-ownership.sh
 	@tests/grpc-proxy-nats-endpoint.sh
+	@tests/nats-image-overrides.sh
+	@tests/cert-manager-image-overrides.sh
 	@tests/llm-pki-openbao-migration.sh
+	@tests/openbao-injector-image-overrides.sh
 	@tests/service-pki-wiring.sh
 	@tests/nonroot-llm-migrations.sh
 	@tests/api-keys-startup-probe.sh
@@ -26,6 +29,7 @@ test:
 	@tests/pdb-value-wiring.sh
 	@tests/invocation-env-wiring.sh
 	@tests/invocation-tracing-baggage.sh
+	@tests/java-tracing-env-wiring.sh
 	@tests/image-override-wiring.sh
 	@tests/sidecar-registry-wiring.sh
 	@tests/api-env-wiring.sh

@@ -99,6 +99,7 @@ spec:
               readOnly: true
             {{- end }}
           env:
+            {{- include "nvcf-openbao.kubectlEnv" . | nindent 12 }}
             - name: JWT_PLUGIN_LIFECYCLE_MODE
               value: {{ include "nvcf-openbao.jwtLifecycleMode" . | quote }}
             {{- if $versioned }}

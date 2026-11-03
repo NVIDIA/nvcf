@@ -1,6 +1,6 @@
 module github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260807010315-d791d3c11262

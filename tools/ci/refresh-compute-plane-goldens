@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Check the compute-plane golden fixtures, or render them again on a bump
+# branch and commit them.
+#
+#   refresh-compute-plane-goldens check [<render-command>...]
+#   refresh-compute-plane-goldens needed <base-ref>
+#   refresh-compute-plane-goldens commit <base-ref> [<render-command>...]
+#
+# The compute-plane stack keeps what it renders for its local test environment
+# under deploy/stacks/nvcf-compute-plane/testdata/golden, and its golden check
+# fails when a pin under the stack moves and those files do not. The
+# compute-plane goldens workflow runs check. The chart version bump and stack
+# pin bump workflows run needed and commit after they commit a bump.
+#
+# check renders the stack afresh, by running
+#
+#   make -C deploy/stacks/nvcf-compute-plane render-local DEV_MODE=1
+#
+# or <render-command>, and compares the result with the fixtures through the
+# stack's tests/verify-golden.sh, the comparison its test-local target ends
+# with. It exits 1, naming the command that renders them again, when they
+# differ.
+#
+# needed prints true when HEAD changes anything under the stack, apart from
+# the fixtures, that <base-ref> does not, and false otherwise. The render
+# reads nothing outside the stack (`make dist` copies only the stack), so a
+# change anywhere else cannot change its output.
+#
+# commit does nothing when the render is not needed. Otherwise it runs
+#
+#   make -C deploy/stacks/nvcf-compute-plane generate-golden DEV_MODE=1
+#
+# or <render-command>, and commits any change to the fixtures as a commit of
+# its own. No change, no commit. A failed render restores the fixtures,
+# commits nothing, and exits 1.
+#
+# That commit changes only the fixtures. The workflows pass the fixture
+# directory to prepare-stack-pin-branch as --derived, so the next run drops it
+# rather than replaying it, and renders the fixtures again for whatever the
+# branch then pins. They are never carried forward stale.
+#
+# Both renders take helm and helmfile from PATH and pull the charts the stack
+# pins, so the caller logs in to their registries first.
+
+set -euo pipefail
+
+stack=deploy/stacks/nvcf-compute-plane
+golden="${stack}/testdata/golden"
+# The paths the stack's Makefile renders to and keeps its fixtures in.
+rendered="${stack}/dist/out"
+fixtures="${golden}/local"
+
+usage() {
+  sed -n '5,10p' "$0" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+
+cd "$(git rev-parse --show-toplevel)"
+
+check_base() {
+  git rev-parse --quiet --verify "$1^{commit}" >/dev/null || {
+    echo "refresh-compute-plane-goldens: unknown base ref: $1" >&2
+    exit 2
+  }
+}
+
+needed() {
+  local base=$1
+  if git diff --quiet "${base}" HEAD -- "${stack}" ":(exclude)${golden}"; then
+    echo false
+  else
+    echo true
+  fi
+}
+
+restore_fixtures() {
+  git checkout --quiet HEAD -- "${golden}" 2>/dev/null || true
+}
+
+commit() {
+  local base=$1
+  shift
+  local render=("$@")
+  if [ "${#render[@]}" -eq 0 ]; then
+    render=(make -C "${stack}" generate-golden DEV_MODE=1)
+  fi
+
+  # Only the render's own edits may be committed.
+  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    echo "refusing to render ${golden}: the work tree has uncommitted changes" >&2
+    git status --short --untracked-files=no >&2
+    exit 1
+  fi
+
+  if [ "$(needed "${base}")" = false ]; then
+    echo "nothing under ${stack} differs from ${base}; the goldens stay as they are"
+    return
+  fi
+
+  echo "rendering ${golden}: ${render[*]}"
+  # stdin from /dev/null: the stack's version checks prompt on a terminal.
+  if ! "${render[@]}" </dev/null; then
+    restore_fixtures
+    echo "error: ${render[*]} failed; ${golden} was not refreshed" >&2
+    exit 1
+  fi
+
+  local stray
+  stray="$(git status --porcelain --untracked-files=no -- . ":(exclude)${golden}")"
+  if [ -n "${stray}" ]; then
+    restore_fixtures
+    {
+      echo "error: the render changed tracked files outside ${golden}:"
+      echo "${stray}"
+    } >&2
+    exit 1
+  fi
+
+  git add --all -- "${golden}"
+  if git diff --cached --quiet; then
+    echo "${golden} already matches what this branch pins"
+    return
+  fi
+  git --no-pager diff --cached --stat -- "${golden}" | tail -n 1
+  git commit --quiet \
+    -m "test(compute-plane): refresh goldens for the pins on this branch" \
+    -m "Rendered by tools/ci/refresh-compute-plane-goldens after the bump. The next bump run drops this commit and renders the fixtures again."
+  echo "committed $(git log -1 --format='%h %s')"
+}
+
+check() {
+  local render=("$@")
+  if [ "${#render[@]}" -eq 0 ]; then
+    render=(make -C "${stack}" render-local DEV_MODE=1)
+  fi
+
+  echo "rendering ${rendered}: ${render[*]}"
+  if ! "${render[@]}" </dev/null; then
+    echo "error: ${render[*]} failed; ${fixtures} was not checked" >&2
+    exit 1
+  fi
+  if ! "${stack}/tests/verify-golden.sh" "${fixtures}" "${rendered}"; then
+    cat >&2 <<EOF
+
+error: ${fixtures} does not match what the stack renders.
+Render it again from the repository root, logged in to the chart registry
+the stack pins, and commit the result:
+
+  make -C ${stack} ensure-binaries
+  PATH="\$PWD/${stack}/bin:\$PATH" HELM_PLUGINS="\$PWD/${stack}/bin/helm-plugins" \\
+    make -C ${stack} generate-golden DEV_MODE=1 </dev/null
+EOF
+    exit 1
+  fi
+}
+
+[ $# -ge 1 ] || usage
+command=$1
+shift
+case "${command}" in
+  check) check "$@" ;;
+  needed)
+    [ $# -eq 1 ] || usage
+    check_base "$1"
+    needed "$1"
+    ;;
+  commit)
+    [ $# -ge 1 ] || usage
+    check_base "$1"
+    commit "$@"
+    ;;
+  *) usage ;;
+esac

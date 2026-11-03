@@ -5,9 +5,9 @@ name: byoo-otel-collector
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release-**', 'release/**']
   pull_request:
-    branches: [main]
+    branches: [main, 'release-**', 'release/**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -127,6 +127,33 @@ jobs:
           GOCACHE: ${{ runner.temp }}/go-cache
           GO_BUILD_P: "1"
         run: ./scripts/validate-otelconfig.sh "${{ matrix.mode }}"
+
+  go-work-sum:
+    name: go.work.sum is up to date
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/compute-plane-services/byoo-otel-collector/go.work
+
+      # The Bazel otelcol genrule declares go.work.sum as an input, so a
+      # missing or stale file breaks the release build or makes it fetch
+      # checksums from the network. Regenerate it and fail on any drift.
+      - name: Regenerate go.work.sum and check for drift
+        working-directory: src/compute-plane-services/byoo-otel-collector
+        run: |
+          ./scripts/update-go-work-sum.sh
+          if [ -n "$(git status --porcelain -- go.work.sum)" ]; then
+            git diff -- go.work.sum
+            echo "::error file=src/compute-plane-services/byoo-otel-collector/go.work.sum::go.work.sum is stale. Run ./scripts/update-go-work-sum.sh and commit the result."
+            exit 1
+          fi
 
   perf:
     name: perf module (build/vet/test)

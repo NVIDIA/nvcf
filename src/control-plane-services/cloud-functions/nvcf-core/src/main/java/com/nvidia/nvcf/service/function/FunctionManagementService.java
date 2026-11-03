@@ -42,6 +42,7 @@ import com.nvidia.nvcf.service.azp.AuthorizedPartiesService;
 import com.nvidia.nvcf.service.ess.EssService;
 import com.nvidia.nvcf.service.instance.InstanceService;
 import com.nvidia.nvcf.service.registry.RegistryArtifactService;
+import com.nvidia.nvcf.service.telemetry.TelemetryAvailability;
 import com.nvidia.nvcf.service.telemetry.TelemetryLookupService;
 import com.nvidia.nvcf.service.telemetry.TelemetryMapperService;
 import com.nvidia.nvcf.service.telemetry.TelemetryProviderValidator;
@@ -117,6 +118,7 @@ public class FunctionManagementService {
     private final InstanceService instanceService;
     private final FunctionDeploymentService deploymentService;
     private final EssService essService;
+    private final TelemetryAvailability telemetryAvailability;
     private final TelemetryLookupService telemetryLookupService;
     private final TelemetryMapperService telemetryMapperService;
     private final FunctionsRepository functionsRepository;
@@ -496,6 +498,8 @@ public class FunctionManagementService {
         if (telemetry == null) {
             return;
         }
+
+        telemetryAvailability.requireEnabled();
 
         if (telemetry.logsTelemetryId() != null) {
             validateTelemetryType(ncaId, telemetry.logsTelemetryId(), LOGS);

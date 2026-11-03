@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+fail() { echo "assemble-umbrella-candidate: $*" >&2; exit 1; }
+repo='' candidate='' event='' base='' ref='' out='' tool=''
+while (($#)); do
+  (($# >= 2)) || fail "expected a value for $1"
+  case "$1" in
+    --repo) repo=$2 ;;
+    --candidate-sha) candidate=$2 ;;
+    --event) event=$2 ;;
+    --base-sha) base=$2 ;;
+    --ref) ref=$2 ;;
+    --out) out=$2 ;;
+    --tool) tool=$2 ;;
+    *) fail "unknown argument: $1" ;;
+  esac
+  shift 2
+done
+[[ -d "$repo" && -x "$tool" && -n "$out" ]] || fail "--repo, --tool and a new --out directory are required"
+[[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || fail "--candidate-sha must be a full commit SHA"
+[[ "$event" == pull_request || "$event" == push ]] || fail "--event must be pull_request or push"
+[[ $(git -C "$repo" rev-parse HEAD) == "$candidate" ]] || fail "checkout HEAD does not match candidate SHA"
+[[ ! -e "$out" ]] || fail "output already exists; choose a new directory: $out"
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+work=$(mktemp -d "${TMPDIR:-/tmp}/umbrella-candidate.XXXXXX")
+trap 'rm -rf -- "$work"' EXIT
+
+manifest_path() {
+  [[ "$1" =~ ^deploy/releases/([0-9]+\.[0-9]+\.[0-9]+)/manifest\.json$ ]] || fail "invalid candidate manifest path: $1"
+}
+
+read_committed_manifest() {
+  local path=$1 destination=$2 mode
+  manifest_path "$path"
+  mode=$(git -C "$repo" ls-tree "$candidate" -- "$path")
+  [[ "$mode" == '100644 blob '* || "$mode" == '100755 blob '* ]] || fail "candidate requires a committed regular manifest: $path"
+  git -C "$repo" show "$candidate:$path" > "$destination"
+  "$tool" umbrella manifest --manifest "$destination"
+  [[ "$path" == "deploy/releases/$(jq -r .version "$destination")/manifest.json" ]] || fail "manifest version differs from its directory: $path"
+}
+
+selected=()
+if [[ "$event" == push ]]; then
+  [[ "$ref" =~ ^refs/heads/release-nvcf/([0-9]+\.[0-9]+\.[0-9]+)$ ]] || fail "push requires a release-nvcf/X.Y.Z candidate branch"
+  selected+=("deploy/releases/${BASH_REMATCH[1]}/manifest.json")
+else
+  [[ "$base" =~ ^[0-9a-f]{40}$ ]] || fail "pull_request requires a full --base-sha"
+  comparison=$(git -C "$repo" merge-base "$base" "$candidate")
+  git -C "$repo" diff --no-renames --name-only -z "$comparison" "$candidate" -- deploy/releases/ > "$work/changed"
+  while IFS= read -r -d '' path; do
+    [[ "$path" == */manifest.json ]] || continue
+    manifest_path "$path"
+    selected+=("$path")
+  done < "$work/changed"
+  # Tooling changes must also validate existing candidates, without rebuilding
+  # every historical stable release. A changed published manifest is still checked.
+  git -C "$repo" ls-tree -r --name-only -z "$candidate" -- deploy/releases/ > "$work/manifests"
+  while IFS= read -r -d '' path; do
+    [[ "$path" == */manifest.json ]] || continue
+    manifest_path "$path"
+    version=${path#deploy/releases/}
+    version=${version%/manifest.json}
+    if ! git -C "$repo" show-ref --verify --quiet "refs/tags/nvcf/$version"; then
+      selected+=("$path")
+    fi
+  done < "$work/manifests"
+fi
+
+{
+  echo '# Umbrella candidate assembly'
+  echo
+  echo "Candidate commit: $candidate"
+  echo "Checkout identity: $event head commit (not a synthetic PR merge commit)."
+  echo
+  echo 'Package validation only; deployment qualification is still required.'
+} > "$out/summary.md"
+
+if ((${#selected[@]} == 0)); then
+  echo 'No candidate manifests to assemble; tooling-only validation.' >> "$out/summary.md"
+  [[ -z "${GITHUB_STEP_SUMMARY:-}" ]] || cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"
+  [[ -z "${GITHUB_OUTPUT:-}" ]] || echo 'assembled=false' >> "$GITHUB_OUTPUT"
+  cat "$out/summary.md"
+  exit 0
+fi
+
+printf '%s\n' "${selected[@]}" | LC_ALL=C sort -u > "$work/selected"
+# Validate all paths and manifest fields before using any of them in a request.
+while IFS= read -r path; do
+  version=${path#deploy/releases/}
+  version=${version%/manifest.json}
+  mkdir "$work/$version"
+  read_committed_manifest "$path" "$work/$version/manifest.json"
+done < "$work/selected"
+
+public_get() {
+  # No token, local curl configuration, or response-provided download URL.
+  curl -q --fail --silent --show-error --location --retry 3 \
+    --proto '=https' --proto-redir '=https' \
+    --header 'Accept: application/vnd.github+json' "$1" --output "$2"
+}
+
+while IFS= read -r path; do
+  version=${path#deploy/releases/}
+  version=${version%/manifest.json}
+  inputs="$work/$version"
+  manifest="$inputs/manifest.json"
+  mkdir "$inputs/inventories" "$inputs/releases"
+  source=$(jq -r .source_commit "$manifest")
+  git -C "$repo" merge-base --is-ancestor "$source" "$candidate" || fail "reviewed source is not an ancestor of the candidate"
+  previous=()
+  previous_version=$(jq -r '.previous_version // empty' "$manifest")
+  if [[ -n "$previous_version" ]]; then
+    read_committed_manifest "deploy/releases/$previous_version/manifest.json" "$inputs/previous.json"
+    previous=(--previous "$inputs/previous.json")
+  fi
+  jq -r '.stacks | to_entries[] | [.key, .value.source_tag, .value.source_commit, .value.inventory_asset, .value.inventory_sha256] | @tsv' "$manifest" > "$inputs/stacks"
+  while IFS=$'\t' read -r stack tag commit asset digest; do
+    encoded_tag=$(jq -rn --arg tag "$tag" '$tag | @uri')
+    release="$inputs/releases/$stack.json"
+    public_get "https://api.github.com/repos/NVIDIA/nvcf/releases/tags/$encoded_tag" "$release" \
+      || fail "public source release unavailable: $tag"
+    jq -e --arg tag "$tag" --arg asset "$asset" '
+      .tag_name == $tag and .draft == false and .prerelease == false and
+      (.published_at | type == "string" and length > 0) and
+      ([.assets[] | select(.name == $asset and .state == "uploaded")] | length == 1)
+    ' "$release" > /dev/null || fail "source must be a published stable release with inventory $asset: $tag"
+    public_get "https://github.com/NVIDIA/nvcf/releases/download/$tag/$asset" "$inputs/inventories/$asset" \
+      || fail "public inventory unavailable: $tag/$asset"
+    actual=$(sha256sum "$inputs/inventories/$asset")
+    [[ "sha256:${actual%% *}" == "$digest" ]] || fail "inventory checksum mismatch: $asset"
+    # Fetch only the selected public tag, including its history. Do not force or
+    # replace a conflicting local tag, or use the candidate branch's stack trees.
+    git -C "$repo" -c credential.helper= -c http.extraheader= fetch --no-tags --no-write-fetch-head \
+      https://github.com/NVIDIA/nvcf.git "refs/tags/$tag:refs/tags/$tag"
+    [[ $(git -C "$repo" rev-parse --verify "refs/tags/$tag^{commit}") == "$commit" ]] \
+      || fail "public source tag does not match selected commit: $tag"
+  done < "$inputs/stacks"
+  "$tool" umbrella check --repo "$repo" --manifest "$manifest" \
+    --inventories "$inputs/inventories" "${previous[@]}"
+  assets="$out/$version"
+  "$tool" umbrella bundle --repo "$repo" --manifest "$manifest" \
+    --inventories "$inputs/inventories" "${previous[@]}" --out "$assets"
+  bundle="nvcf-$version.tar.gz"
+  digest=$(jq -er --arg bundle "$bundle" '.assets[$bundle]' "$assets/release-assets.json")
+  "$tool" umbrella verify-bundle --manifest "$assets/manifest.json" \
+    --bundle "$assets/$bundle" --sha256 "$digest"
+  jq -n --arg candidate "$candidate" --arg event "$event" --arg ref "$ref" \
+    --arg workflow_sha "${GITHUB_SHA:-}" --arg run_id "${GITHUB_RUN_ID:-}" \
+    --arg run_attempt "${GITHUB_RUN_ATTEMPT:-}" --arg manifest_path "$path" \
+    --arg bundle "$bundle" --arg bundle_digest "$digest" \
+    --slurpfile manifest "$manifest" --slurpfile index "$assets/release-assets.json" \
+    '{schema_version: 1, candidate_commit: $candidate, event: $event, ref: $ref,
+      workflow_commit: $workflow_sha, run_id: $run_id, run_attempt: $run_attempt,
+      manifest_path: $manifest_path, manifest_sha256: $index[0].assets["manifest.json"],
+      bundle: $bundle, bundle_sha256: $bundle_digest,
+      version: $manifest[0].version, stacks: $manifest[0].stacks,
+      qualification: "Package validation only; deployment qualification is still required."}' \
+    > "$assets/candidate.json"
+  cp -R "$inputs/releases" "$assets/source-releases"
+  {
+    echo
+    echo "Version: $version"
+    echo "Manifest: $path"
+    echo "Bundle: $bundle ($digest)"
+    jq -r '.stacks | to_entries[] | "- \(.key): \(.value.source_tag) at \(.value.source_commit), \(.value.inventory_sha256)"' "$manifest"
+  } >> "$out/summary.md"
+done < "$work/selected"
+[[ -z "${GITHUB_STEP_SUMMARY:-}" ]] || cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"
+[[ -z "${GITHUB_OUTPUT:-}" ]] || echo 'assembled=true' >> "$GITHUB_OUTPUT"
+cat "$out/summary.md"

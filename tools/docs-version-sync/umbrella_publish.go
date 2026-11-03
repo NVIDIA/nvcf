@@ -385,7 +385,7 @@ func runUmbrellaPublish(args []string) error {
 		return fmt.Errorf("release target must contain the exact reviewed manifest")
 	}
 	if _, err := gitOutput(*root, "merge-base", "--is-ancestor", manifest.SourceCommit, *target); err != nil {
-		return fmt.Errorf("release target must descend from reviewed catalog source: %w", err)
+		return fmt.Errorf("release target must descend from reviewed source: %w", err)
 	}
 	if err := validatePublishedUmbrella(*root, manifest, assets["manifest.json"]); err != nil {
 		return err

@@ -1,28 +1,38 @@
 # OpenBao image
 
-This subtree owns the server image, plugin packaging, and lifecycle driver.
-Plugin implementation guidance is in `plugins/vault-plugin-secrets-jwt/AGENTS.md`.
+This native subtree builds the OpenBao server and JWT plugin image, packages
+the legacy plugin, and owns the JWT lifecycle driver. See
+`plugins/vault-plugin-secrets-jwt/AGENTS.md` for plugin implementation guidance.
 
 Run from the repository root:
 
 ```sh
+sh infra/openbao/scripts/test-semver.sh
+sh infra/openbao/scripts/test-runtime-packages.sh
 python3 -B -m unittest discover -s infra/openbao/tests
 bash deploy/helm/openbao/tests/jwt-plugin-lifecycle.sh
 bash migrations/openbao/tests/jwt-plugin-version-test.sh
+shellcheck infra/openbao/scripts/test-runtime-packages.sh
 ```
 
-Build with `docker buildx build --platform linux/amd64,linux/arm64 infra/openbao`.
-Builds need registry access and the pinned Go toolchain. Keep legacy plugin
-bytes from the pinned image; rebuilding them changes catalog digests.
-Match the bridge baseline to the published pre-bridge image shipped by the
-chart. Keep the image digest and old catalog version aligned with that baseline.
-Bump the target catalog version when changing its source or build inputs.
-Keep chart configuration and migration defaults aligned with the image.
+Build from `infra/openbao` with
+`docker buildx build --platform linux/arm64 --load -t openbao:test .`.
+Run `RUNTIME_IMAGE=openbao:test sh scripts/test-runtime-packages.sh` there to
+verify the built image. Check both architectures before release.
 
-The real lifecycle BDD uses `tests/Dockerfile` and
-`tests/bdd/features/openbao-jwt-plugin-lifecycle.feature`. See `tests/bdd/README.md`
-for isolated runtime qualification. Unit tests use a fake `bao` and do not
-qualify server reload, signing, or rollback behavior.
+Keep the legacy image digest and old catalog version aligned with the
+published pre-bridge image shipped by the chart. Preserve its plugin bytes;
+rebuilding the old source changes the stored catalog digest. Compare server
+and plugin executable hashes with the published image before claiming catalog
+compatibility. Keep chart configuration and migration defaults aligned with
+the image. Bump the target catalog version when changing its source or build
+inputs.
 
-Use POSIX shell for packaging and Bash for lifecycle operations. Live upgrade
-and rollback qualification must follow the root QA environment rules.
+The live lifecycle BDD uses `tests/Dockerfile` and
+`tests/bdd/features/openbao-jwt-plugin-lifecycle.feature`. See
+`tests/bdd/README.md` for isolated runtime qualification. Unit tests use a
+fake `bao` and do not qualify server reload, signing, or rollback behavior.
+Qualify a persistent-state rollout before release. Follow the root QA rules
+before running live tests.
+
+Use POSIX shell for packaging and Bash for lifecycle operations.

@@ -80,7 +80,7 @@ releases:
       release-group: services
 
   - name: api
-    version: 1.31.1
+    version: 1.33.0
     namespace: nvcf
     inherit:
       - template: service
@@ -101,7 +101,7 @@ releases:
       - nvcf/reval
 
   - name: nvct-api
-    version: 1.8.1
+    version: 1.8.2
     namespace: nvcf
     inherit:
       - template: service
@@ -121,7 +121,7 @@ releases:
       - nvcf/api
 
   - name: invocation-service
-    version: 1.8.0
+    version: 1.9.0
     namespace: nvcf
     inherit:
       - template: service
@@ -129,7 +129,7 @@ releases:
       - nvcf/api
 
   - name: grpc-proxy
-    version: 1.10.1
+    version: 1.13.0
     namespace: nvcf
     inherit:
       - template: service
@@ -149,7 +149,7 @@ releases:
       - nvcf/api
 
   - name: ess-api
-    version: 1.10.0
+    version: 1.11.0
     namespace: ess
     inherit:
       - template: service
@@ -162,7 +162,7 @@ releases:
 
   - name: admin-issuer-proxy
     chart: nvcf/helm-admin-token-issuer-proxy
-    version: 1.6.0
+    version: 1.7.0
     namespace: api-keys
     condition: adminIssuerProxy.enabled
     values:
@@ -271,7 +271,7 @@ releases:
       release-group: services
 
   - name: vanity-gateway
-    version: 0.9.1
+    version: 0.11.0
     namespace: nvcf
     condition: addons.vanityGateway.enabled
     inherit:
@@ -293,7 +293,7 @@ releases:
 
   - name: event-ledger
     chart: nvcf/helm-nvcf-event-ledger
-    version: 0.6.0
+    version: 0.9.0
     namespace: nvcf
     condition: addons.eventLedger.enabled
     values:
