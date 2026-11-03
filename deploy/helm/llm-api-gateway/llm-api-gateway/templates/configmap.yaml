@@ -18,12 +18,19 @@
 {{- fail "llmApiGateway.config.decisionImageTokens must be 0 or more" }}
 {{- end }}
 {{- $maxBody := $cfg.maxRequestBodyBytes }}
-{{- if not (kindIs "invalid" $maxBody) }}
-{{- if not (and (kindIs "float64" $maxBody) (eq $maxBody (floor $maxBody)) (ge $maxBody 0.0) (lt $maxBody 9223372036854775807.0)) }}
-{{- if not (and (or (kindIs "int" $maxBody) (kindIs "int64" $maxBody)) (ge ($maxBody | int64) 0)) }}
+{{- $maxBodyEnv := "" }}
+{{- if kindIs "float64" $maxBody }}
+{{- if and (eq $maxBody (floor $maxBody)) (ge $maxBody 0.0) (lt $maxBody 9223372036854775807.0) }}
+{{- $maxBodyEnv = $maxBody | int64 | toString }}
+{{- else if eq $maxBody 9223372036854775807.0 }}
+{{- /* values files parse 9223372036854775807 as float64 2^63 */}}
+{{- $maxBodyEnv = "9223372036854775807" }}
+{{- end }}
+{{- else if and (or (kindIs "int" $maxBody) (kindIs "int64" $maxBody)) (ge ($maxBody | int64) 0) }}
+{{- $maxBodyEnv = $maxBody | int64 | toString }}
+{{- end }}
+{{- if and (not (kindIs "invalid" $maxBody)) (eq $maxBodyEnv "") }}
 {{- fail "llmApiGateway.config.maxRequestBodyBytes must be a whole number from 0 to 9223372036854775807" }}
-{{- end }}
-{{- end }}
 {{- end }}
 apiVersion: v1
 kind: ConfigMap
@@ -44,8 +51,8 @@ data:
   STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES: {{ $cfg.lastCluster.localMaxEntries | int64 | toString | quote }}
   NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT: {{ $cfg.inferenceWriteTimeout | quote }}
   NVCF_DECISION_IMAGE_TOKENS: {{ $cfg.decisionImageTokens | int64 | toString | quote }}
-  {{- if not (kindIs "invalid" $maxBody) }}
-  NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES: {{ $maxBody | int64 | toString | quote }}
+  {{- if $maxBodyEnv }}
+  NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES: {{ $maxBodyEnv | quote }}
   {{- end }}
   NVCF_GRPC_ADDR: {{ $cfg.nvcfGrpcAddr | quote }}
   NVCF_GRPC_INSECURE: {{ $cfg.nvcfGrpcInsecure | toString | quote }}

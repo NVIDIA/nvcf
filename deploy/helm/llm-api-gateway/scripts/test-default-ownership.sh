@@ -99,7 +99,7 @@ fi
 grep -Fq 'llmApiGateway.config.maxRequestBodyBytes must be a whole number from 0 to 9223372036854775807' "$invalid_error" ||
   fail "negative maxRequestBodyBytes returned the wrong error"
 
-printf 'llmApiGateway:\n  config:\n    maxRequestBodyBytes: 9223372036854775808\n' >"$work_dir/over-int64.yaml"
+printf 'llmApiGateway:\n  config:\n    maxRequestBodyBytes: 10000000000000000000\n' >"$work_dir/over-int64.yaml"
 for bad in "--set-string llmApiGateway.config.maxRequestBodyBytes=50Mi" \
   "--set llmApiGateway.config.maxRequestBodyBytes=1.5" \
   "--values $work_dir/over-int64.yaml"; do
@@ -113,6 +113,15 @@ for bad in "--set-string llmApiGateway.config.maxRequestBodyBytes=50Mi" \
   grep -Fq 'llmApiGateway.config.maxRequestBodyBytes must be a whole number from 0 to 9223372036854775807' "$invalid_error" ||
     fail "maxRequestBodyBytes ($bad) returned the wrong error"
 done
+
+printf 'llmApiGateway:\n  config:\n    maxRequestBodyBytes: 9223372036854775807\n' >"$work_dir/max-int64.yaml"
+helm template llm-api-gateway "$chart_dir" \
+  --namespace nvcf \
+  --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
+  --values "$work_dir/max-int64.yaml" \
+  >"$override_manifest"
+test "$(read_config "$override_manifest" NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES)" = 9223372036854775807 ||
+  fail "maxRequestBodyBytes 9223372036854775807 in a values file must render unchanged"
 
 # An unset value, as left by helm upgrade --reuse-values from an older chart,
 # omits the env var so the gateway's own 50 MiB default applies.
