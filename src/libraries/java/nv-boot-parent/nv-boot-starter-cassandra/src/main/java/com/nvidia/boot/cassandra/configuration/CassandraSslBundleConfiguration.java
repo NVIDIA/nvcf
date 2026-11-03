@@ -37,6 +37,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.ssl.PropertiesSslBundle;
 import org.springframework.boot.autoconfigure.ssl.SslProperties;
 import org.springframework.boot.ssl.SslBundle;
+import org.springframework.boot.ssl.SslBundleRegistry;
 import org.springframework.boot.ssl.SslBundles;
 import org.springframework.cloud.context.scope.refresh.RefreshScopeRefreshedEvent;
 import org.springframework.context.ApplicationContext;
@@ -132,19 +133,22 @@ public class CassandraSslBundleConfiguration {
     public RefreshingCqlSession refreshableCqlSession(
             ApplicationContext applicationContext,
             SslBundles sslBundles,
+            @Autowired(required = false) SslBundleRegistry sslBundleRegistry,
             Environment environment,
             @Autowired(required = false) SslProperties sslProperties,
             CqlSessionBuilder cqlSessionBuilder,
             @Autowired(required = false) ObservationRegistry observationRegistry,
-            @Autowired(required = false) RefreshingCqlSessionObservabilityProperties observationProperties) {
+            @Autowired(required = false)
+            RefreshingCqlSessionObservabilityProperties observationProperties) {
         log.info("Creating RefreshingCqlSession with SSL bundle and credentials");
         var shouldWrap = observationProperties == null || observationProperties.isEnabled();
         var actualObservationRegistry = shouldWrap ? observationRegistry : null;
 
         var initialSession = cqlSessionBuilder.build();
         var sessionToUse = wrapWithObservability(initialSession, actualObservationRegistry);
-        return new RefreshingCqlSession(applicationContext, sslBundles, environment, sslProperties,
-                sslBundleName, sessionToUse, actualObservationRegistry);
+        return new RefreshingCqlSession(applicationContext, sslBundles, sslBundleRegistry,
+                                        environment, sslProperties, sslBundleName, sessionToUse,
+                                        actualObservationRegistry);
     }
 
     private static CqlSession wrapWithObservability(
@@ -166,6 +170,7 @@ public class CassandraSslBundleConfiguration {
 
         private final ApplicationContext applicationContext;
         private final SslBundles sslBundles;
+        private final SslBundleRegistry sslBundleRegistry;
         private final Environment environment;
         private final SslProperties sslProperties;
         private final String sslBundleName;
@@ -183,6 +188,7 @@ public class CassandraSslBundleConfiguration {
         RefreshingCqlSession(
                 ApplicationContext applicationContext,
                 SslBundles sslBundles,
+                SslBundleRegistry sslBundleRegistry,
                 Environment environment,
                 SslProperties sslProperties,
                 String sslBundleName,
@@ -190,6 +196,7 @@ public class CassandraSslBundleConfiguration {
                 ObservationRegistry observationRegistry) {
             this.applicationContext = applicationContext;
             this.sslBundles = sslBundles;
+            this.sslBundleRegistry = sslBundleRegistry;
             this.environment = environment;
             this.sslProperties = sslProperties;
             this.sslBundleName = sslBundleName;
@@ -227,11 +234,12 @@ public class CassandraSslBundleConfiguration {
                     var currentSslSnapshot = SslMaterialSnapshot.from(environment, sslBundleName);
                     var sslMaterialChanged = !StringUtils.isBlank(sslBundleName)
                             && !Objects.equals(lastKnownSslMaterial, currentSslSnapshot);
+                    SslBundle freshBundle = null;
                     CqlSession newSession;
                     if (sslMaterialChanged && sslProperties != null) {
                         var pem = sslProperties.getBundle().getPem().get(sslBundleName);
                         if (pem != null) {
-                            var freshBundle = PropertiesSslBundle.get(pem, applicationContext);
+                            freshBundle = PropertiesSslBundle.get(pem, applicationContext);
                             var sslContext = freshBundle.createSslContext();
                             var sslSessionBuilder = builder.withSslContext(sslContext);
                             newSession = wrapWithObservability(sslSessionBuilder.build());
@@ -258,6 +266,9 @@ public class CassandraSslBundleConfiguration {
                         lastKnownPassword = password;
                         lastKnownSslMaterial = SslMaterialSnapshot.from(environment, sslBundleName);
                         oldSession.close();
+                        if (freshBundle != null) {
+                            publishRotatedBundle(freshBundle);
+                        }
                     } else {
                         log.error("New session validation failed - keeping old session");
                         newSession.close();
@@ -269,6 +280,16 @@ public class CassandraSslBundleConfiguration {
             } finally {
                 sessionLock.unlock();
             }
+        }
+
+        private void publishRotatedBundle(SslBundle freshBundle) {
+            if (sslBundleRegistry == null) {
+                log.warn("No SslBundleRegistry bean available; SSL bundle '{}' in SslBundles "
+                                 + "(and /actuator/health/ssl) will keep reporting the "
+                                 + "certificates loaded at startup", sslBundleName);
+                return;
+            }
+            sslBundleRegistry.updateBundle(sslBundleName, freshBundle);
         }
 
         private CqlSession wrapWithObservability(CqlSession session) {

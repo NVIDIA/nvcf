@@ -36,6 +36,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.ssl.SslBundle;
+import org.springframework.boot.ssl.SslBundleRegistry;
 import org.springframework.boot.ssl.SslBundles;
 import org.springframework.cloud.context.scope.refresh.RefreshScopeRefreshedEvent;
 import org.springframework.context.ApplicationContext;
@@ -60,6 +61,7 @@ class RefreshingCqlSessionTest {
         session = new CassandraSslBundleConfiguration.RefreshingCqlSession(
                 applicationContext,
                 sslBundles,
+                mock(SslBundleRegistry.class),
                 environment,
                 null,
                 "",
@@ -86,6 +88,7 @@ class RefreshingCqlSessionTest {
         var sessionWithBundle = new CassandraSslBundleConfiguration.RefreshingCqlSession(
                 applicationContext,
                 sslBundles,
+                mock(SslBundleRegistry.class),
                 environment,
                 null,
                 "cassandra-ssl",
@@ -107,6 +110,7 @@ class RefreshingCqlSessionTest {
         var sessionWithBundle = new CassandraSslBundleConfiguration.RefreshingCqlSession(
                 applicationContext,
                 sslBundles,
+                mock(SslBundleRegistry.class),
                 environment,
                 null,
                 "cassandra-ssl",
@@ -186,6 +190,7 @@ class RefreshingCqlSessionTest {
             var sessionWithObservability = new CassandraSslBundleConfiguration.RefreshingCqlSession(
                     applicationContext,
                     sslBundles,
+                    mock(SslBundleRegistry.class),
                     environment,
                     null,
                     "",
@@ -225,6 +230,7 @@ class RefreshingCqlSessionTest {
             var sessionWithObservability = new CassandraSslBundleConfiguration.RefreshingCqlSession(
                     applicationContext,
                     sslBundles,
+                    mock(SslBundleRegistry.class),
                     environment,
                     null,
                     "test-bundle",
@@ -263,6 +269,7 @@ class RefreshingCqlSessionTest {
                     new CassandraSslBundleConfiguration.RefreshingCqlSession(
                             applicationContext,
                             sslBundles,
+                            mock(SslBundleRegistry.class),
                             environment,
                             null,
                             "",
@@ -302,6 +309,7 @@ class RefreshingCqlSessionTest {
                     new CassandraSslBundleConfiguration.RefreshingCqlSession(
                             applicationContext,
                             sslBundles,
+                            mock(SslBundleRegistry.class),
                             environment,
                             null,
                             "test-bundle",
