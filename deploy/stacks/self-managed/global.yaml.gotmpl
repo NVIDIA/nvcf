@@ -590,9 +590,9 @@ nats:
     {{- end }}
     container:
       image:
-        registry: {{ dig "nats" "natsBox" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
-        repository: {{ dig "nats" "natsBox" "container" "image" "repository" "" .Values | default (printf "%s/nats-box" .Values.global.image.repository) }}
-        tag: {{ dig "nats" "natsBox" "container" "image" "tag" "" .Values | default "0.19.7-nonroot" | quote }}
+        registry: {{ dig "nats" "natsBox" "container" "image" "registry" "" .Values | default "docker.io" }}
+        repository: {{ dig "nats" "natsBox" "container" "image" "repository" "" .Values | default "natsio/nats-box" }}
+        tag: {{ dig "nats" "natsBox" "container" "image" "tag" "" .Values | default "0.20.1-nonroot" | quote }}
   nkeyJob:
     image:
       registry: {{ .Values.global.image.registry }}

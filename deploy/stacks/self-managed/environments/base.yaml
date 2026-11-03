@@ -342,6 +342,13 @@ nats:
   #     registry: <your-registry>
   #     repository: <your-repository>/nats-server-config-reloader
   #     tag: "0.24.0"
+  # NATS box also defaults to its public upstream image, independently of
+  # global.image. Set registry and repository together for a private mirror.
+  # natsBox:
+  #   container:
+  #     image:
+  #       registry: <your-registry>
+  #       repository: <your-repository>/nats-box
   # PDB: the upstream NATS chart enables a disruption budget by default.
   # Override here to disable it or adjust the minAvailable threshold.
   podDisruptionBudget:
