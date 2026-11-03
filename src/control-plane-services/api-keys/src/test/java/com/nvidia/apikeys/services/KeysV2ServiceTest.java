@@ -75,6 +75,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -421,6 +422,76 @@ class KeysV2ServiceTest {
                 .isEqualTo(KEY_V2_VO_1);
 
         verify(keysV2Dao, never()).save(any());
+        verifyNoInteractions(actionRecorder);
+    }
+
+    @ParameterizedTest
+    @MethodSource("keysWithMismatchedScope")
+    void mutationsRejectLookupKeyOutsideRequestedScope(KeyV2Vo key) {
+        when(keysV2Dao.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
+                .thenReturn(Optional.of(KEY_V2_ROW_1));
+        when(keysV2Dao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.of(key));
+
+        assertThrowsExceptionWithDetails(BadRequestException.class,
+                () -> service.updateKeyStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
+                        KEY_ID_1, KeyStatus.REVOKED), "Key does not match the requested scope");
+        assertThrowsExceptionWithDetails(BadRequestException.class,
+                () -> service.deleteKeyById(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1),
+                "Key does not match the requested scope");
+
+        verify(keysV2Dao, never()).save(any());
+        verify(keysV2Dao, never()).delete(any());
+        verifyNoInteractions(actionRecorder);
+    }
+
+    private static Stream<KeyV2Vo> keysWithMismatchedScope() {
+        return Stream.of(
+                KEY_V2_VO_1.toBuilder().ncaId("other-account").build(),
+                KEY_V2_VO_1.toBuilder().ownerType(null).build(),
+                KEY_V2_VO_1.toBuilder().ownerId("other-user").build(),
+                KEY_V2_VO_1.toBuilder().issuerServiceId("other-service").build(),
+                KEY_V2_VO_1.toBuilder().keyId("other-key").build());
+    }
+
+    @Test
+    void mutationsValidateLegacyLookupBeforeChangingEitherMigratedCopy() {
+        var migrated = KeysByOwnerAndAccountAndServiceVo.from(LEGACY_KEY_V2);
+        when(keysV2Dao.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
+                .thenReturn(Optional.of(migrated));
+        when(keysV2Dao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.of(LEGACY_KEY_V2));
+        when(keysDao.getKeyByOwnerAndServiceAndId(USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
+                .thenReturn(Optional.of(KEY_BY_OWNER_AND_SERVICE_VO_1));
+        when(keysDao.getKeyByHash(API_KEY_HASH_1))
+                .thenReturn(Optional.of(KEY_VO_1.toBuilder().ownerId("other-user").build()));
+
+        assertThrowsExceptionWithDetails(BadRequestException.class,
+                () -> service.updateKeyStatus(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME,
+                        KEY_ID_1, KeyStatus.REVOKED), "Key does not match the requested scope");
+        assertThrowsExceptionWithDetails(BadRequestException.class,
+                () -> service.deleteKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1),
+                "Key does not match the requested scope");
+
+        verify(keysV2Dao, never()).save(any());
+        verify(keysDao, never()).save(any(KeyVo.class), any());
+        verify(keysV2Dao, never()).delete(any());
+        verify(keysDao, never()).deleteKey(any());
+        verifyNoInteractions(actionRecorder);
+    }
+
+    @Test
+    void revokeRejectsMissingLegacyLookupBeforeChangingMigratedCopy() {
+        when(keysV2Dao.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
+                .thenReturn(Optional.of(KeysByOwnerAndAccountAndServiceVo.from(LEGACY_KEY_V2)));
+        when(keysV2Dao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.of(LEGACY_KEY_V2));
+        when(keysDao.getKeyByOwnerAndServiceAndId(USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
+                .thenReturn(Optional.of(KEY_BY_OWNER_AND_SERVICE_VO_1));
+
+        assertThrowsExceptionWithDetails(NotFoundException.class,
+                () -> service.updateKeyStatus(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME,
+                        KEY_ID_1, KeyStatus.REVOKED), "Key not found");
+
+        verify(keysV2Dao, never()).save(any());
+        verify(keysDao, never()).save(any(KeyVo.class), any());
         verifyNoInteractions(actionRecorder);
     }
 

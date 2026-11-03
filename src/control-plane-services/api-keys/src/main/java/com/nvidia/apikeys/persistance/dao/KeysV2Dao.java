@@ -31,6 +31,7 @@ import com.nvidia.apikeys.vo.KeysByAccountSliceVo;
 import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import com.nvidia.apikeys.vo.KeysByScopeFilterVo;
 import java.nio.ByteBuffer;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -40,6 +41,7 @@ import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.data.cassandra.core.CassandraTemplate;
+import org.springframework.data.cassandra.core.cql.QueryOptions;
 import org.springframework.data.cassandra.core.query.CassandraPageRequest;
 import org.springframework.data.cassandra.core.query.Criteria;
 import org.springframework.data.cassandra.core.query.CriteriaDefinition;
@@ -123,6 +125,26 @@ public class KeysV2Dao {
         return slice(
                 pageable -> keysByOwnerAndAccountAndServiceRepository.findByNcaId(ncaId, pageable),
                 limit, cursor);
+    }
+
+    /** Streams indexed bulk matches in driver-sized pages; null dimensions are unrestricted. */
+    public Stream<KeysByOwnerAndAccountAndServiceVo> streamForBulk(
+            String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
+            Instant cutoff, int pageSize) {
+        var query = Query.query(Criteria.where("owner_type").is(ownerType))
+                .and(Criteria.where("created_at").lte(cutoff));
+        if (ncaId != null) {
+            query = query.and(Criteria.where("nca_id").is(ncaId));
+        }
+        if (ownerId != null) {
+            query = query.and(Criteria.where("owner_id").is(ownerId));
+        }
+        if (issuerServiceId != null) {
+            query = query.and(Criteria.where("issuer_service_id").is(issuerServiceId));
+        }
+        return cassandraTemplate.stream(query.queryOptions(QueryOptions.builder().pageSize(pageSize).build()),
+                        KeysByOwnerAndAccountAndServiceModel.class)
+                .map(keyConverter::modelToVo);
     }
 
     public KeysByAccountSliceVo list(
