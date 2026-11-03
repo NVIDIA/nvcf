@@ -44,8 +44,8 @@ import (
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/test/testutils"
 
-	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"

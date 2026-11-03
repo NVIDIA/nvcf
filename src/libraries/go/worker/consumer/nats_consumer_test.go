@@ -19,8 +19,8 @@ package consumer
 
 import (
 	"errors"
-	"github.com/stretchr/testify/assert"
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/semaphore"
+	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
 )

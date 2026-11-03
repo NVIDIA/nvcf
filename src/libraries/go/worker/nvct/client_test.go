@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/zap"
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"go.uber.org/zap"
 
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvct"
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/test/testutils"

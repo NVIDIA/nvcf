@@ -38,9 +38,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bombsimon/logrusr/v4"
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	nvcaconfig "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
-	"github.com/bombsimon/logrusr/v4"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"

@@ -23,11 +23,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/bombsimon/logrusr/v4"
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/auth"
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	nvcaconfig "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
-	"github.com/bombsimon/logrusr/v4"
 	"github.com/go-logr/logr"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
