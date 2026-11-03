@@ -553,8 +553,8 @@ nats:
       {{- end }}
     {{- end }}
     image:
-      registry: {{ dig "nats" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
-      repository: {{ dig "nats" "container" "image" "repository" "" .Values | default (printf "%s/nats-server" .Values.global.image.repository) }}
+      registry: {{ dig "nats" "container" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "nats" "container" "image" "repository" "" .Values | default "synadia/nats-server" }}
       tag: {{ dig "nats" "container" "image" "tag" "" .Values | default "2.14.6-alpine3.22" | quote }}
   {{- $natsReloaderRegistry := dig "nats" "reloader" "image" "registry" "" .Values }}
   {{- $natsReloaderRepository := dig "nats" "reloader" "image" "repository" "" .Values }}
@@ -590,9 +590,9 @@ nats:
     {{- end }}
     container:
       image:
-        registry: {{ dig "nats" "natsBox" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
-        repository: {{ dig "nats" "natsBox" "container" "image" "repository" "" .Values | default (printf "%s/nats-box" .Values.global.image.repository) }}
-        tag: {{ dig "nats" "natsBox" "container" "image" "tag" "" .Values | default "0.19.7-nonroot" | quote }}
+        registry: {{ dig "nats" "natsBox" "container" "image" "registry" "" .Values | default "docker.io" }}
+        repository: {{ dig "nats" "natsBox" "container" "image" "repository" "" .Values | default "natsio/nats-box" }}
+        tag: {{ dig "nats" "natsBox" "container" "image" "tag" "" .Values | default "0.20.1-nonroot" | quote }}
   nkeyJob:
     image:
       registry: {{ .Values.global.image.registry }}
@@ -936,12 +936,16 @@ natsAuthCalloutService:
 {{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE is deprecated and conflicts with api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image" }}
 {{- end }}
 {{- $effectivePylonImage := "" }}
+{{- $routerImageTag := "" }}
+{{- if $llmEnabled }}
+{{- $routerImageTag = dig "addons" "llm" "requestRouter" "image" "tag" "" .Values | required "addons.llm.requestRouter.image.tag must be set to select matching router and Pylon images" }}
+{{- end }}
 {{- if $configuredPylonImagePresent }}
 {{- $effectivePylonImage = $configuredPylonImage }}
 {{- else if $legacyPylonImageConfigured }}
 {{- $effectivePylonImage = $legacyPylonImage }}
 {{- else if $llmEnabled }}
-{{- $effectivePylonImage = printf "%s/%s/pylon:0.25.0" $sidecarsHost $sidecarsRepo }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:%s" $sidecarsHost $sidecarsRepo $routerImageTag }}
 {{- end }}
 {{- $stackApiRemoteConfigData := dict }}
 {{- $stackNvcfRemoteConfig := dict }}
@@ -1100,6 +1104,17 @@ api:
   env:
     {{- toYaml $apiEnv | nindent 4 }}
 
+  {{- /* Pylon lives in remote config rather than a Kubernetes image field. */}}
+  {{- $apiPodAnnotations := deepCopy (dig "api" "podAnnotations" dict .Values) }}
+  {{- if and $effectivePylonImage (not $llmEnabled) }}
+  {{- $pylonArtifactImage := $effectivePylonImage | replace "${nvcf.sidecars.hostname}" $apiEnv.NVCF_SIDECARS_HOSTNAME | replace "${nvcf.sidecars.repository}" $apiEnv.NVCF_SIDECARS_REPOSITORY }}
+  {{- $_ := set $apiPodAnnotations "release-artifact-llm-router-client-image" $pylonArtifactImage }}
+  {{- end }}
+  {{- with $apiPodAnnotations }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
 invocation:
   {{- $configuredInvocationEnv := dig "invocation" "env" dict .Values }}
   {{- if not (kindIs "map" $configuredInvocationEnv) }}
@@ -1240,6 +1255,20 @@ nvctApi:
       {{- toYaml $nvctApiRemoteConfigData | nindent 6 }}
   {{- end }}
 
+  {{- /* Task sidecars are created later by NVCT and must enter the inventory. */}}
+  {{- $nvctPodAnnotations := deepCopy (dig "nvctApi" "podAnnotations" dict .Values) }}
+  {{- $nvctSidecars := dig "nvct" "sidecars" dict $configuredNvctApiRemoteConfigData }}
+  {{- range $key := list "init-container" "utils-container" "ess-agent-container" }}
+  {{- with index $nvctSidecars $key }}
+  {{- $image := . | replace "${nvct.sidecars.hostname}" $sidecarsHost | replace "${nvct.sidecars.repository}" $sidecarsRepo }}
+  {{- $_ := set $nvctPodAnnotations (printf "release-artifact-%s-image" $key) $image }}
+  {{- end }}
+  {{- end }}
+  {{- with $nvctPodAnnotations }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
   env:
     NVCT_SIDECARS_HOSTNAME: {{ $sidecarsHost }}
     NVCT_SIDECARS_REPOSITORY: {{ $sidecarsRepo }}
@@ -1376,6 +1405,9 @@ rateLimiter:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}
+    {{- with dig "rateLimiter" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- if .Values.global.nodeSelectors.enabled }}
   nodeSelector:
     {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
@@ -1433,6 +1465,9 @@ ess:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-ess
+    {{- with dig "ess" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -1493,6 +1528,9 @@ notary:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-notary
+    {{- with dig "notary" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -1739,6 +1777,9 @@ reval:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/reval-server
+    {{- with dig "reval" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   securityContext:
     runAsNonRoot: true
     runAsUser: 65532
@@ -1859,6 +1900,16 @@ llmApiGateway:
 llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-request-router
+  {{- /* The router's optional release owns its dynamically created Pylon image. */}}
+  {{- $routerPodAnnotations := deepCopy (dig "addons" "llm" "requestRouter" "podAnnotations" dict .Values) }}
+  {{- if and $llmEnabled $effectivePylonImage }}
+  {{- $pylonArtifactImage := $effectivePylonImage | replace "${nvcf.sidecars.hostname}" $apiEnv.NVCF_SIDECARS_HOSTNAME | replace "${nvcf.sidecars.repository}" $apiEnv.NVCF_SIDECARS_REPOSITORY }}
+  {{- $_ := set $routerPodAnnotations "release-artifact-llm-router-client-image" $pylonArtifactImage }}
+  {{- end }}
+  {{- with $routerPodAnnotations }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- $requestRouterValues := dig "addons" "llm" "requestRouter" dict .Values }}
   {{- if hasKey $requestRouterValues "replicaCount" }}
   replicaCount: {{ index $requestRouterValues "replicaCount" }}
@@ -2207,7 +2258,7 @@ vanityGateway:
 {{/* openbao-migrations image tag: 0.19.5 is the floor. An operator may pin a
      newer tag via addons.nvcfUi.openbaoMigrations.image.tag, but anything older
      than the floor is ignored (the migrations job needs >= 0.19.5). */}}
-{{- $nvcfUiOpenbaoMigrationsTag := "0.19.5" }}
+{{- $nvcfUiOpenbaoMigrationsTag := "0.19.10" }}
 {{- $nvcfUiMigrationsTagOverride := dig "addons" "nvcfUi" "openbaoMigrations" "image" "tag" "" .Values }}
 {{- if and $nvcfUiMigrationsTagOverride (not (regexMatch "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" $nvcfUiMigrationsTagOverride)) }}
 {{- fail "addons.nvcfUi.openbaoMigrations.image.tag must be a valid OCI image tag" }}
@@ -2228,6 +2279,7 @@ nvcfUi:
     nvctUrl: {{ printf "%s.%s.svc.cluster.local:%v" $nvctApiBackend.name $nvctApiBackend.namespace $nvctApiBackend.port | quote }}
     sisUrl: {{ printf "%s.%s.svc.cluster.local:%v" $sisBackend.name $sisBackend.namespace $sisBackend.port | quote }}
   openbaoMigrations:
+    kubectlMinor: {{ dig "addons" "nvcfUi" "openbaoMigrations" "kubectlMinor" "" .Values | quote }}
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao-migrations

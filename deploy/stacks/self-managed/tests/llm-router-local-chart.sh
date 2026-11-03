@@ -127,11 +127,14 @@ test "$backend_repository" = "$main_repository" || {
 }
 
 main_tag="$(yq -r '.llmRequestRouter.image.tag // ""' "$values_file")"
-test -z "$main_tag" || {
-  echo "llm-router-local-chart: expected main router tag to inherit the chart default, got $main_tag" >&2
+expected_main_tag="$(yq -r '.addons.llm.requestRouter.image.tag // ""' "$stack_dir/environments/base.yaml")"
+test "$main_tag" = "$expected_main_tag" || {
+  echo "llm-router-local-chart: stack image selection was not forwarded: $main_tag" >&2
   exit 1
 }
-expected_main_tag="$(yq -r '.llmRequestRouter.image.tag' "$stack_dir/../../helm/llm-request-router/llm-request-router/values.yaml")"
+if test -z "$expected_main_tag"; then
+  expected_main_tag="$(yq -r '.llmRequestRouter.image.tag' "$stack_dir/../../helm/llm-request-router/llm-request-router/values.yaml")"
+fi
 test -n "$expected_main_tag" && test "$expected_main_tag" != "null" || {
   echo "llm-router-local-chart: local chart has no default main router tag" >&2
   exit 1
