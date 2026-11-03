@@ -483,8 +483,11 @@ counted in `nvcf_grpc_proxy_service_event_ledger_publish_total` by
 
 Authentication follows the same rule as the NVCF API client. If the secrets
 file has an `eventLedgerToken` key, that token is sent as a bearer token and
-reloaded when the file changes. Otherwise the proxy uses OAuth2 client
-credentials against `OAUTH2_FQDN` with the scope `fnds:createEvent`.
+reloaded when the file changes. Otherwise the proxy uses the secrets file's
+OAuth2 client credentials against `EVENT_LEDGER_OAUTH2_ADDR` (for example
+`https://oauth2.example.com`) with the scope `fnds:createEvent`. This
+is the namespace the ledger trusts, which can differ from `OAUTH2_FQDN`, so
+that namespace must grant the proxy's client the scope.
 
 Events use source `grpc-proxy` and carry the extensions `functionversionid`,
 `functionid`, `resourceid` (the NVCF request ID) and `ncaid` (the
