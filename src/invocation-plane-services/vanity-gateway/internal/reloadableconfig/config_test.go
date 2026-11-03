@@ -140,6 +140,45 @@ func TestSetupConfigReportsReloadErrorsOnlyForFailedReloads(t *testing.T) {
 	require.Equal(t, "two", cfg.Get().Value)
 }
 
+func TestSetupConfigReportsAPersistentlyBadFileOnce(t *testing.T) {
+	useFastReloadTiming(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeTestConfig(t, path, "one")
+
+	var failures atomic.Int32
+	cfg, err := SetupConfig[testConfig](path,
+		WithValidateFunc(func(c *testConfig) error {
+			if c.Value == "bad" || c.Value == "worse" {
+				return fmt.Errorf("bad value")
+			}
+			return nil
+		}),
+		WithReloadErrorFunc[testConfig](func(error) { failures.Add(1) }))
+	require.NoError(t, err)
+
+	time.Sleep(20 * time.Millisecond)
+	writeTestConfig(t, path, "bad")
+	require.Eventually(t, func() bool { return failures.Load() == 1 }, 2*time.Second, 5*time.Millisecond)
+
+	// Poll ticks keep retrying the unchanged bad file; they must not recount it.
+	time.Sleep(10 * PollInterval)
+	require.EqualValues(t, 1, failures.Load(), "one bad edit must be reported once")
+
+	// A different bad edit is a new failure.
+	time.Sleep(20 * time.Millisecond)
+	writeTestConfig(t, path, "worse")
+	require.Eventually(t, func() bool { return failures.Load() == 2 }, 2*time.Second, 5*time.Millisecond)
+
+	// A successful reload resets the state, so the same bad content reports again later.
+	time.Sleep(20 * time.Millisecond)
+	writeTestConfig(t, path, "two")
+	requireConfigValue(t, cfg, "two")
+	time.Sleep(20 * time.Millisecond)
+	writeTestConfig(t, path, "bad")
+	require.Eventually(t, func() bool { return failures.Load() == 3 }, 2*time.Second, 5*time.Millisecond)
+	require.Equal(t, "two", cfg.Get().Value)
+}
+
 func TestSetupConfigKeepsLastGoodConfigDuringZeroByteWrite(t *testing.T) {
 	useFastReloadTiming(t)
 	path := filepath.Join(t.TempDir(), "config.yaml")

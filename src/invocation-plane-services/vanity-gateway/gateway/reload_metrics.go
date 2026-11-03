@@ -20,6 +20,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -42,14 +43,27 @@ const (
 	reloadStageRouterBuild = "router_build"
 )
 
-// reloadClock is a variable so tests can control the recorded timestamp.
-var reloadClock = time.Now
+// reloadInstruments is swapped as a whole through an atomic pointer because the
+// file watcher and router swap goroutines read it while setup or tests replace
+// it. The clock is part of it so tests can control the recorded timestamp.
+type reloadInstruments struct {
+	lastReload otelmetric.Int64Gauge
+	failures   otelmetric.Int64Counter
+	clock      func() time.Time
+}
 
 var (
-	lastReloadGauge       otelmetric.Int64Gauge   = metricnoop.Int64Gauge{}
-	reloadFailuresCounter otelmetric.Int64Counter = metricnoop.Int64Counter{}
-	reloadStages                                  = []string{reloadStageLoad, reloadStageRouterBuild}
+	reloadInstrumentsRef atomic.Pointer[reloadInstruments]
+	reloadStages         = []string{reloadStageLoad, reloadStageRouterBuild}
 )
+
+func init() {
+	reloadInstrumentsRef.Store(&reloadInstruments{
+		lastReload: metricnoop.Int64Gauge{},
+		failures:   metricnoop.Int64Counter{},
+		clock:      time.Now,
+	})
+}
 
 func setupReloadMetrics() error {
 	meter := otel.GetMeterProvider().Meter(reloadMetricsScope)
@@ -61,8 +75,7 @@ func setupReloadMetrics() error {
 	if err != nil {
 		return err
 	}
-	lastReloadGauge = gauge
-	reloadFailuresCounter = counter
+	reloadInstrumentsRef.Store(&reloadInstruments{lastReload: gauge, failures: counter, clock: time.Now})
 	for _, stage := range reloadStages {
 		recordConfigReloadFailureCount(context.Background(), stage, 0)
 	}
@@ -72,7 +85,8 @@ func setupReloadMetrics() error {
 func newLastReloadGauge(meter otelmetric.Meter) (otelmetric.Int64Gauge, error) {
 	gauge, err := meter.Int64Gauge(
 		lastReloadMetricName,
-		otelmetric.WithDescription("Unix time of the last config load that was followed by a successful router swap."),
+		otelmetric.WithDescription("Unix time of the last config change applied by a successful router swap. "+
+			"It does not advance while the mapping file is unchanged, so alert on its age only together with the reload failures counter."),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create last config reload gauge: %w", err)
@@ -92,7 +106,8 @@ func newReloadFailuresCounter(meter otelmetric.Meter) (otelmetric.Int64Counter, 
 }
 
 func recordConfigReloadSuccess(ctx context.Context) {
-	lastReloadGauge.Record(ctx, reloadClock().Unix())
+	instruments := reloadInstrumentsRef.Load()
+	instruments.lastReload.Record(ctx, instruments.clock().Unix())
 }
 
 // recordConfigLoadFailure is the file-watcher callback for a reload rejected
@@ -106,5 +121,5 @@ func recordConfigReloadFailure(ctx context.Context, stage string) {
 }
 
 func recordConfigReloadFailureCount(ctx context.Context, stage string, count int64) {
-	reloadFailuresCounter.Add(ctx, count, otelmetric.WithAttributes(attribute.String(reloadStageLabel, stage)))
+	reloadInstrumentsRef.Load().failures.Add(ctx, count, otelmetric.WithAttributes(attribute.String(reloadStageLabel, stage)))
 }

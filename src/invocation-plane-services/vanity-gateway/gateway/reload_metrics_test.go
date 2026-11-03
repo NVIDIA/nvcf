@@ -46,15 +46,20 @@ func installReloadMetrics(t *testing.T) (*sdkmetric.ManualReader, *atomic.Int64)
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	previousProvider := otel.GetMeterProvider()
 	otel.SetMeterProvider(provider)
+	previousInstruments := reloadInstrumentsRef.Load()
 	require.NoError(t, setupReloadMetrics())
 
 	now := &atomic.Int64{}
-	previousGauge, previousCounter, previousClock := lastReloadGauge, reloadFailuresCounter, reloadClock
-	reloadClock = func() time.Time { return time.Unix(now.Load(), 0) }
+	installed := reloadInstrumentsRef.Load()
+	reloadInstrumentsRef.Store(&reloadInstruments{
+		lastReload: installed.lastReload,
+		failures:   installed.failures,
+		clock:      func() time.Time { return time.Unix(now.Load(), 0) },
+	})
 	t.Cleanup(func() {
-		// Let a swap goroutine canceled by the test exit before the globals are restored.
-		time.Sleep(50 * time.Millisecond)
-		lastReloadGauge, reloadFailuresCounter, reloadClock = previousGauge, previousCounter, previousClock
+		// Goroutines still draining after the test read the instruments
+		// atomically, so restoring them here cannot race.
+		reloadInstrumentsRef.Store(previousInstruments)
 		otel.SetMeterProvider(previousProvider)
 		require.NoError(t, provider.Shutdown(context.Background()))
 	})
@@ -108,15 +113,20 @@ func TestReloadMetricsPrometheusExposition(t *testing.T) {
 	require.NoError(t, err)
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
 	previousProvider := otel.GetMeterProvider()
-	previousGauge, previousCounter, previousClock := lastReloadGauge, reloadFailuresCounter, reloadClock
+	previousInstruments := reloadInstrumentsRef.Load()
 	otel.SetMeterProvider(provider)
 	t.Cleanup(func() {
-		lastReloadGauge, reloadFailuresCounter, reloadClock = previousGauge, previousCounter, previousClock
+		reloadInstrumentsRef.Store(previousInstruments)
 		otel.SetMeterProvider(previousProvider)
 		require.NoError(t, provider.Shutdown(context.Background()))
 	})
 	require.NoError(t, setupReloadMetrics())
-	reloadClock = func() time.Time { return time.Unix(1700000000, 0) }
+	installed := reloadInstrumentsRef.Load()
+	reloadInstrumentsRef.Store(&reloadInstruments{
+		lastReload: installed.lastReload,
+		failures:   installed.failures,
+		clock:      func() time.Time { return time.Unix(1700000000, 0) },
+	})
 
 	recordConfigReloadSuccess(context.Background())
 	recordConfigReloadFailure(context.Background(), reloadStageRouterBuild)

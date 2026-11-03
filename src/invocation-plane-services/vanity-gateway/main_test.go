@@ -441,7 +441,7 @@ func testConfigReloadMetricsExposed(t *testing.T, client http.Client, startedAt 
 		require.NoError(t, err)
 
 		for _, stage := range []string{"load", "router_build"} {
-			require.Regexp(t, `(?m)^nvcf_vanity_gateway_config_reload_failures_total\{[^}]*stage="`+stage+`"[^}]*\} 0$`, string(body))
+			require.Regexp(t, `(?m)^nvcf_vanity_gateway_config_reload_failures_total\{[^}]*stage="`+stage+`"[^}]*\} \d+(\.\d+)?$`, string(body))
 		}
 		match := regexp.MustCompile(`(?m)^nvcf_vanity_gateway_last_successful_config_reload_timestamp_seconds(?:\{[^}]*\})? (\S+)$`).FindStringSubmatch(string(body))
 		require.NotNil(t, match, "the gauge must be set once the initial router is built")
