@@ -1086,8 +1086,10 @@ in `error.message`, as described in [Error Responses](#error-responses).
 A `503` with `no ready backends` means the router knows the model but no
 backend is ready, for example while the only instance is replaced or the model
 is still loading. The response carries `Retry-After`, and clients should retry.
-The router keeps a model known for 15 minutes after its last backend leaves,
-so a removed function returns this `503` before it returns `404`. Check:
+By default the router keeps a model known for 15 minutes after its last
+backend leaves, so a removed function returns this `503` before it returns
+`404`. The request router flag `--deregistered-model-grace-ms` sets this
+period, and `0` disables it. Check:
 
 - The deployment became `ACTIVE` more than about one minute ago. The sidecar
   registers with the request routers after the pod is `Running`.

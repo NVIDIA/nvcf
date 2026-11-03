@@ -31,6 +31,8 @@ mod startup;
 
 use startup::runtime_from_args;
 
+const MAX_DEREGISTERED_MODEL_GRACE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
 mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
@@ -176,12 +178,14 @@ struct Args {
     routing_reservation_ttl_max_ms: u64,
     /// How long a model stays known after its last backend deregisters.
     /// Requests in this window get a retryable `503` with `Retry-After`
-    /// instead of `404`, covering backend replacement. 0 disables.
+    /// instead of `404`, covering backend replacement. 0 disables; at most
+    /// 7 days.
     #[arg(
         long,
         default_value_t = DEFAULT_DEREGISTERED_MODEL_GRACE.as_millis() as u64,
         env = "STARGATE_DEREGISTERED_MODEL_GRACE_MS",
-        value_name = "MS"
+        value_name = "MS",
+        value_parser = clap::value_parser!(u64).range(..=MAX_DEREGISTERED_MODEL_GRACE_MS)
     )]
     deregistered_model_grace_ms: u64,
     /// Grace period for shutdown tasks after Stargate starts draining.
@@ -752,6 +756,17 @@ mod tests {
         let config = runtime_config_from_args(&args, proxy_transport(&args))
             .expect("runtime config should parse");
         assert_eq!(config.deregistered_model_grace, Duration::ZERO);
+
+        let args = parse_args("--deregistered-model-grace-ms 604800000");
+        assert_eq!(
+            args.deregistered_model_grace_ms,
+            MAX_DEREGISTERED_MODEL_GRACE_MS
+        );
+        assert_parse_error("--deregistered-model-grace-ms 604800001", "604800001");
+        assert_parse_error(
+            "--deregistered-model-grace-ms 18446744073709551615",
+            "18446744073709551615",
+        );
     }
 
     #[test]
