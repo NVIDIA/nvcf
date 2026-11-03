@@ -147,6 +147,9 @@ jobs:
       CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     container:
       image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/dsx-ai-factory/nvcf/bazel-ci:0.14.0' }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         # In container jobs Actions falls back to plain `sh` (dash), which
