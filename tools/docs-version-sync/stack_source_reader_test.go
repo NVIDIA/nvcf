@@ -43,7 +43,7 @@ func TestResolveStackSourceSnapshotAcceptsExplicitSelector(t *testing.T) {
 	repo := initTestGitRepo(t)
 	release := commitTestStackSource(t, repo, "1.2.3", map[string]string{"stack.yaml": "version: 1.2.3\n"})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		wantPath := "/repos/NVIDIA/nvcf/git/ref/tags/deploy/stacks/self-managed/v1.2.3"
+		wantPath := "/repos/dsx-ai-factory/nvcf/git/ref/tags/deploy/stacks/self-managed/v1.2.3"
 		if r.URL.Path != wantPath {
 			http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
 			return

@@ -40,7 +40,7 @@ type editionStack struct {
 	InventoryURL   string `json:"inventory_url"`
 }
 
-var qualificationPathRE = regexp.MustCompile(`^/NVIDIA/nvcf/(pull|issues)/[1-9][0-9]*$`)
+var qualificationPathRE = regexp.MustCompile(`^/(NVIDIA|dsx-ai-factory)/nvcf/(pull|issues)/[1-9][0-9]*$`)
 
 func renderEditionSummary(catalog *Catalog, stackName string) (string, error) {
 	if catalog.DocsEdition == nil {
@@ -72,7 +72,7 @@ func renderEditionSummary(catalog *Catalog, stackName string) (string, error) {
 	if catalog.UmbrellaManifestSHA256 == "" {
 		b.WriteString("\nThe docs edition versions this documented combination. Each stack keeps its own artifact version.\n")
 	} else {
-		fmt.Fprintf(&b, "\nEach stack keeps its own artifact version. Docs corrections keep this NVCF release version. [Download the release bundle](https://github.com/NVIDIA/nvcf/releases/download/%s/%s).\n", umbrellaTag(edition.Version), umbrellaBundleName(edition.Version))
+		fmt.Fprintf(&b, "\nEach stack keeps its own artifact version. Docs corrections keep this NVCF release version. [Download the release bundle](https://github.com/dsx-ai-factory/nvcf/releases/download/%s/%s).\n", umbrellaTag(edition.Version), umbrellaBundleName(edition.Version))
 	}
 	return b.String(), nil
 }
@@ -96,7 +96,7 @@ func validateDocsEdition(catalog *Catalog) error {
 	case ReleaseSetQualified:
 		evidence, err := url.Parse(edition.Qualification)
 		if err != nil || evidence.Scheme != "https" || evidence.Host != "github.com" || evidence.User != nil || !qualificationPathRE.MatchString(evidence.Path) {
-			return fmt.Errorf("qualified docs edition requires a public NVIDIA/nvcf pull request or issue URL recording approval of the complete combination")
+			return fmt.Errorf("qualified docs edition requires a public dsx-ai-factory/nvcf pull request or issue URL recording approval of the complete combination")
 		}
 	default:
 		return fmt.Errorf("docs edition status must be development or qualified")
@@ -206,7 +206,19 @@ func validateEditionTransition(previous, current *Catalog) error {
 	return nil
 }
 
+// Editions frozen before the repository moved to dsx-ai-factory publish
+// inventory URLs under the NVIDIA owner. GitHub redirects those URLs, and the
+// release branches that hold them are immutable.
+const (
+	releaseDownloadBase       = "https://github.com/dsx-ai-factory/nvcf/releases/download/"
+	legacyReleaseDownloadBase = "https://github.com/NVIDIA/nvcf/releases/download/"
+)
+
 func manifestForEdition(catalog *Catalog) ([]byte, error) {
+	return manifestForEditionWithBase(catalog, releaseDownloadBase)
+}
+
+func manifestForEditionWithBase(catalog *Catalog, downloadBase string) ([]byte, error) {
 	if catalog.DocsEdition == nil {
 		return nil, fmt.Errorf("catalog has no docs edition")
 	}
@@ -216,7 +228,7 @@ func manifestForEdition(catalog *Catalog) ([]byte, error) {
 	manifest := editionManifest{SchemaVersion: 1, Edition: *catalog.DocsEdition, Stacks: map[string]editionStack{}}
 	for _, name := range releaseSetStackNames {
 		stack, _ := catalog.ReleaseSet.Stacks.byName(name)
-		manifest.Stacks[name] = editionStack{Version: stack.Version, SourceTag: stack.SourceTag, SourceCommit: stack.SourceCommit, InventoryAsset: stack.InventoryAsset, InventoryURL: "https://github.com/NVIDIA/nvcf/releases/download/" + stack.SourceTag + "/" + stack.InventoryAsset}
+		manifest.Stacks[name] = editionStack{Version: stack.Version, SourceTag: stack.SourceTag, SourceCommit: stack.SourceCommit, InventoryAsset: stack.InventoryAsset, InventoryURL: downloadBase + stack.SourceTag + "/" + stack.InventoryAsset}
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	return append(data, '\n'), err
@@ -236,6 +248,15 @@ func syncEditionManifest(repoRoot string, catalog *Catalog, check bool) error {
 		return nil
 	}
 	if check {
+		if readErr == nil {
+			legacy, err := manifestForEditionWithBase(catalog, legacyReleaseDownloadBase)
+			if err != nil {
+				return err
+			}
+			if string(existing) == string(legacy) {
+				return nil
+			}
+		}
 		return fmt.Errorf("%w: docs/edition-manifest.json does not match the edition catalog", ErrCheckFailed)
 	}
 	if readErr != nil && !os.IsNotExist(readErr) {
