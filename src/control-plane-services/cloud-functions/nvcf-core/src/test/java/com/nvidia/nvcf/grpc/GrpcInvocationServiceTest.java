@@ -48,6 +48,7 @@ import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_5;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.persistence.function.entity.FunctionType;
 import com.nvidia.nvcf.persistence.function.entity.RateLimitUdt;
 import com.nvidia.nvcf.proto.ClientInvokeRequest;
@@ -1170,6 +1171,18 @@ class GrpcInvocationServiceTest extends BaseFunctionInvocationTest {
                 .isInstanceOf(StatusRuntimeException.class)
                 .extracting(thrown -> ((StatusRuntimeException) thrown).getStatus().getCode())
                 .isEqualTo(Status.NOT_FOUND.getCode());
+    }
+
+    @Test
+    void degradedFunctionReturnsInvalidArgument() {
+        setFunctionStatus(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionStatus.DEGRADED);
+        var clientAuth = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                         List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        assertThatThrownBy(() -> functionAuth(clientAuth, TEST_FUNCTION_ID.toString(), null))
+                .isInstanceOf(StatusRuntimeException.class)
+                .extracting(thrown -> ((StatusRuntimeException) thrown).getStatus().getCode())
+                .isEqualTo(Status.INVALID_ARGUMENT.getCode());
     }
 
     @Test

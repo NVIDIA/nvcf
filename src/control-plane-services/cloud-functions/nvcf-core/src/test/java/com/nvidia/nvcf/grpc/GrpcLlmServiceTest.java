@@ -38,6 +38,7 @@ import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_2;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.persistence.function.entity.FunctionType;
 import com.nvidia.nvcf.proto.llm_gateway.AuthLlmInvokeRequest;
 import com.nvidia.nvcf.proto.llm_gateway.AuthLlmInvokeResponse;
@@ -501,6 +502,23 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
         assertThatThrownBy(() -> callLlmAuth(serviceToken, clientToken, "not-a-uuid"))
                 .isInstanceOf(StatusRuntimeException.class)
                 .hasMessageContaining("INVALID_ARGUMENT");
+    }
+
+    @Test
+    void authLlmInvocation_degradedFunction_returnsFailedPrecondition() {
+        setFunctionStatus(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionStatus.DEGRADED);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        assertThatThrownBy(() -> callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID))
+                .isInstanceOf(StatusRuntimeException.class)
+                .satisfies(thrown -> {
+                    var status = ((StatusRuntimeException) thrown).getStatus();
+                    assertThat(status.getCode()).isEqualTo(Status.Code.FAILED_PRECONDITION);
+                    assertThat(status.getDescription()).contains("DEGRADED");
+                });
     }
 
     @Test
