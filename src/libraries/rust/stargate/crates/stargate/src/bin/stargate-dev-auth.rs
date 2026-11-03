@@ -107,12 +107,15 @@ impl DevAuth {
             ensure!(!value.is_empty(), "{name} must not be empty");
         }
         // An empty token would authorize a request that omits clientAuthorizationToken,
-        // because an omitted proto3 string is "".
+        // because an omitted proto3 string is "". An empty ncaId would become the
+        // gateway's rate-limit key and reject every authorized invocation.
         if let Some(invocation) = &config.invocation {
-            ensure!(
-                !invocation.client_token.is_empty(),
-                "invocation.clientToken must not be empty"
-            );
+            for (name, value) in [
+                ("invocation.clientToken", &invocation.client_token),
+                ("invocation.ncaId", &invocation.nca_id),
+            ] {
+                ensure!(!value.is_empty(), "{name} must not be empty");
+            }
         }
         Ok(Self {
             config,
@@ -412,20 +415,25 @@ mod tests {
     }
 
     #[test]
-    fn invocation_rejects_an_empty_client_token_at_startup() {
-        let config: Config = serde_json::from_str(
-            r#"{
-                "serviceToken": "service-token",
-                "workerToken": "worker-token",
-                "routingKey": "mockdc-usw2-a",
-                "invocation": {"clientToken": "", "ncaId": "nca-1"}
-            }"#,
-        )
-        .expect("config should parse");
-        let error = DevAuth::new(config)
-            .err()
-            .expect("an empty client token must be rejected");
-        assert!(error.to_string().contains("clientToken"), "{error}");
+    fn invocation_rejects_empty_client_values_at_startup() {
+        for (field, invocation) in [
+            ("clientToken", r#"{"clientToken": "", "ncaId": "nca-1"}"#),
+            ("ncaId", r#"{"clientToken": "client-token", "ncaId": ""}"#),
+        ] {
+            let config: Config = serde_json::from_str(&format!(
+                r#"{{
+                    "serviceToken": "service-token",
+                    "workerToken": "worker-token",
+                    "routingKey": "mockdc-usw2-a",
+                    "invocation": {invocation}
+                }}"#
+            ))
+            .expect("config should parse");
+            let error = DevAuth::new(config)
+                .err()
+                .unwrap_or_else(|| panic!("an empty {field} must be rejected"));
+            assert!(error.to_string().contains(field), "{error}");
+        }
     }
 
     #[tokio::test]
