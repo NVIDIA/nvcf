@@ -445,7 +445,7 @@ tests/bdd/scripts/destroy-nonlocal-stack.sh \
 
 Operator notes:
 
-- `stack-multi` and `topology-multi` require `jq` on `PATH`.
+- `stack-multi`, `topology-single`, and `topology-multi` require `jq` on `PATH`.
 - CRDs survive every mode. If a future install schema-incompatibly
   changes a CRD, run `kubectl --context <ctx> delete crd <name>`
   manually before the next install.
