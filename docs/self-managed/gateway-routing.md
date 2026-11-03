@@ -585,7 +585,7 @@ These resources must be created manually before deploying the control plane:
 When you deploy the control plane via helmfile, the `nvcf-gateway-routes` chart automatically creates:
 
 - `HTTPRoutes` for API Keys, NVCF API, and Invocation services
-- Optional LLM invocation HTTPRoute when the `llmInvocation` route is enabled
+- Optional LLM API and LLM invocation HTTPRoutes when the LLM add-on is enabled
 - Optional Vanity Gateway HTTPRoute only when the stack package includes the addon and the `vanityGateway` route is enabled
 - Optional NVCF UI HTTPRoute only when the stack package includes the addon and the `nvcfUi` route is enabled
 - `TCPRoute` for gRPC
@@ -609,6 +609,7 @@ These routes attach to the Gateway you prepared in [Gateway quickstart](./gatewa
 | API Keys | `api-keys.<domain>` | 80 | Token generation and API key management |
 | NVCF API | `api.<domain>` | 80 | Function management (create, deploy, delete) |
 | Invocation | `invocation.<domain>`, `*.invocation.<domain>` | 80 | Function invocation (wildcard for dynamic routing) |
+| LLM API | `llm.<domain>` | 80 | Optional routing to `llm-api-gateway.nvcf:8080`, created when the LLM add-on is enabled |
 | LLM Invocation | `llm.invocation.<domain>` | 80 | LLM invocation routes such as `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, and the beta `/v1/decisions` and `/v1/systemone` |
 | Vanity Gateway | `vanity.<domain>` | 80 | Optional vanity host/path routing to `vanity-gateway.nvcf:8080`, only in stack packages that include the addon |
 | NVCF UI | `nvcf-ui.<domain>` | 80 | Optional nvcf-ui host/path routing to `nvcf-ui.nvcf-ui:8300`, only in stack packages that include the addon |

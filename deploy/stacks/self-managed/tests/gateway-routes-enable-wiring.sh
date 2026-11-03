@@ -99,9 +99,9 @@ write_env() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. Default: flags unset -> the stack passes NO enabled override for any of the
-#    three, so the gateway-routes chart default (true) stands and existing
-#    installs are unchanged.
+# 1. Default: flags unset -> the stack passes NO enabled override for apiKeys,
+#    sis or reval, so the gateway-routes chart default (true) stands. With the
+#    LLM add-on off by default, llmApiGateway is forced to false.
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:

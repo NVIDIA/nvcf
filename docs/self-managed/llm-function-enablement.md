@@ -962,10 +962,10 @@ To remove the LLM addon from a running control plane:
    not affected.
 2. Set `addons.llm.enabled: false` in the environment file, or restore the
    environment file from before enablement, and apply the control-plane
-   stack. This removes the `llm.invocation.<domain>` route and clears the
-   LLM settings in the NVCF API remote configuration, so new LLM functions
-   can no longer be invoked or launched with the sidecar. No running
-   Deployment or StatefulSet changes.
+   stack. This removes the `llm.<domain>` and `llm.invocation.<domain>`
+   routes and clears the LLM settings in the NVCF API remote configuration,
+   so new LLM functions can no longer be invoked or launched with the
+   sidecar. No running Deployment or StatefulSet changes.
 3. Remove the addon releases. With the addon disabled, the Helmfile no longer
    contains these releases, so the apply leaves them installed and running
    instead of uninstalling them:
