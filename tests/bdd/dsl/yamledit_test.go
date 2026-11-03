@@ -430,3 +430,61 @@ func TestParsePathInvalidShapes(t *testing.T) {
 		})
 	}
 }
+
+func TestSetYAMLKeyReplacesSubtreeWithTypedYAML(t *testing.T) {
+	t.Setenv("BDD_TEST_FUNCTION_ID", "fn-1")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env.yaml")
+	writeFile(t, path, "global:\n  domain: localhost\naddons:\n  vanityGateway:\n    enabled: true\n    mappingConfig:\n      v2config:\n        openai:\n          host: old.localhost\n")
+
+	err := SetYAMLKey(path, "addons.vanityGateway.mappingConfig.v2config.openai", `host: openai.localhost
+chatCompletions:
+  primary:
+    functionID: ${BDD_TEST_FUNCTION_ID}
+    shadows:
+      - modelName: shadow
+        percentage: 50
+        samplingMethod: [promptCacheKey, firstMessageHash]
+`)
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	for key, want := range map[string]string{
+		"global.domain":                "localhost",
+		"addons.vanityGateway.enabled": "true",
+		"addons.vanityGateway.mappingConfig.v2config.openai.host":                               "openai.localhost",
+		"addons.vanityGateway.mappingConfig.v2config.openai.chatCompletions.primary.functionID": "fn-1",
+	} {
+		got, found, err := ReadYAMLKey(path, key)
+		if err != nil || !found || got != want {
+			t.Fatalf("%s = %q (found %v, err %v), want %q", key, got, found, err, want)
+		}
+	}
+	data, _ := os.ReadFile(path)
+	for _, want := range []string{"percentage: 50\n", "- promptCacheKey\n"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("typed value %q missing:\n%s", want, data)
+		}
+	}
+}
+
+func TestSetYAMLKeyCreatesMissingParentsAndRejectsBadInput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env.yaml")
+	writeFile(t, path, "global: scalar\n")
+	if err := SetYAMLKey(path, "addons.vanityGateway.mappingConfig", "v2config: {}\n"); err != nil {
+		t.Fatalf("missing parents: %v", err)
+	}
+	if _, found, _ := ReadYAMLKey(path, "addons.vanityGateway.mappingConfig.v2config"); !found {
+		t.Fatal("subtree not created")
+	}
+	if err := SetYAMLKey(path, "global.child", "a: 1\n"); err == nil {
+		t.Fatal("expected error when a scalar blocks descent")
+	}
+	if err := SetYAMLKey(path, "addons.bad", "a: [1\n"); err == nil {
+		t.Fatal("expected error for invalid YAML")
+	}
+	if err := SetYAMLKey(path, "", "a: 1\n"); err == nil {
+		t.Fatal("expected error for an empty key")
+	}
+}

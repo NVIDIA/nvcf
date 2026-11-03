@@ -67,7 +67,7 @@ public class ClusterGroupController {
                      cluster groups such as GFN, OCI, etc.
                     """ + AUTH_DESCRIPTION
     )
-    @PreAuthorize("hasAuthority('list_cluster_groups')")
+    @PreAuthorize("hasAnyAuthority('list_cluster_groups', 'apikey:list_cluster_groups')")
     public ClusterGroupsResponse getClusterGroups(
             @NonNull Authentication authentication) {
         var ncaId =  accountService.getNcaId(authentication);

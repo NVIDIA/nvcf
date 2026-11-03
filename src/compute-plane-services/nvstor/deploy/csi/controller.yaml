@@ -1,0 +1,133 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nvstor-csi-controller
+  namespace: nvstor
+  labels:
+    app: nvstor-csi-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nvstor-csi-controller
+  template:
+    metadata:
+      labels:
+        app: nvstor-csi-controller
+    spec:
+      serviceAccountName: nvstor-csi-controller
+      containers:
+        # CSI provisioner sidecar — watches PVCs and calls CreateVolume.
+        - name: csi-provisioner
+          image: registry.k8s.io/sig-storage/csi-provisioner:v4.0.0
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--v=5"
+            - "--leader-election"
+            - "--leader-election-namespace=nvstor"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+
+        # CSI attacher sidecar — calls ControllerPublishVolume.
+        - name: csi-attacher
+          image: registry.k8s.io/sig-storage/csi-attacher:v4.5.0
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--v=5"
+            - "--leader-election"
+            - "--leader-election-namespace=nvstor"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+
+        # nvstor CSI controller plugin.
+        - name: nvstor-csi
+          image: nvstor:latest
+          command: ["nvstor-csi"]
+          securityContext:
+            runAsUser: 0
+            privileged: true
+          args:
+            - "--endpoint=unix:///csi/csi.sock"
+            - "--nvstor-server=$(NVSTOR_SERVER)"
+          env:
+            - name: NVSTOR_SERVER
+              valueFrom:
+                configMapKeyRef:
+                  name: nvstor-config
+                  key: server_address
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          ports:
+            - containerPort: 9808
+              name: healthz
+
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nvstor-csi-controller
+  namespace: nvstor
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvstor-csi-controller
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nvstor-csi-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nvstor-csi-controller
+subjects:
+  - kind: ServiceAccount
+    name: nvstor-csi-controller
+    namespace: nvstor

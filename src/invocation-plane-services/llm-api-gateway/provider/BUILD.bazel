@@ -28,7 +28,6 @@ go_library(
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/config",
         "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
-        "//src/invocation-plane-services/llm-api-gateway/internal/servicetier",
         "//src/invocation-plane-services/llm-api-gateway/lastcluster",
         "//src/invocation-plane-services/llm-api-gateway/models",
         "//src/invocation-plane-services/llm-api-gateway/ratelimit",
@@ -60,7 +59,6 @@ go_test(
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/config",
         "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
-        "//src/invocation-plane-services/llm-api-gateway/internal/servicetier",
         "//src/invocation-plane-services/llm-api-gateway/lastcluster",
         "//src/invocation-plane-services/llm-api-gateway/models",
         "//src/invocation-plane-services/llm-api-gateway/requestctx",

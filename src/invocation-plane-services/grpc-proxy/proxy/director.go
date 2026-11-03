@@ -120,6 +120,8 @@ type StreamDirector struct {
 	eventLedger     *eventledger.Publisher
 }
 
+var errShuttingDown = errors.New("proxy is shutting down")
+
 // workerConnectionKey
 // when a worker connects back to the proxy (this service), it sends a request id and an auth token
 // specific to the connection it wants to form. Since multiple connections are allowed per request
@@ -588,6 +590,13 @@ func (s *StreamDirector) RegisterWorker(workerAuthToken string, info workerAuthI
 	connectedAt := time.Now()
 	if err := w.Value().SetConnection(workerLink); err != nil {
 		return err
+	}
+	// A tunnel accepted after Close drained the cache would never be closed.
+	// Deleting the entry closes it through the same eviction path as every
+	// other tunnel. If Close starts after this check, its drain closes it.
+	if s.shuttingDown.Load() {
+		s.workers.Delete(key)
+		return errShuttingDown
 	}
 	s.eventLedger.Publish(context.Background(), newAttachmentEstablished(w.Value(), info, connectedAt))
 	return nil

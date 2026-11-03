@@ -17,6 +17,11 @@ spring:
     contact-points: ${CASSANDRA_CONTACT_POINTS:cassandra.cassandra-system.svc.cluster.local}
     keyspace-name: nvcf_api
     local-datacenter: ${CASSANDRA_DATACENTER:ncp}
+    advanced:
+      retry-policy:
+        # Also retry range-read (index lookup) timeouts on the next host. Override with
+        # SPRING_CASSANDRA_ADVANCED_RETRY_POLICY_CLASS to go back to NextHostRetryPolicy.
+        class: com.nvidia.boot.cassandra.retry.RangeReadRetryPolicy
     username: cassandra
     password: cassandra
   security:
@@ -62,7 +67,9 @@ management:
     tracing:
       export:
         otlp:
-          endpoint: https://dummy:8282
+          # No trace backend by default. When this is empty, workloads get no
+          # OTEL_EXPORTER_OTLP_ENDPOINT and run with tracing disabled.
+          endpoint: ""
           headers:
             lightstep-access-token: unused
 
@@ -96,7 +103,7 @@ nvcf:
     otel-container: dummy
     niclls-container: dummy
     ess-agent-container: dummy
-    otel-collector-container: dummy
+    otel-collector-container: ""
     llm-credential-manager-image: dummy
     llm-router-client-image: dummy
   ess:

@@ -19,6 +19,8 @@ package treecopy
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -423,4 +425,24 @@ func mustReadFile(t *testing.T, p string) string {
 		t.Fatalf("read %s: %v", p, err)
 	}
 	return string(b)
+}
+
+// A worker's failure cancels the walk; the copy must report the failure,
+// not the cancellation it caused (an L2 volume that filled up reported
+// "context canceled" instead of "no space left on device").
+func TestTreeCopier_ReportsTheWorkerErrorNotTheCancel(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	for i := 0; i < 3000; i++ {
+		mustWriteRegular(t, filepath.Join(src, fmt.Sprintf("f%04d", i)), "x", 0o644)
+	}
+	// The destination of the first file is a non-empty directory: writing
+	// it fails.
+	mustWriteRegular(t, filepath.Join(dst, "f0000", "keep"), "y", 0o644)
+	_, _, err := NewCopier(nil, nil).Copy(context.Background(), src, dst)
+	if err == nil {
+		t.Fatal("copy succeeded over a directory")
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Errorf("reported the cancellation, not the cause: %v", err)
+	}
 }

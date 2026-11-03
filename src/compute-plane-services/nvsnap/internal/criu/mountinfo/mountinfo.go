@@ -53,6 +53,10 @@ func MountinfoPathForRoot(procRoot string, pid int) string { //nolint:revive // 
 
 // MountInfo represents the subset of mountinfo we need.
 type MountInfo struct {
+	// Root is field (4): the path within the source filesystem that is
+	// mounted. For a kubelet volume it names the volume's directory, e.g.
+	// .../volumes/kubernetes.io~empty-dir/<name>.
+	Root       string
 	MountPoint string
 	FsType     string
 	// Opts is field (6) of /proc/<pid>/mountinfo — per-mount options like
@@ -68,7 +72,7 @@ type MountInfo struct {
 //
 //	(1)mount ID (2)parent ID (3)major:minor (4)root (5)mount point (6)opts (7+)optional fields - (fstype) (src) (superopts)
 //
-// We only need field (5) mount point.
+// Fields (4) root, (5) mount point and (6) opts, then fstype and superopts.
 func ParseMountinfo(path string) ([]MountInfo, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -93,7 +97,7 @@ func ParseMountinfo(path string) ([]MountInfo, error) {
 		if mp == "" {
 			continue
 		}
-		mi := MountInfo{MountPoint: mp, Opts: left[5]}
+		mi := MountInfo{Root: left[3], MountPoint: mp, Opts: left[5]}
 		if len(parts) == 2 {
 			right := strings.Fields(parts[1])
 			// fstype source superopts

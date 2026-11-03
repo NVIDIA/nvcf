@@ -42,6 +42,7 @@ type Handlers struct {
 
 type observabilityMetrics struct {
 	messagesUsage               otelmetric.Int64Counter
+	decisionUsage               otelmetric.Int64Counter
 	llmTokens                   otelmetric.Int64Counter
 	providerTime                otelmetric.Float64Histogram
 	streamFirstToken            otelmetric.Float64Histogram
@@ -52,6 +53,7 @@ type observabilityMetrics struct {
 func newObservabilityMetrics() observabilityMetrics {
 	return observabilityMetrics{
 		messagesUsage:               telemetry.MessagesUsage(),
+		decisionUsage:               telemetry.DecisionUsage(),
 		llmTokens:                   telemetry.LLMTokens(),
 		providerTime:                telemetry.ProviderTime(),
 		streamFirstToken:            telemetry.StreamFirstToken(),
@@ -158,14 +160,10 @@ func (h *Handlers) normalizeChatRequest(
 		return nil, err
 	}
 
-	if !request.ServiceTier.IsValid() {
-		request.ServiceTier = h.config.DefaultServiceTier
-	}
-
 	estimatedInputTokens := estimatedInputTokensForNormalizedRequest(
 		request.Model,
 		request,
-	) + estimatedTokenCountForUnmodeledChatFields(rawBody)
+	) + estimatedTokenCountForUnmodeledChatFields(rawBody, *request.Messages)
 	inputTokens := estimatedInputTokens
 	maxOutputTokens := maxOutputTokensForRequest(request)
 	checkRequest := ratelimit.ResourceRequest{

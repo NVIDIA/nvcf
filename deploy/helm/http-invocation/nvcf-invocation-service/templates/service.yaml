@@ -35,5 +35,11 @@ spec:
       targetPort: metrics
       protocol: TCP
     {{- end }}
+    {{- if .Values.invocation.workerTls.enabled }}
+    - name: worker-tls
+      port: {{ .Values.invocation.workerTls.port }}
+      targetPort: worker-tls
+      protocol: TCP
+    {{- end }}
   selector:
     {{- include "nvcf-invocation-service.selectorLabels" . | nindent 4 }}

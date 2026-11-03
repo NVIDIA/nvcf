@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	translatecommon "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
@@ -238,6 +239,9 @@ func (r *Reconciler) doSharedStorageSMB(ctx context.Context,
 		case corev1.PodRunning:
 			// Ensure containers ready status is true
 			if !nvcak8sutil.IsPodReady(smbPod.Status) {
+				// The pod started, so a pull or scheduling reason from an earlier Pending
+				// phase no longer applies and must not linger on the request.
+				meta.RemoveStatusCondition(&stCopy.Status.Conditions, ConditionTypeSMBServerReady)
 				return reconcile.Result{RequeueAfter: defaultRequeueDelay}, nil
 			}
 		case corev1.PodFailed, corev1.PodSucceeded:
@@ -246,8 +250,26 @@ func (r *Reconciler) doSharedStorageSMB(ctx context.Context,
 			stCopy.Status.Phase = nvcav1new.StorageFailed
 			goto done
 		case corev1.PodPending, corev1.PodUnknown:
+			// Both causes can clear on their own, so keep retrying for a while and
+			// record why the pod is stuck. Past the timeout, fail the request so the
+			// cause reaches the task through the failure path.
+			setSMBServerPendingCondition(stCopy, smbPod)
+			if cond := meta.FindStatusCondition(stCopy.Status.Conditions, ConditionTypeSMBServerReady); cond != nil &&
+				cond.Status == metav1.ConditionFalse {
+				timeout := r.smbServerPendingTimeout(cond.Reason)
+				if r.nowFunc().Sub(cond.LastTransitionTime.Time) > timeout {
+					rerr = failSMBServerNotStarting(stCopy, cond, timeout)
+					log.Error(rerr, "nvcf-smb-server pod did not start in time", "timeout", timeout.String())
+					goto done
+				}
+			}
 			return reconcile.Result{RequeueAfter: defaultRequeueDelay}, nil
 		}
+		meta.SetStatusCondition(&stCopy.Status.Conditions, metav1.Condition{
+			Type:   ConditionTypeSMBServerReady,
+			Status: metav1.ConditionTrue,
+			Reason: ConditionReasonPodReady,
+		})
 
 		// Create RW and RO PVs and StorageClass plus the definitions for PVCs
 		sc := newStorageClass(st.Namespace)
@@ -408,6 +430,87 @@ done:
 	}
 
 	return reconcile.Result{}, rerr
+}
+
+// setSMBServerPendingCondition records on the StorageRequest why a Pending SMB
+// server pod is not starting. A pod that is merely starting clears the condition.
+func setSMBServerPendingCondition(stCopy *nvcav1new.StorageRequest, pod *corev1.Pod) {
+	reason, message := smbPodPendingCause(pod)
+	if reason == "" {
+		meta.RemoveStatusCondition(&stCopy.Status.Conditions, ConditionTypeSMBServerReady)
+		return
+	}
+	// SetStatusCondition keeps LastTransitionTime when only the reason changes. The timeout is
+	// per cause, so a different cause starts a new timer instead of inheriting the old one.
+	if cur := meta.FindStatusCondition(stCopy.Status.Conditions, ConditionTypeSMBServerReady); cur != nil && cur.Reason != reason {
+		meta.RemoveStatusCondition(&stCopy.Status.Conditions, ConditionTypeSMBServerReady)
+	}
+	meta.SetStatusCondition(&stCopy.Status.Conditions, metav1.Condition{
+		Type:    ConditionTypeSMBServerReady,
+		Status:  metav1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
+	})
+}
+
+// smbPodPendingCause returns a condition reason and message when a Pending pod
+// cannot pull its image or cannot be scheduled, and "" for a normal start.
+func smbPodPendingCause(pod *corev1.Pod) (reason, message string) {
+	if issues, ok := nvcak8sutil.ImagePullIssuesReported(pod.Status); ok {
+		issue := issues[0]
+		image := issue.Image
+		if image == "" {
+			image = podContainerImage(pod, issue.Name)
+		}
+		if image == "" {
+			return ConditionReasonImagePullFailed,
+				fmt.Sprintf("container %q cannot pull its image: %s", issue.Name, issue.Message)
+		}
+		return ConditionReasonImagePullFailed,
+			fmt.Sprintf("container %q cannot pull image %q: %s", issue.Name, image, issue.Message)
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse &&
+			c.Reason == corev1.PodReasonUnschedulable {
+			return ConditionReasonUnschedulable, fmt.Sprintf("pod %s cannot be scheduled: %s", pod.Name, c.Message)
+		}
+	}
+	return "", ""
+}
+
+// podContainerImage returns the image of the named init or regular container in the pod
+// spec, or "" when the pod has no such container.
+func podContainerImage(pod *corev1.Pod, name string) string {
+	for _, c := range append(append([]corev1.Container{}, pod.Spec.InitContainers...), pod.Spec.Containers...) {
+		if c.Name == name {
+			return c.Image
+		}
+	}
+	return ""
+}
+
+// smbServerPendingTimeout returns how long the SMB server pod may stay unable to start for
+// the given SMBServerReady reason before the request fails. It reuses the thresholds NVCA
+// applies to other pods: MaxImagePullErrorThreshold for image pull failures and
+// PodScheduledThreshold for pods that cannot be scheduled.
+func (r *Reconciler) smbServerPendingTimeout(reason string) time.Duration {
+	tc := r.k8sTimeConfig
+	if tc == nil {
+		tc = (&nvcak8sutil.TimeConfig{}).Complete()
+	}
+	if reason == ConditionReasonImagePullFailed {
+		return tc.MaxImagePullErrorThreshold
+	}
+	return tc.PodScheduledThreshold
+}
+
+// failSMBServerNotStarting marks the request failed after the SMB server pod stayed
+// unable to start for longer than timeout. The SMBServerReady condition keeps the
+// cause that GetStorageRequestErrorLog reports to the task.
+func failSMBServerNotStarting(stCopy *nvcav1new.StorageRequest, cond *metav1.Condition, timeout time.Duration) error {
+	stCopy.Status.Phase = nvcav1new.StorageFailed
+	return reconcile.TerminalError(fmt.Errorf("%s pod did not start within %s: %s: %s",
+		SMBServerPodName, timeout, cond.Reason, cond.Message))
 }
 
 // failSharedStorageObjectCreate marks the request failed after the API server

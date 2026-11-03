@@ -4,7 +4,7 @@
 #
 # Check out a shared bump branch on top of the current base branch.
 #
-#   prepare-stack-pin-branch <branch> <base-branch> [<bump-command>...]
+#   prepare-stack-pin-branch [--derived <path>]... <branch> <base-branch> [<bump-command>...]
 #
 # The chart version bump and stack pin bump workflows each add one commit per
 # release to a shared branch. Every run first moves that branch onto the
@@ -14,10 +14,18 @@
 # The branch's commits are replayed onto the base branch one at a time, oldest
 # first:
 #
+#   only derived files    dropped, whether or not it applies. See below.
 #   applies cleanly       kept as it is.
 #   already on the base   dropped. Someone landed the same change.
 #   conflicts             a workflow bump commit is regenerated; any other
 #                         commit stops the run.
+#
+# A --derived path holds files the caller renders from the rest of the tree
+# after its bump, such as golden render fixtures. A commit that changes only
+# files under such paths is not replayed: it was rendered for the pins the
+# branch had then, and the caller renders those files again for the pins it
+# ends up with. Replaying it would conflict whenever the base branch rendered
+# them too.
 #
 # A conflict means the base branch moved the same pin after the bump was
 # recorded, usually through a manual bump. Merging the two version lines as
@@ -39,7 +47,12 @@
 
 set -euo pipefail
 
-usage="usage: prepare-stack-pin-branch <branch> <base-branch> [<bump-command>...]"
+usage="usage: prepare-stack-pin-branch [--derived <path>]... <branch> <base-branch> [<bump-command>...]"
+derived=()
+while [ "${1:-}" = --derived ]; do
+  derived+=("${2:?${usage}}")
+  shift 2
+done
 branch="${1:?${usage}}"
 base_branch="${2:?${usage}}"
 shift 2
@@ -82,6 +95,19 @@ message_match() {
 
 recorded_tag() {
   message_match "$1" '^Opened by the .* workflow on release of (.*)\.$'
+}
+
+# True when <commit> changes at least one file and every file it changes is
+# under a --derived path.
+only_derived() {
+  local commit=$1 path
+  local outside=()
+  [ "${#derived[@]}" -gt 0 ] || return 1
+  for path in "${derived[@]}"; do
+    outside+=(":(exclude)${path}")
+  done
+  ! git diff --quiet "${commit}^" "${commit}" \
+    && git diff --quiet "${commit}^" "${commit}" -- . "${outside[@]}"
 }
 
 stop() {
@@ -174,6 +200,12 @@ regenerate() {
 
 replay() {
   local commit=$1 tag conflicts
+
+  if only_derived "${commit}"; then
+    echo "dropped $(git log -1 --format='%h %s' "${commit}"): only derived files, which the caller renders again"
+    dropped=$((dropped + 1))
+    return
+  fi
 
   if git cherry-pick --no-commit "${commit}" >/dev/null 2>&1; then
     if git diff --cached --quiet; then

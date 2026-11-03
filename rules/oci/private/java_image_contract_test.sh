@@ -30,11 +30,11 @@
 #
 # Usage:
 #   EXPECT_ENV_COUNT=n EXPECT_ENV_0=K=V ... \
-#     java_image_contract_test.sh <image.tar> <index-dir> <jar-path> <workdir>
+#     java_image_contract_test.sh <image.tar> <index-dir> <jar-path> <workdir> <runtime-check>
 set -euo pipefail
 
-if [[ "$#" -lt 4 ]]; then
-  echo "usage: $0 <image.tar> <index dir> <jar path> <workdir>" >&2
+if [[ "$#" -ne 5 ]]; then
+  echo "usage: $0 <image.tar> <index dir> <jar path> <workdir> <runtime-check>" >&2
   exit 1
 fi
 
@@ -42,7 +42,8 @@ image_tar="$1"
 index_dir="$2"
 jar_abs="$3"
 workdir="$4"
-shift 4
+runtime_check="$5"
+shift 5
 
 # Expectations arrive as EXPECT_ENV_0..N-1 rather than positional arguments:
 # sh_test args are shell-word-split, so a value containing spaces would be
@@ -265,3 +266,5 @@ for arch in amd64 arm64; do
 
   echo "ok: ${arch} manifest present with the expected runtime contract"
 done
+
+"${runtime_check}" "${index_dir}"

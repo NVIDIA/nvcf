@@ -19,19 +19,27 @@ for the manifest and publisher interfaces.
 
 1. Inventory published and reserved docs/product versions. Allocate an unused
    version; never assign an existing docs URL to a different stack combination.
-2. Review the exact three released inventories and their source tags/commits.
-   Commit the corresponding catalog, distribution locations, and compatibility
-   requirements. Do not resolve `latest` during preparation or publication.
+2. Publish each stack independently. Select exact public stable Self-Managed,
+   Compute Plane, and Observability releases, download their inventory assets,
+   and fetch their conventional source tags. Stack maintenance branches need not
+   wait for umbrella qualification to merge or publish.
 3. Choose the product SemVer change from the highest required change to the
    supported deployment contract. A prose-only correction needs no product bump.
-4. Prepare the manifest and assemble the candidate from that reviewed commit.
+4. Prepare a release-local manifest using all three version flags. The tool
+   resolves tag commits and inventory hashes; the Development docs catalog does
+   not select these pins. Choose a full reviewed source commit for provenance,
+   `LICENSE`, and `NOTICE`. The candidate and final publication targets must
+   descend from that source commit.
    The initial release omits `--previous`; later releases supply the preceding
    qualified manifest and use `major`, `minor`, or `patch` as appropriate.
 
 ```bash
 go run -C tools/docs-version-sync . umbrella prepare \
-  --repo /path/to/nvcf --source FULL_REVIEWED_CATALOG_COMMIT \
+  --repo /path/to/nvcf --source FULL_REVIEWED_SOURCE_COMMIT \
   --version X.Y.Z --change initial \
+  --self-managed-version RELEASED_SELF_MANAGED_VERSION \
+  --compute-plane-version RELEASED_COMPUTE_PLANE_VERSION \
+  --observability-version RELEASED_OBSERVABILITY_VERSION \
   --helm-version EXACT_HELM_3_VERSION --helmfile-version EXACT_HELMFILE_1_1_VERSION \
   --inventories /path/to/exact-inventories --out /tmp/product-manifest.json
 
@@ -39,6 +47,35 @@ go run -C tools/docs-version-sync . umbrella bundle \
   --repo /path/to/nvcf --manifest /tmp/product-manifest.json \
   --inventories /path/to/exact-inventories --out /tmp/product-assets
 ```
+
+This produces manifest schema 2. Its peer constraints lock exactly the selected
+combination to qualify; they do not assert runtime compatibility before QA. The
+manifest remains `development` until whole-combination qualification is recorded.
+All three flags require plain `X.Y.Z` versions. No `latest`, branch, prerelease,
+or build-metadata selection is accepted.
+
+Local checks verify the fetched tags, inventory identities, ownership, hashes,
+and combination consistency. Candidate CI and the final publisher additionally
+check public stable release visibility and the original inventory asset bytes.
+Existing schema 1 callers can omit the version flags to select the reviewed
+catalog; their strict catalog validation remains unchanged.
+
+Commit the candidate at `deploy/releases/X.Y.Z/manifest.json`. Pull requests
+changing the manifest and pushes to the matching `release-nvcf/X.Y.Z` branch run
+candidate CI. It validates and assembles the pins and uploads a QA artifact
+named `umbrella-candidate-<sha>-<run-id>-<run-attempt>`. Pull requests use their
+head commit SHA. It creates no stable tag or release.
+Download that exact artifact for QA and retain its candidate SHA, manifest hash,
+archive hash, and CI run with the results. The CI artifact expires after
+30 days; retain required evidence in durable release storage. A pin change produces a new artifact
+and requires qualification of the changed combination.
+
+Keep implementation fixes in their owning component and stack maintenance
+branches. An older candidate branch may need the reviewed candidate tooling
+once; thereafter it carries the selection manifest and qualification metadata.
+Do not merge the whole umbrella branch back into a stack maintenance branch.
+Customer catalog publication of stack resources is not a prerequisite for
+assembly: CI consumes the public stable source releases and inventories.
 
 The archive preserves the sibling paths under `deploy/stacks/`. Each stack's
 `VERSION` is its own version; root `VERSION` is the umbrella version. The archive
@@ -83,7 +120,16 @@ configuration, and test results. Test fresh installation, supported upgrade
 paths, repeat apply, rollback limits, single/split cluster topologies, and
 supported observability profiles. Validate real workloads, original function
 and deployment identities, migrations, registration, and invocation continuity.
-Fixture chart tests validate the packaging machinery only.
+Fixture chart tests validate the packaging machinery only. The
+`Umbrella bundle E2E` workflow assembles and renders fixtures; it does not run
+live single- or multi-cluster BDDs or approve the product.
+
+Before QA sign-off, download every selected external chart through its customer
+registry or retained public upstream route. Account for bundled charts and
+subchart dependencies in the archive. Verify effective images after stack
+values and overrides; chart `appVersion` alone is insufficient. Repeat these
+checks when selected pins change. Record any engineering-registry testing
+separately from completed customer-distribution checks.
 
 Run qualification through the existing packaged Helmfile/Make entrypoints.
 Any CLI-assisted step must use the existing component-source interface with
@@ -108,6 +154,8 @@ Run `Publish Umbrella Release` from `main` with `version=X.Y.Z` and
 `target=FULL_REVIEWED_PRODUCT_COMMIT`. Use `mode=validate`, then `draft`.
 Keep that full target SHA for retries and promotion, even if `main` advances.
 The target must already belong to `main` and contain the final manifest and notes.
+The workflow validates source identities and assets; it does not execute QA
+or independently enforce a release-owner hold on external catalog publication.
 The publisher uploads missing assets, verifies existing bytes, and leaves an
 interrupted upload as a draft. Retry identical inputs. A checksum conflict
 requires investigation; do not replace a published asset.
@@ -118,6 +166,12 @@ After the draft's complete asset readback and reviewed qualification, use
 the docs default or publish the site.
 
 ## Prepare and activate maintained docs
+
+This section currently supports schema 1 products only. Schema 2 maintained
+docs preparation and activation are deferred until selected inventories can
+seed the docs catalog; see [the docs follow-up](https://github.com/NVIDIA/nvcf/issues/2798).
+The commands reject schema 2 instead of copying unrelated Development pins.
+Keep the existing published docs edition while that support is pending.
 
 Protect `docs/versions/**` against deletion and force pushes. Require reviewed
 updates and applicable docs checks; these branches must permit approved

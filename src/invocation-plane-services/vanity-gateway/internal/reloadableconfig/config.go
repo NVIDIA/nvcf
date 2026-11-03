@@ -57,6 +57,7 @@ type configData[T any] struct {
 	mu            sync.Mutex
 	loadTimeout   time.Duration
 	initializer   func(*T) error
+	unmarshal     func([]byte, *T) error
 	validators    []func(*T) error
 	postLoadHooks []func(*T) error
 }
@@ -64,6 +65,12 @@ type configData[T any] struct {
 func WithPreLoadInitializer[T any](initialize func(*T) error) ConfigOption[T] {
 	return func(cd *configData[T]) {
 		cd.initializer = initialize
+	}
+}
+
+func WithUnmarshalFunc[T any](unmarshal func([]byte, *T) error) ConfigOption[T] {
+	return func(cd *configData[T]) {
+		cd.unmarshal = unmarshal
 	}
 }
 
@@ -166,7 +173,11 @@ func (c *configData[T]) reloadConfig() error {
 	if err != nil {
 		return err
 	}
-	if err := yaml.Unmarshal(configBytes, newData); err != nil {
+	unmarshal := c.unmarshal
+	if unmarshal == nil {
+		unmarshal = func(data []byte, target *T) error { return yaml.Unmarshal(data, target) }
+	}
+	if err := unmarshal(configBytes, newData); err != nil {
 		return err
 	}
 	for _, validator := range c.validators {

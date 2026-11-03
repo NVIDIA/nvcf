@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# nvstor Node 1 (leader / bootstrap)
+#
+# Replace 10.0.0.2 / 10.0.0.3 with the reachable IPs of your other
+# two nodes before running deploy.sh.
+
+[storage]
+data_path = "/data/nvstor"
+chunk_size_bytes = 16777216
+gc_enabled = true
+gc_interval_secs = 300
+
+[network]
+s3_port = 9000
+grpc_port = 9002
+health_port = 9101
+nbd_port = 10809
+nfs_port = 2049
+raft_port = 9102
+
+[nfs]
+# Who may mount the NFS export (it has no other authentication): the
+# three nodes and local mounts; add your NFS clients. A list admits
+# exactly what it names; empty admits loopback only.
+allow_clients = ["127.0.0.1", "10.0.0.1", "10.0.0.2", "10.0.0.3"]
+
+[limits]
+max_connections = 1000
+request_timeout_secs = 30
+idle_timeout_secs = 300
+
+[node]
+# Node identity MUST be explicit and agree cluster-wide: every node writes
+# the same id for the same machine (here and in the peers' `seeds`).
+# Leaving this unset makes each node infer an id from its own name, and
+# nodes without a numeric name suffix all pick 1 — placement and Raft then
+# attribute data and votes to the wrong machine.
+id = 1
+
+[cluster]
+bootstrap = true
+# "<id>@<addr>" — the id must match that node's own [node] id.
+seeds = ["2@10.0.0.2:9102", "3@10.0.0.3:9102"]
+
+[auth]
+anonymous = true
+
+[tls]
+enabled = false

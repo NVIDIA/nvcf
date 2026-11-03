@@ -35,10 +35,11 @@ func TestEmbeddingsTokenInputValidationAndAccounting(t *testing.T) {
 		{"token count is not batch size", `[` + strings.Repeat("1,", MaxEmbeddingInputs) + `1]`, "2049", http.StatusOK},
 		{"too many sequences", `[` + strings.Repeat("[1],", MaxEmbeddingInputs) + `[1]]`, "", http.StatusBadRequest},
 		{"empty batch", `[]`, "", http.StatusBadRequest},
-		{"empty sequence", `[[],[1]]`, "", http.StatusBadRequest},
-		{"null sequence", `[null,[1]]`, "", http.StatusBadRequest},
-		{"null token", `[[1,null]]`, "", http.StatusBadRequest},
-		{"fractional token", `[1.5]`, "", http.StatusBadRequest},
+		// The backend validates elements. Invalid ones count by raw size.
+		{"empty sequence", `[[],[1]]`, "1", http.StatusOK},
+		{"null sequence", `[null,[1]]`, "8", http.StatusOK},
+		{"null token", `[[1,null]]`, "7", http.StatusOK},
+		{"fractional token", `[1.5]`, "7", http.StatusOK},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			upstream := newPassthroughUpstream(t, "application/json", `{"object":"list","data":[]}`)

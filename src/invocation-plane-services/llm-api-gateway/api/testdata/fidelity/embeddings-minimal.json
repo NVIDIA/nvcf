@@ -9,6 +9,8 @@
     "model": "company/model",
     "input": "hello"
   },
+  "upstream_input_tokens": "7",
+  "upstream_affinity_key": "",
   "upstream_response": {
     "json": {
       "object": "list",

@@ -26,9 +26,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
 
 // UnmarshalError represents JSON unmarshaling errors with field context
@@ -136,6 +135,21 @@ type CreateRequest struct {
 	Stream            *bool                  `json:"stream"`
 	StreamOptions     *ResponseStreamOptions `json:"stream_options"`
 	Conversation      *Conversation          `json:"conversation"`
+
+	// UndecodedMembers holds declared members that fail to decode. The gateway
+	// does not need them, so it forwards them for the backend to validate.
+	UndecodedMembers map[string]json.RawMessage `json:"-"`
+}
+
+func (*CreateRequest) DecodesMembers() {}
+
+// UnmarshalJSON checks only the members that the gateway needs for routing,
+// relay mode, admission and session affinity.
+func (r *CreateRequest) UnmarshalJSON(data []byte) error {
+	failed, err := models.DecodeMembers(data, r,
+		"model", "input", "stream", "max_output_tokens", "prompt_cache_key", "conversation")
+	r.UndecodedMembers = failed
+	return err
 }
 
 // Response represents the response from the responses API
@@ -216,6 +230,11 @@ type Input struct {
 }
 
 func (i *Input) UnmarshalJSON(data []byte) error {
+	// null is no input. Without this, null decodes as one empty text item.
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		i.Items = nil
+		return nil
+	}
 	// Try string first
 	var text string
 	if err := json.Unmarshal(data, &text); err == nil {
@@ -254,6 +273,7 @@ func (i Input) MarshalJSON() ([]byte, error) {
 	return json.Marshal(i.Items)
 }
 
+// Validate checks only what admission needs. The backend validates the rest.
 func (r *CreateRequest) Validate() error {
 	if r.Model == "" {
 		return &UnmarshalError{
@@ -261,130 +281,28 @@ func (r *CreateRequest) Validate() error {
 			Msg:   "is required",
 		}
 	}
-
-	if ptr.Lt(r.Temperature, 0) || ptr.Gt(r.Temperature, 2) {
-		return &UnmarshalError{
-			Field: "temperature",
-			Msg:   "must be between 0 and 2",
-		}
-	}
-
-	if ptr.Lt(r.TopP, 0) || ptr.Gt(r.TopP, 1) {
-		return &UnmarshalError{
-			Field: "top_p",
-			Msg:   "must be between 0 and 1",
-		}
-	}
-
-	if ptr.Lt(r.MaxToolCalls, 1) || ptr.Gt(r.MaxToolCalls, 100) {
-		return &UnmarshalError{
-			Field: "max_tool_calls",
-			Msg:   "must be between 1 and 100",
-		}
-	}
-
-	if ptr.Lt(r.TopLogprobs, 0) || ptr.Gt(r.TopLogprobs, 20) {
-		return &UnmarshalError{
-			Field: "top_logprobs",
-			Msg:   "must be between 0 and 20",
-		}
-	}
-
-	if r.ServiceTier != nil {
-		validTiers := []string{ServiceTierAuto, ServiceTierDefault, ServiceTierFlex}
-		var valid bool
-		for _, tier := range validTiers {
-			if ptr.Deref(r.ServiceTier) == tier {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return &UnmarshalError{
-				Field: "service_tier",
-				Msg:   fmt.Sprintf("must be one of: %s", strings.Join(validTiers, ", ")),
-			}
-		}
-	}
-
-	if r.Truncation != nil {
-		validTruncations := []string{TruncationAuto, TruncationDisabled}
-		var valid bool
-		for _, trunc := range validTruncations {
-			if ptr.Deref(r.Truncation) == trunc {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return &UnmarshalError{
-				Field: "truncation",
-				Msg:   fmt.Sprintf("must be one of: %s", strings.Join(validTruncations, ", ")),
-			}
-		}
-	}
-
-	if r.Metadata != nil {
-		if len(*r.Metadata) > 16 {
-			return &UnmarshalError{
-				Field: "metadata",
-				Msg:   "must have at most 16 key-value pairs",
-			}
-		}
-		for k, v := range *r.Metadata {
-			if utf8.RuneCountInString(k) > 64 {
-				return &UnmarshalError{
-					Field: "metadata",
-					Msg:   fmt.Sprintf("key %q exceeds 64 character limit", k),
-				}
-			}
-			if utf8.RuneCountInString(v) > 512 {
-				return &UnmarshalError{
-					Field: "metadata",
-					Msg:   fmt.Sprintf("value for key %q exceeds 512 character limit", k),
-				}
-			}
-		}
-	}
-
-	// Validate tools
-	for i, tool := range r.Tools {
-		if err := tool.Validate(); err != nil {
-			return &UnmarshalError{
-				Field: fmt.Sprintf("tools[%d]", i),
-				Msg:   err.Error(),
-			}
-		}
-	}
-
-	if err := r.Input.Validate(); err != nil {
+	if len(r.Input.Items) == 0 && !r.hasStoredContext() {
 		return &UnmarshalError{
 			Field: "input",
-			Msg:   err.Error(),
+			Msg:   "must provide input, prompt, previous_response_id or conversation",
 		}
 	}
-
 	return nil
 }
 
-func (i *Input) Validate() error {
-	if len(i.Items) == 0 {
-		return &UnmarshalError{
-			Field: "input",
-			Msg:   "must provide input",
+// hasStoredContext reports whether prompt, previous_response_id or
+// conversation gives the context, even when its value fails to decode.
+func (r *CreateRequest) hasStoredContext() bool {
+	if r.Prompt != nil || r.PreviousResponseID != nil || r.Conversation != nil {
+		return true
+	}
+	for key, value := range r.UndecodedMembers {
+		if (strings.EqualFold(key, "prompt") || strings.EqualFold(key, "previous_response_id")) &&
+			!bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return true
 		}
 	}
-
-	for idx, item := range i.Items {
-		if err := item.Validate(); err != nil {
-			return &UnmarshalError{
-				Field: fmt.Sprintf("items[%d]", idx),
-				Msg:   err.Error(),
-			}
-		}
-	}
-
-	return nil
+	return false
 }
 
 // Helper functions

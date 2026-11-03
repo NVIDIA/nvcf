@@ -1,4 +1,4 @@
-ARG GO_IMAGE=golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395
+ARG GO_IMAGE=golang:1.27.3-alpine3.23@sha256:754d5200fc3edae76d3b6598a9a3fac7e74981ee6a5413ab955025f185753ef2
 
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS migrate-builder
 
@@ -49,6 +49,8 @@ USER root
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates gettext-base && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' perl-base)" ge 5.40.1-6+deb13u1 && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20250419+deb13u1 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     rm -f \
@@ -56,6 +58,7 @@ RUN apt-get update && \
       /opt/cassandra/lib/jackson-core-*.jar \
       /opt/cassandra/lib/jackson-databind-*.jar \
       /opt/cassandra/lib/jackson-datatype-jsr310-*.jar \
+      /opt/cassandra/lib/lz4-java-*.jar \
       /opt/cassandra/lib/netty-*-4.1.130.Final*.jar
 
 COPY --from=migrate-builder --chmod=0555 /out/migrate /usr/bin/migrate

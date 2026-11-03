@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The chart version bump and stack pin bump workflows push their shared bot
+# branches. GitHub starts no workflow for a push made with the job's
+# github.token, so a bot pull request pushed that way had no CI until a person
+# pushed to it. The workflows push with the repository token instead, and keep
+# it away from the steps that run repository code.
+#
+# For each workflow this checks that:
+#   - every checkout leaves no credential in the git config;
+#   - the push takes the repository secret, with github.token as the fallback;
+#   - no step that holds a token runs repository code;
+#   - the push's credential helper hands git the token from the environment.
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+work_dir="$(mktemp -d)"
+trap 'rm -rf -- "${work_dir}"' EXIT
+
+fail() { echo "test-bump-workflow-push: $*" >&2; exit 1; }
+
+# shellcheck disable=SC2016 # workflow text; its ${...} stay literal
+push_token_line='PUSH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}'
+
+check_workflow() {
+  local name=$1
+  local file="${repo_root}/.github/workflows/${name}"
+  local steps="${work_dir}/${name%.yml}"
+  [ -f "${file}" ] || fail "${name} not found"
+
+  local checkouts unpersisted
+  checkouts="$(grep -c 'uses: actions/checkout@' "${file}" || true)"
+  unpersisted="$(grep -c 'persist-credentials: false' "${file}" || true)"
+  if [ "${checkouts}" -eq 0 ] || [ "${checkouts}" -ne "${unpersisted}" ]; then
+    fail "${name}: ${checkouts} checkouts but ${unpersisted} with persist-credentials: false"
+  fi
+
+  grep -Fq -- "${push_token_line}" "${file}" \
+    || fail "${name} no longer pushes with: ${push_token_line}"
+  test "$(grep -c 'push --force-with-lease' "${file}" || true)" -eq 1 \
+    || fail "${name} should push the bump branch from exactly one step"
+
+  # One file per step. Steps are the list items at the job's step indentation.
+  mkdir -p "${steps}"
+  awk -v dir="${steps}" '
+    /^      - / { n++ }
+    n > 0 { print > (dir "/" sprintf("%03d", n)) }
+  ' "${file}"
+
+  local step title token_steps=0 pushes=0
+  for step in "${steps}"/*; do
+    if ! grep -Eq 'secrets\.|github\.token' "${step}"; then
+      continue
+    fi
+    token_steps=$((token_steps + 1))
+    title="$(grep -m1 -E '^[[:space:]]*(- )?name:' "${step}" | sed 's/^.*name: *//')"
+    # Repository code: anything under tools/, or a command line that starts
+    # with a build, test, or script runner.
+    if grep -q 'tools/' "${step}" \
+      || grep -Eq '^[[:space:]]*(make|go|bash|sh|python3?)[[:space:]]|^[[:space:]]*\./' "${step}"; then
+      fail "${name}: step '${title}' holds a token and runs repository code"
+    fi
+    if grep -Fq -- "${push_token_line}" "${step}"; then
+      grep -q 'push --force-with-lease' "${step}" \
+        || fail "${name}: step '${title}' holds PUSH_TOKEN but does not push"
+      pushes=$((pushes + 1))
+      check_helper "${name}" "${step}"
+    fi
+  done
+  [ "${token_steps}" -gt 0 ] || fail "${name}: no step holds a token; update this test"
+  [ "${pushes}" -eq 1 ] || fail "${name}: expected one push step, found ${pushes}"
+}
+
+# Runs the credential helper exactly as the workflow configures it and checks
+# that git gets the token from PUSH_TOKEN.
+check_helper() {
+  local name=$1 step=$2 line helper out
+  line="$(grep -F "'credential.helper=!" "${step}" || true)"
+  [ -n "${line}" ] || fail "${name}: the push step sets no credential helper"
+  helper="${line#*\'credential.helper=}"
+  helper="${helper%\'*}"
+  # shellcheck disable=SC2016 # matching literal workflow text
+  case "${helper}" in
+    *'${{'*) fail "${name}: the credential helper interpolates an expression; read the token from the environment" ;;
+    *'${PUSH_TOKEN}'*) ;;
+    *) fail "${name}: the credential helper does not read PUSH_TOKEN" ;;
+  esac
+  grep -Fq -- '-c credential.helper= ' "${step}" \
+    || fail "${name}: the push does not reset inherited credential helpers"
+
+  out="$(cd "${work_dir}" \
+    && printf 'protocol=https\nhost=github.com\n\n' \
+    | env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+        PUSH_TOKEN=test-sentinel-token \
+        git -c credential.helper= -c "credential.helper=${helper}" credential fill)" \
+    || fail "${name}: git credential fill failed with the workflow's helper"
+  grep -Fxq 'password=test-sentinel-token' <<<"${out}" \
+    || fail "${name}: the helper did not hand git the token"
+  grep -Fxq 'username=x-access-token' <<<"${out}" \
+    || fail "${name}: the helper did not hand git a username"
+}
+
+check_workflow stack-pin-bump.yml
+check_workflow chart-version-bump.yml
+
+echo "test-bump-workflow-push: all checks passed"

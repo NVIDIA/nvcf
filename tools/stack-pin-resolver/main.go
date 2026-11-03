@@ -6,13 +6,16 @@
 // them.
 //
 //	stack-pin-resolver --audit
-//	stack-pin-resolver --tag deploy/helm/nats/v0.8.0 [--write]
+//	stack-pin-resolver --tag deploy/helm/nats/v0.8.0 [--base origin/main] [--write]
 //
 // --audit enumerates every release in the stack and reports the chart each one
 // pins. It exits non-zero when any release cannot be resolved.
 //
 // --tag takes a chart release tag and reports the pins that should move. With
-// --write it edits them in place.
+// --write it edits them in place. A pin only moves up: a release whose version
+// is not above the pinned one is skipped. With --base, so is a release tagged
+// on a commit the base branch does not contain, such as a backport cut on a
+// release branch.
 //
 // Why an audit mode exists at all: the failure this guards against is silence.
 // A chart releases, nothing in the stack resolves to it, no pin moves, and the
@@ -30,10 +33,12 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -52,6 +57,7 @@ func main() {
 	tag := flag.String("tag", "", "chart release tag, for example deploy/helm/nats/v0.8.0")
 	write := flag.Bool("write", false, "apply the changes rather than only reporting them")
 	root := flag.String("root", ".", "repository root")
+	base := flag.String("base", "", "skip the release unless its tagged commit is reachable from this ref")
 	flag.Parse()
 
 	var code int
@@ -60,7 +66,7 @@ func main() {
 	case *auditMode:
 		code, err = Audit(*root, os.Stdout, os.Stderr)
 	case *tag != "":
-		code, err = Bump(*root, *tag, *write, os.Stdout, os.Stderr)
+		code, err = Bump(*root, *tag, *base, *write, os.Stdout, os.Stderr)
 	default:
 		flag.Usage()
 		os.Exit(1)
@@ -103,8 +109,9 @@ func Audit(root string, out, errOut io.Writer) (int, error) {
 	return 0, nil
 }
 
-// Bump moves every stack pin that names the chart the tag released.
-func Bump(root, tag string, write bool, out, errOut io.Writer) (int, error) {
+// Bump moves every stack pin that names the chart the tag released. A
+// non-empty base skips a tag whose commit that ref does not contain.
+func Bump(root, tag, base string, write bool, out, errOut io.Writer) (int, error) {
 	m := tagRE.FindStringSubmatch(tag)
 	if m == nil {
 		return 1, fmt.Errorf("not a chart release tag: %s", tag)
@@ -112,6 +119,16 @@ func Bump(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 	chartPath, version := m[1], m[2]
 	if !versionRE.MatchString(version) {
 		return 1, fmt.Errorf("tag %s carries a version that is not a plain version string: %q", tag, version)
+	}
+	if base != "" {
+		onBase, err := TagOnBase(root, tag, base)
+		if err != nil {
+			return 1, err
+		}
+		if !onBase {
+			fmt.Fprintf(out, "%s: skipped, its commit is not on %s; a release cut on another branch moves no pin here\n", tag, base)
+			return 0, nil
+		}
 	}
 
 	chart, err := ChartNameForPath(root, chartPath)
@@ -158,8 +175,15 @@ func Bump(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 			fmt.Fprintf(out, "%s: already %s\n", r.Name, version)
 			continue
 		}
-		if BumpLevel(version, r.Version) != "" {
-			fmt.Fprintf(out, "%s: skipped older release %s; keeping %s\n", r.Name, version, r.Version)
+		// Never down, and never sideways to another spelling of the same
+		// version. A version that does not parse falls through to the bump, as
+		// it always has.
+		if order, ok := CompareVersions(version, r.Version); ok && order <= 0 {
+			which := "older"
+			if order == 0 {
+				which = "same-version"
+			}
+			fmt.Fprintf(out, "%s: skipped %s release %s; keeping %s\n", r.Name, which, version, r.Version)
 			continue
 		}
 		fmt.Fprintf(out, "%s: %s -> %s\n", r.Name, r.Version, version)
@@ -197,4 +221,22 @@ func ChartNameForPath(root, chartPath string) (string, error) {
 		return e.ServiceName, nil
 	}
 	return "", fmt.Errorf("no release-metadata entry with path %s", chartPath)
+}
+
+// TagOnBase reports whether the commit a release tag names is reachable from
+// base. Exit 1 from git merge-base --is-ancestor means it is not; any other
+// failure, such as a tag or ref that does not exist, is an error rather than
+// a skip, so a missing tag cannot pass for a backport.
+func TagOnBase(root, tag, base string) (bool, error) {
+	// refs/tags/ in front, so a tag can never be read as a git option.
+	cmd := exec.Command("git", "-C", root, "merge-base", "--is-ancestor", "refs/tags/"+tag+"^{commit}", base)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("check whether %s is on %s: %w: %s", tag, base, err, strings.TrimSpace(string(output)))
 }

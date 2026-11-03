@@ -42,7 +42,10 @@ import com.nvidia.nvcf.service.azp.AuthorizedPartiesService;
 import com.nvidia.nvcf.service.ess.EssService;
 import com.nvidia.nvcf.service.instance.InstanceService;
 import com.nvidia.nvcf.service.registry.RegistryArtifactService;
+import com.nvidia.nvcf.service.telemetry.TelemetryAvailability;
 import com.nvidia.nvcf.service.telemetry.TelemetryLookupService;
+import com.nvidia.nvcf.service.telemetry.TelemetryMapperService;
+import com.nvidia.nvcf.service.telemetry.TelemetryProviderValidator;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -115,7 +118,9 @@ public class FunctionManagementService {
     private final InstanceService instanceService;
     private final FunctionDeploymentService deploymentService;
     private final EssService essService;
+    private final TelemetryAvailability telemetryAvailability;
     private final TelemetryLookupService telemetryLookupService;
+    private final TelemetryMapperService telemetryMapperService;
     private final FunctionsRepository functionsRepository;
     private final RegistryArtifactService registryArtifactService;
 
@@ -494,6 +499,8 @@ public class FunctionManagementService {
             return;
         }
 
+        telemetryAvailability.requireEnabled();
+
         if (telemetry.logsTelemetryId() != null) {
             validateTelemetryType(ncaId, telemetry.logsTelemetryId(), LOGS);
         }
@@ -518,6 +525,10 @@ public class FunctionManagementService {
             log.error(MESG_TELEMETRY_INVALID_TYPE);
             throw new BadRequestException(MESG_TELEMETRY_INVALID_TYPE);
         }
+        TelemetryProviderValidator.validateReference(
+                telemetryId,
+                telemetryMapperService.toTelemetryTypeEnum(expectedType),
+                telemetryMapperService.toTelemetryProviderEnum(telemetryEntity.getProvider()));
     }
 
     private void preRegistrationValidation(

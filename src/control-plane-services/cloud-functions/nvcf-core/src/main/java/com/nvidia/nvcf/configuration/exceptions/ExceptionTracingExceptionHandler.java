@@ -20,6 +20,7 @@ import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.ConflictException;
 import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.boot.exceptions.NotFoundException;
+import com.nvidia.boot.exceptions.ServiceUnavailableException;
 import com.nvidia.boot.exceptions.TooManyRequestsException;
 import com.nvidia.boot.exceptions.UnauthorizedException;
 import com.nvidia.boot.exceptions.handlers.BootMvcExceptionHandler;
@@ -27,12 +28,19 @@ import com.nvidia.nvcf.util.NvcfUtils;
 import io.micrometer.tracing.Tracer;
 import jakarta.annotation.Nonnull;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.data.cassandra.CassandraConnectionFailureException;
+import org.springframework.data.cassandra.CassandraInsufficientReplicasAvailableException;
+import org.springframework.data.cassandra.CassandraReadTimeoutException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 public class ExceptionTracingExceptionHandler extends BootMvcExceptionHandler {
+
+    public static final String STORAGE_UNAVAILABLE = "Storage is temporarily unavailable";
 
     @Autowired
     private Tracer tracer;
@@ -129,6 +137,28 @@ public class ExceptionTracingExceptionHandler extends BootMvcExceptionHandler {
             WebRequest request) throws Exception {
         return super.handleException(
                 new BadRequestException(ex.getMessage(), ex.getCause()), request);
+    }
+
+    /**
+     * Cassandra failures that are safe to report as retriable.
+     *
+     * <p>Only failures where Cassandra did no work are: a coordinator read timeout, too few replicas
+     * alive, an overloaded or bootstrapping coordinator, or no node reachable. Write timeouts and
+     * driver timeouts are not, because the write may have been applied and a retry of a create would
+     * duplicate it. Read and write failures are not transient. Keep in sync with
+     * {@code GrpcConfiguration}.
+     */
+    @ExceptionHandler({
+            CassandraReadTimeoutException.class,
+            CassandraInsufficientReplicasAvailableException.class,
+            TransientDataAccessResourceException.class,
+            CassandraConnectionFailureException.class
+    })
+    protected ResponseEntity<Object> handleStorageUnavailable(
+            DataAccessException ex,
+            WebRequest request) throws Exception {
+        return super.handleException(
+                new ServiceUnavailableException(STORAGE_UNAVAILABLE, ex), request);
     }
 
 }

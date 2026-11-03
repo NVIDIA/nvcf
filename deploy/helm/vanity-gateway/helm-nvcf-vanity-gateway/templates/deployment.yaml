@@ -84,10 +84,12 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
+          # The admin listener's /health checks only this process. /health on
+          # the http port also checks upstreams, so it is used for readiness only.
           livenessProbe:
             httpGet:
               path: /health
-              port: http
+              port: admin
             initialDelaySeconds: 30
             periodSeconds: 30
             timeoutSeconds: 5

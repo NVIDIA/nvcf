@@ -16,13 +16,15 @@
  */
 package com.nvidia.icms.service.account;
 
+import com.nvidia.icms.configuration.bean.CapacityGatingProperties;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
+import com.nvidia.icms.configuration.bean.CapacityGatingProperties.GatingPolicy;
 import com.nvidia.icms.inbound.rest.model.InstanceTypeDetails;
 import com.nvidia.icms.inbound.rest.model.account.InstanceTypeAvailabilityResponse;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
 import com.nvidia.icms.service.byoc.ClustersService.ReadyClusterInfo;
-import com.nvidia.icms.service.gating.GpuGatingService;
+import com.nvidia.icms.service.gating.CapacityGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformTestFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -67,7 +69,7 @@ class AccountInfoServiceTest {
     void setUp() {
         accountInfoService = new AccountInfoService(null, null, clusterGpuInfoHelper,
                 ComputePlatformTestFixtures.nonByocComputePlatformService(),
-                new GpuGatingService(null, null));
+                new CapacityGatingService(new CapacityGatingProperties(), null));
     }
 
     @Test
@@ -235,11 +237,14 @@ class AccountInfoServiceTest {
     }
 
     private void gate(String ncaId, Map<String, List<String>> allowedInstanceTypesByGpu) {
-        IcmsConfigurationProperties properties = new IcmsConfigurationProperties();
-        properties.setGpuGating(Map.of(ncaId, allowedInstanceTypesByGpu));
-        accountInfoService = new AccountInfoService(clusterTargetingHelper, properties,
+        CapacityGatingProperties properties = new CapacityGatingProperties();
+        properties.setCapacityGating(Map.of(ncaId, GatingPolicy.builder()
+                .gpus(allowedInstanceTypesByGpu)
+                .build()));
+        accountInfoService = new AccountInfoService(clusterTargetingHelper,
+                new IcmsConfigurationProperties(),
                 clusterGpuInfoHelper, ComputePlatformTestFixtures.nonByocComputePlatformService(),
-                new GpuGatingService(properties, null));
+                new CapacityGatingService(properties, null));
     }
 
     private static InstanceTypeV5Udt instanceType(String name) {

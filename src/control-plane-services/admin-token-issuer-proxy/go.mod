@@ -1,6 +1,6 @@
 module github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy
 
-go 1.25.0
+go 1.26.10
 
 require github.com/hashicorp/vault/api v1.23.0
 

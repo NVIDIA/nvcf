@@ -84,6 +84,7 @@ java_oci_image(
         "MAX_REQUEST_BODY_SIZE_BYTES": "4096",
         "VAULT_SECRETS_JSON_PATH": "vault/vault-secrets.json",
     },
+    user = "1000:1000",
     workdir = "/home/app",
 )
 
@@ -103,5 +104,6 @@ java_image_contract_test(
         "MAX_REQUEST_BODY_SIZE_BYTES": "4096",
         "VAULT_SECRETS_JSON_PATH": "vault/vault-secrets.json",
     },
+    user = "1000:1000",
     workdir = "/home/app",
 )

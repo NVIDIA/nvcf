@@ -13,5 +13,5 @@ metadata:
     {{- include "nvct-api.labels" . | nindent 4 }}
 data:
   nvct-api.yaml: |-
-{{ toYaml .Values.nvctApi.remoteConfig.configData | indent 4 }}
+{{ include "nvct-api.remoteConfigData" . | indent 4 }}
 {{- end }}

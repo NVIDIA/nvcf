@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
@@ -182,6 +184,30 @@ func TestCompose_DistinguishesByConfig(t *testing.T) {
 	}
 }
 
+// A cluster salt changes every identity; the same salt is stable; the pod
+// annotation still applies on top.
+func TestCompose_ClusterSalt(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Image: "vllm/vllm-openai:v0.11.2", Args: []string{"vllm serve --model m"}}}}}
+	plain := (&HashInputComposer{CUDADriverMajor: 580}).Compose(pod, 0)
+	a := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-01"}).Compose(pod, 0)
+	b := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-01"}).Compose(pod, 0)
+	c := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-02"}).Compose(pod, 0)
+	if checkpointstore.ComputeHash(plain) == checkpointstore.ComputeHash(a) {
+		t.Error("a cluster salt must change the identity")
+	}
+	if checkpointstore.ComputeHash(a) != checkpointstore.ComputeHash(b) {
+		t.Error("the same cluster salt must be stable")
+	}
+	if checkpointstore.ComputeHash(a) == checkpointstore.ComputeHash(c) {
+		t.Error("a different cluster salt must change the identity again")
+	}
+	pod.Annotations = map[string]string{CacheSaltAnnotation: "chart"}
+	if d := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-01"}).Compose(pod, 0); checkpointstore.ComputeHash(d) == checkpointstore.ComputeHash(a) {
+		t.Error("the pod annotation still applies on top of the cluster salt")
+	}
+}
+
 func TestCompose_DistinguishesByDriverMajor(t *testing.T) {
 	mk := func() *corev1.Pod {
 		return &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
@@ -245,5 +271,279 @@ func TestCompose_CommandIncluded(t *testing.T) {
 	flags := strings.Join(in.EngineCompatFlags, "|")
 	if !strings.Contains(flags, "cmd[0]:/bin/bash") || !strings.Contains(flags, "cmd[1]:-lc") {
 		t.Fatalf("Command not included: %v", in.EngineCompatFlags)
+	}
+}
+
+// The model identity is what makes a pod a downloader, and charts spell it
+// several ways: Dynamo lists "--model" and the value as separate items,
+// stock charts wrap "vllm serve --model X" in one bash string, NIMs use
+// env or the image. Frontend pods have none of them.
+func TestInferModelID_Forms(t *testing.T) {
+	cases := map[string]struct {
+		c    corev1.Container
+		want string
+	}{
+		"dynamo list form": {corev1.Container{
+			Command: []string{"python3", "-m", "dynamo.vllm"},
+			Args:    []string{"--model", "Qwen/Qwen3-0.6B", "--is-decode-worker"},
+		}, "Qwen/Qwen3-0.6B"},
+		"sglang list form": {corev1.Container{
+			Command: []string{"python3", "-m", "dynamo.sglang"},
+			Args:    []string{"--model-path", "google/gemma-4-31B-it", "--tp", "2"},
+		}, "google/gemma-4-31B-it"},
+		"equals form": {corev1.Container{Args: []string{"--model=meta-llama/Llama-3.1-8B-Instruct"}}, "meta-llama/Llama-3.1-8B-Instruct"},
+		"bash wrapper": {corev1.Container{
+			Command: []string{"/bin/bash", "-lc"},
+			Args:    []string{"set -e\nnohup setsid vllm serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --tensor-parallel-size 2 &\nwhile true; do sleep 30; done"},
+		}, "TinyLlama/TinyLlama-1.1B-Chat-v1.0"},
+		"env HF_MODEL_ID": {corev1.Container{Env: []corev1.EnvVar{{Name: "HF_MODEL_ID", Value: "openai/whisper-large-v3"}}}, "openai/whisper-large-v3"},
+		"nim image":       {corev1.Container{Image: "nvcr.io/nim/meta/llama-3.1-8b-instruct:1.8.3"}, "nvcr.io/nim/meta/llama-3.1-8b-instruct:1.8.3"},
+		"dangling flag":   {corev1.Container{Args: []string{"--model"}}, ""},
+		"flag then flag":  {corev1.Container{Args: []string{"--model", "--port"}}, ""},
+		"dynamo frontend": {corev1.Container{Command: []string{"python3", "-m", "dynamo.frontend"}, Args: []string{"--router-mode", "kv"}}, ""},
+	}
+	for name, tc := range cases {
+		if got := InferModelID(tc.c); got != tc.want {
+			t.Errorf("%s: InferModelID = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestIsModelWorkload(t *testing.T) {
+	gpu := corev1.ResourceRequirements{Limits: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("2")}}
+	worker := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Command: []string{"python3", "-m", "dynamo.vllm"}, Args: []string{"--model", "Qwen/Qwen3-0.6B", "--is-prefill-worker"}, Resources: gpu,
+	}}}}
+	frontend := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Command: []string{"python3", "-m", "dynamo.frontend"},
+	}}}}
+	gpuNoModel := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Command: []string{"python3", "train.py"}, Resources: gpu,
+	}}}}
+	modelNoGPU := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Args: []string{"--model", "Qwen/Qwen3-0.6B"},
+	}}}}
+	if id, ok := IsModelWorkload(worker, 0); !ok || id != "Qwen/Qwen3-0.6B" {
+		t.Errorf("dynamo worker: (%q,%v), want downloader", id, ok)
+	}
+	for name, p := range map[string]*corev1.Pod{"frontend": frontend, "gpu without model": gpuNoModel, "model without gpu": modelNoGPU} {
+		if _, ok := IsModelWorkload(p, 0); ok {
+			t.Errorf("%s must not be classified as a downloader", name)
+		}
+	}
+	if _, ok := IsModelWorkload(worker, 3); ok {
+		t.Error("out-of-range main container must not classify")
+	}
+}
+
+// Prefill and decode workers of one disaggregated deployment must share a
+// hash: same image, same model, same download. Only the role flags and the
+// Dynamo/etcd/NATS wiring differ, and none of that changes the cache tree.
+func TestCompose_RoleNeutralAcrossPrefillAndDecode(t *testing.T) {
+	c := &HashInputComposer{CUDADriverMajor: 580}
+	hashOf := func(cmd, args []string, env ...corev1.EnvVar) string {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "main", Image: "vllm/vllm-openai:v0.20.0", Command: cmd, Args: args, Env: env,
+		}}}}
+		return checkpointstore.ComputeHash(c.Compose(p, 0))
+	}
+	dyn := []string{"python3", "-m", "dynamo.vllm"}
+	prefill := hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B", "--is-prefill-worker"},
+		corev1.EnvVar{Name: "DYN_NAMESPACE", Value: "dgd-a"}, corev1.EnvVar{Name: "ETCD_ENDPOINTS", Value: "etcd-a:2379"})
+	decode := hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B", "--is-decode-worker"},
+		corev1.EnvVar{Name: "DYN_NAMESPACE", Value: "dgd-b"}, corev1.EnvVar{Name: "NATS_SERVER", Value: "nats://x:4222"})
+	if prefill != decode {
+		t.Error("dynamo.vllm prefill and decode workers must hash the same")
+	}
+	sgl := []string{"python3", "-m", "dynamo.sglang"}
+	sp := hashOf(sgl, []string{"--model-path", "google/gemma-4-31B-it", "--disaggregation-mode", "prefill", "--disaggregation-bootstrap-port", "8998"})
+	sd := hashOf(sgl, []string{"--model-path", "google/gemma-4-31B-it", "--disaggregation-mode=decode", "--disaggregation-transfer-backend", "nixl"})
+	if sp != sd {
+		t.Error("dynamo.sglang prefill and decode workers must hash the same")
+	}
+	bash := []string{"/bin/bash", "-lc"}
+	bp := hashOf(bash, []string{`vllm serve --model Qwen/Qwen3-0.6B --is-prefill-worker --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_producer"}' > /out 2>&1`})
+	bd := hashOf(bash, []string{`vllm serve --model Qwen/Qwen3-0.6B --is-decode-worker --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_consumer"}' > /out 2>&1`})
+	if bp != bd {
+		t.Error("shell-string prefill and decode workers must hash the same")
+	}
+	// What changes the download or the engine still separates hashes.
+	if hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B", "--is-prefill-worker"}) == hashOf(dyn, []string{"--model", "Qwen/Qwen3-1.7B", "--is-prefill-worker"}) {
+		t.Error("different models must hash differently")
+	}
+	if hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B", "--revision", "abc"}) == hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B", "--revision", "def"}) {
+		t.Error("different revisions download different files and must hash differently")
+	}
+	if hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B"}, corev1.EnvVar{Name: "HF_HUB_OFFLINE", Value: "1"}) == hashOf(dyn, []string{"--model", "Qwen/Qwen3-0.6B"}) {
+		t.Error("cache-relevant env must still participate in the hash")
+	}
+}
+
+// The ranks of one multi-node engine share its configuration, whether the
+// chart spells each rank's flags out or computes them in a shared script.
+func TestCompose_RanksOfOneEngineHashTheSame(t *testing.T) {
+	c := &HashInputComposer{CUDADriverMajor: 580}
+	hashOf := func(args []string, env ...corev1.EnvVar) string {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "main", Image: "vllm/vllm-openai:v0.20.0", Command: []string{"vllm"}, Args: args, Env: env,
+		}}}}
+		return checkpointstore.ComputeHash(c.Compose(p, 0))
+	}
+	base := []string{"serve", "m", "--tensor-parallel-size", "2", "--nnodes", "2", "--master-addr", "vllm-0.vllm"}
+	r0 := hashOf(append(append([]string{}, base...), "--node-rank", "0"), corev1.EnvVar{Name: "NODE_RANK", Value: "0"})
+	r1 := hashOf(append(append([]string{}, base...), "--node-rank=1", "--headless"), corev1.EnvVar{Name: "NODE_RANK", Value: "1"})
+	if r0 != r1 {
+		t.Error("ranks of one vLLM multi-node engine must hash the same")
+	}
+	sh := func(rank string) string {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "lmsysorg/sglang:v0.5",
+			Command: []string{"/bin/bash", "-lc"}, Args: []string{"python3 -m sglang.launch_server --model-path m --tp 8 --nnodes 2 --node-rank " + rank + " --dist-init-addr x:5000"}}}}}
+		return checkpointstore.ComputeHash(c.Compose(p, 0))
+	}
+	if sh("0") != sh("1") {
+		t.Error("ranks of one SGLang multi-node engine in a shell string must hash the same")
+	}
+	lws := func(idx, leader string) string {
+		return hashOf(base, corev1.EnvVar{Name: "LWS_WORKER_INDEX", Value: idx}, corev1.EnvVar{Name: "LWS_LEADER_ADDRESS", Value: leader},
+			corev1.EnvVar{Name: "LOCAL_RANK", Value: idx})
+	}
+	if lws("0", "kimi-0.kimi") != lws("1", "kimi-1.kimi") {
+		t.Error("the ranks of LeaderWorkerSet groups must hash the same")
+	}
+	cmd := func(rank string) string {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "vllm/vllm-openai:v0.20.0",
+			Command: []string{"vllm", "serve", "m", "--node-rank", rank}}}}}
+		return checkpointstore.ComputeHash(c.Compose(p, 0))
+	}
+	if cmd("0") != cmd("1") {
+		t.Error("a rank flag in the command must not split the hash")
+	}
+	if hashOf(base) == hashOf([]string{"serve", "m", "--tensor-parallel-size", "4", "--nnodes", "2", "--master-addr", "vllm-0.vllm"}) {
+		t.Error("a different parallel layout must hash differently")
+	}
+}
+
+func TestStripRoleFlags(t *testing.T) {
+	got := stripRoleFlags([]string{"--model", "m", "--is-decode-worker", "--disaggregation-mode", "decode", "--disaggregation-strategy=prefill_first", "--tp", "2", "--kv-transfer-config"})
+	want := []string{"--model", "m", "--tp", "2"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("stripRoleFlags = %v, want %v", got, want)
+	}
+	// A dangling value-flag at the end must not eat a following flag.
+	got = stripRoleFlags([]string{"--disaggregation-mode", "--port", "8000"})
+	if strings.Join(got, " ") != "--port 8000" {
+		t.Errorf("value flag followed by a flag: %v", got)
+	}
+}
+
+// Taken from the pods the Dynamo operator (vllm-runtime 1.1.1) created on
+// dev1 for the NVCF disaggregated sample: prefill also carries
+// --kv-events-config, and the operator injects Grove scheduling env whose
+// values differ per component and per replica.
+func TestCompose_RoleNeutral_LiveDynamoOperatorPods(t *testing.T) {
+	c := &HashInputComposer{CUDADriverMajor: 580}
+	worker := func(args []string, pclq string) *corev1.Pod {
+		env := []corev1.EnvVar{
+			{Name: "DYN_COMPONENT", Value: pclq}, {Name: "DYN_NAMESPACE", Value: "myllm"}, {Name: "DYN_SYSTEM_PORT", Value: "9090"},
+			{Name: "GROVE_PCLQ_NAME", Value: pclq}, {Name: "GROVE_PCLQ_POD_INDEX", Value: "0"}, {Name: "GROVE_PCS_NAME", Value: "myllm"},
+			{Name: "NATS_SERVER", Value: "nats://dynamo-operator-nats:4222"},
+			{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
+			{Name: "NIXL_TELEMETRY_ENABLE", Value: "true"},
+		}
+		return &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "main", Image: "nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.1.1",
+			Command: []string{"python3", "-m", "dynamo.vllm"}, Args: args, Env: env,
+		}}}}
+	}
+	prefill := worker([]string{"--model", "Qwen/Qwen3-0.6B", "--disaggregation-mode", "prefill", "--tensor-parallel-size", "1",
+		"--kv-transfer-config", `{"kv_connector":"NixlConnector","kv_role":"kv_both"}`,
+		"--kv-events-config", `{"publisher":"zmq","topic":"kv-events","endpoint":"tcp://*:20080","enable_kv_cache_events":true}`}, "myllm-0-vllmprefillworker")
+	decode := worker([]string{"--model", "Qwen/Qwen3-0.6B", "--disaggregation-mode", "decode", "--tensor-parallel-size", "1"}, "myllm-0-vllmdecodeworker")
+	replica := worker([]string{"--model", "Qwen/Qwen3-0.6B", "--disaggregation-mode", "decode", "--tensor-parallel-size", "1"}, "myllm-0-vllmdecodeworker")
+	replica.Spec.Containers[0].Env[4].Value = "1" // GROVE_PCLQ_POD_INDEX
+	hp, hd, hr := checkpointstore.ComputeHash(c.Compose(prefill, 0)), checkpointstore.ComputeHash(c.Compose(decode, 0)), checkpointstore.ComputeHash(c.Compose(replica, 0))
+	if hp != hd {
+		t.Errorf("live prefill and decode workers must hash the same: %s vs %s", hp[:8], hd[:8])
+	}
+	if hd != hr {
+		t.Errorf("two replicas of one component must hash the same: %s vs %s", hd[:8], hr[:8])
+	}
+}
+
+// nvsnap.io/cache-salt folds an operator-chosen value into the identity, so
+// an engine change inside an unchanged image (a wheel installed at start,
+// a floating tag re-pointed) can start a fresh cache. Absent, nothing
+// changes, so existing captures stay valid.
+func TestCompose_CacheSalt(t *testing.T) {
+	c := HashInputComposer{CUDADriverMajor: 580}
+	mk := func(salt string) *corev1.Pod {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Image: "vllm/vllm-openai:v0.20.0", Args: []string{"vllm serve --model m"},
+		}}}}
+		if salt != "" {
+			p.Annotations = map[string]string{CacheSaltAnnotation: salt}
+		}
+		return p
+	}
+	plain := checkpointstore.ComputeHash(c.Compose(mk(""), 0))
+	again := checkpointstore.ComputeHash(c.Compose(mk(""), 0))
+	salted := checkpointstore.ComputeHash(c.Compose(mk("flashinfer-0.6.9"), 0))
+	resalted := checkpointstore.ComputeHash(c.Compose(mk("flashinfer-0.7.0"), 0))
+	if plain != again {
+		t.Fatal("identity must be stable without a salt")
+	}
+	if salted == plain || resalted == salted {
+		t.Fatalf("each salt value must yield its own identity: plain=%s salted=%s resalted=%s", plain, salted, resalted)
+	}
+}
+
+// Env the webhook adds to a Dynamo component (ETCD_LEASE_TTL, the fixed
+// DYN_NAMESPACE) must not change its identity: the capture hashes the
+// running pod, admission the pod before the webhook's patches.
+func TestComposeIgnoresWebhookDynamoEnv(t *testing.T) {
+	c := &HashInputComposer{CUDADriverMajor: 610}
+	pod := func(env ...corev1.EnvVar) *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "main", Image: "nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.4.1",
+			Args: []string{"--model", "Qwen/Qwen2.5-7B-Instruct"},
+			Env:  append([]corev1.EnvVar{{Name: "DYN_NAMESPACE", Value: "sr-1"}}, env...),
+		}}}}
+	}
+	admitted := checkpointstore.ComputeHash(c.Compose(pod(), 0))
+	running := checkpointstore.ComputeHash(c.Compose(pod(corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "60"}), 0))
+	if admitted != running {
+		t.Error("ETCD_LEASE_TTL changed the configuration identity")
+	}
+}
+
+// The tenant is part of a capture's identity: the same image and arguments
+// in another tenant's namespace hash differently, so no tenant mounts
+// another's cache; two namespaces of one tenant (a redeploy) share it.
+// Without a resolver every namespace is its own tenant.
+func TestCompose_DistinguishesByTenant(t *testing.T) {
+	tenants := map[string]string{"sr-a": "tenant:nca-id=acct-1", "sr-b": "tenant:nca-id=acct-1", "sr-c": "tenant:nca-id=acct-2"}
+	c := HashInputComposer{CUDADriverMajor: 580, Tenant: func(ns string) string { return tenants[ns] }}
+	mk := func(ns string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{
+				Image: "vllm/vllm-openai:v0.11.2",
+				Args:  []string{"vllm serve --model m"},
+			}}},
+		}
+	}
+	hash := func(c HashInputComposer, ns string) string { return checkpointstore.ComputeHash(c.Compose(mk(ns), 0)) }
+	if hash(c, "sr-a") != hash(c, "sr-b") {
+		t.Error("two namespaces of one tenant hash differently")
+	}
+	if hash(c, "sr-a") == hash(c, "sr-c") {
+		t.Error("two tenants share a hash")
+	}
+	plain := HashInputComposer{CUDADriverMajor: 580}
+	if hash(plain, "sr-a") == hash(plain, "sr-b") {
+		t.Error("without a resolver, two namespaces share a hash")
+	}
+	if got := plain.Compose(mk("sr-a"), 0).Tenant; got != "namespace:sr-a" {
+		t.Errorf("tenant without a resolver %q", got)
 	}
 }

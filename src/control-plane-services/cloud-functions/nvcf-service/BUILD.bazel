@@ -139,6 +139,7 @@ java_oci_image(
         "ULIMIT_FLAG": "1",
         "JDK_JAVA_OPTIONS": "-XX:MaxRAMPercentage=40.0 -XX:+EnableDynamicAgentLoading -Dreactor.netty.pool.maxIdleTime=30000 -Dreactor.netty.pool.maxConnections=500",
     },
+    user = "1000:1000",
     workdir = "/home/app",
 )
 
@@ -152,5 +153,6 @@ java_image_contract_test(
         "ULIMIT_FLAG": "1",
         "JDK_JAVA_OPTIONS": "-XX:MaxRAMPercentage=40.0 -XX:+EnableDynamicAgentLoading -Dreactor.netty.pool.maxIdleTime=30000 -Dreactor.netty.pool.maxConnections=500",
     },
+    user = "1000:1000",
     workdir = "/home/app",
 )

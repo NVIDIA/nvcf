@@ -129,3 +129,9 @@ go_test(
     ],
     data = [":image_index"],
 )
+
+filegroup(
+    name = "model_info_testdata",
+    srcs = glob(["testdata/model_info/*"]),
+    visibility = ["//src/invocation-plane-services/vanity-gateway:__subpackages__"],
+)

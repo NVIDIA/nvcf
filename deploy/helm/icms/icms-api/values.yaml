@@ -39,14 +39,16 @@ sis:
           cpu: 250m
           memory: 256Mi
     hmacRotation:
+      # Empty uses the image default. Set "1.36" for Kubernetes 1.35 servers.
+      # Requires an image with NVCF_KUBECTL_MINOR support ("1.36" or "1.37").
+      kubectlMinor: ""
       # Rotation schedule: 1st of each month at midnight UTC (every ~30 days)
       schedule: "0 0 1 * *"
       # Migrations image for rotation job
       image:
         # registry: must be supplied in additional values
         # repository: must be supplied in additional values
-        # tag: must be supplied in additional values (see icms-api/values.versions.yaml for the internal pin)
-        tag: ""
+        tag: "0.19.10"
         pullPolicy: IfNotPresent
       # OpenBao connection settings
       # When empty, baoService is derived from lls.namespace in templates (openbao-server.<namespace>.svc.cluster.local)

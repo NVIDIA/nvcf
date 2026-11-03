@@ -1,0 +1,127 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1107" viewBox="0 0 1400 1107" role="img" aria-labelledby="title desc">
+<title id="title">nvstor-peer: Copy a Directory Node to Node, Then Fan Out</title>
+<desc id="desc">An origin node serves a directory read-only over RDMA on every rail. It admits at most --max-fetchers fetch sessions (default 4); a fifth fetcher is told BUSY in the bootstrap, before any queue pair exists, and tries its other sources. A replica started with --then-serve serves its finished copy, so later replicas fetch from it and the copy spreads as a tree. Inside one fetch, the manifest is read first, ranges are pulled in parallel and checked, files are staged privately and each is renamed into place when complete.</desc>
+<defs>
+<symbol id="icon-admit" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#f2c230"/><g fill="none" stroke="#1a1a1a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 15h22l-8.5 10v8l-5 3V25z"/></g></symbol>
+<symbol id="icon-data" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#e07b1f"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 12h11l6 6v18H16z"/><path d="M27 12v6h6M20 24h9M20 29h9"/></g></symbol>
+<symbol id="icon-folder" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v16h24V20H24l-3-3z"/></g></symbol>
+<symbol id="icon-run" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#f2c230"/><g fill="none" stroke="#1a1a1a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="12" y="14" width="24" height="20" rx="2"/><path d="M17 21l4 3-4 3M24 28h7"/></g></symbol>
+<symbol id="icon-server" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="13" y="13" width="22" height="9" rx="1.5"/><rect x="13" y="26" width="22" height="9" rx="1.5"/><path d="M17 17.5h2M17 30.5h2M25 17.5h6M25 30.5h6"/></g></symbol>
+<symbol id="icon-service" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#76b900"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M24 12l11 6v12l-11 6-11-6V18z"/><path d="M13 18l11 6 11-6M24 24v12"/></g></symbol>
+<marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#000000"/></marker>
+<marker id="arrow-opt" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#999999"/></marker>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#000000}.title{font-size:20px;font-weight:600}.sub{font-size:12px;fill:#333333}.group{fill:#ffffff;stroke:#cccccc;stroke-width:1}.group-nv{fill:#ffffff;stroke:#76b900;stroke-width:1.5}.group-partner{fill:#f4f7f7;stroke:#cccccc;stroke-width:1}.group-label{font-size:12px;font-weight:600}.card{fill:#ffffff;stroke:#cccccc;stroke-width:1}.label{font-size:12px}.small{font-size:10px;fill:#333333}.plabel{font-size:10px;font-weight:500}.path{fill:none;stroke:#000000;stroke-width:1;stroke-linejoin:round}.opt{fill:none;stroke:#999999;stroke-width:1;stroke-dasharray:5 3;stroke-linejoin:round}.callout{fill:#000000}.callout-text{font-size:11px;font-weight:600;fill:#ffffff}.note{font-size:11px;fill:#333333}.note-b{font-size:11px;font-weight:600}</style></defs>
+<rect x="0" y="0" width="1400" height="1107" fill="#ffffff"/>
+<text x="40" y="44" class="title">nvstor-peer: Copy a Directory Node to Node, Then Fan Out</text>
+<text x="40" y="64" class="sub">The fetcher cap, BUSY and failover have run on RDMA hardware; trees of --then-serve fetchers have not. Numbers 1-3 are the fan-out; 4-7 one fetch.</text>
+<rect x="40" y="110" width="320" height="610" rx="10" class="group-nv"/>
+<text x="54" y="132" class="group-label" text-anchor="start">Origin node</text>
+<text x="54" y="147" class="small" text-anchor="start">nvstor-peer serve, 9890 + rail</text>
+<rect id="o-serve" x="70" y="162" width="260" height="424" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="176" y="170" width="48" height="48"/>
+<text x="200" y="234" class="label" text-anchor="middle" data-fit="o-serve" data-fit-padding="4">nvstor-peer serve</text>
+<text x="200" y="249" class="small" text-anchor="middle" data-fit="o-serve" data-fit-padding="4">--max-fetchers 4</text>
+<text x="200" y="262" class="small" text-anchor="middle" data-fit="o-serve" data-fit-padding="4">read-only export, every rail</text>
+<text x="200" y="294" class="small" text-anchor="middle">S3-over-RDMA GET only</text>
+<text x="200" y="309" class="small" text-anchor="middle">CRC-32C + generation per range</text>
+<rect id="o-dir" x="70" y="632" width="260" height="64" rx="8" class="card"/>
+<use href="#icon-folder" x="80" y="640" width="48" height="48"/>
+<text x="138" y="661" class="label" data-fit="o-dir" data-fit-padding="4">Model or checkpoint dir</text>
+<text x="138" y="676" class="small" data-fit="o-dir" data-fit-padding="4">local NVMe</text>
+<rect x="430" y="110" width="340" height="500" rx="10" class="group"/>
+<text x="444" y="132" class="group-label" text-anchor="start">First fetchers</text>
+<text x="444" y="147" class="small" text-anchor="start">fetch --then-serve</text>
+<rect id="r-a" x="450" y="162" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-server" x="460" y="170" width="48" height="48"/>
+<text x="518" y="191" class="label" data-fit="r-a" data-fit-padding="4">Replica A</text>
+<text x="518" y="206" class="small" data-fit="r-a" data-fit-padding="4">fetches, then serves its copy</text>
+<rect id="r-b" x="450" y="252" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-server" x="460" y="260" width="48" height="48"/>
+<text x="518" y="281" class="label" data-fit="r-b" data-fit-padding="4">Replica B</text>
+<text x="518" y="296" class="small" data-fit="r-b" data-fit-padding="4">fetches, then serves its copy</text>
+<rect id="r-c" x="450" y="342" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-server" x="460" y="350" width="48" height="48"/>
+<text x="518" y="371" class="label" data-fit="r-c" data-fit-padding="4">Replica C</text>
+<text x="518" y="386" class="small" data-fit="r-c" data-fit-padding="4">fetches, then serves its copy</text>
+<rect id="r-d" x="450" y="432" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-server" x="460" y="440" width="48" height="48"/>
+<text x="518" y="461" class="label" data-fit="r-d" data-fit-padding="4">Replica D</text>
+<text x="518" y="476" class="small" data-fit="r-d" data-fit-padding="4">fetches, then serves its copy</text>
+<rect id="r-busy" x="450" y="522" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-admit" x="460" y="530" width="48" height="48"/>
+<text x="518" y="551" class="label" data-fit="r-busy" data-fit-padding="4">Fifth fetcher</text>
+<text x="518" y="566" class="small" data-fit="r-busy" data-fit-padding="4">BUSY; tries its other sources</text>
+<rect x="840" y="110" width="340" height="230" rx="10" class="group"/>
+<text x="854" y="132" class="group-label" text-anchor="start">Later fetchers</text>
+<text x="854" y="147" class="small" text-anchor="start">--source origin --source replicas (repeatable)</text>
+<rect id="r-e" x="860" y="162" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-server" x="870" y="170" width="48" height="48"/>
+<text x="928" y="191" class="label" data-fit="r-e" data-fit-padding="4">Replica E</text>
+<text x="928" y="206" class="small" data-fit="r-e" data-fit-padding="4">fetches from A</text>
+<rect id="r-f" x="860" y="252" width="300" height="64" rx="8" class="card"/>
+<use href="#icon-server" x="870" y="260" width="48" height="48"/>
+<text x="928" y="281" class="label" data-fit="r-f" data-fit-padding="4">Replica F</text>
+<text x="928" y="296" class="small" data-fit="r-f" data-fit-padding="4">fetches from B</text>
+<path class="path" d="M200 632 L200 586" marker-end="url(#arrow)"/>
+<path class="path" d="M330 194 L450 194" marker-end="url(#arrow)"/>
+<path class="path" d="M330 284 L450 284" marker-end="url(#arrow)"/>
+<path class="path" d="M330 374 L450 374" marker-end="url(#arrow)"/>
+<path class="path" d="M330 464 L450 464" marker-end="url(#arrow)"/>
+<circle cx="390" cy="194" r="9" class="callout"/><text x="390" y="198" class="callout-text" text-anchor="middle">1</text>
+<path class="opt" d="M330 554 L450 554" marker-end="url(#arrow-opt)"/>
+<circle cx="390" cy="554" r="9" class="callout"/><text x="390" y="558" class="callout-text" text-anchor="middle">2</text>
+<path class="path" d="M750 194 L860 194" marker-end="url(#arrow)"/>
+<circle cx="805" cy="194" r="9" class="callout"/><text x="805" y="198" class="callout-text" text-anchor="middle">3</text>
+<path class="path" d="M750 284 L860 284" marker-end="url(#arrow)"/>
+<rect x="40" y="750" width="1320" height="134" rx="10" class="group"/>
+<text x="54" y="772" class="group-label" text-anchor="start">Inside one fetch (any replica)</text>
+<text x="54" y="787" class="small" text-anchor="start">flock on DEST; one retry budget; staging removed on success or error</text>
+<rect id="p-man" x="60" y="800" width="220" height="64" rx="8" class="card"/>
+<use href="#icon-data" x="70" y="808" width="48" height="48"/>
+<text x="128" y="829" class="label" data-fit="p-man" data-fit-padding="4">Manifest v3</text>
+<text x="128" y="844" class="small" data-fit="p-man" data-fit-padding="4">/manifest3:PREFIX</text>
+<rect id="p-work" x="326" y="800" width="220" height="64" rx="8" class="card"/>
+<use href="#icon-run" x="336" y="808" width="48" height="48"/>
+<text x="394" y="829" class="label" data-fit="p-work" data-fit-padding="4">Range workers</text>
+<text x="394" y="844" class="small" data-fit="p-work" data-fit-padding="4">32 conns, 16 MiB ranges</text>
+<rect id="p-stage" x="592" y="800" width="220" height="64" rx="8" class="card"/>
+<use href="#icon-folder" x="602" y="808" width="48" height="48"/>
+<text x="660" y="829" class="label" data-fit="p-stage" data-fit-padding="4">Private staging</text>
+<text x="660" y="844" class="small" data-fit="p-stage" data-fit-padding="4">.nvstor-peer-staging-*</text>
+<rect id="p-dest" x="858" y="800" width="220" height="64" rx="8" class="card"/>
+<use href="#icon-folder" x="868" y="808" width="48" height="48"/>
+<text x="926" y="829" class="label" data-fit="p-dest" data-fit-padding="4">DEST</text>
+<text x="926" y="844" class="small" data-fit="p-dest" data-fit-padding="4">fsync, rename per file</text>
+<rect id="p-content" x="1124" y="800" width="220" height="64" rx="8" class="card"/>
+<use href="#icon-data" x="1134" y="808" width="48" height="48"/>
+<text x="1192" y="829" class="label" data-fit="p-content" data-fit-padding="4">Content record</text>
+<text x="1192" y="844" class="small" data-fit="p-content" data-fit-padding="4">DEST/.nvstor-peer-content</text>
+<path class="path" d="M280 832 L326 832" marker-end="url(#arrow)"/>
+<circle cx="296" cy="832" r="9" class="callout"/><text x="296" y="836" class="callout-text" text-anchor="middle">4</text>
+<path class="path" d="M546 832 L592 832" marker-end="url(#arrow)"/>
+<circle cx="562" cy="832" r="9" class="callout"/><text x="562" y="836" class="callout-text" text-anchor="middle">5</text>
+<path class="path" d="M812 832 L858 832" marker-end="url(#arrow)"/>
+<circle cx="828" cy="832" r="9" class="callout"/><text x="828" y="836" class="callout-text" text-anchor="middle">6</text>
+<path class="path" d="M1078 832 L1124 832" marker-end="url(#arrow)"/>
+<circle cx="1094" cy="832" r="9" class="callout"/><text x="1094" y="836" class="callout-text" text-anchor="middle">7</text>
+<circle cx="49" cy="916" r="9" class="callout"/><text x="49" y="920" class="callout-text" text-anchor="middle">1</text>
+<text x="66" y="920" class="note" text-anchor="start">One fetch is one session (access key nvstor-peer:&lt;session id&gt;) across all its rails and connections; serve admits at most --max-fetchers of them.</text>
+<circle cx="49" cy="937" r="9" class="callout"/><text x="49" y="941" class="callout-text" text-anchor="middle">2</text>
+<text x="66" y="941" class="note" text-anchor="start">The next fetcher gets BUSY in the bootstrap, before any queue pair exists. It skips that source without counting a failure and tries its other --source entries, backing off with jitter up to --wait-s (1800 s).</text>
+<circle cx="49" cy="958" r="9" class="callout"/><text x="49" y="962" class="callout-text" text-anchor="middle">3</text>
+<text x="66" y="962" class="note" text-anchor="start">A replica fetched with --then-serve serves its copy under --prefix. Mid-copy failover only goes to a source whose manifest (v2 or later) has the same size and content identity for every unfinished file.</text>
+<circle cx="49" cy="979" r="9" class="callout"/><text x="49" y="983" class="callout-text" text-anchor="middle">4</text>
+<text x="66" y="983" class="note" text-anchor="start">The fetcher reads the manifest (at most --max-manifest-mib, default 256 MiB): path, size, generation, content identity and attributes of every entry, and then every file's ranges in parallel; each range is CRC-32C</text>
+<text x="66" y="998" class="note" text-anchor="start">checked and pinned to the file's generation.</text>
+<circle cx="49" cy="1015" r="9" class="callout"/><text x="49" y="1019" class="callout-text" text-anchor="middle">5</text>
+<text x="66" y="1019" class="note" text-anchor="start">Ranges land in a 0700 staging directory under DEST, opened with openat2 beneath DEST and no symlinks.</text>
+<circle cx="49" cy="1036" r="9" class="callout"/><text x="49" y="1040" class="callout-text" text-anchor="middle">6</text>
+<text x="66" y="1040" class="note" text-anchor="start">Each complete file gets the source's mtime and mode (and owner, when the fetch may chown) on its staged descriptor, is fsynced (fdatasynced with --no-attrs) and renamed into DEST; directory attributes are applied and</text>
+<text x="66" y="1055" class="note" text-anchor="start">the directories fsynced at the end.</text>
+<circle cx="49" cy="1072" r="9" class="callout"/><text x="49" y="1076" class="callout-text" text-anchor="middle">7</text>
+<text x="66" y="1076" class="note" text-anchor="start">The fetch records each file's content identity, which a later serve of DEST advertises while the file is unchanged.</text>
+</svg>

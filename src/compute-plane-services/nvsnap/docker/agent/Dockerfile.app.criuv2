@@ -24,7 +24,7 @@ ARG BASE_IMAGE=nvsnap-agent-base:v0.0.7
 # ---------------------------------------------------------------------------
 # Stage 1: build the Go agent (static, no glibc dependency)
 # ---------------------------------------------------------------------------
-FROM golang:1.25-bookworm AS go-builder
+FROM golang:1.26.10-bookworm AS go-builder
 ARG TARGETARCH=amd64
 WORKDIR /app
 COPY go.mod go.sum ./

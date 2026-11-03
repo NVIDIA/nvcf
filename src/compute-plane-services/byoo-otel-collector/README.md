@@ -197,6 +197,10 @@ The collector renders an exporter for these provider and signal pairs. Any other
 | `SERVICENOW` | No | No | Yes |
 | `SPLUNK` | Yes | No | No |
 
+#### SERVICENOW Traces
+
+`SERVICENOW` traces go out over OTLP/gRPC, and the secret is a single token string. A token that starts with `otel_` is sent in the `otel-token` header. Any other token, such as a classic Lightstep access token, is sent in the `lightstep-access-token` header. The collector never sends both, because ingest gateways reject a request that carries both headers.
+
 #### KRATOS Traces
 
 `KRATOS` traces go to the Kratos OTLP/HTTP traces gateway over mTLS. Register a separate `KRATOS` telemetry endpoint with type `TRACES`. The UI does not offer this yet, so register it through the API with `POST /v2/nvcf/telemetries`:

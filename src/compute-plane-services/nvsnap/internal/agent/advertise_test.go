@@ -9,7 +9,7 @@ import "testing"
 
 // selfAgentURL decides what peers dial. Getting it wrong does not fail
 // loudly -- it registers an unreachable address in the catalog and the
-// cascade silently degrades to blobstore-only, so the fallback order is
+// cascade silently degrades, so the fallback order is
 // pinned here. See GH #490.
 func TestSelfAgentURL(t *testing.T) {
 	cases := []struct {

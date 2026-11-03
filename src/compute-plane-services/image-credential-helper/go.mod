@@ -1,6 +1,6 @@
 module github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper
 
-go 1.25.11
+go 1.26.10
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.2 // indirect

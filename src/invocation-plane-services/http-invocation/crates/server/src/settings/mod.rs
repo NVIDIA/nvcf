@@ -24,6 +24,7 @@ use crate::nvcf_api::NVCFApiProperties;
 use crate::s3::S3Properties;
 use crate::telemetry::settings::ServerSettings;
 use crate::worker_streams::WorkerStreamProperties;
+use crate::worker_tls::WorkerTlsSettings;
 use anyhow::Context;
 use http::Uri;
 use std::time::Duration;
@@ -115,6 +116,9 @@ pub struct AppConfig {
     pub oauth2_base_url: String,
     pub tcp_nodelay: bool,
     pub worker_stream_properties: WorkerStreamProperties,
+    /// Second listener for worker callbacks over https. Off by default.
+    #[serde(default)]
+    pub worker_tls: WorkerTlsSettings,
     pub pod_ip: Option<String>,
     #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
@@ -162,6 +166,7 @@ impl AppConfig {
             oauth2_base_url: "".into(),
             tcp_nodelay: true,
             worker_stream_properties,
+            worker_tls: WorkerTlsSettings::default(),
             pod_ip: None,
             cors_allowed_origins: Vec::new(),
             enforce_polling_owner: false,
@@ -416,5 +421,33 @@ mod tests {
             assert_eq!(settings.enforce_polling_owner, enforce);
             assert_eq!(settings.nvcf_api_address, "http://api.example:9090");
         }
+    }
+
+    #[test]
+    fn environment_source_parses_worker_tls() {
+        let env = std::collections::HashMap::from([
+            ("WORKER_TLS__ENABLED".into(), "true".into()),
+            ("WORKER_TLS__PORT".into(), "9443".into()),
+            ("WORKER_TLS__CERT_PATH".into(), "/tls/tls.crt".into()),
+        ]);
+        let settings = config::Config::builder()
+            .add_source(config::File::from_str(
+                &serde_json::to_string(&AppConfig::default()).unwrap(),
+                config::FileFormat::Json,
+            ))
+            .add_source(environment_source().source(Some(env)))
+            .build()
+            .unwrap()
+            .try_deserialize::<AppConfig>()
+            .unwrap();
+        assert!(settings.worker_tls.enabled);
+        assert_eq!(settings.worker_tls.port, 9443);
+        assert_eq!(settings.worker_tls.cert_path, PathBuf::from("/tls/tls.crt"));
+        assert_eq!(
+            settings.worker_tls.key_path,
+            WorkerTlsSettings::default().key_path,
+            "unset fields keep their defaults"
+        );
+        assert!(!AppConfig::default().worker_tls.enabled);
     }
 }

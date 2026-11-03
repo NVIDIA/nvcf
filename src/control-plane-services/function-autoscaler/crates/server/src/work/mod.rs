@@ -22,7 +22,8 @@ use crate::models::NodeHealth;
 use crate::nvcf_api::nvcf_client::NvcfApiService;
 use crate::nvcf_api::{DeploymentInfo, NvcfApiError};
 use crate::scaling::{
-    decide_scaling, sanitize_utilization, MetricSource, ScalingInputs, ScalingSettings,
+    decide_scaling, sanitize_utilization, ActiveFunctionSource, MetricSource, ScalingInputs,
+    ScalingSettings,
 };
 use crate::{
     cassandra::cassandra_service::CassandraServiceManager,
@@ -83,6 +84,8 @@ struct GatheredScalingInputs {
 
 pub mod bucket;
 pub mod discovery;
+pub mod local_registry;
+use local_registry::LocalFunctionRegistry;
 
 use discovery::get_recently_invoked_functions;
 
@@ -506,12 +509,7 @@ async fn llm_gateway_recently_invoked(
         r#"sum by(function_id) (increase(llm_api_gateway_http_requests_total{{function_id="{function_id}"{env_suffix}}}[{lookback_seconds}s])) > 0"#,
     );
     let response = timeseries_db_client
-        .query_range(
-            &query,
-            end_time,
-            end_time,
-            TIMESERIES_DB_QUERY_STEP,
-        )
+        .query_range(&query, end_time, end_time, TIMESERIES_DB_QUERY_STEP)
         .await?;
     Ok(!response.data.result.is_empty())
 }
@@ -788,10 +786,11 @@ pub async fn run_autoscaling_logic_p0(
     scaling_settings: Arc<ScalingSettings>,
     env: &str,
     ignore_env: bool,
-    bucket_manager: &bucket::NodeBucketManager,
+    bucket_manager: Arc<bucket::NodeBucketManager>,
     lock_manager: &DistributedLockManager,
     function_state_cache: Arc<FunctionStateCache>,
     metric_routing_cache: Arc<MetricRoutingCache>,
+    local_registry: Option<Arc<LocalFunctionRegistry>>,
 ) -> Result<()> {
     tracing::info!("Starting P0 autoscaling logic for env: {}", env);
 
@@ -806,6 +805,7 @@ pub async fn run_autoscaling_logic_p0(
         lock_manager,
         function_state_cache,
         metric_routing_cache,
+        local_registry,
     )
     .await?;
 
@@ -820,10 +820,11 @@ async fn make_scaling_requests(
     scaling_settings: Arc<ScalingSettings>,
     env: &str,
     ignore_env: bool,
-    bucket_manager: &bucket::NodeBucketManager,
+    bucket_manager: Arc<bucket::NodeBucketManager>,
     lock_manager: &DistributedLockManager,
     function_state_cache: Arc<FunctionStateCache>,
     metric_routing_cache: Arc<MetricRoutingCache>,
+    local_registry: Option<Arc<LocalFunctionRegistry>>,
 ) -> Result<()> {
     let bucket_ranges = bucket_manager.get_all_bucket_ranges();
     let mut task_failures = 0usize;
@@ -834,13 +835,30 @@ async fn make_scaling_requests(
         return Ok(());
     }
 
+    if scaling_settings.active_function_source == ActiveFunctionSource::LocalDiscovery
+        && !local_registry
+            .as_ref()
+            .is_some_and(|registry| registry.is_initialized())
+    {
+        tracing::warn!("Local discovery has not completed; skipping scaling cycle");
+        return Ok(());
+    }
+
     let page_size = scaling_settings.cassandra_page_size;
 
     for (bucket_index, (start_token, end_token)) in bucket_ranges.iter() {
         let token_range = [*start_token, *end_token];
-        let functions_in_bucket = cassandra_service
-            .get_active_functions_with_token_range(&token_range, page_size)
-            .await?;
+        let functions_in_bucket = match scaling_settings.active_function_source {
+            ActiveFunctionSource::Cassandra => {
+                cassandra_service
+                    .get_active_functions_with_token_range(&token_range, page_size)
+                    .await?
+            }
+            ActiveFunctionSource::LocalDiscovery => local_registry
+                .as_ref()
+                .expect("local registry initialized for local discovery")
+                .functions_in_bucket(*bucket_index, &bucket_manager),
+        };
 
         tracing::info!(
             "Processing {} recently invoked functions in bucket {}",
@@ -861,6 +879,9 @@ async fn make_scaling_requests(
             )
             .await
         {
+            if local_registry.is_some() && !bucket_manager.owns_bucket(*bucket_index) {
+                continue;
+            }
             tracing::debug!(
                 "Acquired lock for bucket {}, processing {} functions",
                 bucket_index,
@@ -882,6 +903,8 @@ async fn make_scaling_requests(
                 let scaling_settings = scaling_settings.clone();
                 let function_state_cache = function_state_cache.clone();
                 let metric_routing_cache = metric_routing_cache.clone();
+                let local_registry = local_registry.clone();
+                let bucket_manager = Arc::clone(&bucket_manager);
                 let env = env.to_string();
                 let bucket_index = *bucket_index;
 
@@ -1034,6 +1057,10 @@ async fn make_scaling_requests(
                         utilization,
                     );
 
+                    if local_registry.is_some() && !bucket_manager.owns_bucket(bucket_index) {
+                        return Ok(());
+                    }
+
                     // Renew TTL so the function stays in the active set as long as instances exist.
                     // If desired is 0 we let the row expire naturally — no explicit delete needed.
                     if desired_instance_count > 0 {
@@ -1044,6 +1071,13 @@ async fn make_scaling_requests(
                                 function.function_version_id,
                                 e
                             );
+                        }
+                    }
+
+
+                    if let Some(registry) = &local_registry {
+                        if desired_instance_count > 0 {
+                            registry.retain_positive(&function);
                         }
                     }
 
@@ -1180,8 +1214,7 @@ mod tests {
 
     #[test]
     fn settled_timeseries_end_time_uses_previous_complete_step() {
-        let now = DateTime::from_timestamp(1_700_000_123, 456_000_000)
-            .expect("valid timestamp");
+        let now = DateTime::from_timestamp(1_700_000_123, 456_000_000).expect("valid timestamp");
 
         assert_eq!(
             settled_timeseries_end_time(now),
@@ -1629,17 +1662,15 @@ mod tests {
             .with_body(function_series)
             .create_async()
             .await;
-        assert!(
-            llm_gateway_recently_invoked(
-                &ts_client(server.url()),
-                &fid,
-                StdDuration::ZERO,
-                "prod",
-                false,
-            )
-                .await
-                .expect("gateway recent invocation query")
-        );
+        assert!(llm_gateway_recently_invoked(
+            &ts_client(server.url()),
+            &fid,
+            StdDuration::ZERO,
+            "prod",
+            false,
+        )
+        .await
+        .expect("gateway recent invocation query"));
     }
 
     /// No worker or gateway series -> fall back to control-plane metrics without

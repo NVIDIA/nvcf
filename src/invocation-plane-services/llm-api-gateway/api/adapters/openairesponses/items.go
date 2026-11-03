@@ -82,10 +82,37 @@ type InputItem struct {
 	Status         *string        `json:"status,omitempty"`
 	MessageContent []InputContent `json:"content"`
 	ToolCallData   any            `json:"-"`
+	// Raw holds an item that the gateway does not model or that fails to
+	// decode. It is forwarded as is, and the backend validates it.
+	Raw json.RawMessage `json:"-"`
 }
 
-// UnmarshalJSON implements custom unmarshaling for InputItem
+// UnmarshalJSON decodes a known item type. Any other item is kept raw, with
+// its type and role when they are strings.
 func (item *InputItem) UnmarshalJSON(data []byte) error {
+	var decoded InputItem
+	if err := decoded.decode(data); err != nil {
+		var envelope struct {
+			Type string `json:"type"`
+			Role string `json:"role"`
+		}
+		_ = json.Unmarshal(data, &envelope) // members that are not strings stay empty
+		*item = InputItem{Type: envelope.Type, Role: envelope.Role, Raw: append(json.RawMessage(nil), data...)}
+		return nil
+	}
+	*item = decoded
+	return nil
+}
+
+func (item InputItem) MarshalJSON() ([]byte, error) {
+	if item.Raw != nil {
+		return item.Raw, nil
+	}
+	type alias InputItem
+	return json.Marshal(alias(item))
+}
+
+func (item *InputItem) decode(data []byte) error {
 	// First unmarshal into a temporary struct to get the type
 	var temp struct {
 		Type string `json:"type"`
@@ -640,6 +667,9 @@ func (c *InputFileContent) inputContentDiscriminator() string {
 type InputContent struct {
 	Type string           `json:"type"`
 	Data inputContentData `json:"-"`
+	// Raw holds a part that the gateway does not model or that fails to
+	// decode. It is forwarded as is, and the backend validates it.
+	Raw json.RawMessage `json:"-"`
 }
 
 type inputContentData interface {
@@ -692,8 +722,22 @@ func NewInputFileContent(
 	}
 }
 
-// UnmarshalJSON implements custom unmarshaling for InputContent using the registry
+// UnmarshalJSON decodes a known content type. Any other part is kept raw.
 func (ic *InputContent) UnmarshalJSON(data []byte) error {
+	var decoded InputContent
+	if err := decoded.decode(data); err != nil {
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal(data, &envelope) // a type that is not a string stays empty
+		*ic = InputContent{Type: envelope.Type, Raw: append(json.RawMessage(nil), data...)}
+		return nil
+	}
+	*ic = decoded
+	return nil
+}
+
+func (ic *InputContent) decode(data []byte) error {
 	var envelope struct {
 		Type string `json:"type"`
 	}
@@ -768,6 +812,9 @@ func (ic *InputContent) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements custom marshaling for InputContent
 func (ic InputContent) MarshalJSON() ([]byte, error) {
+	if ic.Raw != nil {
+		return ic.Raw, nil
+	}
 	if ic.Data == nil {
 		return json.Marshal(struct {
 			Type string `json:"type"`

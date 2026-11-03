@@ -35,6 +35,7 @@ func registerFileSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I copy the file "([^"]*)" to "([^"]*)"$`, sc.iCopyFile)
 	ctx.Step(`^I write yaml file "([^"]*)" with values:$`, sc.iWriteYAMLFile)
 	ctx.Step(`^I update yaml file "([^"]*)" with keys:$`, sc.iUpdateYAMLFile)
+	ctx.Step(`^I set yaml file "([^"]*)" key "([^"]*)" to:$`, sc.iSetYAMLFileKey)
 	ctx.Step(`^I prepare Helmfile environment "([^"]*)" for stack "([^"]*)" from fixture "([^"]*)" with values:$`, sc.iPrepareHelmfileEnvironment)
 	ctx.Step(`^I prepare self-managed secrets file "([^"]*)" from template "([^"]*)" using the current NGC registry credential$`, sc.iPrepareSelfManagedSecretsFile)
 	ctx.Step(`^I substitute a block in file "([^"]*)":$`, sc.iSubstituteBlock)
@@ -119,6 +120,16 @@ func (sc *ScenarioContext) iUpdateYAMLFile(path string, table *godog.Table) erro
 		return err
 	}
 	return dsl.UpdateYAMLKeys(resolved, keys)
+}
+
+// iSetYAMLFileKey replaces one subtree with the docstring YAML, keeping
+// numbers, booleans, and lists typed, after snapshotting the file.
+func (sc *ScenarioContext) iSetYAMLFileKey(path, key string, doc *godog.DocString) error {
+	resolved := sc.resolvePath(dsl.Interpolate(path))
+	if err := sc.Suite.Ledger.Snapshot(resolved); err != nil {
+		return err
+	}
+	return dsl.SetYAMLKey(resolved, key, doc.Content)
 }
 
 // iPrepareSelfManagedSecretsFile delegates the secrets-file operation so the

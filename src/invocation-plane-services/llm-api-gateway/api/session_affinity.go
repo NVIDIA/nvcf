@@ -71,6 +71,10 @@ func applyResponsesSessionAffinity(
 	if headerSessionID != "" {
 		return setSessionAffinity(reqCtx, sessionAffinitySourceHeader, headerSessionID)
 	}
+	// Without input every request would hash to the same key and pin to one replica.
+	if len(request.Input.Items) == 0 {
+		return nil
+	}
 
 	payload, err := json.Marshal(request.Input)
 	if err != nil {

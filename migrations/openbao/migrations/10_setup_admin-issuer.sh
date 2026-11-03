@@ -61,7 +61,7 @@ NVCF_API_NAMESPACE="nvcf"
 NVCF_API_SERVICE_NAME="api"
 
 # Full admin-level scopes for NVCF operations
-SCOPES="register_function,list_functions,list_functions_details,deploy_function,update_function,update_secrets,delete_function,manage_telemetries,manage_registry_credentials,cluster-management"
+SCOPES="register_function,list_functions,list_functions_details,deploy_function,update_function,update_secrets,delete_function,manage_telemetries,manage_registry_credentials,list_cluster_groups,cluster-management"
 
 # Use ADMIN_CLIENT_ID from environment (set via Helm values) as the client identity in the JWT
 # This determines the sub, azp, and aud claims in the signed JWT

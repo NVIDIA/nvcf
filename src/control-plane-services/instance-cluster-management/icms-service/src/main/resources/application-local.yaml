@@ -147,7 +147,6 @@ icms:
       - dummy-static-zone-nca-id: STATIC-ZONE
     model-caching-enabled: true
     terminate-cloud-failed-instances-from-clusters: [ ]
-    authorized-nca-id-update-enabled: true
 
   db:
     cloud-health-ttl-in-sec: 120

@@ -43,6 +43,19 @@ type HashInputComposer struct {
 	// compatible on a 555.x node because the rootfs upperdir contains
 	// driver-versioned firmware paths.
 	CUDADriverMajor int
+
+	// Salt is the cluster operator's counterpart of CacheSaltAnnotation:
+	// folded into every identity this composer produces, so bumping it
+	// (a Helm value) starts fresh captures cluster-wide. Needed when the
+	// cache contents must change for a reason the identity cannot see,
+	// such as a new cachedir env template whose effect only exists on a
+	// fresh capture (warm pods replay the env stamped at capture).
+	Salt string
+
+	// Tenant names the tenant of a namespace (tenant.Resolver.Scope); nil
+	// makes every namespace its own tenant. A capture is shared only
+	// within its tenant.
+	Tenant func(namespace string) string
 }
 
 // Compose returns the HashInput for the given pod. mainContainer is the
@@ -55,7 +68,14 @@ func (c *HashInputComposer) Compose(pod *corev1.Pod, mainContainer int) checkpoi
 		CUDADriverMajor:      c.CUDADriverMajor,
 		CaptureFormatVersion: checkpointstore.CaptureFormatVersion,
 	}
-	if pod == nil || mainContainer < 0 || mainContainer >= len(pod.Spec.Containers) {
+	if pod == nil {
+		return out
+	}
+	out.Tenant = "namespace:" + pod.Namespace
+	if c.Tenant != nil {
+		out.Tenant = c.Tenant(pod.Namespace)
+	}
+	if mainContainer < 0 || mainContainer >= len(pod.Spec.Containers) {
 		return out
 	}
 	main := pod.Spec.Containers[mainContainer]
@@ -63,8 +83,24 @@ func (c *HashInputComposer) Compose(pod *corev1.Pod, mainContainer int) checkpoi
 	out.ImageDigest = resolvedImageDigest(pod, mainContainer)
 	out.ModelID = inferModelID(main)
 	out.EngineCompatFlags = composeEngineCompatFlags(main)
+	if c.Salt != "" {
+		out.EngineCompatFlags = append(out.EngineCompatFlags, "cluster-salt:"+c.Salt)
+	}
+	if salt := pod.Annotations[CacheSaltAnnotation]; salt != "" {
+		out.EngineCompatFlags = append(out.EngineCompatFlags, "salt:"+salt)
+	}
 	return out
 }
+
+// CacheSaltAnnotation lets a chart or operator fold an arbitrary value
+// into the capture and cache identity. The identity already covers the
+// image reference, model, arguments, cache-relevant env, driver and GPU
+// class; it cannot see a change made inside an unchanged image, such as
+// a wheel installed at start-up from a mounted volume or a floating tag
+// re-pointed at a new build. Bumping the salt on such an upgrade starts a
+// fresh cache instead of seeding the old one. Absent, the identity is
+// unchanged, so existing captures stay valid.
+const CacheSaltAnnotation = "nvsnap.io/cache-salt"
 
 // resolvedImageDigest prefers status.containerStatuses[].imageID (the
 // post-pull resolved digest like "nvcr.io/nim/...@sha256:abc..." or
@@ -95,10 +131,10 @@ func resolvedImageDigest(pod *corev1.Pod, mainContainer int) string {
 // slice but we keep the per-namespace order via the prefix sort.
 func composeEngineCompatFlags(c corev1.Container) []string {
 	flags := make([]string, 0, len(c.Command)+len(c.Args))
-	for i, cmd := range c.Command {
+	for i, cmd := range stripRoleFlags(c.Command) {
 		flags = append(flags, "cmd["+itoa(i)+"]:"+cmd)
 	}
-	for i, a := range c.Args {
+	for i, a := range stripRoleFlags(c.Args) {
 		flags = append(flags, "arg["+itoa(i)+"]:"+a)
 	}
 	for _, e := range cacheRelevantEnv(c.Env) {
@@ -156,7 +192,13 @@ func cacheRelevantEnv(envs []corev1.EnvVar) []corev1.EnvVar {
 		"TORCH_DISTRIBUTED_DEBUG":    {},
 		"VLLM_LOGGING_LEVEL":         {},
 	}
-	skipPrefix := []string{"NVSNAP_"}
+	// Disaggregated-serving wiring (Dynamo runtime env, etcd and NATS
+	// endpoints) says where a worker plugs in, not what it downloads or
+	// compiles; see stripRoleFlags.
+	for _, name := range roleEnvExact {
+		skipExact[name] = struct{}{}
+	}
+	skipPrefix := append([]string{"NVSNAP_"}, roleEnvPrefixes...)
 	out := make([]corev1.EnvVar, 0, len(envs))
 	for _, e := range envs {
 		if _, ok := skipExact[e.Name]; ok {
@@ -190,23 +232,144 @@ func cacheRelevantEnv(envs []corev1.EnvVar) []corev1.EnvVar {
 // engines that wrap the launch command in /bin/bash -c).
 var modelFlagPattern = regexp.MustCompile(`--model(?:-path)?(?:=|\s+)([^\s\\]+)`)
 
-// inferModelID is a best-effort extractor for the human-readable model
-// identifier. Empty result is fine — ModelID is for display only and
-// doesn't affect hash discrimination (the args themselves are in
-// EngineCompatFlags). Conventions:
+// modelEnvNames are the env vars engines and NIMs read the model identity
+// from when it is not on the command line, in precedence order.
+var modelEnvNames = []string{"HF_MODEL_ID", "MODEL_ID", "NIM_MODEL_NAME"}
+
+// InferModelID is a best-effort extractor for the model identifier the
+// container will download. It looks, in order, at:
 //
-//   - vLLM / SGLang / TRT-LLM: --model or --model-path flag inside an
-//     Args[0] shell script (most nvsnap workloads use this pattern).
-//   - NIM: the model id is encoded in the image name
-//     (nvcr.io/nim/<vendor>/<model>:<tag>).
-func inferModelID(c corev1.Container) string {
+//   - command+args as a token list: "--model X", "--model-path X",
+//     "--model=X". Dynamo workers (python3 -m dynamo.vllm --model X) and
+//     any chart that lists args one per item land here.
+//   - each arg as free text, for the bash -lc "vllm serve --model X ..."
+//     wrapper convention.
+//   - the env vars in modelEnvNames.
+//   - a NIM image, whose identity is the image itself.
+//
+// Empty means no model identity: the pod is not a downloader.
+func InferModelID(c corev1.Container) string {
+	argv := append(append([]string{}, c.Command...), c.Args...)
+	for i, tok := range argv {
+		switch {
+		case tok == "--model" || tok == "--model-path":
+			if i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
+				return argv[i+1]
+			}
+		case strings.HasPrefix(tok, "--model=") || strings.HasPrefix(tok, "--model-path="):
+			if v := tok[strings.IndexByte(tok, '=')+1:]; v != "" {
+				return v
+			}
+		}
+	}
 	for _, a := range c.Args {
 		if m := modelFlagPattern.FindStringSubmatch(a); m != nil {
 			return m[1]
+		}
+	}
+	for _, name := range modelEnvNames {
+		for _, e := range c.Env {
+			if e.Name == name && e.Value != "" {
+				return e.Value
+			}
 		}
 	}
 	if IsNIMImage(c.Image) {
 		return c.Image
 	}
 	return ""
+}
+
+// inferModelID keeps the historical unexported name for the composer.
+func inferModelID(c corev1.Container) string { return InferModelID(c) }
+
+// IsModelWorkload reports whether the pod is a model downloader: it asks
+// for a GPU and its main container names a model. Supporting pods in a
+// chart (frontend, router, planner, etcd, nats) fail one or both tests
+// and are left alone by the election.
+func IsModelWorkload(pod *corev1.Pod, mainContainer int) (modelID string, ok bool) {
+	if pod == nil || mainContainer < 0 || mainContainer >= len(pod.Spec.Containers) {
+		return "", false
+	}
+	if podGPURequest(pod) == 0 {
+		return "", false
+	}
+	modelID = InferModelID(pod.Spec.Containers[mainContainer])
+	return modelID, modelID != ""
+}
+
+// Role flags. In a disaggregated deployment (Dynamo over vLLM, SGLang or
+// TRT-LLM) the prefill and decode workers run the same image, download
+// the same model and differ only in a flag that names their role and in
+// the KV-transfer plumbing between them. Hashing those flags would give
+// each role its own cache and its own download, which is the duplication
+// the election exists to remove. The model tree is identical across roles
+// and mounts read-only; compile caches live in a per-pod writable shadow,
+// so a role that needs different kernels recompiles into it and nothing
+// is corrupted. Flags that change what is downloaded (--model, --revision,
+// --tokenizer, quantization) stay in the hash.
+var (
+	roleFlagsNoValue = map[string]bool{
+		"--is-prefill-worker": true, // dynamo.vllm
+		"--is-decode-worker":  true,
+		"--headless":          true, // vLLM: the ranks of a multi-node engine other than the first
+	}
+	roleFlagsWithValue = map[string]bool{
+		"--disaggregation-mode":             true, // dynamo.sglang, dynamo.trtllm
+		"--disaggregation-strategy":         true,
+		"--disaggregation-bootstrap-port":   true,
+		"--disaggregation-transfer-backend": true,
+		"--kv-transfer-config":              true, // vLLM connector JSON, carries kv_role
+		"--kv-events-config":                true, // KV event publishing, prefill side only
+		// The rank of a pod in a multi-node engine: every rank shares
+		// the configuration, and the instance's ranks share its caches.
+		"--node-rank":                true, // vLLM, SGLang
+		"--node_rank":                true,
+		"--data-parallel-start-rank": true,
+		"--data-parallel-rank":       true,
+	}
+	// GROVE_*: Grove gang-scheduling env the Dynamo operator injects, with
+	// the component name and the pod index in it.
+	roleEnvPrefixes = []string{"DYN_", "DYNAMO_", "GROVE_"}
+	// The rank and instance placement a controller injects: a pod's index
+	// in its instance (LeaderWorkerSet, indexed Job, torchrun) and the
+	// address of its instance's leader.
+	// ETCD_LEASE_TTL is wiring too, and the webhook sets it on Dynamo
+	// components (webhook/dynamo.go): a companion is hashed from its running
+	// spec and its replacement from the one admission sees, so anything the
+	// webhook adds must not be in the identity.
+	roleEnvExact = []string{"ETCD_ENDPOINTS", "ETCD_LEASE_TTL", "NATS_SERVER", "NATS_URL", "NODE_RANK", "RANK", "GROUP_RANK",
+		"LOCAL_RANK", "LWS_WORKER_INDEX", "LWS_LEADER_ADDRESS", "JOB_COMPLETION_INDEX"}
+
+	// roleFlagInString removes the same flags from a shell-script arg (the
+	// bash -lc "vllm serve ..." convention), value quoted or bare.
+	roleFlagInString = regexp.MustCompile(
+		`\s--(?:is-prefill-worker|is-decode-worker|headless)\b` +
+			`|\s--(?:disaggregation-mode|disaggregation-strategy|disaggregation-bootstrap-port|disaggregation-transfer-backend|kv-transfer-config|kv-events-config|node-rank|node_rank|data-parallel-start-rank|data-parallel-rank)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)`)
+)
+
+// stripRoleFlags returns args without the role flags, in both the
+// one-token-per-item form and the single shell-string form.
+func stripRoleFlags(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if roleFlagsNoValue[a] {
+			continue
+		}
+		if roleFlagsWithValue[a] {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+			}
+			continue
+		}
+		if eq := strings.IndexByte(a, '='); eq > 0 && roleFlagsWithValue[a[:eq]] {
+			continue
+		}
+		if strings.ContainsAny(a, " \n\t") {
+			a = roleFlagInString.ReplaceAllString(a, "")
+		}
+		out = append(out, a)
+	}
+	return out
 }

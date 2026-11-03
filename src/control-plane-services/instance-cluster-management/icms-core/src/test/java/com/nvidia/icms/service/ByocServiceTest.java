@@ -40,19 +40,12 @@ import com.nvidia.icms.inbound.rest.model.CreateSpotInstancesResponse;
 import com.nvidia.icms.inbound.rest.model.FunctionType;
 import com.nvidia.icms.inbound.rest.model.SpotInstanceRequestAction;
 import com.nvidia.icms.inbound.rest.model.TerminateInstancesResponse;
-import com.nvidia.icms.inbound.rest.model.byoc.BartRegistrationCredentialsResponse;
-import com.nvidia.icms.inbound.rest.model.byoc.BartRegistrationRequest;
-import com.nvidia.icms.inbound.rest.model.byoc.BartRegistrationResponse;
-import com.nvidia.icms.inbound.rest.model.byoc.ClusterHeartbeatRequest;
 import com.nvidia.icms.inbound.rest.model.swagger.schema.SpotInstanceRequestSchema;
 import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.sns.model.SnsTerminationMessageModel;
 import com.nvidia.icms.service.byoc.ByocCreateService;
 import com.nvidia.icms.service.byoc.ByocTerminateService;
-import com.nvidia.icms.service.byoc.ClusterHealthService;
-import com.nvidia.icms.service.byoc.ClusterQueueAccessCredsService;
-import com.nvidia.icms.service.byoc.ClusterRegistrationService;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -75,15 +68,6 @@ public class ByocServiceTest {
     ClusterRepository clusterRepository;
 
     @Mock
-    ClusterQueueAccessCredsService clusterQueueAccessCredsService;
-
-    @Mock
-    ClusterRegistrationService clusterRegistrationService;
-
-    @Mock
-    ClusterHealthService clusterHeartbeatService;
-
-    @Mock
     ByocCreateService byocCreateService;
 
     @Mock
@@ -97,62 +81,7 @@ public class ByocServiceTest {
     @BeforeEach
     void init() {
 
-        byocService =
-                new ByocService(clusterQueueAccessCredsService, clusterRegistrationService,
-                                clusterHeartbeatService, clusterRepository,
-                                byocTerminateService);
-    }
-
-    @Test
-    void registerCluster_success() {
-        Map<String, Object> auditProps = new HashMap<>();
-        when(clusterRegistrationService.registerCluster(Mockito.any(),
-                                                        eq(DUMMY_CLUSTER_ID),
-                                                        eq(auditProps))).thenReturn(
-                new BartRegistrationResponse());
-
-        BartRegistrationResponse bartRegistrationResponse =
-                byocService.registerCluster(new BartRegistrationRequest(),
-                                            DUMMY_CLUSTER_ID, auditProps);
-
-        Assertions.assertNotNull(bartRegistrationResponse);
-        verify(clusterRegistrationService).registerCluster(Mockito.any(),
-                                                           eq(DUMMY_CLUSTER_ID), eq(auditProps));
-    }
-
-    @Test
-    void deleteCluster_success() {
-        Map<String, Object> auditProps = new HashMap<>();
-        doNothing().when(clusterRegistrationService).deleteCluster(DUMMY_CLUSTER_ID, auditProps);
-
-        byocService.deleteCluster(DUMMY_CLUSTER_ID, auditProps);
-
-        verify(clusterRegistrationService).deleteCluster(DUMMY_CLUSTER_ID, auditProps);
-    }
-
-    @Test
-    void getClusterQueuesInfo() {
-
-        when(clusterQueueAccessCredsService.getClusterQueuesInfo(DUMMY_CLUSTER_ID)).thenReturn(
-                new BartRegistrationCredentialsResponse());
-
-        BartRegistrationCredentialsResponse bartRegistrationCredentialsResponse =
-                byocService.getClusterQueuesInfo(DUMMY_CLUSTER_ID);
-
-        Assertions.assertNotNull(bartRegistrationCredentialsResponse);
-        verify(clusterQueueAccessCredsService).getClusterQueuesInfo(DUMMY_CLUSTER_ID);
-
-    }
-
-    @Test
-    void registerClusterHeartbeat_success() {
-        doNothing().when(clusterHeartbeatService)
-                .registerClusterHeartbeat(Mockito.any(), eq(DUMMY_CLUSTER_ID));
-
-        byocService.registerClusterHeartbeat(new ClusterHeartbeatRequest(), DUMMY_CLUSTER_ID);
-
-        verify(clusterHeartbeatService).registerClusterHeartbeat(Mockito.any(),
-                                                                 eq(DUMMY_CLUSTER_ID));
+        byocService = new ByocService(clusterRepository, byocTerminateService);
     }
 
     @Test

@@ -297,7 +297,7 @@ rollback.
 
 ## Disabling Admin Issuer Proxy
 
-Admin Issuer Proxy is a bootstrap helper. `POST /v1/admin/keys` returns a 12-hour admin JWT, signed by OpenBao as the NVCF API's in-cluster issuer, carrying function, secret, registry-credential and cluster-management scopes.
+Admin Issuer Proxy is a bootstrap helper. `POST /v1/admin/keys` returns a 12-hour admin JWT, signed by OpenBao as the NVCF API's in-cluster issuer, carrying function, secret, registry-credential, cluster-group listing and cluster-management scopes.
 
 **It does not authenticate callers** — the stack relies on the gateway in front of it for that.
 

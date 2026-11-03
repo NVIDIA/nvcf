@@ -74,6 +74,10 @@ type State struct {
 	NVCTAPIKey           string    `json:"nvctApiKey,omitempty"`
 	NVCTAPIKeyExpiration time.Time `json:"nvctApiKeyExpiration,omitempty"`
 
+	// Event Ledger read API key (separate scopes from the NVCF function key)
+	EventLedgerAPIKey           string    `json:"eventLedgerApiKey,omitempty"`
+	EventLedgerAPIKeyExpiration time.Time `json:"eventLedgerApiKeyExpiration,omitempty"`
+
 	// Last used endpoints and settings
 	LastBaseURL   string `json:"lastBaseUrl,omitempty"`
 	LastInvokeURL string `json:"lastInvokeUrl,omitempty"`
@@ -220,6 +224,8 @@ func (sm *StateManager) ClearTokens() {
 	sm.state.APIKeyExpiration = time.Time{}
 	sm.state.NVCTAPIKey = ""
 	sm.state.NVCTAPIKeyExpiration = time.Time{}
+	sm.state.EventLedgerAPIKey = ""
+	sm.state.EventLedgerAPIKeyExpiration = time.Time{}
 }
 
 // SetConfig updates configuration settings
@@ -297,6 +303,18 @@ func (sm *StateManager) ClearNVCTAPIKey() {
 // HasNVCTAPIKey reports whether an NVCT API key is stored.
 func (sm *StateManager) HasNVCTAPIKey() bool {
 	return sm.state.NVCTAPIKey != ""
+}
+
+// SetEventLedgerAPIKey stores an Event Ledger read API key and its expiration.
+func (sm *StateManager) SetEventLedgerAPIKey(key string, expiration time.Time) {
+	sm.state.EventLedgerAPIKey = key
+	sm.state.EventLedgerAPIKeyExpiration = expiration
+}
+
+// ClearEventLedgerAPIKey removes the stored Event Ledger API key.
+func (sm *StateManager) ClearEventLedgerAPIKey() {
+	sm.state.EventLedgerAPIKey = ""
+	sm.state.EventLedgerAPIKeyExpiration = time.Time{}
 }
 
 // PrintStatus prints the current state in a human-readable format
@@ -426,3 +444,6 @@ func HasTask() bool                           { return DefaultStateManager.HasTa
 func SetNVCTAPIKey(key string, exp time.Time) { DefaultStateManager.SetNVCTAPIKey(key, exp) }
 func ClearNVCTAPIKey()                        { DefaultStateManager.ClearNVCTAPIKey() }
 func HasNVCTAPIKey() bool                     { return DefaultStateManager.HasNVCTAPIKey() }
+func SetEventLedgerAPIKey(key string, exp time.Time) {
+	DefaultStateManager.SetEventLedgerAPIKey(key, exp)
+}

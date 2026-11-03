@@ -288,7 +288,7 @@ async fn fetch_function_state(
 /// Fetch active functions from independent invocation and worker metric sources.
 /// A failed source is unknown, not empty: keep every successful result, and fail
 /// only when neither source produced a usable response.
-async fn fetch_timeseries_db_active_functions(
+pub async fn fetch_timeseries_db_active_functions(
     timeseries_db_client: &TimeseriesDbClient,
     env: &str,
     timeseries_db_ignore_env: bool,

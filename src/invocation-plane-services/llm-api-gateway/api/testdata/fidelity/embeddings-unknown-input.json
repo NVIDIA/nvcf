@@ -1,0 +1,76 @@
+{
+  "description": "Multimodal object inputs that the gateway does not model are forwarded unchanged and counted by raw size.",
+  "path": "/v1/embeddings",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "input": [
+      {
+        "type": "image_url",
+        "image_url": {
+          "url": "data:image/png;base64,AAAA"
+        }
+      },
+      {
+        "type": "text",
+        "text": "a cat"
+      }
+    ]
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "input": [
+      {
+        "type": "image_url",
+        "image_url": {
+          "url": "data:image/png;base64,AAAA"
+        }
+      },
+      {
+        "type": "text",
+        "text": "a cat"
+      }
+    ]
+  },
+  "upstream_input_tokens": "36",
+  "upstream_affinity_key": "",
+  "upstream_response": {
+    "json": {
+      "object": "list",
+      "data": [
+        {
+          "object": "embedding",
+          "index": 0,
+          "embedding": [
+            0.5,
+            0
+          ]
+        }
+      ],
+      "model": "company/model",
+      "usage": {
+        "prompt_tokens": 2,
+        "total_tokens": 2
+      }
+    }
+  },
+  "response": {
+    "json": {
+      "object": "list",
+      "data": [
+        {
+          "object": "embedding",
+          "index": 0,
+          "embedding": [
+            0.5,
+            0
+          ]
+        }
+      ],
+      "model": "company/model",
+      "usage": {
+        "prompt_tokens": 2,
+        "total_tokens": 2
+      }
+    }
+  }
+}

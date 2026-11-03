@@ -18,6 +18,7 @@ limitations under the License.
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -57,6 +58,9 @@ func estimatedTokenCountForRequest(model string, request *models.ChatCompletionR
 	totalTokens += estimatedTokenCountForStringPtr(request.ReasoningFormat)
 	totalTokens += estimatedTokenCountForStringPtr(request.ReasoningEffort)
 	totalTokens += estimatedTokenCountForValue(request.Metadata)
+	for _, value := range request.UndecodedMembers {
+		totalTokens += estimatedTokenCountForRawJSON(value)
+	}
 
 	return totalTokens
 }
@@ -64,6 +68,10 @@ func estimatedTokenCountForRequest(model string, request *models.ChatCompletionR
 func estimatedTokenCountForMessages(messages []models.ChatMessage) int {
 	totalTokens := 0
 	for _, message := range messages {
+		if message.Raw != nil {
+			totalTokens += estimatedTokenCountForRawJSON(message.Raw)
+			continue
+		}
 		totalTokens += tokensPerMessage
 		totalTokens += tokensPerRole
 
@@ -85,8 +93,12 @@ func estimatedTokenCountForMessages(messages []models.ChatMessage) int {
 func estimatedTokenCountForMessageContent(content models.ChatMessageContent) int {
 	totalTokens := 0
 	for _, part := range content {
-		if text, ok := part.(models.ContentPartText); ok {
-			totalTokens += len(text.String()) / 4
+		switch typed := part.(type) {
+		case models.ContentPartText:
+			totalTokens += len(typed.String()) / 4
+			continue
+		case models.ContentPartRaw:
+			totalTokens += estimatedTokenCountForRawJSON(typed)
 			continue
 		}
 		totalTokens += estimatedTokenCountForValue(part)
@@ -147,8 +159,9 @@ func estimatedInputTokensForNormalizedRequest(
 // body that ChatCompletionRequest and ChatMessage do not declare. They are
 // forwarded upstream and can carry prompt text (for example
 // chat_template_kwargs or messages[].reasoning_content), so their JSON text is
-// counted as a conservative admission estimate.
-func estimatedTokenCountForUnmodeledChatFields(rawBody []byte) int {
+// counted as a conservative admission estimate. Messages that failed to decode
+// are counted whole by estimatedTokenCountForMessages, so they are skipped.
+func estimatedTokenCountForUnmodeledChatFields(rawBody []byte, messages []models.ChatMessage) int {
 	totalTokens := 0
 	for _, value := range models.UnmodeledMembers(rawBody, models.ChatCompletionRequest{}) {
 		totalTokens += estimatedTokenCountForText(string(value))
@@ -160,12 +173,26 @@ func estimatedTokenCountForUnmodeledChatFields(rawBody []byte) int {
 	if err := json.Unmarshal(rawBody, &body); err != nil {
 		return totalTokens
 	}
-	for _, message := range body.Messages {
+	for i, message := range body.Messages {
+		if i < len(messages) && messages[i].Raw != nil {
+			continue
+		}
 		for _, value := range models.UnmodeledMembers(message, models.ChatMessage{}) {
 			totalTokens += estimatedTokenCountForText(string(value))
 		}
 	}
 	return totalTokens
+}
+
+// estimatedTokenCountForRawJSON counts JSON that the gateway keeps raw. Whitespace
+// between JSON tokens is not content, so the same element costs the same however
+// the client formats it.
+func estimatedTokenCountForRawJSON(raw []byte) int {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		return estimatedTokenCountForText(string(raw))
+	}
+	return estimatedTokenCountForText(compact.String())
 }
 
 func estimatedTokenCountForText(text string) int {

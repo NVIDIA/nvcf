@@ -17,10 +17,12 @@ load("@rules_go//go:def.bzl", "go_test")
 
 go_test(
     name = "test_e2e_test",
+    timeout = "long",
     srcs = [
         "connection_e2e_test.go",
         "nkey_e2e_test.go",
         "oauth_e2e_test.go",
+        "reconnect_e2e_test.go",
         "service_e2e_test.go",
         "webhook_e2e_test.go",
     ],

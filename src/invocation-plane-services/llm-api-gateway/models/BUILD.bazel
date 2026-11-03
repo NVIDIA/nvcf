@@ -20,7 +20,6 @@ go_library(
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/internal/must",
         "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
-        "//src/invocation-plane-services/llm-api-gateway/internal/servicetier",
     ],
 )
 

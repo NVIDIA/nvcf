@@ -165,6 +165,7 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 
 	err = s.RegisterWorker(auth, authInfo, conn)
 	if err != nil {
+		result = metrics.ConnectRegisterFailed
 		zap.L().Error("failed to register worker", zap.Error(err))
 		_ = spanError(span, err)
 		_ = conn.Close()

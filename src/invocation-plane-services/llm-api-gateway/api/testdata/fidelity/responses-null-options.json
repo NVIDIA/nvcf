@@ -45,6 +45,8 @@
       "null": null
     }
   },
+  "upstream_input_tokens": "19",
+  "upstream_affinity_key": "mt:v1:payload:e65e9581b3339b7745b9c38d9f42cff67f377c28859195d226c2104a352cca82",
   "upstream_response": {
     "sse": [
       {

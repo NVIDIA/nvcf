@@ -417,32 +417,73 @@ Usage: {{ include "nvcaop.jsonListOrEmpty" <list> }}
 {{- end -}}
 
 {{/*
-Get the imageCredHelper repository based on image.repository
-If imageRepository is explicitly set, use it. Otherwise, calculate it based on image.repository prefix.
+Registry path (registry plus org and team) of a repository: everything
+before the last path element. The credential helper and collector default
+to this path, so a sibling image lives next to image.repository wherever
+that is: the public org, staging, or any other registry path. A repository
+with no registry path falls back to the public path nvcr.io/nvidia/nvcf-byoc
+instead of a bare name, which a container runtime would resolve on Docker
+Hub.
+Usage: {{ include "nvcaop.imageRegistryPath" .Values.image.repository }}
+*/}}
+{{- define "nvcaop.imageRegistryPath" -}}
+{{- $parts := splitList "/" . -}}
+{{- if gt (len $parts) 1 -}}
+{{- join "/" (initial $parts) -}}
+{{- else -}}
+nvcr.io/nvidia/nvcf-byoc
+{{- end -}}
+{{- end -}}
+
+{{/*
+Get the imageCredHelper repository based on image.repository.
+If imageRepository is explicitly set, use it. Otherwise it is the sibling of
+image.repository: nvcf-image-credential-helper under the same registry path
+(see nvcaop.imageRegistryPath). The default image.repository therefore still
+resolves to nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper and staging
+to stg.nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper. An operator
+image from any other registry path gets the helper from that same path.
 Usage: {{ include "nvcaop.imageCredHelperRepository" (dict "imageRepository" .Values.helmManaged.imageCredHelper.imageRepository "defaultRepository" .Values.image.repository) }}
 */}}
 {{- define "nvcaop.imageCredHelperRepository" -}}
 {{- if .imageRepository -}}
 {{- .imageRepository -}}
-{{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
-stg.nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper
 {{- else -}}
-nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper
+{{- include "nvcaop.imageRegistryPath" .defaultRepository }}/nvcf-image-credential-helper
 {{- end -}}
 {{- end -}}
 
 {{/*
-Get the OTel collector repository based on image.repository
-If imageRepository is explicitly set, use it. Otherwise, calculate it based on image.repository prefix.
+Get the OTel collector repository based on image.repository.
+If imageRepository is explicitly set, use it. Otherwise it is the sibling of
+image.repository, nvcf-otel-collector under the same registry path (see
+nvcaop.imageCredHelperRepository).
 Usage: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .Values.otelCollector.imageRepository "defaultRepository" .Values.image.repository) }}
 */}}
 {{- define "nvcaop.otelCollectorRepository" -}}
 {{- if .imageRepository -}}
 {{- .imageRepository -}}
-{{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
-stg.nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector
 {{- else -}}
-nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector
+{{- include "nvcaop.imageRegistryPath" .defaultRepository }}/nvcf-otel-collector
+{{- end -}}
+{{- end -}}
+
+{{/*
+Return "true" when the operator would read OTEL_COLLECTOR_IMAGE_TAG: the
+collector is enabled at the top level, or the NVCFBackend this chart renders
+enables it without its own tag. The operator's built-in tag is not kept
+current, so the chart fails instead of leaving the tag unset in that case.
+*/}}
+{{- define "nvcaop.otelCollectorTagNeeded" -}}
+{{- $source := (.Values.ngcConfig).clusterSource | default "ngc-managed" -}}
+{{- $backend := dict -}}
+{{- if eq $source "self-managed" -}}
+{{- $backend = (.Values.selfManaged | default dict).otelCollector | default dict -}}
+{{- else if eq $source "helm-managed" -}}
+{{- $backend = (.Values.helmManaged | default dict).otelCollector | default dict -}}
+{{- end -}}
+{{- if or (.Values.otelCollector | default dict).enabled (and $backend.enabled (not $backend.imageTag)) -}}
+true
 {{- end -}}
 {{- end -}}
 
@@ -470,17 +511,15 @@ nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
 {{- end -}}
 
 {{/*
-Get the BYOO OTel collector image when its tag is configured.
+Get the BYOO OTel collector image when its tag is configured. values.yaml
+holds the only default tag, which the release bump updates. An empty or null
+tag renders nothing, so the chart sets no BYOO_OTEL_COLLECTOR_CONTAINER.
 */}}
 {{- define "nvcaop.byooOtelCollectorImage" -}}
 {{- $agent := .Values.agent | default dict -}}
 {{- $byooOtelCollector := $agent.byooOtelCollector | default dict -}}
-{{- $imageTag := "0.160.0-nv-0.2.5" -}}
-{{- if hasKey $byooOtelCollector "imageTag" -}}
-{{- $imageTag = $byooOtelCollector.imageTag -}}
-{{- end -}}
-{{- if $imageTag -}}
-{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" .Values.image.repository "clusterSource" ((.Values.ngcConfig).clusterSource | default "ngc-managed"))) $imageTag -}}
+{{- with $byooOtelCollector.imageTag -}}
+{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" $.Values.image.repository "clusterSource" (($.Values.ngcConfig).clusterSource | default "ngc-managed"))) . -}}
 {{- end -}}
 {{- end -}}
 

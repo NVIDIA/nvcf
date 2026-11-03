@@ -321,7 +321,6 @@ func TestPayloadLastClusterErrors(t *testing.T) {
 	for _, derive := range []func(*requestctx.RequestContext){
 		func(c *requestctx.RequestContext) { h.setChatLastClusterKeys(c, []byte(`{`)) },
 		func(c *requestctx.RequestContext) { h.setChatLastClusterKeys(c, []byte(`{"messages":[]}`)) },
-		func(c *requestctx.RequestContext) { h.setChatLastClusterKeys(c, []byte(`{"messages":[{"role":1}]}`)) },
 		func(c *requestctx.RequestContext) { h.setMessagesLastClusterKeys(c, nil, nil) },
 		func(c *requestctx.RequestContext) {
 			h.setMessagesLastClusterKeys(c, []json.RawMessage{json.RawMessage(`{`)}, nil)
@@ -354,6 +353,15 @@ func TestPayloadLastClusterErrors(t *testing.T) {
 		if reqCtx.SessionID != "existing-session" || reqCtx.CacheAffinityKey != "existing-affinity" {
 			t.Fatal("error changed session affinity")
 		}
+	}
+}
+
+func TestChatLastClusterKeepsMessagesWithoutStringRole(t *testing.T) {
+	h := enabledLastClusterHandlers()
+	reqCtx := lastClusterPayloadContext()
+	h.setChatLastClusterKeys(reqCtx, []byte(`{"messages":[{"role":"user","content":"hi"},{"role":1},"note"]}`))
+	if !strings.HasPrefix(reqCtx.LastClusterWriteKey, "pc:v1:") {
+		t.Fatalf("write = %q, want a key for messages the gateway does not model", reqCtx.LastClusterWriteKey)
 	}
 }
 

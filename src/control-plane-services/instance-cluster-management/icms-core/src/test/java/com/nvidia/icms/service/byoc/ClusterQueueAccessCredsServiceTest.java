@@ -21,22 +21,15 @@ import static com.nvidia.icms.util.TestUtil.DUMMY_CLUSTER_GROUP_ID;
 import static com.nvidia.icms.util.TestUtil.DUMMY_CLUSTER_ID;
 import static com.nvidia.icms.util.TestUtil.DUMMY_CREATION_QUEUE_URL;
 import static com.nvidia.icms.util.TestUtil.buildGpuUdts;
-import static com.nvidia.icms.util.TestUtil.buildGpus;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.*;
 
 import com.amazonaws.services.sqs.model.QueueAttributeName;
 import com.nvidia.icms.configuration.aws.AwsQueueProperties;
-import com.nvidia.icms.errors.IcmsConflictException;
-import com.nvidia.icms.errors.IcmsInternalServerException;
-import com.nvidia.icms.errors.IcmsNotFoundException;
-import com.nvidia.icms.inbound.rest.model.byoc.BartRegistrationCredentialsResponse;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterProviderEnum;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterStatusEnum;
 import com.nvidia.icms.inbound.rest.model.nvca.NvcaAccessCreds;
-import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.CreationQueueUdt;
 import com.nvidia.icms.outbound.sqs.QueueManager;
@@ -45,23 +38,17 @@ import com.nvidia.icms.service.InstanceServiceHelper;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import software.amazon.awssdk.services.sts.model.Credentials;
 
 @ExtendWith(MockitoExtension.class)
 public class ClusterQueueAccessCredsServiceTest {
-
-    @Mock
-    ClusterRepository clusterRepository;
 
     @Mock
     CredentialsGenerationService credentialGenerationService;
@@ -80,232 +67,8 @@ public class ClusterQueueAccessCredsServiceTest {
     @BeforeEach
     void init() {
         clusterQueueAccessCredsService =
-                new ClusterQueueAccessCredsService(clusterRepository, credentialGenerationService,
-                                                   queueManager, awsQueueProperties, instanceServiceHelper);
-    }
-
-    @Test
-    void getClusterQueuesInfo_success()
-            throws Exception {
-
-        // Prepare
-        Mockito.when(clusterRepository.getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false))
-                .thenReturn(Optional.of(getClusterEntity()));
-        Mockito.when(credentialGenerationService.getCredentialsForQueue("creation_queue_url"))
-                .thenReturn(getDummyCredentialsForCreate());
-        Mockito.when(credentialGenerationService.getCredentialsForQueue("termination_queue_url"))
-                .thenReturn(getDummyCredentialsForTerminate());
-        when(queueManager.queueExists("creation_queue_url")).thenReturn(true);
-        when(queueManager.queueExists("termination_queue_url")).thenReturn(true);
-
-        // Act
-        BartRegistrationCredentialsResponse bartRegistrationCredentialsResponse =
-                clusterQueueAccessCredsService.getClusterQueuesInfo(DUMMY_CLUSTER_ID);
-
-        // Assert
-        Assertions.assertNotNull(bartRegistrationCredentialsResponse);
-        Assertions.assertNotNull(bartRegistrationCredentialsResponse.getCredentials());
-        Assertions.assertEquals("creation_queue_url",
-                                bartRegistrationCredentialsResponse.getCredentials()
-                                        .getCreationQueue().getUrl());
-        Assertions.assertEquals("FifoQueue",
-                                bartRegistrationCredentialsResponse.getCredentials()
-                                        .getCreationQueue()
-                                        .getQueueType());
-        Assertions.assertEquals("creation_accessKey",
-                                bartRegistrationCredentialsResponse.getCredentials()
-                                        .getCreationQueue()
-                                        .getAccessKeyId());
-        Assertions.assertEquals("creation_secretKey",
-                                bartRegistrationCredentialsResponse.getCredentials()
-                                        .getCreationQueue()
-                                        .getSecretAccessKey());
-        Assertions.assertEquals("creation_sessionToken",
-                                bartRegistrationCredentialsResponse.getCredentials()
-                                        .getCreationQueue()
-                                        .getSessionToken());
-        Assertions.assertNotNull(
-                bartRegistrationCredentialsResponse.getCredentials().getCreationQueue()
-                        .getExpiresAt());
-        Assertions.assertEquals("termination_queue_url",
-                                bartRegistrationCredentialsResponse.getCredentials()
-                                        .getTerminationQueue()
-                                        .getUrl());
-        Assertions.assertEquals("FifoQueue",
-                                bartRegistrationCredentialsResponse.getCredentials()
-                                        .getTerminationQueue()
-                                        .getQueueType());
-        Assertions.assertEquals("termination_accessKey",
-                                bartRegistrationCredentialsResponse.getCredentials()
-                                        .getTerminationQueue()
-                                        .getAccessKeyId());
-        Assertions.assertEquals("termination_secretKey",
-                                bartRegistrationCredentialsResponse.getCredentials()
-                                        .getTerminationQueue()
-                                        .getSecretAccessKey());
-        Assertions.assertEquals("termination_sessionToken",
-                                bartRegistrationCredentialsResponse.getCredentials()
-                                        .getTerminationQueue()
-                                        .getSessionToken());
-        Assertions.assertNotNull(
-                bartRegistrationCredentialsResponse.getCredentials().getTerminationQueue()
-                        .getExpiresAt());
-
-        verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(credentialGenerationService).getCredentialsForQueue("creation_queue_url");
-        verify(credentialGenerationService).getCredentialsForQueue("termination_queue_url");
-        verify(queueManager).queueExists("creation_queue_url");
-        verify(queueManager).queueExists("termination_queue_url");
-    }
-
-    @Test
-    void getClusterQueuesInfo_clusterDoesNotExist_throwsError()
-            throws Exception {
-
-        // Prepare
-        Mockito.when(clusterRepository.getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false))
-                .thenReturn(Optional.empty());
-
-        // Act
-        IcmsNotFoundException exception = assertThrows(IcmsNotFoundException.class,
-                                                      () -> clusterQueueAccessCredsService.getClusterQueuesInfo(
-                                                              DUMMY_CLUSTER_ID));
-
-        // Assert
-        Assertions.assertEquals("Could not find any cluster registered with id " + DUMMY_CLUSTER_ID,
-                                exception.getBody().getDetail());
-        verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-    }
-
-    @Test
-    void getClusterQueuesInfo_exceptionGeneratingCreds_throwsError()
-            throws Exception {
-
-        // Prepare
-        Mockito.when(clusterRepository.getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false))
-                .thenReturn(Optional.of(getClusterEntity()));
-        Mockito.when(credentialGenerationService.getCredentialsForQueue("creation_queue_url"))
-                .thenReturn(getDummyCredentialsForCreate());
-        Mockito.when(credentialGenerationService.getCredentialsForQueue("termination_queue_url"))
-                .thenThrow(new RuntimeException("dummy_error"));
-        when(queueManager.queueExists("creation_queue_url")).thenReturn(true);
-        when(queueManager.queueExists("termination_queue_url")).thenReturn(true);
-
-        // Act
-        IcmsInternalServerException exception = assertThrows(IcmsInternalServerException.class,
-                                                            () -> clusterQueueAccessCredsService.getClusterQueuesInfo(
-                                                                    DUMMY_CLUSTER_ID));
-
-        // Assert
-        Assertions.assertEquals(
-                "Exception while generating creds for queue termination_queue_url, error dummy_error",
-                exception.getBody().getDetail());
-        verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(credentialGenerationService).getCredentialsForQueue("creation_queue_url");
-        verify(credentialGenerationService).getCredentialsForQueue("termination_queue_url");
-        verify(queueManager).queueExists("creation_queue_url");
-        verify(queueManager).queueExists("termination_queue_url");
-    }
-
-    @Test
-    void getClusterQueuesInfo_forAbandonedClusters_throwsError()
-            throws Exception {
-
-        // Prepare
-        ClusterEntity clusterEntity = getClusterEntity();
-        clusterEntity.setClusterStatus(ClusterStatusEnum.ABANDONED);
-        Mockito.when(clusterRepository.getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false))
-                .thenReturn(Optional.of(clusterEntity));
-
-        // Act
-        IcmsConflictException exception = assertThrows(IcmsConflictException.class,
-                                                      () -> clusterQueueAccessCredsService.getClusterQueuesInfo(
-                                                              DUMMY_CLUSTER_ID));
-
-        // Assert
-        Assertions.assertEquals("Cannot generate creds for a cluster with ABANDONED status",
-                                exception.getBody().getDetail());
-        verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-    }
-
-    @Test
-    void getClusterQueuesInfo_nullOrEmptyCredsGenerated_throwsError()
-            throws Exception {
-
-        // Prepare
-        Mockito.when(clusterRepository.getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false))
-                .thenReturn(Optional.of(getClusterEntity()));
-        Mockito.when(credentialGenerationService.getCredentialsForQueue("creation_queue_url"))
-                .thenReturn(getDummyCredentialsForCreate());
-        Mockito.when(credentialGenerationService.getCredentialsForQueue("termination_queue_url"))
-                .thenReturn(null);
-        when(queueManager.queueExists("creation_queue_url")).thenReturn(true);
-        when(queueManager.queueExists("termination_queue_url")).thenReturn(true);
-
-        // Act
-        IcmsInternalServerException exception = assertThrows(IcmsInternalServerException.class,
-                                                            () -> clusterQueueAccessCredsService.getClusterQueuesInfo(
-                                                                    DUMMY_CLUSTER_ID));
-
-        // Assert
-        Assertions.assertEquals("Null or Empty creds generated for termination_queue_url",
-                                exception.getBody().getDetail());
-        verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(credentialGenerationService).getCredentialsForQueue("creation_queue_url");
-        verify(credentialGenerationService).getCredentialsForQueue("termination_queue_url");
-        verify(queueManager).queueExists("creation_queue_url");
-        verify(queueManager).queueExists("termination_queue_url");
-    }
-
-    @Test
-    void getClusterQueuesInfo_invalidCredsGenerated_throwsError()
-            throws Exception {
-
-        // Prepare
-        Mockito.when(clusterRepository.getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false))
-                .thenReturn(Optional.of(getClusterEntity()));
-        Mockito.when(credentialGenerationService.getCredentialsForQueue("creation_queue_url"))
-                .thenReturn(getDummyCredentialsForCreate());
-        Mockito.when(credentialGenerationService.getCredentialsForQueue("termination_queue_url"))
-                .thenReturn(Credentials.builder().build());
-        when(queueManager.queueExists("creation_queue_url")).thenReturn(true);
-        when(queueManager.queueExists("termination_queue_url")).thenReturn(true);
-
-        // Act
-        IcmsInternalServerException exception = assertThrows(IcmsInternalServerException.class,
-                                                            () -> clusterQueueAccessCredsService.getClusterQueuesInfo(
-                                                                    DUMMY_CLUSTER_ID));
-
-        // Assert
-        Assertions.assertEquals("Invalid creds generated for termination_queue_url",
-                                exception.getBody().getDetail());
-        verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(credentialGenerationService).getCredentialsForQueue("creation_queue_url");
-        verify(credentialGenerationService).getCredentialsForQueue("termination_queue_url");
-        verify(queueManager).queueExists("creation_queue_url");
-        verify(queueManager).queueExists("termination_queue_url");
-    }
-
-    @Test
-    void getClusterQueuesInfo_InterruptedException_throwsError()
-            throws Exception {
-        // Prepare
-        Mockito.when(clusterRepository.getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false))
-                .thenReturn(Optional.of(getClusterEntity()));
-        Mockito.when(credentialGenerationService.getCredentialsForQueue("creation_queue_url"))
-                .thenThrow(new InterruptedException("Thread interrupted"));
-        when(queueManager.queueExists("creation_queue_url")).thenReturn(true);
-
-        // Act
-        IcmsInternalServerException exception = assertThrows(IcmsInternalServerException.class,
-                                                            () -> clusterQueueAccessCredsService.getClusterQueuesInfo(
-                                                                    DUMMY_CLUSTER_ID));
-
-        // Assert
-        Assertions.assertEquals("Interrupted while fetching the queue credentials, error: Thread interrupted",
-                                exception.getBody().getDetail());
-        verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
-        verify(credentialGenerationService).getCredentialsForQueue("creation_queue_url");
+                new ClusterQueueAccessCredsService(credentialGenerationService, queueManager,
+                                                   awsQueueProperties, instanceServiceHelper);
     }
 
     @Test
@@ -453,33 +216,6 @@ public class ClusterQueueAccessCredsServiceTest {
                 .secretAccessKey("creation_secretKey")
                 .sessionToken("creation_sessionToken").expiration(
                         Instant.now().plusMillis(1000)).build();
-    }
-
-    private Credentials getDummyCredentialsForTerminate() {
-        return Credentials.builder().accessKeyId("termination_accessKey")
-                .secretAccessKey("termination_secretKey")
-                .sessionToken("termination_sessionToken").expiration(
-                        Instant.now().plusMillis(1000)).build();
-    }
-
-    private ClusterEntity getClusterEntity() {
-        return ClusterEntity.builder()
-                .clusterName("name")
-                .clusterId("id")
-                .ncaId("ncaId")
-                .terminationQueueUrl("termination_queue_url")
-                .terminationQueueType("FifoQueue")
-                .clusterDescription("cluster_description")
-                .clusterProvider(ClusterProviderEnum.GDN)
-                .clusterStatus(ClusterStatusEnum.READY)
-                .clusterGroupName("group_name")
-                .clusterGroupId("group_id")
-                .creationQueueUrl("creation_queue_url")
-                .creationQueueType("FifoQueue")
-                .gpus(buildGpuUdts())
-                .authorizedNcaIds(Set.of("ncaId", "ncaId1"))
-                .requestDump("request")
-                .build();
     }
 
     private ClusterEntity getClusterEntityWithQueuesTargetingAndTask(String gpuName) {

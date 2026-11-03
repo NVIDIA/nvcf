@@ -74,7 +74,7 @@ public class KeysService {
         // Obtain lock for authorizations updates
         lockForAuthorizationUpdates(key, service, now);
 
-        keysDao.save(key, owner);
+        keysDao.create(key, owner);
 
         actionRecorder.record(API_KEY, key.getKeyId(), owner.getOwnerType().name(),
                               owner.getOwnerId(), CREATE, key.getIssuerServiceId(),

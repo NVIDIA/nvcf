@@ -14,23 +14,15 @@ bazel build //crates/server:image_index
 bazel run //crates/server:image_load
 ```
 
-Push targets are declared under `//nvidia-internal`. Use them only with the
-right `DOCKER_CONFIG` credentials:
-
-```bash
-bazel run //nvidia-internal:image_push_nvcf_dev
-bazel run //nvidia-internal:image_push_ncp_dev
-```
-
 After `Cargo.lock` changes, repin crate metadata:
 
 ```bash
 CARGO_BAZEL_REPIN=1 bazel sync --only=nvcf_invocation_crates
 ```
 
-CI subproject id: `http-invocation`. Native Bazel validation and release wiring
-live in `tools/ci/subproject-validations.yaml`, an internal GitLab CI config
-not present in this public snapshot.
+CI subproject id: `http-invocation`. Follow the root `RELEASE.md` and
+`docs/dev/github-release-process.md` for source versioning and publication
+handoffs. Inspect `.github/workflows/` for current public validation.
 
 ## Cargo Development
 

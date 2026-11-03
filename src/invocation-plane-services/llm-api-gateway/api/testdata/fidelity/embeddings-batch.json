@@ -33,6 +33,8 @@
       "empty": null
     }
   },
+  "upstream_input_tokens": "14",
+  "upstream_affinity_key": "",
   "upstream_response": {
     "json": {
       "object": "list",

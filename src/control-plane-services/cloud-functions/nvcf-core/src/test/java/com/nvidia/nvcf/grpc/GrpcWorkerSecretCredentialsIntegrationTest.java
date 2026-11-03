@@ -157,7 +157,7 @@ class GrpcWorkerSecretCredentialsIntegrationTest extends BaseFunctionInvocationT
                 TEST_TELEMETRY_LOGS_ID,
                 TEST_TELEMETRY_ENDPOINT,
                 TelemetryProtocol.HTTP,
-                TelemetryProvider.PROMETHEUS,
+                TelemetryProvider.SPLUNK,
                 Set.of(TelemetryType.LOGS),
                 TEST_TELEMETRY_LOG_SECRETS
         );
@@ -192,7 +192,7 @@ class GrpcWorkerSecretCredentialsIntegrationTest extends BaseFunctionInvocationT
                 TEST_TELEMETRY_LOGS_ID,
                 TEST_TELEMETRY_ENDPOINT,
                 TelemetryProtocol.HTTP,
-                TelemetryProvider.PROMETHEUS,
+                TelemetryProvider.SPLUNK,
                 Set.of(TelemetryType.LOGS),
                 TEST_TELEMETRY_LOG_SECRETS);
 

@@ -233,3 +233,60 @@ func TestDeleteTeardownReportsFailures(t *testing.T) {
 		t.Fatal("the deployment-not-found tolerance must not apply to a function delete")
 	}
 }
+
+func TestNamedFunctionUndeployTeardownTargetsThatFunction(t *testing.T) {
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("BDD_PRIMARY_FUNCTION_ID", "fn-primary")
+	t.Setenv("BDD_PRIMARY_VERSION_ID", "ver-primary")
+	sc, fake := newScenarioContext(t)
+	sc.NVCFCLIConfig = "/cfg.yaml"
+	if err := sc.theFunctionIsUndeployedAtTeardown("${BDD_PRIMARY_FUNCTION_ID}", "${BDD_PRIMARY_VERSION_ID}"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BDD_PRIMARY_FUNCTION_ID", "changed-later")
+	fake.result = harness.Result{ExitCode: 1, Stdout: functionDeploymentNotFound}
+	if err := sc.runTeardown(context.Background()); err != nil {
+		t.Fatalf("a function with no deployment counts as done: %v", err)
+	}
+	if len(fake.runs) != 1 || !strings.Contains(fake.runs[0].command,
+		"function delete --deployment-only --function-id fn-primary --version-id ver-primary") {
+		t.Fatalf("runs = %+v", fake.runs)
+	}
+}
+
+func TestNamedFunctionUndeployTeardownRequiresIDs(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	sc.NVCFCLIConfig = "/cfg.yaml"
+	t.Setenv("BDD_MISSING_ID", "")
+	if err := sc.theFunctionIsUndeployedAtTeardown("${BDD_MISSING_ID}", "ver"); err == nil {
+		t.Fatal("expected an error for an empty function ID")
+	}
+}
+
+func TestNamedFunctionDeleteTeardownDeletesThatVersion(t *testing.T) {
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("BDD_PRIMARY_FUNCTION_ID", "fn-primary")
+	t.Setenv("BDD_PRIMARY_VERSION_ID", "ver-primary")
+	sc, fake := newScenarioContext(t)
+	sc.NVCFCLIConfig = "/cfg.yaml"
+	if err := sc.theFunctionIsDeletedAtTeardown("${BDD_PRIMARY_FUNCTION_ID}", "${BDD_PRIMARY_VERSION_ID}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sc.runTeardown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.runs) != 1 || !strings.Contains(fake.runs[0].command, "function delete --function-id fn-primary --version-id ver-primary") ||
+		strings.Contains(fake.runs[0].command, "--deployment-only") {
+		t.Fatalf("runs = %+v", fake.runs)
+	}
+	fake.runs, fake.result = nil, harness.Result{ExitCode: 1}
+	if err := sc.theFunctionIsDeletedAtTeardown("fn", "ver"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sc.runTeardown(context.Background()); err == nil {
+		t.Fatal("a failed delete must fail the scenario")
+	}
+	if err := sc.theFunctionIsDeletedAtTeardown("", "ver"); err == nil {
+		t.Fatal("expected an error for an empty function ID")
+	}
+}

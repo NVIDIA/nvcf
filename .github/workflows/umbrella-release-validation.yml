@@ -7,6 +7,9 @@ on:
   pull_request:
     paths:
       - 'tools/docs-version-sync/**'
+      - 'tools/ci/assemble-umbrella-candidate'
+      - 'tools/scripts/test/test-umbrella-candidate'
+      - '.github/workflows/umbrella-candidate.yml'
       - '.github/workflows/umbrella-release-validation.yml'
       - '.github/workflows/publish-umbrella-release.yml'
       - '.github/workflows/release-tags.yml'
@@ -50,3 +53,5 @@ jobs:
           echo "$bin" >> "$GITHUB_PATH"
       - name: Assemble, verify, extract, and render fixture releases
         run: go test -C tools/docs-version-sync -run TestUmbrella -count=1 -v
+      - name: Validate candidate CI with released-source fixtures
+        run: tools/scripts/test/test-umbrella-candidate

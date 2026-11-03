@@ -139,11 +139,20 @@ helm template nvct-api "$chart_dir" \
 assert_remote_config_key "$manifest" '.nvct.sidecars."otel-container"' "$otel_image" \
   "merge: the override reaches the rendered ConfigMap"
 
-# Expected values come from the chart so a version bump there does not break this.
+# Expected values come from the chart's own render so a version bump there does
+# not break this. The chart composes the worker references from
+# nvctApi.remoteConfig.workerImageTags, so they are not in its configData.
+chart_default_manifest="$work_dir/nvct-api-chart-defaults.yaml"
+helm template nvct-api "$chart_dir" \
+  --namespace nvcf \
+  --set-string nvctApi.image.registry=example.com \
+  --set-string nvctApi.image.repository=foo/bar/nvct \
+  --set-string nvctApi.fullnameOverride=nvct-api >"$chart_default_manifest" ||
+  fail "helm template could not render the nvct-api chart defaults"
+
 for sidecar_key in init-container utils-container ess-agent-container; do
-  chart_default="$(yq -r \
-    ".nvctApi.remoteConfig.configData.nvct.sidecars.\"$sidecar_key\"" \
-    "$chart_dir/values.yaml")"
+  chart_default="$(read_remote_config_key "$chart_default_manifest" \
+    ".nvct.sidecars.\"$sidecar_key\"")"
   [[ -n "$chart_default" && "$chart_default" != "null" ]] ||
     fail "merge: the chart no longer defaults $sidecar_key, update this test"
   assert_remote_config_key "$manifest" ".nvct.sidecars.\"$sidecar_key\"" \

@@ -33,9 +33,8 @@ make dev-format
 make dev-swagger
 ```
 
-CI subproject id: `nats-auth-callout`. Native Bazel validation and release
-wiring live in `tools/ci/subproject-validations.yaml`, an internal GitLab CI
-config not present in this public snapshot.
+Follow the [release workflow](../../../docs/dev/github-release-process.md) for source versions and
+producer handoffs.
 
 ## Plugin Work
 

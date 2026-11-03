@@ -44,9 +44,13 @@ func (h *Handlers) setChatLastClusterKeys(reqCtx *requestctx.RequestContext, raw
 	if err := json.Unmarshal(rawBody, &body); err != nil {
 		return
 	}
-	output, err := assistantMessageFlags(body.Messages)
-	if err != nil {
-		return
+	output := make([]bool, len(body.Messages))
+	for i, item := range body.Messages {
+		var message struct {
+			Role string `json:"role"`
+		}
+		// A message without a string role counts as not assistant.
+		output[i] = json.Unmarshal(item, &message) == nil && message.Role == "assistant"
 	}
 	setPayloadLastClusterKeys(reqCtx, lastcluster.PayloadInput{
 		Endpoint: lastcluster.EndpointChatCompletions,

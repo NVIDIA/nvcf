@@ -145,3 +145,26 @@ func TestSetupConfigReloadsConfigMapStyleSymlinkReplacement(t *testing.T) {
 
 	requireConfigValue(t, cfg, "two")
 }
+
+func TestCustomUnmarshalKeepsLastGoodSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	c := &configData[testConfig]{filename: path}
+	WithUnmarshalFunc(func(data []byte, target *testConfig) error {
+		if string(data) == "invalid" {
+			return fmt.Errorf("invalid custom config")
+		}
+		target.Value = string(data)
+		return nil
+	})(c)
+	require.NoError(t, os.WriteFile(path, []byte("first"), 0600))
+	require.NoError(t, c.reloadConfig())
+	first := c.Get()
+	require.Equal(t, "first", first.Value)
+	require.NoError(t, os.WriteFile(path, []byte("invalid"), 0600))
+	require.ErrorContains(t, c.reloadConfig(), "invalid custom config")
+	require.Same(t, first, c.Get())
+	require.NoError(t, os.WriteFile(path, []byte("second"), 0600))
+	require.NoError(t, c.reloadConfig())
+	require.Equal(t, "second", c.Get().Value)
+	require.Equal(t, "first", first.Value)
+}

@@ -771,6 +771,11 @@ func runTaskCreate(cmd *cobra.Command, args []string) error {
 		return OutputJSON(resp)
 	}
 
+	printTaskCreateResult(resp)
+	return nil
+}
+
+func printTaskCreateResult(resp *client.TaskResponse) {
 	logging.Success("Task created successfully!")
 	logging.Plain("Task ID: %s", resp.Task.ID)
 	logging.Plain("Name: %s", resp.Task.Name)
@@ -781,7 +786,12 @@ func runTaskCreate(cmd *cobra.Command, args []string) error {
 	if resp.Task.CreatedAt != "" {
 		logging.Plain("Created: %s", resp.Task.CreatedAt)
 	}
-	return nil
+	if lines := attachedTelemetryLines(resp.Task.Telemetries); len(lines) > 0 {
+		logging.Plain("Telemetries:")
+		for _, line := range lines {
+			logging.Plain("  %s", line)
+		}
+	}
 }
 
 func runTaskList(cmd *cobra.Command, args []string) error {
@@ -971,6 +981,12 @@ func runTaskGet(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\nResult Strategy: %s\n", t.ResultHandlingStrategy)
 		if t.ResultsLocation != "" {
 			fmt.Printf("Results Location: %s\n", t.ResultsLocation)
+		}
+	}
+	if lines := attachedTelemetryLines(t.Telemetries); len(lines) > 0 {
+		fmt.Println("\nTelemetries:")
+		for _, line := range lines {
+			fmt.Printf("  %s\n", line)
 		}
 	}
 	if len(t.Instances) > 0 {

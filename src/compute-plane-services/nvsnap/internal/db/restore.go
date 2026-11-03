@@ -28,7 +28,7 @@ import (
 func (d *DB) CreateRestore(r *Restore) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	_, err := d.db.Exec(`INSERT INTO restores
+	_, err := d.w.Exec(`INSERT INTO restores
 		(id, checkpoint_id, checkpoint_ref, namespace, node_name, new_pod_name, status, message, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, r.CheckpointID, r.CheckpointRef, r.Namespace, r.NodeName,
@@ -52,7 +52,7 @@ func (d *DB) UpdateRestoreStatus(id, status, newPodName, message string) error {
 
 	// Only set started_at if not already set
 	if startedAt != nil {
-		_, err := d.db.Exec(`UPDATE restores
+		_, err := d.w.Exec(`UPDATE restores
 			SET status = ?, new_pod_name = ?, message = ?,
 			    started_at = COALESCE(started_at, ?), completed_at = ?
 			WHERE id = ?`,
@@ -61,7 +61,7 @@ func (d *DB) UpdateRestoreStatus(id, status, newPodName, message string) error {
 		return err
 	}
 
-	_, err := d.db.Exec(`UPDATE restores
+	_, err := d.w.Exec(`UPDATE restores
 		SET status = ?, new_pod_name = ?, message = ?, completed_at = ?
 		WHERE id = ?`,
 		status, newPodName, message, completedAt, id,

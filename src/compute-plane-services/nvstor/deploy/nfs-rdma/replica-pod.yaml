@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# New vLLM replica that loads its weights from nvstor-source over NFS/RDMA
+# on all four RDMA rails, instead of from a storage tier. Needs Kubernetes
+# 1.29 or later (native sidecar containers).
+#
+# rails-mount (a native sidecar: an initContainer with restartPolicy: Always)
+# is the only privileged container. It pins one rail VF per source rail
+# address, mounts the source's export (session trunking over the four rails)
+# at /var/lib/kubelet/nvstor-nfs-rail/<pod UID>/data on the node, and
+# reports ready through its startup probe once every rail carries a transport.
+# Only then does the vllm container start. vllm is unprivileged, has no host
+# filesystem, and sees the mount read-only through the same hostPath
+# (mountPropagation: HostToContainer). When the pod stops, vllm exits first,
+# then the sidecar gets SIGTERM and unmounts. A sidecar that was killed
+# without unmounting cleans up on its next start (restart in this pod, or the
+# next replica pod on the node).
+#
+# The rail VFs (Multus NAD + nvidia.com/mlnxnics) belong to the pod, so both
+# containers share them through the pod's network namespace; the kernel NFS
+# client uses the namespace of the sidecar that mounted, which is the pod's.
+#
+# For a replica that spans two nodes (LeaderWorkerSet, Ray), give every pod of
+# the replica the same sidecar and volumes; each node mounts and reads the
+# weights itself.
+#
+# Before applying:
+#   kubectl create configmap nvstor-rails-mount --from-file=deploy/nfs-rdma/rails-mount.sh
+# Edit:
+#   NVSTOR_SOURCE_ADDRS     the source pod's rail addresses, space separated
+#                           (the value below is a placeholder):
+#                           kubectl logs nvstor-source | awk '/^nvstor-rail/ {print $3}'
+#   image, MODEL_DIR (relative to the export) and vLLM arguments
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-replica
+  labels: {app: vllm-replica}
+  annotations:
+    k8s.v1.cni.cncf.io/networks: "network-operator/sriov-net,network-operator/sriov-net,network-operator/sriov-net,network-operator/sriov-net"
+spec:
+  restartPolicy: Always
+  # Room for vLLM to stop, then for the sidecar to unmount (umount -f aborts
+  # outstanding RPCs, so a dead source does not hold it up).
+  terminationGracePeriodSeconds: 90
+  initContainers:
+  - name: rails-mount
+    image: nvcr.io/nvidia/cuda:13.0.0-base-ubuntu22.04
+    imagePullPolicy: IfNotPresent
+    restartPolicy: Always
+    command: ["/opt/nvstor/rails-mount.sh", "sidecar"]
+    env:
+    - {name: NVSTOR_SOURCE_ADDRS, value: "fd12:3456:1a01:40e7::1 fd12:3456:1a02:40e7::1 fd12:3456:1a03:40e7::1 fd12:3456:1a04:40e7::1"}
+    - name: NVSTOR_POD_ID
+      valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+    # Extra mount options go after ro,soft,softerr,timeo=100,retrans=2,
+    # e.g. "timeo=50,retrans=1" to fail faster when the source dies.
+    # - {name: NVSTOR_MOUNT_OPTS, value: ""}
+    # mount(2) through chroot /host, route pins in the pod's network namespace,
+    # and Bidirectional mount propagation all need privileged.
+    securityContext: {privileged: true}
+    # Up to 60 s for the rails' SLAAC addresses, then mount and 15 s for the
+    # trunked transports.
+    startupProbe:
+      exec: {command: ["/opt/nvstor/rails-mount.sh", "check"]}
+      periodSeconds: 2
+      failureThreshold: 60
+    readinessProbe:
+      exec: {command: ["/opt/nvstor/rails-mount.sh", "check"]}
+      periodSeconds: 10
+    resources:
+      requests: {cpu: 100m, memory: 64Mi}
+      limits: {memory: 256Mi}
+    volumeMounts:
+    - {name: rails-mount, mountPath: /opt/nvstor}
+    - {name: host, mountPath: /host, readOnly: true}
+    - {name: mounts, mountPath: /host/var/lib/kubelet/nvstor-nfs-rail, mountPropagation: Bidirectional}
+  containers:
+  - name: vllm
+    image: vllm/vllm-openai:v0.31.0
+    imagePullPolicy: IfNotPresent
+    env:
+    - name: POD_UID
+      valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+    # The sidecar's mount, as seen here: /nvstor/<pod UID>/data.
+    command: ["vllm", "serve", "/nvstor/$(POD_UID)/data/MODEL_DIR"]
+    args: ["--tensor-parallel-size", "4"]
+    # Multi-node NCCL over the rails would need IPC_LOCK added back.
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities: {drop: [ALL]}
+    resources:
+      requests: {nvidia.com/gpu: "4", nvidia.com/mlnxnics: "4"}
+      limits: {nvidia.com/gpu: "4", nvidia.com/mlnxnics: "4"}
+    volumeMounts:
+    - {name: mounts, mountPath: /nvstor, readOnly: true, mountPropagation: HostToContainer}
+    - {name: dshm, mountPath: /dev/shm}
+  volumes:
+  - name: rails-mount
+    configMap: {name: nvstor-rails-mount, defaultMode: 0755}
+  - name: host
+    hostPath: {path: /}
+  # One subdirectory per pod (its UID). The sidecar mounts there on the node
+  # and unmounts on exit; the directory is removed with the mounts.
+  - name: mounts
+    hostPath: {path: /var/lib/kubelet/nvstor-nfs-rail, type: DirectoryOrCreate}
+  - name: dshm
+    emptyDir: {medium: Memory, sizeLimit: 64Gi}

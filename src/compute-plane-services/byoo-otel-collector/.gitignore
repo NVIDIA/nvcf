@@ -45,9 +45,11 @@ _output/
 vendor/
 bin/
 
-# go.work is intentional Bazel infra (multi-module wiring). Force-tracked
-# despite the generic Go ignore.
+# go.work is intentional Bazel infra (multi-module wiring), and go.work.sum
+# pins the extra checksums it needs. The otelcol genrule declares both as
+# inputs. Force-tracked despite the generic Go ignore.
 !go.work
+!go.work.sum
 
 # Bazel local symlinks (output, execroot, testlogs).
 /bazel-*

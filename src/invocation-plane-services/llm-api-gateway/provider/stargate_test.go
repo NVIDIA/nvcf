@@ -1085,72 +1085,72 @@ func TestStargateProviderNewOutboundRequestOmitsFieldsTheClientDidNotSend(t *tes
 			name:       "unary chat",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "max_tokens", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "max_tokens", "stream"},
 		},
 		{
 			name:       "unary chat forced to stream upstream",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`,
 			stream:     true,
-			wantFields: []string{"messages", "model", "max_tokens", "service_tier", "stream", "stream_options"},
+			wantFields: []string{"messages", "model", "max_tokens", "stream", "stream_options"},
 		},
 		{
 			name:       "streaming chat",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`,
 			stream:     true,
-			wantFields: []string{"messages", "model", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "stream"},
 		},
 		{
 			name:       "explicit reasoning fields",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"include_reasoning":false,"reasoning_format":"parsed","prompt_cache_key":"k"}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "include_reasoning", "reasoning_format", "prompt_cache_key", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "include_reasoning", "reasoning_format", "prompt_cache_key", "stream"},
 		},
 		{
 			name:       "explicit null fields",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":null,"stop":null}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "stream"},
 		},
 		{
 			name:       "explicit empty stop list",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":[]}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "stop", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "stop", "stream"},
 			wantValues: map[string]string{"stop": `[]`},
 		},
 		{
 			name:       "stop string",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":"END"}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "stop", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "stop", "stream"},
 			wantValues: map[string]string{"stop": `["END"]`},
 		},
 		{
 			name:       "explicit zero and false values",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":0,"seed":0,"parallel_tool_calls":false,"logit_bias":{}}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "temperature", "seed", "parallel_tool_calls", "logit_bias", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "temperature", "seed", "parallel_tool_calls", "logit_bias", "stream"},
 			wantValues: map[string]string{"temperature": `0`, "seed": `0`, "parallel_tool_calls": `false`, "logit_bias": `{}`},
 		},
 		{
 			name:       "json schema without optional members",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"s"}}}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "response_format", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "response_format", "stream"},
 			wantValues: map[string]string{"response_format": `{"type":"json_schema","json_schema":{"name":"s"}}`},
 		},
 		{
 			name:       "json schema with explicit strict false and empty schema",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"s","schema":{},"strict":false}}}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "response_format", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "response_format", "stream"},
 			wantValues: map[string]string{"response_format": `{"type":"json_schema","json_schema":{"name":"s","schema":{},"strict":false}}`},
 		},
 		{
 			name:       "tool without optional members",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}]}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "tools", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "tools", "stream"},
 		},
 	}
 	for _, tt := range tests {
@@ -1444,4 +1444,89 @@ func TestStargateMessagesCredentialsStopBeforeWorker(t *testing.T) {
 	resp, err := p.Proxy(context.Background(), &requestctx.RequestContext{BearerToken: "caller-secret", RoutingKey: "fn-messages"}, &ProxyRequest{Method: "POST", Path: "/v1/messages", Header: http.Header{"Authorization": {"Bearer injected"}, "X-Api-Key": {"secret"}, "Proxy-Authorization": {"secret"}}, Body: io.NopCloser(strings.NewReader(`{}`))})
 	require.NoError(t, err)
 	defer resp.Body.Close()
+}
+
+func TestStargateDecisionRouteCredentialsStopBeforeWorker(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		t.Run(path, func(t *testing.T) {
+			p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+			require.NoError(t, err)
+			p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie"} {
+					require.Empty(t, r.Header.Values(name), name)
+				}
+				require.Equal(t, "fn-decisions", r.Header.Get(headerRoutingKey))
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+			})}
+			resp, err := p.Proxy(context.Background(),
+				&requestctx.RequestContext{BearerToken: "caller-secret", RoutingKey: "fn-decisions"},
+				&ProxyRequest{Method: "POST", Path: path, Header: http.Header{
+					"Authorization": {"Bearer injected"}, "X-Api-Key": {"secret"},
+					"Proxy-Authorization": {"secret"}, "Cookie": {"session=secret"},
+				}, Body: io.NopCloser(strings.NewReader(`{}`))})
+			require.NoError(t, err)
+			defer resp.Body.Close()
+		})
+	}
+}
+
+func TestStargateDecisionRouteControlHeaders(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		for _, tc := range []struct {
+			name       string
+			estimate   int
+			wantTokens string
+		}{
+			{"positive estimate is sent", 42, "42"},
+			{"zero estimate is sent as one", 0, "1"},
+		} {
+			t.Run(path+"/"+tc.name, func(t *testing.T) {
+				p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+				require.NoError(t, err)
+				var got http.Header
+				p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					got = r.Header.Clone()
+					return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+				})}
+				resp, err := p.Proxy(context.Background(),
+					&requestctx.RequestContext{RoutingKey: "fn-decisions"},
+					&ProxyRequest{Method: "POST", Path: path, Header: http.Header{
+						"X-Input-Tokens":       {"999999"},
+						"X-Token-Estimate":     {"999999"},
+						"X-Max-Wait-Ms":        {"abc"},
+						"X-Request-Slo-Ms":     {"abc"},
+						"X-Cache-Affinity-Key": {"client-key"},
+						"Accept-Encoding":      {"gzip, br"},
+						"X-Vendor":             {"kept"},
+					}, Body: io.NopCloser(strings.NewReader(`{}`)), InputTokens: tc.estimate, TokenEstimate: tc.estimate})
+				require.NoError(t, err)
+				defer resp.Body.Close()
+
+				require.Equal(t, []string{tc.wantTokens}, got.Values(headerInputTokens))
+				require.Equal(t, []string{tc.wantTokens}, got.Values(headerTokenEstimate))
+				for _, name := range []string{"X-Max-Wait-Ms", "X-Request-Slo-Ms", headerCacheAffinityKey} {
+					require.Empty(t, got.Values(name), name)
+				}
+				// Identity keeps the response readable for the usage observer.
+				require.Equal(t, []string{"identity"}, got.Values("Accept-Encoding"))
+				require.Equal(t, "kept", got.Get("X-Vendor"))
+			})
+		}
+	}
+}
+
+func TestStargateNonDecisionRouteKeepsZeroEstimateUnset(t *testing.T) {
+	p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	var got http.Header
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		got = r.Header.Clone()
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+	})}
+	resp, err := p.Proxy(context.Background(), &requestctx.RequestContext{RoutingKey: "fn"},
+		&ProxyRequest{Method: "POST", Path: "/v1/embeddings", Header: http.Header{"Accept-Encoding": {"gzip"}}, Body: io.NopCloser(strings.NewReader(`{}`))})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Empty(t, got.Values(headerInputTokens))
+	require.Equal(t, "gzip", got.Get("Accept-Encoding"))
 }

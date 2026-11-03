@@ -236,6 +236,10 @@ func GetStorageRequestErrorLog(st *nvcav2beta1.StorageRequest) string {
 				condition.Status == metav1.ConditionFalse && condition.Message != "" {
 				return condition.Message
 			}
+			if condition.Type == ConditionTypeSMBServerReady &&
+				condition.Status == metav1.ConditionFalse && condition.Message != "" {
+				return condition.Message
+			}
 		}
 		return fmt.Sprintf("storage request %s is in %s phase", st.Name, st.Status.Phase)
 	}

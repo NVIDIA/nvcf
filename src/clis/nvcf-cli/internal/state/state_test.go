@@ -233,3 +233,16 @@ func TestNewStateManagerForConfig_StatePath(t *testing.T) {
 		})
 	}
 }
+
+func TestEventLedgerAPIKey_SetAndClearTokens(t *testing.T) {
+	sm := newTestStateManager(t)
+	exp := time.Now().Add(24 * time.Hour).UTC().Round(time.Second)
+
+	sm.SetEventLedgerAPIKey("nvapi-el-key", exp)
+	assert.Equal(t, "nvapi-el-key", sm.GetState().EventLedgerAPIKey)
+	assert.True(t, exp.Equal(sm.GetState().EventLedgerAPIKeyExpiration))
+
+	sm.ClearTokens()
+	assert.Empty(t, sm.GetState().EventLedgerAPIKey)
+	assert.True(t, sm.GetState().EventLedgerAPIKeyExpiration.IsZero())
+}

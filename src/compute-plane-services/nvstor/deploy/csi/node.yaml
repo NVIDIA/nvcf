@@ -1,0 +1,128 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvstor-csi-node
+  namespace: nvstor
+  labels:
+    app: nvstor-csi-node
+spec:
+  selector:
+    matchLabels:
+      app: nvstor-csi-node
+  template:
+    metadata:
+      labels:
+        app: nvstor-csi-node
+    spec:
+      hostNetwork: true
+      serviceAccountName: nvstor-csi-node
+      containers:
+        # CSI node-driver-registrar — registers the CSI plugin with kubelet.
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.10.0
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins/nvstor.storage.io/csi.sock"
+            - "--v=5"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+
+        # nvstor CSI node plugin — handles mount/unmount on each node.
+        - name: nvstor-csi
+          image: nvstor:latest
+          command: ["nvstor-csi"]
+          securityContext:
+            runAsUser: 0
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+          args:
+            - "--endpoint=unix:///csi/csi.sock"
+            - "--node-name=$(NODE_NAME)"
+            - "--nvstor-server=$(NVSTOR_SERVER)"
+          env:
+            - name: NVSTOR_SERVER
+              valueFrom:
+                configMapKeyRef:
+                  name: nvstor-config
+                  key: server_address
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: pods-mount-dir
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+            - name: nfs-mount-dir
+              mountPath: /mnt/nvstor
+              mountPropagation: Bidirectional
+          ports:
+            - containerPort: 9808
+              name: healthz
+
+      volumes:
+        - name: socket-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/nvstor.storage.io
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: DirectoryOrCreate
+        - name: pods-mount-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+        - name: nfs-mount-dir
+          hostPath:
+            path: /mnt/nvstor
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nvstor-csi-node
+  namespace: nvstor
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvstor-csi-node
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nvstor-csi-node
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nvstor-csi-node
+subjects:
+  - kind: ServiceAccount
+    name: nvstor-csi-node
+    namespace: nvstor

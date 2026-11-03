@@ -33,6 +33,9 @@ const (
 	contextKeyRequestContext = "nvcf.request_context"
 	contextKeyRequestID      = "nvcf.request_id"
 	contextKeyRateLimitCtx   = "nvcf.rate_limit_context"
+	// contextKeyBackendErrorRelayed marks a backend error written unchanged,
+	// so headers the gateway normally owns are left as the backend sent them.
+	contextKeyBackendErrorRelayed = "nvcf.backend_error_relayed"
 )
 
 type GatewayContext struct {

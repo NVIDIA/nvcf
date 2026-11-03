@@ -1,0 +1,263 @@
+{
+  "description": "A streamed OpenAI SDK chat request with tools, logprobs, prediction and service_tier default reaches the backend unchanged.",
+  "path": "/v1/chat/completions",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "messages": [
+      {
+        "role": "developer",
+        "content": "Use tools when needed."
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Weather in Paris?"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "tool_calls": [
+          {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+              "name": "weather",
+              "arguments": "{\"city\":\"Paris\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": [
+          {
+            "type": "text",
+            "text": "Sunny"
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "weather",
+          "description": "Read the weather.",
+          "strict": true,
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    ],
+    "tool_choice": "auto",
+    "parallel_tool_calls": true,
+    "max_completion_tokens": 512,
+    "seed": 7,
+    "logprobs": true,
+    "top_logprobs": 2,
+    "reasoning_effort": "low",
+    "user": "user-1",
+    "store": false,
+    "metadata": {
+      "source": "sdk"
+    },
+    "modalities": [
+      "text"
+    ],
+    "prediction": {
+      "type": "content",
+      "content": "Sunny"
+    },
+    "prompt_cache_key": "chat-cache-1",
+    "service_tier": "default"
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "messages": [
+      {
+        "role": "developer",
+        "content": "Use tools when needed."
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Weather in Paris?"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "tool_calls": [
+          {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+              "name": "weather",
+              "arguments": "{\"city\":\"Paris\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": [
+          {
+            "type": "text",
+            "text": "Sunny"
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "weather",
+          "description": "Read the weather.",
+          "strict": true,
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    ],
+    "tool_choice": "auto",
+    "parallel_tool_calls": true,
+    "max_completion_tokens": 512,
+    "seed": 7,
+    "logprobs": true,
+    "top_logprobs": 2,
+    "reasoning_effort": "low",
+    "user": "user-1",
+    "store": false,
+    "metadata": {
+      "source": "sdk"
+    },
+    "modalities": [
+      "text"
+    ],
+    "prediction": {
+      "type": "content",
+      "content": "Sunny"
+    },
+    "prompt_cache_key": "chat-cache-1",
+    "service_tier": "default"
+  },
+  "upstream_affinity_key": "mt:v1:session:781859934362795a1518e7d6e6a705006bacc8b48b04330cc52ff96d3dd0d6bb",
+  "upstream_response": {
+    "sse": [
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "content": "OK"
+              },
+              "finish_reason": "stop"
+            }
+          ]
+        }
+      },
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 2,
+            "total_tokens": 9
+          }
+        }
+      },
+      {
+        "data": "[DONE]"
+      }
+    ]
+  },
+  "response": {
+    "sse": [
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "fn-alpha/company/model",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "content": "OK"
+              },
+              "finish_reason": "stop"
+            }
+          ]
+        }
+      },
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "fn-alpha/company/model",
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 2,
+            "total_tokens": 9
+          }
+        }
+      },
+      {
+        "data": "[DONE]"
+      }
+    ]
+  }
+}

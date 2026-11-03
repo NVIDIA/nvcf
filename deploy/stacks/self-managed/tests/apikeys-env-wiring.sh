@@ -89,4 +89,39 @@ assert_yaml_value "$override_values" '.apikeys.env.NVCF_NCA_ID' nca-test-1234 \
 assert_yaml_value "$override_values" '.apikeys.env.CUSTOM_APIKEYS_ENV' configured \
   "override: arbitrary api-keys env keys must reach the release values"
 
+# Resource overrides follow the same environment-to-chart path. Unset values
+# must not replace chart defaults, and partial values remain partial so Helm
+# retains the chart's other requests and limits.
+assert_yaml_value "$default_values" '.apikeys.resources' null \
+  "default: chart resources must remain in control"
+
+write_environment <<'EOF'
+apikeys:
+  resources:
+    requests:
+      cpu: 350m
+      memory: 768Mi
+    limits:
+      cpu: "2"
+      memory: 1536Mi
+EOF
+resource_values="$work_dir/apikeys-resource-values.yaml"
+render_apikeys_values "$resource_values" >/dev/null
+assert_yaml_value "$resource_values" '.apikeys.resources.requests.cpu' 350m "CPU request"
+assert_yaml_value "$resource_values" '.apikeys.resources.requests.memory' 768Mi "memory request"
+assert_yaml_value "$resource_values" '.apikeys.resources.limits.cpu' 2 "CPU limit"
+assert_yaml_value "$resource_values" '.apikeys.resources.limits.memory' 1536Mi "memory limit"
+
+write_environment <<'EOF'
+apikeys:
+  resources:
+    limits:
+      cpu: "1"
+EOF
+partial_values="$work_dir/apikeys-partial-resource-values.yaml"
+render_apikeys_values "$partial_values" >/dev/null
+assert_yaml_value "$partial_values" '.apikeys.resources.limits.cpu' 1 "partial CPU limit"
+assert_yaml_value "$partial_values" '.apikeys.resources.requests' null "chart requests preserved"
+assert_yaml_value "$partial_values" '.apikeys.resources.limits.memory' null "chart memory limit preserved"
+
 echo "apikeys-env-wiring: OK"

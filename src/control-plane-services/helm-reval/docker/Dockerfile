@@ -23,7 +23,7 @@
 #     --secret id=github_token,src=<(echo $GITHUB_TOKEN) \
 #     -f docker/Dockerfile -t reval-server:local .
 
-FROM golang:1.26.9-bookworm AS builder
+FROM golang:1.26.10-bookworm AS builder
 
 ARG REVAL_VERSION=dev
 ARG REVAL_GIT_COMMIT=dev

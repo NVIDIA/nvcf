@@ -75,6 +75,10 @@ if [ -z "$WORKLOAD" ]; then
     echo "  nim-llama-8b      Llama-3.1-8B on NVIDIA NIM"
     echo "  e5-mistral        e5-mistral-7B-instruct on vLLM (embedding)"
     echo ""
+    echo "Workloads (gpushare CRIU, default NCCL settings):"
+    echo "  vllm-small-gpushare  TinyLlama 1.1B on vLLM (single GPU)"
+    echo "  vllm-tp4-gpushare    Qwen2.5-7B on vLLM (TP=4)"
+    echo ""
     echo "Workloads (multi-GPU rootfs):"
     echo "  vllm-70b          Llama-3.1-70B on vLLM (TP=4)"
     echo "  nim-qwen3-32b     Qwen3-32B on NVIDIA NIM (TP=2)"
@@ -94,6 +98,21 @@ case "$WORKLOAD" in
         POST_INFER_DATA='{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","prompt":"The meaning of life is","max_tokens":10}'
         SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-small.yaml"
         RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-small-restore.yaml"
+        ;;
+    vllm-small-gpushare|vllm-tp4-gpushare)
+        # gpushare: criu-v2 with libnvsnap_gpushare.so, default NCCL settings
+        # (TP=1 regression on any GPU node; TP=4 needs a node with 4 GPUs).
+        POD_NAME="$WORKLOAD"
+        CONTAINER_NAME="vllm"
+        RESTORE_POD_NAME="${WORKLOAD}-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        if [ "$WORKLOAD" = vllm-tp4-gpushare ]; then MODEL="Qwen/Qwen2.5-7B-Instruct"; else MODEL="TinyLlama/TinyLlama-1.1B-Chat-v1.0"; fi
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA="{\"model\":\"$MODEL\",\"prompt\":\"Hello\",\"max_tokens\":5}"
+        POST_INFER_DATA="{\"model\":\"$MODEL\",\"prompt\":\"The meaning of life is\",\"max_tokens\":10}"
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/${WORKLOAD}.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/${WORKLOAD}-restore.yaml"
         ;;
     vllm-mp)
         # E0 multi-GPU ladder: TinyLlama TP=1, multi-process EngineCore.
@@ -370,8 +389,8 @@ print_summary() {
 # Usage: pod_curl <pod> <container> <method> <path> [data] [timeout]
 #
 # Tries curl first; falls back to python3 urllib for containers that
-# don't ship curl (e.g. NIM images). Clears LD_PRELOAD so the nvsnap
-# intercept library doesn't load into the probe binary.
+# don't ship curl (e.g. NIM images). Clears LD_PRELOAD so a workload's own
+# preloads don't load into the probe binary.
 pod_curl() {
     local pod="$1" container="$2" method="$3" path="$4" data="${5:-}" timeout="${6:-10}"
 
@@ -534,6 +553,9 @@ log_info "Pre-flight: pinning to node $SELECTED_NODE (needs $GPU_REQ GPU)"
 # single-GPU → criu.
 if [ -n "${CAPTURE_PATH:-}" ]; then
     : # respect caller override
+elif grep -q 'nvsnap.io/gpushare: "true"' "$SOURCE_MANIFEST"; then
+    # gpushare makes multi-GPU CRIU work: stay on criu-v2 at any GPU count.
+    CAPTURE_PATH="criu-v2"
 elif [ "$GPU_REQ" -ge 2 ]; then
     CAPTURE_PATH="rootfs"
 else
@@ -557,8 +579,8 @@ if [ "$CAPTURE_PATH" = "rootfs" ]; then
 fi
 
 # On the rootfs/cachedir path, prefer a dedicated <workload>-rootfs-restore.yaml
-# if one exists: the CRIU restore template chains restore-entrypoint and waits
-# for a CRIU dump that never appears on the rootfs path. The rootfs variant is a
+# if one exists: the CRIU restore template is a placeholder pod that waits for
+# the agent's in-namespace restore, which never comes on the rootfs path. The rootfs variant is a
 # plain pod with a nvsnap.io/restore-from annotation the webhook acts on.
 if [ "$CAPTURE_PATH" = "rootfs" ]; then
     _rootfs_tmpl="${RESTORE_MANIFEST_TEMPLATE%-restore.yaml}-rootfs-restore.yaml"
@@ -715,7 +737,7 @@ else
     log_info "Step 7: Creating checkpoint..."
     # criu-v2 must be requested explicitly per checkpoint — the agent only
     # takes the in-namespace engine via capturePath (or its own
-    # NVSNAP_CRIU_V2=1 env). Plain criu keeps the no-override behavior.
+    # criu-v2 engine). Plain criu keeps the no-override behavior.
     # The `|| CHECKPOINT_RC=$?` guard matters: under set -e a plain failing
     # command substitution kills the whole script before any diagnostics
     # below can print (first criu-v2 run died silently this way).
@@ -920,7 +942,7 @@ fi
 echo ""
 log_info "Key restore events:"
 kubectl logs $RESTORE_POD_NAME -n $NAMESPACE -c $RESTORE_CONTAINER_NAME 2>&1 | \
-    grep -E "wakeRestoredThreads|uv_loop_fork|libzmq.*CRIU|ETERM|reinit completed|RESTORE_COMPLETE" | head -10 || true
+    grep -E "Restoring FAILED|Tasks resumed|restore.*complete|RESTORE_COMPLETE" | head -10 || true
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 echo ""

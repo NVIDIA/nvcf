@@ -194,6 +194,12 @@ Any standard that cannot be enforced by modification will result in error(s) dur
   - Rolebindings
   - PersistentVolumeClaims
 
+- Self-managed compute planes also accept KAI Scheduler, Grove, and Dynamo
+  resources, such as `PodGroup` and `DynamoGraphDeployment`, when the matching
+  add-ons are enabled. Without them, NVCF rejects the chart with an error such
+  as `unsupported types: ["nvidia.com/v1alpha1.DynamoGraphDeployment"]`. See
+  [Gang Scheduling](../compute-plane/cluster-management/gang-scheduling.md#enable-gang-scheduling).
+
 - A rendered Helm chart may contain a maximum of 300 of the aforementioned objects.
 
 - The only allowed Pod or Pod template volume types are:

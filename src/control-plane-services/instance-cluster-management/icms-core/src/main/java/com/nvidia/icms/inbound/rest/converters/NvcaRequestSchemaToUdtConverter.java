@@ -16,20 +16,13 @@
  */
 package com.nvidia.icms.inbound.rest.converters;
 
-import com.nvidia.icms.inbound.rest.model.byoc.Gpu;
 import com.nvidia.icms.inbound.rest.model.byoc.GpuRequestSchema;
-import com.nvidia.icms.inbound.rest.model.byoc.InstanceType;
 import com.nvidia.icms.inbound.rest.model.byoc.InstanceTypeRequestSchema;
-import com.nvidia.icms.inbound.rest.model.byoc.InstanceTypeUsageEnum;
-import com.nvidia.icms.inbound.rest.model.byoc.NodeTypeEnum;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV4Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV3Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import jakarta.validation.constraints.NotNull;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
@@ -41,51 +34,6 @@ public class NvcaRequestSchemaToUdtConverter {
 
     private NvcaRequestSchemaToUdtConverter() {
 
-    }
-
-    // Convert to GpuUdt
-
-    public static GpuUdt toGpuUdt(@NotNull Gpu gpu) {
-        return GpuUdt.builder()
-                .name(gpu.getName())
-                .instanceTypes(toInstanceTypeUdts(gpu.getInstanceTypes()))
-                .build();
-    }
-
-    public static Set<GpuUdt> toGpuUdts(Set<Gpu> gpus) {
-        if (gpus == null) {
-            return new HashSet<>();
-        }
-
-        Set<GpuUdt> result = new HashSet<>();
-        gpus.forEach(r -> result.add(toGpuUdt(r)));
-
-        return result;
-    }
-
-    // Convert to InstanceTypeUdt
-    public static InstanceTypeUdt toInstanceTypeUdt(@NotNull InstanceType instanceType) {
-        return InstanceTypeUdt.builder()
-                .cpuCores(instanceType.getCpuCores())
-                .systemMemory(instanceType.getSystemMemory())
-                .gpuMemory(instanceType.getGpuMemory())
-                .gpuCount(instanceType.getGpuCount())
-                .name(instanceType.getName())
-                .description(instanceType.getDescription())
-                .isDefault(instanceType.getIsDefault())
-                .value(instanceType.getValue())
-                .build();
-    }
-
-    public static Set<InstanceTypeUdt> toInstanceTypeUdts(Set<InstanceType> instanceTypes) {
-        if (instanceTypes == null) {
-            return new HashSet<>();
-        }
-
-        Set<InstanceTypeUdt> result = new HashSet<>();
-        instanceTypes.forEach(r -> result.add(toInstanceTypeUdt(r)));
-
-        return result;
     }
 
     // Convert GpuRequestSchema to GpuV4Udt

@@ -34,7 +34,7 @@ import org.springframework.core.io.support.PropertiesLoaderUtils;
  * Environment post processor that loads default properties and
  * spring.application.version from git.properties when present.
  *
- * <p>Order is:  "git.closest.tag.name" -> "git.build.version" -> "git.commit.id.abbrev"
+ * <p>Order is:  "git.build.version" -> "git.closest.tag.name" -> "git.commit.id.abbrev"
  *
  *
  * <p>Logback configuration has been moved to nv-boot-starter-observability.
@@ -88,11 +88,13 @@ public class BootCoreEnvironmentPostProcessor implements EnvironmentPostProcesso
                 // moveToEnd() seems to be called after this post-processor runs, so ApplicationInfoPropertySource never overrides this
                 // endresult is always [..., "nv-boot-git-properties", "applicationInfo", "..."]
                 var existingVersion = environment.getProperty("spring.application.version");
+                // A context refresh re-runs this without the manifest version, and a release build's
+                // closest tag is the previous release, so the build version must win.
                 if (StringUtils.isBlank(existingVersion)) {
-                    var version = gitProperties.getProperty("git.closest.tag.name");
+                    var version = gitProperties.getProperty("git.build.version");
 
                     if (StringUtils.isBlank(version)) {
-                        version = gitProperties.getProperty("git.build.version");
+                        version = gitProperties.getProperty("git.closest.tag.name");
                     }
 
                     if (StringUtils.isBlank(version)) {

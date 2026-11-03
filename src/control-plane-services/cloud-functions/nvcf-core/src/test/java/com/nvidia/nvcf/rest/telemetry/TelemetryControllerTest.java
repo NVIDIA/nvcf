@@ -62,6 +62,7 @@ import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult;
 import com.nvidia.nvcf.service.common.TestCommonService;
 import com.nvidia.nvcf.service.ess.EssService;
 import com.nvidia.nvcf.service.telemetry.TelemetryLookupService;
+import com.nvidia.nvcf.service.telemetry.TelemetryProviderValidator;
 import com.nvidia.nvcf.service.telemetry.TelemetryService;
 import com.nvidia.nvcf.util.MockApiKeysServer;
 import com.nvidia.nvcf.util.MockEssServer;
@@ -79,6 +80,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -88,7 +90,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.RequestEntity;
+import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.ContextConfiguration;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.StringNode;
 
@@ -176,7 +180,7 @@ class TelemetryControllerTest {
                 // No .endpoint(...) call
                 .protocol(TelemetryProtocolEnum.HTTP)
                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                .types(Set.of(TelemetryTypeEnum.LOGS))
+                .types(Set.of(TelemetryTypeEnum.METRICS))
                 .secret(SecretDto.builder().name("telemetry-secret").build())
                 .build()
         ).isInstanceOf(NullPointerException.class);
@@ -188,7 +192,7 @@ class TelemetryControllerTest {
                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                 // No .protocol(...) call
                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                .types(Set.of(TelemetryTypeEnum.LOGS))
+                .types(Set.of(TelemetryTypeEnum.METRICS))
                 .secret(SecretDto.builder().name("telemetry-secret").build())
                 .build()
         ).isInstanceOf(NullPointerException.class);
@@ -336,7 +340,7 @@ class TelemetryControllerTest {
                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                 .protocol(TelemetryProtocolEnum.HTTP)
                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                .types(Set.of(TelemetryTypeEnum.LOGS))
+                .types(Set.of(TelemetryTypeEnum.METRICS))
                 .secret(SecretDto.builder()
                                 .name("prometheus-secret")
                                 .value(jsonMapper.createObjectNode()
@@ -355,8 +359,8 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
-                                .secret(SecretDto.builder().name("telemetry-secret").value(secretJsonNodeValue).build())
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
+                                .secret(SecretDto.builder().name("telemetry-secret").value(validSecretValue(TelemetryProviderEnum.PROMETHEUS)).build())
                                 .build(),
                         HttpStatus.FORBIDDEN
                 ),
@@ -367,8 +371,8 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
-                                .secret(SecretDto.builder().name("telemetry-secret").value(secretJsonNodeValue).build())
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
+                                .secret(SecretDto.builder().name("telemetry-secret").value(validSecretValue(TelemetryProviderEnum.PROMETHEUS)).build())
                                 .build(),
                         HttpStatus.UNAUTHORIZED
                 ),
@@ -379,10 +383,10 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.PROMETHEUS))
                                         .build())
                                 .build(),
                         HttpStatus.UNAUTHORIZED
@@ -394,10 +398,10 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.PROMETHEUS))
                                         .build())
                                 .build(),
                         HttpStatus.UNAUTHORIZED
@@ -409,10 +413,10 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.PROMETHEUS))
                                         .build())
                                 .build(),
                         HttpStatus.FORBIDDEN
@@ -426,10 +430,10 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(null)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.PROMETHEUS))
                                         .build())
                                 .build(),
                         HttpStatus.BAD_REQUEST
@@ -446,7 +450,7 @@ class TelemetryControllerTest {
                                 .types(null) // Missing types
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.PROMETHEUS))
                                         .build())
                                 .build(),
                         HttpStatus.BAD_REQUEST
@@ -460,7 +464,7 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(null) // Missing secret
                                 .build(),
                         HttpStatus.BAD_REQUEST
@@ -474,7 +478,7 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .build(),
                         HttpStatus.BAD_REQUEST
                 ),
@@ -487,10 +491,10 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.PROMETHEUS))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -502,11 +506,11 @@ class TelemetryControllerTest {
                         TelemetryRequest.builder()
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
-                                .provider(TelemetryProviderEnum.GRAFANA_CLOUD)
+                                .provider(TelemetryProviderEnum.SPLUNK)
                                 .types(Set.of(TelemetryTypeEnum.LOGS))
                                 .secret(SecretDto.builder()
                                         .name("plaintext-secret")
-                                        .value(jsonMapper.createObjectNode().put("secret", "plaintext_value"))
+                                        .value(new StringNode("plaintext_value"))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -523,8 +527,8 @@ class TelemetryControllerTest {
                                 .secret(SecretDto.builder()
                                         .name("grafana-secret")
                                         .value(jsonMapper.createObjectNode()
-                                                .put("username", "grafana-user")
-                                                .put("password", "grafana-password"))
+                                                .put("instanceId", "123456")
+                                                .put("apiKey", "grafana-api-key"))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -673,10 +677,10 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("Telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.PROMETHEUS))
                                         .build())
                                 .build(),
                         HttpStatus.BAD_REQUEST
@@ -690,10 +694,10 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.PROMETHEUS))
                                         .build())
                                 .build(),
                         HttpStatus.BAD_REQUEST
@@ -745,10 +749,10 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.PROMETHEUS))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -765,7 +769,7 @@ class TelemetryControllerTest {
                                 .types(Set.of(TelemetryTypeEnum.LOGS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.GRAFANA_CLOUD))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -782,7 +786,7 @@ class TelemetryControllerTest {
                                 .types(Set.of(TelemetryTypeEnum.LOGS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.SPLUNK))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -796,10 +800,10 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.SERVICENOW)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.TRACES))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.SERVICENOW))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -816,7 +820,26 @@ class TelemetryControllerTest {
                                 .types(Set.of(TelemetryTypeEnum.LOGS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.KRATOS))
+                                        .build())
+                                .build(),
+                        HttpStatus.OK
+                ),
+                //Telemetry provider KRATOS for traces, which does not need a collector ID
+                Arguments.of(
+                        MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                        List.of(SCOPE_MANAGE_TELEMETRIES),
+                                                        100),
+                        TelemetryRequest.builder()
+                                .endpoint(TEST_TELEMETRY_ENDPOINT)
+                                .protocol(TelemetryProtocolEnum.HTTP)
+                                .provider(TelemetryProviderEnum.KRATOS)
+                                .types(Set.of(TelemetryTypeEnum.TRACES))
+                                .secret(SecretDto.builder()
+                                        .name("telemetry-secret")
+                                        .value(jsonMapper.createObjectNode()
+                                                .put("clientCert", "client-cert")
+                                                .put("clientKey", "client-key"))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -830,44 +853,10 @@ class TelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.KRATOS_THANOS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
-                                        .build())
-                                .build(),
-                        HttpStatus.OK
-                ),
-                //Telemetry provider TIMESTREAM
-                Arguments.of(
-                        MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
-                                                        List.of(SCOPE_MANAGE_TELEMETRIES),
-                                                        100),
-                        TelemetryRequest.builder()
-                                .endpoint(TEST_TELEMETRY_ENDPOINT)
-                                .protocol(TelemetryProtocolEnum.HTTP)
-                                .provider(TelemetryProviderEnum.TIMESTREAM)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
-                                .secret(SecretDto.builder()
-                                        .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
-                                        .build())
-                                .build(),
-                        HttpStatus.OK
-                ),
-                //Telemetry provider VICTORIAMETRICS
-                Arguments.of(
-                        MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
-                                                        List.of(SCOPE_MANAGE_TELEMETRIES),
-                                                        100),
-                        TelemetryRequest.builder()
-                                .endpoint(TEST_TELEMETRY_ENDPOINT)
-                                .protocol(TelemetryProtocolEnum.HTTP)
-                                .provider(TelemetryProviderEnum.VICTORIAMETRICS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
-                                .secret(SecretDto.builder()
-                                        .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.KRATOS_THANOS))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -884,7 +873,7 @@ class TelemetryControllerTest {
                                 .types(Set.of(TelemetryTypeEnum.LOGS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.AZURE_MONITOR))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -901,7 +890,7 @@ class TelemetryControllerTest {
                                 .types(Set.of(TelemetryTypeEnum.LOGS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.OTEL_COLLECTOR))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -914,11 +903,11 @@ class TelemetryControllerTest {
                         TelemetryRequest.builder()
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
-                                .provider(TelemetryProviderEnum.VICTORIAMETRICS)
+                                .provider(TelemetryProviderEnum.OTEL_COLLECTOR)
                                 .types(Set.of(TelemetryTypeEnum.LOGS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.OTEL_COLLECTOR))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -931,11 +920,11 @@ class TelemetryControllerTest {
                         TelemetryRequest.builder()
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.GRPC)
-                                .provider(TelemetryProviderEnum.VICTORIAMETRICS)
+                                .provider(TelemetryProviderEnum.OTEL_COLLECTOR)
                                 .types(Set.of(TelemetryTypeEnum.LOGS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.OTEL_COLLECTOR))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -948,11 +937,11 @@ class TelemetryControllerTest {
                         TelemetryRequest.builder()
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
-                                .provider(TelemetryProviderEnum.VICTORIAMETRICS)
+                                .provider(TelemetryProviderEnum.OTEL_COLLECTOR)
                                 .types(Set.of(TelemetryTypeEnum.LOGS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.OTEL_COLLECTOR))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -965,11 +954,11 @@ class TelemetryControllerTest {
                         TelemetryRequest.builder()
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
-                                .provider(TelemetryProviderEnum.VICTORIAMETRICS)
+                                .provider(TelemetryProviderEnum.OTEL_COLLECTOR)
                                 .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.OTEL_COLLECTOR))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -982,11 +971,11 @@ class TelemetryControllerTest {
                         TelemetryRequest.builder()
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
-                                .provider(TelemetryProviderEnum.VICTORIAMETRICS)
+                                .provider(TelemetryProviderEnum.OTEL_COLLECTOR)
                                 .types(Set.of(TelemetryTypeEnum.TRACES))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.OTEL_COLLECTOR))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -999,13 +988,13 @@ class TelemetryControllerTest {
                         TelemetryRequest.builder()
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
-                                .provider(TelemetryProviderEnum.SPLUNK)
+                                .provider(TelemetryProviderEnum.OTEL_COLLECTOR)
                                 .types(Set.of(TelemetryTypeEnum.LOGS,
                                         TelemetryTypeEnum.METRICS,
                                         TelemetryTypeEnum.TRACES))
                                 .secret(SecretDto.builder()
                                         .name("multi-type-secret")
-                                        .value(secretJsonNodeValue)
+                                        .value(validSecretValue(TelemetryProviderEnum.OTEL_COLLECTOR))
                                         .build())
                                 .build(),
                         HttpStatus.OK
@@ -1032,6 +1021,148 @@ class TelemetryControllerTest {
         if (!expectedStatus.isError()) {
             assertThat(response.getBody()).isNotNull();
         }
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = TelemetryProviderEnum.class, names = {"TIMESTREAM", "VICTORIAMETRICS"})
+    void shouldRejectProviderTheCollectorCannotRender(TelemetryProviderEnum provider) {
+        var telemetryRequest = TelemetryRequest.builder()
+                .endpoint(TEST_TELEMETRY_ENDPOINT)
+                .protocol(TelemetryProtocolEnum.HTTP)
+                .provider(provider)
+                .types(Set.of(TelemetryTypeEnum.METRICS))
+                .secret(SecretDto.builder()
+                                .name("unsupported-provider-secret")
+                                .value(new StringNode("secret-value"))
+                                .build())
+                .build();
+
+        var response = postTelemetry(telemetryRequest);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody())
+                .contains("Telemetry provider '" + provider + "' is not supported")
+                .contains(TelemetryProviderValidator.supportedProviders());
+    }
+
+    Stream<Arguments> unsupportedTelemetryTypeArgs() {
+        return Stream.of(
+                Arguments.of(TelemetryProviderEnum.SPLUNK, Set.of(TelemetryTypeEnum.METRICS),
+                             "[METRICS]. Supported types: [LOGS]"),
+                Arguments.of(TelemetryProviderEnum.SPLUNK,
+                             Set.of(TelemetryTypeEnum.LOGS, TelemetryTypeEnum.TRACES),
+                             "[TRACES]. Supported types: [LOGS]"),
+                Arguments.of(TelemetryProviderEnum.SERVICENOW, Set.of(TelemetryTypeEnum.LOGS),
+                             "[LOGS]. Supported types: [TRACES]"),
+                Arguments.of(TelemetryProviderEnum.PROMETHEUS, Set.of(TelemetryTypeEnum.LOGS),
+                             "[LOGS]. Supported types: [METRICS]"),
+                Arguments.of(TelemetryProviderEnum.KRATOS_THANOS, Set.of(TelemetryTypeEnum.TRACES),
+                             "[TRACES]. Supported types: [METRICS]"),
+                Arguments.of(TelemetryProviderEnum.KRATOS, Set.of(TelemetryTypeEnum.METRICS),
+                             "[METRICS]. Supported types: [LOGS, TRACES]"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("unsupportedTelemetryTypeArgs")
+    void shouldRejectTypesTheProviderDoesNotExport(
+            TelemetryProviderEnum provider, Set<TelemetryTypeEnum> types, String expectedMessage) {
+        var telemetryRequest = TelemetryRequest.builder()
+                .endpoint(TEST_TELEMETRY_ENDPOINT)
+                .protocol(TelemetryProtocolEnum.HTTP)
+                .provider(provider)
+                .types(types)
+                .secret(SecretDto.builder()
+                                .name("unsupported-type-secret")
+                                .value(validSecretValue(provider))
+                                .build())
+                .build();
+
+        var response = postTelemetry(telemetryRequest);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody())
+                .contains("Telemetry provider '" + provider + "' does not support types "
+                                  + expectedMessage);
+    }
+
+    Stream<Arguments> invalidTelemetrySecretArgs() {
+        return Stream.of(
+                Arguments.of(TelemetryProviderEnum.GRAFANA_CLOUD, TelemetryTypeEnum.METRICS,
+                             jsonMapper.createObjectNode().put("instanceId", "123456"),
+                             "missing required fields [apiKey]"),
+                Arguments.of(TelemetryProviderEnum.GRAFANA_CLOUD, TelemetryTypeEnum.METRICS,
+                             jsonMapper.createObjectNode()
+                                     .put("username", "grafana-user")
+                                     .put("password", "grafana-password"),
+                             "missing required fields [instanceId, apiKey]"),
+                Arguments.of(TelemetryProviderEnum.SPLUNK, TelemetryTypeEnum.LOGS,
+                             jsonMapper.createObjectNode().put("token", "splunk-token"),
+                             "must be a non-empty string"),
+                Arguments.of(TelemetryProviderEnum.PROMETHEUS, TelemetryTypeEnum.METRICS,
+                             jsonMapper.createObjectNode().put("clientCert", "client-cert"),
+                             "'clientCert' and 'clientKey' must be set together"),
+                Arguments.of(TelemetryProviderEnum.AZURE_MONITOR, TelemetryTypeEnum.METRICS,
+                             jsonMapper.createObjectNode().put("instrumentationKey", "ikey"),
+                             "missing required fields [applicationId, liveEndpoint]"),
+                Arguments.of(TelemetryProviderEnum.KRATOS, TelemetryTypeEnum.LOGS,
+                             jsonMapper.createObjectNode()
+                                     .put("clientCert", "client-cert")
+                                     .put("clientKey", "client-key"),
+                             "Telemetry provider 'KRATOS' with types [LOGS]: "
+                                     + "secret is missing required fields [collectorId]"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidTelemetrySecretArgs")
+    void shouldRejectSecretShapeTheCollectorCannotRender(
+            TelemetryProviderEnum provider, TelemetryTypeEnum type, JsonNode secretValue,
+            String expectedMessage) {
+        var telemetryRequest = TelemetryRequest.builder()
+                .endpoint(TEST_TELEMETRY_ENDPOINT)
+                .protocol(TelemetryProtocolEnum.HTTP)
+                .provider(provider)
+                .types(Set.of(type))
+                .secret(SecretDto.builder()
+                                .name("invalid-shape-secret")
+                                .value(secretValue)
+                                .build())
+                .build();
+
+        var response = postTelemetry(telemetryRequest);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains(expectedMessage);
+    }
+
+    private ResponseEntity<String> postTelemetry(TelemetryRequest telemetryRequest) {
+        var token = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                    List.of(SCOPE_MANAGE_TELEMETRIES),
+                                                    100);
+        var requestEntity = RequestEntity.post(URI.create("/v2/nvcf/telemetries"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + token)
+                .body(telemetryRequest);
+        return testRestTemplate.exchange(requestEntity, String.class);
+    }
+
+    private JsonNode validSecretValue(TelemetryProviderEnum provider) {
+        return switch (provider) {
+            case GRAFANA_CLOUD -> jsonMapper.createObjectNode()
+                    .put("instanceId", "123456")
+                    .put("apiKey", "grafana-api-key");
+            case KRATOS -> jsonMapper.createObjectNode()
+                    .put("collectorId", "collector-id")
+                    .put("clientCert", "client-cert")
+                    .put("clientKey", "client-key");
+            case KRATOS_THANOS, PROMETHEUS -> jsonMapper.createObjectNode()
+                    .put("clientCert", "client-cert")
+                    .put("clientKey", "client-key");
+            case AZURE_MONITOR -> jsonMapper.createObjectNode()
+                    .put("instrumentationKey", "instrumentation-key")
+                    .put("applicationId", "application-id")
+                    .put("liveEndpoint", "https://live.example.com");
+            default -> new StringNode("telemetry-api-key");
+        };
     }
 
     Stream<Arguments> getTelemetryDetailsArgs() {
@@ -1662,10 +1793,10 @@ class TelemetryControllerTest {
                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                 .protocol(TelemetryProtocolEnum.HTTP)
                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                .types(Set.of(TelemetryTypeEnum.LOGS))
+                .types(Set.of(TelemetryTypeEnum.METRICS))
                 .secret(SecretDto.builder()
                                 .name("first-telemetry-secret")
-                                .value(secretJsonNodeValue)
+                                .value(validSecretValue(TelemetryProviderEnum.PROMETHEUS))
                                 .build())
                 .build();
 
@@ -1687,7 +1818,7 @@ class TelemetryControllerTest {
                 .types(Set.of(TelemetryTypeEnum.METRICS))
                 .secret(SecretDto.builder()
                                 .name("second-telemetry-secret")
-                                .value(secretJsonNodeValue)
+                                .value(validSecretValue(TelemetryProviderEnum.GRAFANA_CLOUD))
                                 .build())
                 .build();
 
@@ -1706,10 +1837,10 @@ class TelemetryControllerTest {
                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                 .protocol(TelemetryProtocolEnum.HTTP)
                 .provider(TelemetryProviderEnum.SPLUNK)
-                .types(Set.of(TelemetryTypeEnum.TRACES))
+                .types(Set.of(TelemetryTypeEnum.LOGS))
                 .secret(SecretDto.builder()
                                 .name("third-telemetry-secret")
-                                .value(secretJsonNodeValue)
+                                .value(validSecretValue(TelemetryProviderEnum.SPLUNK))
                                 .build())
                 .build();
 
@@ -1765,7 +1896,7 @@ class TelemetryControllerTest {
                 .types(Set.of(TelemetryTypeEnum.LOGS))
                 .secret(SecretDto.builder()
                                 .name("third-telemetry-secret")
-                                .value(secretJsonNodeValue)
+                                .value(validSecretValue(TelemetryProviderEnum.SPLUNK))
                                 .build())
                 .build();
 

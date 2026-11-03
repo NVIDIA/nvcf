@@ -31,6 +31,7 @@ go_library(
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
         "//src/invocation-plane-services/llm-api-gateway/mcp",
+        "//src/invocation-plane-services/llm-api-gateway/models",
         "@com_jetify_go_sse//:sse",
     ],
 )

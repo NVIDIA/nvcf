@@ -102,6 +102,12 @@ if [[ "${actual_nvca_version}" != "3.2.7" ]]; then
   exit 1
 fi
 
+actual_byoo_collector_repository="$(yq -r '.agent.byooOtelCollector.imageRepository' "${output_file}")"
+if [[ "${actual_byoo_collector_repository}" != "nvcr.io/<your-org>/byoo-otel-collector" ]]; then
+  echo "expected agent.byooOtelCollector.imageRepository under the stack image prefix, got ${actual_byoo_collector_repository}" >&2
+  exit 1
+fi
+
 actual_gateway_names="$(yq -r '.clusterValidator.gatewayNames | join(",")' "${output_file}")"
 if [[ "${actual_gateway_names}" != "envoy-gateway/nats-gateway,envoy-gateway/nvcf-gateway" ]]; then
   echo "expected the wired stack Gateways in clusterValidator.gatewayNames, got ${actual_gateway_names}" >&2
@@ -174,6 +180,11 @@ fi
 actual_probe_image="$(yq -r '.clusterValidator.nodeToNodeProbeImage' "${output_file}")"
 if [[ "${actual_probe_image}" != "registry.example.com/mirror/nvcf/busybox:1.36" ]]; then
   echo "expected the probe image from the stack's mirror registry, got ${actual_probe_image}" >&2
+  exit 1
+fi
+actual_byoo_collector_repository="$(yq -r '.agent.byooOtelCollector.imageRepository' "${output_file}")"
+if [[ "${actual_byoo_collector_repository}" != "registry.example.com/mirror/nvcf/byoo-otel-collector" ]]; then
+  echo "expected agent.byooOtelCollector.imageRepository to follow the stack's mirror registry, got ${actual_byoo_collector_repository}" >&2
   exit 1
 fi
 

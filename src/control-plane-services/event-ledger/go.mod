@@ -15,7 +15,7 @@
 
 module github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/Masterminds/squirrel v1.5.4

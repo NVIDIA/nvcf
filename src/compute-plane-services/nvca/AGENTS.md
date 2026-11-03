@@ -1,17 +1,17 @@
 # AGENTS.md - Guide for AI Coding Agents
 
-Quick reference for working with **NVCA** (NVIDIA Cloud Functions Agent), a Kubernetes agent and operator (Go) that manages NVCF Bring-Your-Own-Compute (BYOC) clusters. This monorepo contains both the NVCA agent and the NVCA Operator (formerly a separate repository).
+Quick reference for working with NVCA (NVIDIA Cloud Functions Agent), a Kubernetes agent and operator (Go) that manages NVCF Bring-Your-Own-Compute (BYOC) clusters. This monorepo contains both the NVCA agent and the NVCA Operator (formerly a separate repository).
 
 ## Quick Start
 
-**Use standard Go tooling by default:**
+Use standard Go tooling by default:
 
 ```bash
 go test ./internal/miniservice/... \
     -ldflags '-X github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version=v25.8.0'
 ```
 
-**Repository structure:**
+Repository structure:
 
 - `cmd/nvca/` - Main NVCA agent binary
 - `cmd/webhook-server/` - Admission webhook server
@@ -39,14 +39,14 @@ go test ./internal/miniservice/... \
 
 ## Build & Test Commands
 
-**Quick check before commit:**
+Quick check before commit:
 
 ```bash
 make test           # Unit tests (excludes generated code)
 make lint           # golangci-lint + helm lint
 ```
 
-**Run specific tests:**
+Run specific tests:
 
 ```bash
 go test ./pkg/nvca -run TestBackend \
@@ -55,7 +55,7 @@ go test -v ./pkg/storage \
     -ldflags '-X github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version=v25.8.0'
 ```
 
-**Running tests in AI agents / IDEs:**
+Running tests in AI agents / IDEs:
 
 When running `go test` directly (not via `make test`), you must pass ldflags to set the DRA driver version, otherwise tests will panic with `could not parse "unknown" as version`:
 
@@ -66,7 +66,7 @@ go test ./internal/miniservice/... -v \
 
 This is automatically handled by `make test`, but required when using `go test` directly.
 
-**Build artifacts:**
+Build artifacts:
 
 ```bash
 mkdir -p _output/bin
@@ -75,7 +75,7 @@ go build -o _output/bin/nvca-operator ./cmd/nvca-operator
 go build -o _output/bin/webhook-server ./cmd/webhook-server
 ```
 
-**Code generation (MUST run after CRD changes):**
+Code generation (MUST run after CRD changes):
 
 ```bash
 make codegen-update      # Generate clientsets, informers, listers, DeepCopy
@@ -84,7 +84,7 @@ make testdata-update     # Regenerate test data
 make docs-update         # Regenerate docs
 ```
 
-**Local E2E tests:**
+Local E2E tests:
 
 ```bash
 make test-e2e
@@ -92,7 +92,7 @@ make test-e2e
 
 ## Testing Instructions
 
-**Before committing:**
+Before committing:
 
 ```bash
 # Format YOUR code only (DO NOT run gofmt on vendor/)
@@ -106,22 +106,22 @@ make lint        # Must pass (golangci-lint)
 git diff --exit-code
 ```
 
-**Quick pre-commit validation:**
+Quick pre-commit validation:
 
 ```bash
 # Run all checks in one go
 gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lint && git diff --exit-code
 ```
 
-**Test structure:**
+Test structure:
 
-- Tests live next to code: `foo.go` → `foo_test.go`
+- Tests live next to code: `foo.go` -> `foo_test.go`
 - Use table-driven tests for multiple scenarios
 - Test naming: `TestFunctionName` or `TestStructName_MethodName`
 - Test data in `pkg/nvca/testdata/`, `internal/*/testdata/`
 - E2E tests in `test/e2e/` (run with `make test-e2e`)
 
-**Envtest setup (for K8s controller tests):**
+Envtest setup (for K8s controller tests):
 
 ```bash
 # Automatically handled by make test, but for IDE:
@@ -129,7 +129,7 @@ source <(./scripts/setup_envtest)
 echo $KUBEBUILDER_ASSETS
 ```
 
-**Example test pattern:**
+Example test pattern:
 
 ```go
 func TestQueueMessageProcessing(t *testing.T) {
@@ -151,7 +151,7 @@ func TestQueueMessageProcessing(t *testing.T) {
 
 ## Code Style
 
-**General implementation guidance (applies to AI agents too):**
+General implementation guidance (applies to AI agents too):
 
 - Match the existing package structure, naming, logging, and error-handling conventions in the repo instead of imposing a new framework or style
 - Prefer small, explicit changes over broad refactors
@@ -162,7 +162,7 @@ func TestQueueMessageProcessing(t *testing.T) {
 - Comment only when the logic is non-obvious
 - If a task is not HTTP/API work, do not force API patterns into the implementation
 
-**Go standards:**
+Go standards:
 
 - All exported symbols need godoc comments
 - Use `logrus` for app logging, `klog` for K8s logging
@@ -170,14 +170,14 @@ func TestQueueMessageProcessing(t *testing.T) {
 - Follow standard Go formatting (gofmt, goimports - enforced by CI)
 - 120 char line limit
 
-**NVCA-specific patterns:**
+NVCA-specific patterns:
 
 - Queue message handlers must be idempotent
 - Use context for cancellation and timeouts
 - Separate storage controller reconciliation from main agent loop
 - MiniService controller handles Helm chart lifecycle
 
-**Operator-specific patterns:**
+Operator-specific patterns:
 
 - Reconciliation must be idempotent
 - Always update status separately from spec
@@ -185,18 +185,18 @@ func TestQueueMessageProcessing(t *testing.T) {
 - Set owner references on managed resources
 - Keep webhook logic fast and deterministic
 
-**Reconcile error handling:**
+Reconcile error handling:
 
 - Use `k8sutil.IsTransientK8sError(err)` (`internal/util/k8sutil/errors.go`) to classify K8s API errors before deciding how to handle them. Packages that must stay small, such as the cluster-validator, call `k8serr.IsTransient(err)` (`internal/util/k8serr`), which holds the classification
-- **Transient errors** (timeouts, 429, 503, 500, conflicts, network errors) → return `reconcile.Result{Requeue: true}, nil` (silent requeue, no error metric)
-- **Non-transient errors** (Forbidden, Unauthorized, Invalid, Gone) → return `reconcile.Result{}, err` (surfaces as reconcile failure)
-- **Never return both `Requeue: true` and an error** — returning an error already triggers automatic requeue with exponential backoff
+- Transient errors (timeouts, 429, 503, 500, conflicts, network errors) -> return `reconcile.Result{Requeue: true}, nil` (silent requeue, no error metric)
+- Non-transient errors (Forbidden, Unauthorized, Invalid, Gone) -> return `reconcile.Result{}, err` (surfaces as reconcile failure)
+- Never return both `Requeue: true` and an error ; returning an error already triggers automatic requeue with exponential backoff
 - Use `reconcile.TerminalError()` for truly unrecoverable errors to prevent retries
 - For batch error collections (cleanup paths), use `k8sutil.AnyNonTransientK8sError(errs)` to check if any error is non-transient
 - Log transient errors at `log.V(1).Info()`, non-transient at `log.Error()`
 - Keep NotFound handling scoped to resource discovery and Kubernetes API errors that can recover on retry.
 
-**Package structure:**
+Package structure:
 
 ```text
 cmd/                    - Binary entry points (nvca, webhook-server, nvca-operator, nvca-self-managed, nvca-mirror)
@@ -219,14 +219,14 @@ internal/               - Private packages
 
 ## Commit & PR Instructions
 
-**General PR authoring guidance (applies to AI agents too):**
+General PR authoring guidance (applies to AI agents too):
 
 - Use the local PR template shape with `Customer Summary`, `TL;DR`, `Additional Details`, `For the Reviewer`, `For QA`, and `Tickets`
 - For `feat`, `fix`, and `perf` PRs, make `Customer Summary` customer-facing because it is used in release notes
 - In `For QA`, list the exact checks or commands you ran and state whether QA is needed
 - Reference the relevant ticket when one exists; use `NO-REF` only when that is acceptable for the change
 
-**Commit format (Conventional Commits v1.0.0 required):**
+Commit format (Conventional Commits v1.0.0 required):
 
 ```text
 <type>(<scope>): <short description>
@@ -236,12 +236,12 @@ internal/               - Private packages
 Closes NVCFCLUST-XXXX  # or use NO-REF if no ticket
 ```
 
-**Types:**
+Types:
 
-- **Customer** (in release notes): `feat`, `fix`, `perf` - **scope required**
-- **Foundational** (not in release notes): `docs`, `build`, `test`, `refactor`, `ci`, `chore`, `style`, `revert`
+- Customer (in release notes): `feat`, `fix`, `perf` - scope required
+- Foundational (not in release notes): `docs`, `build`, `test`, `refactor`, `ci`, `chore`, `style`, `revert`
 
-**Examples:**
+Examples:
 
 ```text
 feat(queue): add support for batch message processing
@@ -249,7 +249,7 @@ fix(storage): handle PVC deletion race condition
 test(miniservice): add unit tests for chart reconciliation
 ```
 
-**Breaking changes - add to footer:**
+Breaking changes - add to footer:
 
 ```text
 feat(api): change MiniService status structure
@@ -259,7 +259,7 @@ BREAKING CHANGE: The status.conditions field has been restructured.
 Closes NVCFCLUST-1234
 ```
 
-**Before committing (CRITICAL - prevents CI failures):**
+Before committing (CRITICAL - prevents CI failures):
 
 ```bash
 # 1. Format YOUR Go code only (NOT vendor/)
@@ -281,41 +281,42 @@ git diff --exit-code
 gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lint && git diff --exit-code
 ```
 
-**IMPORTANT: Never modify vendor files**
+IMPORTANT: Never modify vendor files
 
 - All fixes and changes must be made in non-vendor files only
 - Vendor files are managed by `go mod vendor` and should not be edited directly
 - If you encounter issues in vendor code, update dependencies in `go.mod` and run `go mod vendor`
 
-**PR checklist:**
+PR checklist:
 
 1. Fork repo, create feature branch
 2. Add tests for your changes (aim for >73% coverage)
-3. **Format YOUR code only**: `gofmt -w $(find . -name '*.go' -not -path './vendor/*')`
-4. **Run all checks**: `make test && make lint`
+3. Format YOUR code only: `gofmt -w $(find . -name '*.go' -not -path './vendor/*')`
+4. Run all checks: `make test && make lint`
 5. Run `make codegen-update` if you touched `pkg/apis/`
-6. **Verify clean working directory**: `git diff --exit-code`
+6. Verify clean working directory: `git diff --exit-code`
 7. Commit with conventional format
 8. Create PR to `main` branch
 9. Fill in PR template (Customer Summary for feat/fix/perf, TL;DR, ticket number)
 10. Wait for CI to pass
 11. Address review feedback
 
-**Branch strategy:**
+Branch strategy:
 
 - `main` - development branch, target for new features
-- `release-x.y` - release branches, bugfixes only
+- `release-src/compute-plane-services/nvca/vX.Y` - component maintenance branches;
+  follow the [release workflow](../../../docs/dev/github-release-process.md).
 
 ## Security Considerations
 
-**Critical rules:**
+Critical rules:
 
 - NEVER commit credentials, API keys, or secrets (use K8s secrets, inject at runtime)
 - Validate all webhook inputs, use TLS, implement timeouts
 - Check `go.mod` replace directives for security patches
 - Run containers as non-root when possible
 
-**Reporting vulnerabilities - DO NOT use public issue trackers:**
+Reporting vulnerabilities - DO NOT use public issue trackers:
 
 - Web: https://www.nvidia.com/object/submit-security-vulnerability.html
 - Email: psirt@nvidia.com
@@ -323,31 +324,31 @@ gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lin
 
 ## Common Gotchas
 
-1. **Use standard Go tooling for GitHub-facing work** - only use internal dev shells when explicitly available
-2. **CRD changes = run codegen** - after touching `pkg/apis/`, MUST run `make codegen-update` and `make openapigen-update`
-3. **Dependency changes = update vendor + LICENSE** - run `go mod tidy` and `go mod vendor` after changing `go.mod`, then update the THIRD-PARTY LICENSES section in `LICENSE` file
-4. **Envtest required** - some tests need `KUBEBUILDER_ASSETS` set (handled by `make test`)
-5. **Local vs CI** - local tests may pass but CI may have additional checks
-6. **Queue message idempotency** - handlers may receive duplicate messages
-7. **Storage controller timing** - PVC operations are async, handle races carefully
-8. **MiniService chartcache key must include namespace** - The `chartcache.ChartCacheInput` struct (in `internal/miniservice/chartcache/`) is used to generate cache keys for rendered Helm charts. Any field that affects the Helm template output (e.g., `.Release.Namespace`) MUST be included in this struct. If namespace is missing from the cache key, cached output from namespace A can be incorrectly returned for namespace B. When adding new fields to `HelmReValRenderInput` that affect rendering, also add them to `ChartCacheInput` and update `getCacheKey()` in `reconcile.go`.
+1. Use standard Go tooling for GitHub-facing work - only use internal dev shells when explicitly available
+2. CRD changes = run codegen - after touching `pkg/apis/`, MUST run `make codegen-update` and `make openapigen-update`
+3. Dependency changes = update vendor + LICENSE - run `go mod tidy` and `go mod vendor` after changing `go.mod`, then update the THIRD-PARTY LICENSES section in `LICENSE` file
+4. Envtest required - some tests need `KUBEBUILDER_ASSETS` set (handled by `make test`)
+5. Local vs CI - local tests may pass but CI may have additional checks
+6. Queue message idempotency - handlers may receive duplicate messages
+7. Storage controller timing - PVC operations are async, handle races carefully
+8. MiniService chartcache key must include namespace - The `chartcache.ChartCacheInput` struct (in `internal/miniservice/chartcache/`) is used to generate cache keys for rendered Helm charts. Any field that affects the Helm template output (e.g., `.Release.Namespace`) MUST be included in this struct. If namespace is missing from the cache key, cached output from namespace A can be incorrectly returned for namespace B. When adding new fields to `HelmReValRenderInput` that affect rendering, also add them to `ChartCacheInput` and update `getCacheKey()` in `reconcile.go`.
 
 ## Code Generation Triggers
 
-**Modified CRD types in `pkg/apis/`?** Run:
+Modified CRD types in `pkg/apis/`? Run:
 
 ```bash
 make codegen-update     # Generates clientsets, informers, listers, DeepCopy
 make openapigen-update  # Updates OpenAPI schema
 ```
 
-**Modified test data templates?** Run:
+Modified test data templates? Run:
 
 ```bash
 make testdata-update
 ```
 
-**Changed dependencies (go.mod)?** Run:
+Changed dependencies (go.mod)? Run:
 
 ```bash
 go mod tidy
@@ -358,7 +359,7 @@ find vendor -name "LICENSE*" -type f | sort
 # Copy the output to the THIRD-PARTY LICENSES section in LICENSE
 ```
 
-**Update all generated code:**
+Update all generated code:
 
 ```bash
 make codegen-update
@@ -371,12 +372,12 @@ make docs-update
 
 The `LICENSE` file contains the NVIDIA Apache 2.0 license and a complete list of third-party licenses from vendored dependencies.
 
-**When to update:**
+When to update:
 
 - After running `go mod vendor`
 - After adding/removing/updating dependencies in `go.mod`
 
-**How to update:**
+How to update:
 
 ```bash
 # Generate the list of third-party licenses
@@ -385,21 +386,21 @@ find vendor -name "LICENSE*" -type f | sort
 # Copy the output to the THIRD-PARTY LICENSES section in LICENSE file
 ```
 
-**Why this matters:**
+Why this matters:
 
 - Legal compliance requires accurate attribution of third-party code
 - The LICENSE file must reflect current vendored dependencies
 
 ## Metrics Initialization
 
-Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so they appear on the first Prometheus scrape. **When adding new label values, update the initialization code.**
+Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so they appear on the first Prometheus scrape. When adding new label values, update the initialization code.
 
-**Files to update:**
+Files to update:
 
 - `internal/metrics/metrics.go` - Add new values to the initialization loops in `NewDefaultMetrics()`
 - `internal/metrics/metrics_test.go` - Add new values to `TestMetricsInitializedToZero`
 
-**Currently initialized metrics:**
+Currently initialized metrics:
 
 | Metric | Label | Values to maintain |
 |--------|-------|-------------------|
@@ -420,7 +421,7 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 | `SchedulerWorkloadCount` | `scheduler_name` | `default-scheduler`, `kai-scheduler` (constants in `internal/metrics/metrics.go`) |
 | `SchedulerWorkloadCount` | `workload_kind` | Constants in `internal/metrics/workloadtypes/types.go` (`AllWorkloadKinds`) |
 
-**When to update:**
+When to update:
 
 - Adding a new K8s resource type to `TrackK8sAPICall()` calls
 - Adding a new GC cleaner in `internal/gc/`
@@ -430,7 +431,7 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 - Adding a new upstream operation constant to `AllUpstreamOperations` in `internal/metrics/metrics.go`
 - Adding a new maintenance mode to `AllMaintenanceModes` in `pkg/types/types.go`
 
-**Why this matters:**
+Why this matters:
 
 - Prometheus `absent()` alerts fail on non-existent metrics
 - `rate()` calculations give unexpected results if metrics appear mid-scrape
@@ -500,10 +501,10 @@ CI behavior:
 
 ## Observability
 
-- **Metrics**: Prometheus metrics in `internal/metrics/` - see [METRICS.md](internal/metrics/METRICS.md) for full documentation
-- **Tracing**: OpenTelemetry via `internal/otel/`
-- **Logging**: Structured logging with logrus
-- **Profiling**: pprof endpoints available - use `./scripts/users/nvca-pprof.sh heap`
+- Metrics: Prometheus metrics in `internal/metrics/` - see [METRICS.md](internal/metrics/METRICS.md) for full documentation
+- Tracing: OpenTelemetry via `internal/otel/`
+- Logging: Structured logging with logrus
+- Profiling: pprof endpoints available - use `./scripts/users/nvca-pprof.sh heap`
 
 ## Debugging NVCA
 

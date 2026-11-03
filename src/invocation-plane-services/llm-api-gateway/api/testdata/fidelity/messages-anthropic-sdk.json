@@ -1,0 +1,162 @@
+{
+  "description": "An Anthropic SDK request with an image, a document, tool_choice any and service_tier reaches the backend unchanged, and the reply is relayed unchanged.",
+  "path": "/v1/messages",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "max_tokens": 1024,
+    "system": "Be brief.",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "image",
+            "source": {
+              "type": "base64",
+              "media_type": "image/png",
+              "data": "AAAA"
+            }
+          },
+          {
+            "type": "document",
+            "source": {
+              "type": "text",
+              "media_type": "text/plain",
+              "data": "Notes."
+            },
+            "citations": {
+              "enabled": true
+            }
+          },
+          {
+            "type": "text",
+            "text": "Summarize."
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "Look up a term.",
+        "input_schema": {
+          "type": "object"
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "any",
+      "disable_parallel_tool_use": true
+    },
+    "temperature": 0.5,
+    "top_k": 40,
+    "stop_sequences": [
+      "END"
+    ],
+    "metadata": {
+      "user_id": "user-1"
+    },
+    "service_tier": "standard_only"
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "max_tokens": 1024,
+    "system": "Be brief.",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "image",
+            "source": {
+              "type": "base64",
+              "media_type": "image/png",
+              "data": "AAAA"
+            }
+          },
+          {
+            "type": "document",
+            "source": {
+              "type": "text",
+              "media_type": "text/plain",
+              "data": "Notes."
+            },
+            "citations": {
+              "enabled": true
+            }
+          },
+          {
+            "type": "text",
+            "text": "Summarize."
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "Look up a term.",
+        "input_schema": {
+          "type": "object"
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "any",
+      "disable_parallel_tool_use": true
+    },
+    "temperature": 0.5,
+    "top_k": 40,
+    "stop_sequences": [
+      "END"
+    ],
+    "metadata": {
+      "user_id": "user-1"
+    },
+    "service_tier": "standard_only"
+  },
+  "upstream_response": {
+    "json": {
+      "id": "msg_1",
+      "type": "message",
+      "role": "assistant",
+      "model": "company/model",
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes.",
+          "citations": null
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 30,
+        "output_tokens": 2,
+        "service_tier": "standard"
+      }
+    }
+  },
+  "response": {
+    "json": {
+      "id": "msg_1",
+      "type": "message",
+      "role": "assistant",
+      "model": "company/model",
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes.",
+          "citations": null
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 30,
+        "output_tokens": 2,
+        "service_tier": "standard"
+      }
+    }
+  }
+}

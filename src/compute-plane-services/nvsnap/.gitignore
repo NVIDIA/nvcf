@@ -11,7 +11,6 @@ dist/
 *.dll
 *.so
 *.dylib
-/restore-entrypoint
 /nvsnap-blobstore
 /nvsnap-server
 /nvsnap-agent
@@ -139,7 +138,6 @@ user.bazelrc
 /python3.12
 
 # Captured ioctl traces / generated binary fixtures (regenerate, don't commit)
-lib/nvsnap_intercept/*.bin
 /nvsnap-rootfs-restore
 /bazel-gpucr
 /tests/iouring/

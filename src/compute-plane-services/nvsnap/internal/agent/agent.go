@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -41,19 +42,29 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/cuda"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/objectstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime"
 	_ "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime/crio" // register CRI-O factory
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tenant"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
 
 // Config holds agent configuration
 type Config struct {
-	ListenAddr    string
+	ListenAddr string
+	// TenantLabel is the namespace label naming the tenant a namespace
+	// belongs to (an account id the platform stamps); captures and caches
+	// are shared only within one tenant. Empty makes every namespace its
+	// own tenant.
+	TenantLabel   string
 	CheckpointDir string
+	// CRIUGhostLimit bounds, in bytes, the contents of one deleted file a
+	// dump saves (criu --ghost-limit); 0 is defaultGhostLimit.
+	CRIUGhostLimit int64
 	// CheckpointHostDir is the host filesystem path that backs CheckpointDir
 	// inside the agent container. The capture-write writer Job consumes
 	// CaptureSource.SrcPath as a host path (joined with /host), so the
@@ -65,8 +76,11 @@ type Config struct {
 	ContainerdNamespace string
 	CudaCheckpointPath  string
 	CRIUPath            string
-	NodeName            string
-	LogLevel            string
+	// CaptureOptIn opts matching pods into the multi-pod instance capture
+	// (criu_group.go); NVSNAP_CRIU_CAPTURE_OPT_IN, JSON.
+	CaptureOptIn []CaptureOptIn
+	NodeName     string
+	LogLevel     string
 
 	// AuthToken is the shared bearer token callers must present on the
 	// agent API. Sourced from a Secret rather than a flag so it does not
@@ -132,17 +146,10 @@ type Config struct {
 	// genuinely mean "this node".
 	AdvertiseIP string
 
-	// BlobStoreURL is the base URL of the cluster's nvsnap-blobstore
-	// (Phase 5d.2 durable backstop). Empty disables capture-side
-	// upload AND cascade tier-3 fallback — agents fall back to
-	// peer-only fanout. Default in cluster:
-	// http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000
-	BlobStoreURL string
-
 	// FSStorePath is the agent-container path to a distributed
 	// filesystem mounted on every node — Lustre, Weka, EFS,
-	// Filestore, NFS, etc. Phase 2c of the 16-node distribution
-	// plan (docs/TRANSPORT-ARCHITECTURE.md). When set, every
+	// Filestore, NFS, etc. (the L2 tier, docs/ARCHITECTURE.md
+	// section 6). When set, every
 	// successful CRIU capture is asynchronously published into
 	// <FSStorePath>/<id>/ and EnsureLocal probes that path before
 	// trying peer agents. Empty disables both halves — agents fall
@@ -157,6 +164,14 @@ type Config struct {
 	// parallel. Disabled (no L2 promote) when StorageClass is
 	// empty.
 	L2 L2BackendConfig
+
+	// Election turns on the one-downloader-per-hash admission election
+	// for chart-shaped model workloads. Needs L2 (the followers mount the
+	// promoted rox); ignored when L2 is off.
+	Election ElectionConfig
+
+	// ModelVolume enables the write-once model volume for Helm functions.
+	ModelVolume ModelVolumeConfig
 
 	// Replication is the opt-in cross-cluster replication config (the L4
 	// tier). See docs/design/cross-cluster-replication.md. When
@@ -205,8 +220,48 @@ type ObjectStoreConfig struct {
 	PeerBuckets []string
 }
 
+// ElectionConfig configures the admission election
+// (docs/design/helm-chart-cache-election.md).
+type ElectionConfig struct {
+	// Enabled turns the election on. Default off until qualified.
+	Enabled bool
+	// Deadline bounds a leader's cold start plus capture; past it the
+	// server evicts the gated followers for re-election. Zero means
+	// election.DefaultDeadline.
+	Deadline time.Duration
+}
+
+// ModelVolumeConfig configures docs/design/helm-shared-model-volume.md.
+type ModelVolumeConfig struct {
+	// Enabled turns the write-once model volume on. Needs L2 and a storage
+	// profile that resolves a mode (block on NVMesh, rwx when declared).
+	Enabled bool
+	// WaitDeadline bounds a reader's wait for the marker before it downloads
+	// itself. Zero means one hour.
+	WaitDeadline time.Duration
+	// HostRoot is the host directory, mounted Bidirectional into the agent
+	// at the same path, where completed model volumes are bound for
+	// readers on block storage. Default /var/lib/containerd/nvsnap-models.
+	HostRoot string
+	// RefreshDisabled turns cache set refresh off; RefreshCooldown is the
+	// least time between generations of one set (zero: 6 hours).
+	// docs/design/helm-chart-cache-refresh.md.
+	RefreshDisabled bool
+	RefreshCooldown time.Duration
+	// ReapInterval is how often the reaper removes read-only model PVs
+	// without a claim and abandoned primaries. Zero means ten minutes.
+	ReapInterval time.Duration
+	// Retention is how long a complete model or cache volume is kept
+	// after its last use before the reaper frees it. Zero keeps forever.
+	Retention time.Duration
+	// TenantLabel is the namespace label naming a namespace's tenant;
+	// model volumes are shared only within one (modelvolume.Config).
+	// Empty falls back to Config.TenantLabel (modelVolumeTenantLabel).
+	TenantLabel string
+}
+
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
-// docs/L2-PVC-CRIU-DESIGN.md.
+// docs/ARCHITECTURE.md §6.
 type L2BackendConfig struct {
 	// StorageClass is the RWX-capable StorageClass name. Required
 	// to enable L2 — empty disables. On GKE production we set this
@@ -247,12 +302,34 @@ const DefaultWriterPullSecret = "nvsnap-agent-pull" //nolint:gosec // secret nam
 
 // Agent is the NVSNAP node agent
 type Agent struct {
+	// freezes are this node's members waiting at a group capture's freeze point.
+	freezes freezePoints
+	// holds are this node's member pods frozen for a group capture
+	// (pod_hold.go).
+	holds podHolds
+	// capturing holds the container IDs with a checkpoint in progress: two
+	// captures of one workload would each suspend it and both fail.
+	capturing sync.Map
+
+	// fabricSessions maps a multi-node gpushare session's pod key to its
+	// directory on this node (see gpushare_fabric.go).
+	fabricSessions sync.Map
+
+	// criuRestore restores CRIU checkpoints into placeholder pods when CRIU
+	// is the cluster's capture method (criu_auto_restore.go).
+	criuRestore *criuAutoRestorer
+	// specCacheURI hashes a pod's configuration as admission does (the
+	// webhook's SpecCacheURI); nil when the webhook is off.
+	specCacheURI    func(*corev1.Pod) (string, bool)
+	criuRestoreOnce sync.Once
+	// checkpointing holds the pods being checkpointed (namespace/pod).
+	checkpointing sync.Map
+
 	config     Config
 	log        *logrus.Logger
 	runtime    runtime.Runtime
 	containerd *containerd.Client // non-nil only when runtime is containerd (for containerd-specific calls)
 	cuda       *cuda.Manager
-	criu       *criu.Manager
 	server     *http.Server
 
 	// captureBackend is the rootfs-only auto-capture loop's backend
@@ -274,6 +351,24 @@ type Agent struct {
 	// its prewarm policy; the promoter strategy is already baked into
 	// l2Backend.
 	l2Profile *checkpointstore.StorageProfile
+	// tenants names the tenant of a namespace for content hashes; built on
+	// first use (tenantScope).
+	tenants     *tenant.Resolver
+	tenantsOnce sync.Once
+	// elector is the admission election, built with the L2 backend when
+	// Election.Enabled; nil keeps the webhook on its explicit paths.
+	elector election.Elector
+	// modelVolume and modelMinter are built with the L2 backend when
+	// ModelVolume.Enabled; the webhook and the controller share them.
+	modelVolume *modelvolume.Provisioner
+	// cacheVolume is the KindCache twin of modelVolume (block mode only).
+	cacheVolume *modelvolume.Provisioner
+	modelMinter *checkpointstore.SharedVolumePromoter
+	// mvc is the model volume controller, which also serves ranks.
+	mvc *ModelVolumeController
+	// electionScope establishes an elected pod's GPU architecture; set
+	// with elector.
+	electionScope election.ArchScope
 
 	// kubeClient is the shared K8s API client used by the rootfs-only
 	// capture watcher AND the admission-webhook cascade-fetch path
@@ -284,8 +379,8 @@ type Agent struct {
 
 	// peerLoad counts this agent's in-flight peer fetches per peer
 	// URL. Used by EnsureLocal to pick the least-loaded peer when
-	// several peers have the same checkpoint. Phase 1 of the 16-node
-	// distribution plan (docs/TRANSPORT-ARCHITECTURE.md).
+	// several peers have the same checkpoint (the L3 tier,
+	// docs/ARCHITECTURE.md section 6).
 	peerLoad *peerLoadTracker
 
 	// fsStore is the shared-filesystem backend. Non-nil when
@@ -402,16 +497,10 @@ func New(cfg Config) (*Agent, error) {
 			log.WithField("detectionMethod", detectionMethod).Info("Detected containerized environment, enabling nsenter mode")
 		}
 	}
-	log.WithField("useNsenter", useNsenter).Info("Initializing CUDA and CRIU managers")
+	log.WithField("useNsenter", useNsenter).Info("Initializing CUDA manager")
 
 	// Initialize CUDA manager (with nsenter support for containerized agents)
 	cudaManager := cuda.New(cfg.CudaCheckpointPath, useNsenter, log)
-
-	// Initialize CRIU manager (with nsenter support for containerized agents)
-	criuManager, err := criu.New(log, cfg.CRIUPath, useNsenter)
-	if err != nil {
-		log.WithError(err).Warn("CRIU initialization failed (optional)")
-	}
 
 	// Create checkpoint directory
 	if err := os.MkdirAll(cfg.CheckpointDir, 0o755); err != nil {
@@ -424,7 +513,6 @@ func New(cfg Config) (*Agent, error) {
 		runtime:    rt,
 		containerd: containerdClient,
 		cuda:       cudaManager,
-		criu:       criuManager,
 		peerLoad:   newPeerLoadTracker(),
 		fsStore:    newFSStore(cfg.FSStorePath, log),
 		overlay:    NewOverlayManager(cfg.OverlayRoot, log, nil),
@@ -444,6 +532,10 @@ func New(cfg Config) (*Agent, error) {
 // Run starts the agent
 func (a *Agent) Run(ctx context.Context) error {
 	metrics.RegisterAgent()
+	// A capture this agent was holding pods for ended with its last run.
+	a.recoverPodHolds(a.log.WithField("subsys", "pod-hold"))
+	// So did a dump it was running: replace what it may have left stopped.
+	go a.recoverInterruptedSources(ctx, a.log.WithField("subsys", "capture-marker"))
 
 	// OpenTelemetry. No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset,
 	// so prod clusters without Jaeger pay zero overhead.
@@ -496,13 +588,33 @@ func (a *Agent) Run(ctx context.Context) error {
 	// API routes
 	router.HandleFunc("/health", a.healthHandler).Methods("GET")
 	router.HandleFunc("/v1/checkpoint", a.checkpointHandler).Methods("POST")
+	// Multi-node gpushare: a group checkpoint drives one fabric session; the
+	// fabric routes serve this node's pods in a session to that driver.
+	router.HandleFunc("/v1/gpushare/group-checkpoint", a.groupCheckpointHandler).Methods("POST")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}", a.fabricStateHandler).Methods("GET")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/verdict", a.fabricVerdictHandler).Methods("PUT")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/in", a.fabricInHandler).Methods("PUT")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/unlock", a.fabricUnlockHandler).Methods("PUT")
+	router.HandleFunc("/v1/gpushare/group-restore", a.groupRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/restore", a.restoreHandler).Methods("POST")
-	router.HandleFunc("/v1/restore/trigger", a.triggerRestoreHandler).Methods("POST")
+	// Instance companions (criu_companion.go): a rank's connections, and
+	// the continue of a companion restored stopped.
+	router.HandleFunc("/v1/pods/{namespace}/{pod}/peers", a.peersHandler).Methods("GET")
+	// Capture preflight (capture_preflight.go): an instance's report, and
+	// the host checks of a pod on this node.
+	router.HandleFunc("/v1/capture-preflight/pod/{namespace}/{pod}", a.podPreflightHandler).Methods("GET")
+	router.HandleFunc("/v1/capture-preflight/{namespace}/{pod}", a.instancePreflightHandler).Methods("GET")
+	// A node bundle version, for a peer whose restore placeholder needs it
+	// (bundle_versions.go).
+	router.HandleFunc("/v1/bundles/{id}", a.bundleHandler).Methods("GET")
+	router.HandleFunc("/v1/group-freeze/{session}/{namespace}/{pod}", a.freezeHandler).Methods("GET", "POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")
+	// A ready rank's cache tree for the agent collecting its set
+	// (bearer-guarded like every agent-to-agent route).
+	router.HandleFunc("/v1/cache-rank/{key}/{ordinal}", a.cacheRankHandler).Methods("GET")
 	router.HandleFunc("/v1/containers", a.listContainersHandler).Methods("GET")
 	router.HandleFunc("/v1/gpu/processes", a.gpuProcessesHandler).Methods("GET")
-	router.HandleFunc("/v1/gpu/restore", a.gpuRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints/{id}", a.deleteCheckpointHandler).Methods("DELETE")
 	router.HandleFunc("/v1/checkpoints/{id}/files", a.listCheckpointFilesHandler).Methods("GET")
 	router.HandleFunc("/v1/checkpoints/{id}/file", a.readCheckpointFileHandler).Methods("GET")
@@ -603,7 +715,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// chain in buildAgentBackend appends a.l2Backend when non-nil so
 	// every rootfs capture also produces the L2 PVC for fan-out. The
 	// previous order (rootfs first, L2 second) silently dropped L2 from
-	// the rootfs path — see docs/design/ROOTFS-EVERYWHERE.md gap #1.
+	// the rootfs path.
 	l2, err := a.startL2Backend(ctx, a.config.L2)
 	if err != nil {
 		a.log.WithError(err).Error("L2 backend failed to start; multi-node restore will use L3 peer cascade only")
@@ -621,6 +733,38 @@ func (a *Agent) Run(ctx context.Context) error {
 	// + cache data + injected pod fragments stay consistent.
 	if err := a.startWebhook(ctx, a.config.Webhook, backend); err != nil {
 		a.log.WithError(err).Error("agent admission webhook failed to start; continuing without it")
+	}
+	if err := a.startCRIUAutoRestore(ctx); err != nil {
+		a.log.WithError(err).Error("CRIU auto-restore failed to start; CRIU captures will not restore into new pods")
+	}
+	a.startGPUShareStoreReaper(ctx)
+	if a.modelVolume != nil {
+		// Completes writer volumes and binds them into pending readers on
+		// this node (docs/design/helm-shared-model-volume.md).
+		mvc := &ModelVolumeController{
+			Kube:              a.kubeClient,
+			Provisioner:       a.modelVolume,
+			Minter:            a.modelMinter,
+			NodeName:          a.config.NodeName,
+			HostRoot:          a.modelHostRoot(),
+			HolderImage:       a.config.L2.WriterImage,
+			HolderPullSecrets: l2PullSecrets(a.config.L2),
+			Copier:            NewAgentCopier("/host", a.log.WithField("subsys", "modelvolume.copy")),
+			Cache:             a.cacheVolume,
+			RefreshDisabled:   a.config.ModelVolume.RefreshDisabled,
+			RefreshCooldown:   a.config.ModelVolume.RefreshCooldown,
+			Log:               a.log.WithField("subsys", "modelvolume"),
+		}
+		a.mvc = mvc
+		go func() {
+			if err := mvc.Run(ctx); err != nil {
+				a.log.WithError(err).Error("model volume controller stopped")
+			}
+		}()
+		// Read-only PVs whose namespace is gone and primaries whose copy
+		// never completed; idempotent, so every agent may run it.
+		reaper := &modelvolume.Reaper{Kube: a.kubeClient, Log: a.log.WithField("subsys", "modelvolume.reaper"), Retention: a.config.ModelVolume.Retention}
+		go reaper.Run(ctx, a.config.ModelVolume.ReapInterval)
 	}
 
 	// nvsnap#194: OverlayFS cleanup-on-pod-delete + startup sweep. Safe
@@ -840,25 +984,6 @@ func (a *Agent) gpuProcessesHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Trigger restore in a placeholder pod
-func (a *Agent) triggerRestoreHandler(w http.ResponseWriter, r *http.Request) {
-	var req TriggerRestoreRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	result, err := a.TriggerRestore(r.Context(), req)
-	if err != nil {
-		a.log.WithError(err).Error("Trigger restore failed")
-		http.Error(w, fmt.Sprintf("trigger restore failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
-}
-
 // Get placeholder pod manifest
 func (a *Agent) getPlaceholderManifestHandler(w http.ResponseWriter, r *http.Request) {
 	var req PlaceholderManifestRequest
@@ -876,75 +1001,6 @@ func (a *Agent) getPlaceholderManifestHandler(w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Content-Type", "text/yaml")
 	_, _ = w.Write([]byte(manifest))
-}
-
-// GPU restore handler - called by restore-entrypoint after CRIU restore
-func (a *Agent) gpuRestoreHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		CheckpointID string `json:"checkpointId"`
-		PID          int    `json:"pid"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
-		return
-	}
-	// Body-supplied, unlike the {id} routes the middleware covers.
-	if err := validPathSegment("checkpointId", req.CheckpointID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	log := a.log.WithFields(logrus.Fields{
-		"checkpointId": req.CheckpointID,
-		"pid":          req.PID,
-	})
-	log.Info("GPU restore requested")
-
-	// Load checkpoint metadata to check if GPU was used
-	checkpointDir := filepath.Join(a.config.CheckpointDir, req.CheckpointID)
-	metadataPath := filepath.Join(checkpointDir, "metadata.json")
-	metadataBytes, err := os.ReadFile(metadataPath)
-	if err != nil {
-		log.WithError(err).Warn("Could not read metadata, skipping GPU restore")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "skipped", "reason": "no metadata"})
-		return
-	}
-
-	var metadata CheckpointMetadata
-	if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
-		log.WithError(err).Warn("Invalid metadata, skipping GPU restore")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "skipped", "reason": "invalid metadata"})
-		return
-	}
-
-	if metadata.GPUPID == 0 {
-		log.Info("No GPU process in checkpoint, skipping GPU restore")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "skipped", "reason": "no GPU"})
-		return
-	}
-
-	// Restore GPU state
-	log.Info("Restoring GPU state")
-	if err := a.cuda.Restore(r.Context(), req.PID); err != nil {
-		log.WithError(err).Error("GPU restore failed")
-		http.Error(w, fmt.Sprintf("GPU restore failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Unlock GPU
-	log.Info("Unlocking GPU")
-	if err := a.cuda.Unlock(r.Context(), req.PID); err != nil {
-		log.WithError(err).Error("GPU unlock failed")
-		http.Error(w, fmt.Sprintf("GPU unlock failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	log.Info("GPU restore completed")
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
 // List files in a checkpoint directory
@@ -1195,4 +1251,34 @@ func (a *Agent) readCheckpointFileHandler(w http.ResponseWriter, r *http.Request
 	// GET, etc. For peer fanout, Range support is the critical feature —
 	// receivers can pull one large pages-*.img via parallel ranges.
 	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
+}
+
+// modelHostRoot is the bind root for completed model volumes.
+func (a *Agent) modelHostRoot() string {
+	if a.config.ModelVolume.HostRoot != "" {
+		return a.config.ModelVolume.HostRoot
+	}
+	return "/var/lib/containerd/nvsnap-models"
+}
+
+// modelVolumeTenantLabel is the tenant label model volumes are scoped by:
+// the model volume's own when set, else the agent's, so one setting
+// scopes captures, caches and model volumes alike.
+func (a *Agent) modelVolumeTenantLabel() string {
+	if l := a.config.ModelVolume.TenantLabel; l != "" {
+		return l
+	}
+	return a.config.TenantLabel
+}
+
+// tenantScope names the tenant of namespace ns for content hashes
+// (internal/tenant).
+func (a *Agent) tenantScope(ns string) string {
+	a.tenantsOnce.Do(func() {
+		a.tenants = &tenant.Resolver{Kube: a.kubeClient, Label: a.config.TenantLabel}
+		if a.log != nil {
+			a.tenants.Log = a.log.WithField("subsys", "tenant")
+		}
+	})
+	return a.tenants.Scope(context.Background(), ns)
 }

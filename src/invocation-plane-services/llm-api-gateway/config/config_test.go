@@ -23,8 +23,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 )
 
 func TestDefaultSetsExpectedDefaults(t *testing.T) {
@@ -35,9 +33,6 @@ func TestDefaultSetsExpectedDefaults(t *testing.T) {
 	}
 	if cfg.Telemetry.MetricsPort != 9464 {
 		t.Fatalf("metrics port = %d, want 9464", cfg.Telemetry.MetricsPort)
-	}
-	if cfg.DefaultServiceTier != servicetier.Auto {
-		t.Fatalf("default service tier = %q, want %q", cfg.DefaultServiceTier, servicetier.Auto)
 	}
 	if cfg.DefaultTPM != 0 {
 		t.Fatalf("default tpm = %d, want 0", cfg.DefaultTPM)
@@ -376,5 +371,49 @@ func TestLoadFromEnvReadsExposeRouterErrorCodes(t *testing.T) {
 	}
 	if !cfg.ExposeRouterErrorCodes {
 		t.Fatal("NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES=true was not applied")
+	}
+}
+
+func TestLoadFromEnvDecisionImageTokens(t *testing.T) {
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.DecisionImageTokens <= 0 {
+		t.Fatalf("default decision image tokens = %d, want a positive default", cfg.DecisionImageTokens)
+	}
+
+	t.Setenv("NVCF_DECISION_IMAGE_TOKENS", "2048")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.DecisionImageTokens != 2048 {
+		t.Fatalf("decision image tokens = %d, want 2048", cfg.DecisionImageTokens)
+	}
+
+	t.Setenv("NVCF_DECISION_IMAGE_TOKENS", "0")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.DecisionImageTokens != 0 {
+		t.Fatalf("decision image tokens = %d, want 0 (images not counted)", cfg.DecisionImageTokens)
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidDecisionImageTokens(t *testing.T) {
+	for _, value := range []string{"-1", "many"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("NVCF_DECISION_IMAGE_TOKENS", value)
+
+			_, err := LoadFromEnv()
+			if err == nil {
+				t.Fatal("LoadFromEnv() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), "NVCF_DECISION_IMAGE_TOKENS") {
+				t.Fatalf("error %q does not mention NVCF_DECISION_IMAGE_TOKENS", err.Error())
+			}
+		})
 	}
 }

@@ -5717,3 +5717,41 @@ func TestEnsureModelCacheNamespaceLabel_Envtest(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateICMSRequestsReusedMessageID(t *testing.T) {
+	for _, termination := range []bool{false, true} {
+		t.Run(fmt.Sprintf("termination=%t", termination), func(t *testing.T) {
+			ctx := newTestContext()
+			clients := mockKubeClients()
+			bc := &BackendK8sCache{clients: clients, requestsNamespace: RequestsNamespace, featureFlagFetcher: featureflag.DefaultFetcher}
+			old := &nvcav2beta1.ICMSRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "original", Namespace: RequestsNamespace, Labels: map[string]string{SQSMessageIDKey: "reused-message-id"}},
+				Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "old-request"},
+			}
+			_, err := clients.BART.NvcaV2beta1().ICMSRequests(RequestsNamespace).Create(ctx, old, metav1.CreateOptions{})
+			require.NoError(t, err)
+			for attempt := 0; attempt < 2; attempt++ {
+				if termination {
+					err = bc.CreateICMSTerminationMessageRequest(ctx, types.ICMSTerminationMessage{RequestID: "new-request", NCAId: "test-org"}, "new-receipt", "reused-message-id")
+					require.NoError(t, err)
+				} else {
+					var payload map[string]any
+					require.NoError(t, json.Unmarshal([]byte(goodCM), &payload))
+					payload["requestId"] = "new-request"
+					body, err := json.Marshal(payload)
+					require.NoError(t, err)
+					created, err := bc.CreateICMSCreationMessageRequest(ctx, decodeCM(t, string(body)), "new-receipt", "reused-message-id", "creation")
+					require.NoError(t, err)
+					if attempt == 0 {
+						require.NotNil(t, created)
+					} else {
+						require.Nil(t, created, "redelivery must remain idempotent")
+					}
+				}
+			}
+			requests, err := clients.BART.NvcaV2beta1().ICMSRequests(RequestsNamespace).List(ctx, metav1.ListOptions{})
+			require.NoError(t, err)
+			require.Len(t, requests.Items, 2)
+		})
+	}
+}

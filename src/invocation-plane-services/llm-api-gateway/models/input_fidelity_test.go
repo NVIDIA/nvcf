@@ -42,12 +42,16 @@ func TestChatInputAudioRoundTrip(t *testing.T) {
 	}
 }
 
-func TestChatInputAudioRejectsMissingDataOrFormat(t *testing.T) {
+func TestChatInputAudioKeepsPartsMissingDataOrFormatRaw(t *testing.T) {
 	for _, member := range []string{``, `,"input_audio":null`, `,"input_audio":{}`, `,"input_audio":{"data":"UklGRg=="}`, `,"input_audio":{"format":"wav"}`, `,"input_audio":{"data":"","format":"wav"}`, `,"input_audio":{"data":"UklGRg==","format":""}`} {
 		t.Run(member, func(t *testing.T) {
+			part := `{"type":"input_audio"` + member + `}`
 			var content ChatMessageContent
-			if err := json.Unmarshal([]byte(`[{"type":"input_audio"`+member+`}]`), &content); err == nil {
-				t.Fatal("accepted missing audio data or format")
+			if err := json.Unmarshal([]byte(`[`+part+`]`), &content); err != nil {
+				t.Fatal(err)
+			}
+			if raw, ok := content[0].(ContentPartRaw); !ok || string(raw) != part {
+				t.Fatalf("part = %#v, want raw %s", content[0], part)
 			}
 		})
 	}
@@ -59,6 +63,18 @@ func TestEmbeddingInputPreservesTextAndTokenValues(t *testing.T) {
 		{`["hello","world"]`, `["hello","world"]`},
 		{`[0,123,456]`, `[[0,123,456]]`},
 		{`[[0,123],[456]]`, `[[0,123],[456]]`},
+		// Other inputs stay raw for the backend to validate.
+		{`1`, `[1]`},
+		{`true`, `[true]`},
+		{`{"type":"image_url"}`, `[{"type":"image_url"}]`},
+		{`[1.5]`, `[[1.5]]`},
+		{`[-1]`, `[[-1]]`},
+		{`[4294967296]`, `[[4294967296]]`},
+		{`[1,null]`, `[[1,null]]`},
+		{`[[1,null]]`, `[[1,null]]`},
+		{`[1,"hello"]`, `[[1,"hello"]]`},
+		{`[[1],"hello",{}]`, `[[1],"hello",{}]`},
+		{`[1,[2]]`, `[[1,[2]]]`},
 	} {
 		t.Run(tt.input, func(t *testing.T) {
 			var input EmbeddingInputField
@@ -83,13 +99,21 @@ func TestEmbeddingInputPreservesTextAndTokenValues(t *testing.T) {
 	}
 }
 
-func TestEmbeddingInputRejectsMalformedTokenArrays(t *testing.T) {
-	for _, body := range []string{`1`, `true`, `{}`, `[1.5]`, `[-1]`, `[4294967296]`, `[1,null]`, `[[1,null]]`, `[1,"hello"]`, `[[1],"hello"]`, `[1,[2]]`} {
-		t.Run(body, func(t *testing.T) {
-			var input EmbeddingInputField
-			if err := json.Unmarshal([]byte(body), &input); err == nil {
-				t.Fatal("accepted malformed token input")
-			}
-		})
+func TestEmbeddingInputRawDoesNotAliasDecoderInput(t *testing.T) {
+	t.Parallel()
+
+	data := []byte(`{"image":"a"}`)
+	var input EmbeddingInputField
+	if err := input.UnmarshalJSON(data); err != nil {
+		t.Fatal(err)
+	}
+	copy(data, `{"image":"b"}`)
+
+	got, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `[{"image":"a"}]` {
+		t.Fatalf("got %s, want the bytes from decode time", got)
 	}
 }

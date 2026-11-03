@@ -18,6 +18,7 @@ type umbrellaPreparation struct {
 	Change        string
 	Qualification string
 	Toolchain     umbrellaToolchain
+	StackVersions map[string]string
 }
 
 func runUmbrella(args []string) error {
@@ -38,7 +39,7 @@ func runUmbrella(args []string) error {
 		return runUmbrellaPublish(args[1:])
 	}
 	allowed := map[string]string{
-		"prepare":       "repo source version change qualification helm-version helmfile-version previous inventories out",
+		"prepare":       "repo source version change qualification helm-version helmfile-version self-managed-version compute-plane-version observability-version previous inventories out",
 		"check":         "repo manifest previous inventories",
 		"bundle":        "repo manifest previous inventories out",
 		"verify-bundle": "repo manifest bundle sha256",
@@ -56,13 +57,23 @@ func runUmbrella(args []string) error {
 	out := flags.String("out", "", "manifest file or new bundle directory; existing output must match exactly")
 	bundle := flags.String("bundle", "", "umbrella archive to verify")
 	digest := flags.String("sha256", "", "expected archive digest from the trusted release asset index")
-	plan := umbrellaPreparation{}
-	flags.StringVar(&plan.Source, "source", "", "full reviewed source commit containing the catalog")
+	plan := umbrellaPreparation{StackVersions: map[string]string{}}
+	flags.StringVar(&plan.Source, "source", "", "full reviewed source commit (also supplies the catalog in legacy mode)")
 	flags.StringVar(&plan.Version, "version", "", "exact umbrella version X.Y.Z")
 	flags.StringVar(&plan.Change, "change", "", "initial, major, minor, or patch")
 	flags.StringVar(&plan.Qualification, "qualification", "", "public review URL approving the complete combination; omit for a candidate")
 	flags.StringVar(&plan.Toolchain.Helm, "helm-version", "", "exact supported Helm 3 version")
 	flags.StringVar(&plan.Toolchain.Helmfile, "helmfile-version", "", "exact supported Helmfile 1.1 version")
+	for _, name := range releaseSetStackNames {
+		key, _ := stackKeyForPlane(name)
+		flags.Func(key+"-version", "exact released stack version X.Y.Z; supply all three to select release-local pins", func(version string) error {
+			if _, exists := plan.StackVersions[name]; exists {
+				return fmt.Errorf("%s version was specified more than once", key)
+			}
+			plan.StackVersions[name] = version
+			return nil
+		})
+	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -155,17 +166,26 @@ func prepareUmbrellaManifest(root, inventoryDir, out string, previous *umbrellaM
 	if !fullLowercaseCommitSHARe.MatchString(plan.Source) {
 		return fmt.Errorf("umbrella prepare requires a full reviewed --source commit SHA")
 	}
-	catalog, err := catalogAtCommit(root, plan.Source)
-	if err != nil {
-		return err
-	}
-	if err := validateEditionSources(root, catalog); err != nil {
+	var catalog *Catalog
+	if len(plan.StackVersions) == 0 {
+		var err error
+		catalog, err = catalogAtCommit(root, plan.Source)
+		if err != nil {
+			return err
+		}
+		if err := validateEditionSources(root, catalog); err != nil {
+			return err
+		}
+	} else if err := validateUmbrellaStackSelections(plan.StackVersions); err != nil {
 		return err
 	}
 	manifest := &umbrellaManifest{
 		SchemaVersion: 1, Version: plan.Version, Change: plan.Change,
 		Status: ReleaseSetDevelopment, Qualification: plan.Qualification,
 		SourceCommit: plan.Source, Toolchain: plan.Toolchain, Stacks: map[string]umbrellaStack{},
+	}
+	if catalog == nil {
+		manifest.SchemaVersion = 2
 	}
 	if previous != nil {
 		manifest.PreviousVersion = previous.Version
@@ -174,23 +194,40 @@ func prepareUmbrellaManifest(root, inventoryDir, out string, previous *umbrellaM
 		manifest.Status = ReleaseSetQualified
 	}
 	for _, name := range releaseSetStackNames {
-		metadata, _ := catalog.ReleaseSet.Stacks.byName(name)
 		key, _ := stackKeyForPlane(name)
 		spec, _ := stackInventorySpecByKey(key)
-		if metadata.InventoryAsset != spec.AssetName {
-			return fmt.Errorf("reviewed %s catalog must select inventory %s", name, spec.AssetName)
+		stack := umbrellaStack{InventoryAsset: spec.AssetName}
+		if catalog != nil {
+			metadata, _ := catalog.ReleaseSet.Stacks.byName(name)
+			if metadata.InventoryAsset != spec.AssetName {
+				return fmt.Errorf("reviewed %s catalog must select inventory %s", name, spec.AssetName)
+			}
+			stack.Version, stack.SourceTag, stack.SourceCommit = metadata.Version, metadata.SourceTag, metadata.SourceCommit
+			for _, compatibility := range catalog.Compatibility {
+				if compatibility.Stack == name && compatibility.Version == metadata.Version {
+					stack.CompatibleWith = compatibility.CompatibleWith
+				}
+			}
+		} else {
+			stack.Version = plan.StackVersions[name]
+			stack.SourceTag = spec.TagPrefix + stack.Version
+			commit, err := gitOutput(root, "rev-parse", "--verify", "refs/tags/"+stack.SourceTag+"^{commit}")
+			if err != nil {
+				return fmt.Errorf("resolve released %s tag: %w", name, err)
+			}
+			stack.SourceCommit = trimOutput(commit)
+			stack.CompatibleWith = map[string]string{}
+			for _, peer := range releaseSetStackNames {
+				if peer != name {
+					stack.CompatibleWith[peer] = plan.StackVersions[peer]
+				}
+			}
 		}
 		data, err := os.ReadFile(filepath.Join(inventoryDir, spec.AssetName))
 		if err != nil {
 			return err
 		}
-		stack := umbrellaStack{Version: metadata.Version, SourceTag: metadata.SourceTag,
-			SourceCommit: metadata.SourceCommit, InventoryAsset: spec.AssetName, InventorySHA256: umbrellaDigest(data)}
-		for _, compatibility := range catalog.Compatibility {
-			if compatibility.Stack == name && compatibility.Version == metadata.Version {
-				stack.CompatibleWith = compatibility.CompatibleWith
-			}
-		}
+		stack.InventorySHA256 = umbrellaDigest(data)
 		manifest.Stacks[name] = stack
 	}
 	data, err := marshalUmbrellaManifest(manifest)
@@ -204,6 +241,18 @@ func prepareUmbrellaManifest(root, inventoryDir, out string, previous *umbrellaM
 		return err
 	}
 	fmt.Printf("Prepared umbrella %s (%s) at %s. Tag: %s. No docs configuration or release was changed.\n", manifest.Version, manifest.Status, out, umbrellaTag(manifest.Version))
+	return nil
+}
+
+func validateUmbrellaStackSelections(versions map[string]string) error {
+	if len(versions) != len(releaseSetStackNames) {
+		return fmt.Errorf("release-local preparation requires --self-managed-version, --compute-plane-version, and --observability-version together")
+	}
+	for _, name := range releaseSetStackNames {
+		if !validReleaseLocalVersion(versions[name]) {
+			return fmt.Errorf("release-local %s version must be an exact stable X.Y.Z", name)
+		}
+	}
 	return nil
 }
 

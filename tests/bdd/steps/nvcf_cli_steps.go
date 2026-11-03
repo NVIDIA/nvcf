@@ -47,6 +47,7 @@ func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I successfully create function "([^"]*)" from image "([^"]*)" with CLI options:$`, sc.iSuccessfullyCreateFunction)
 	ctx.Step(`^I successfully create function "([^"]*)" from Helm chart "([^"]*)" with CLI options:$`, sc.iSuccessfullyCreateHelmFunction)
 	ctx.Step(`^I successfully deploy the function selected by NVCF CLI with options:$`, sc.iSuccessfullyDeploySelectedFunction)
+	ctx.Step(`^I successfully generate an Event Ledger API key with CLI options:$`, sc.iSuccessfullyGenerateEventLedgerAPIKey)
 	ctx.Step(`^I successfully generate a task API key with CLI options:$`, sc.iSuccessfullyGenerateTaskAPIKey)
 	ctx.Step(`^I successfully create task "([^"]*)" from image "([^"]*)" with CLI options:$`, sc.iSuccessfullyCreateTask)
 	ctx.Step(`^the task selected by NVCF CLI should reach status "([^"]*)" within "([^"]*)" seconds, polling every "([^"]*)" seconds$`, sc.selectedTaskShouldReachStatus)
@@ -95,6 +96,10 @@ func (sc *ScenarioContext) iSuccessfullyDeploySelectedFunction(ctx context.Conte
 
 func (sc *ScenarioContext) iSuccessfullyGenerateFunctionAPIKey(ctx context.Context, table *godog.Table) error {
 	return sc.generateAPIKey(ctx, "function", table)
+}
+
+func (sc *ScenarioContext) iSuccessfullyGenerateEventLedgerAPIKey(ctx context.Context, table *godog.Table) error {
+	return sc.generateAPIKey(ctx, "event-ledger", table)
 }
 
 func (sc *ScenarioContext) iSuccessfullyGenerateTaskAPIKey(ctx context.Context, table *godog.Table) error {
@@ -295,9 +300,13 @@ func (sc *ScenarioContext) iSuccessfullyInvokeModel(
 // isNoEligibleCandidates reports whether the router has not registered the
 // model yet. Chat completions return the router message; passthrough
 // endpoints return the router code.
+// isNoEligibleCandidates reports a function that is deployed but not yet
+// routable: the gateway has no route for it yet (404), or its backend is
+// connected but still calibrating at startup (503 Service Unavailable).
 func isNoEligibleCandidates(output string) bool {
 	return strings.Contains(output, "no_eligible_candidates") ||
-		strings.Contains(output, "no eligible candidates")
+		strings.Contains(output, "no eligible candidates") ||
+		strings.Contains(output, `API error 503: {"message":"Service Unavailable"}`)
 }
 
 func (sc *ScenarioContext) iSuccessfullyInvokeFunctionThroughVanityGateway(

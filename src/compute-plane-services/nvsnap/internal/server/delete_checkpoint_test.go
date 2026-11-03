@@ -39,43 +39,6 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db"
 )
 
-// fakeBlobstore records DELETE /v1/capture/{hash} calls + answers
-// 204 unless one of the hashes is in the failHash set.
-type fakeBlobstore struct {
-	mu        sync.Mutex
-	deletedOK []string
-	failHash  map[string]int
-}
-
-func newFakeBlobstore() (*fakeBlobstore, *httptest.Server) {
-	fb := &fakeBlobstore{failHash: map[string]int{}}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		const prefix = "/v1/capture/"
-		if r.Method != http.MethodDelete || !strings.HasPrefix(r.URL.Path, prefix) {
-			http.NotFound(w, r)
-			return
-		}
-		hash := strings.TrimPrefix(r.URL.Path, prefix)
-		fb.mu.Lock()
-		defer fb.mu.Unlock()
-		if code, fail := fb.failHash[hash]; fail {
-			w.WriteHeader(code)
-			return
-		}
-		fb.deletedOK = append(fb.deletedOK, hash)
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	return fb, srv
-}
-
-func (fb *fakeBlobstore) deletes() []string {
-	fb.mu.Lock()
-	defer fb.mu.Unlock()
-	out := make([]string, len(fb.deletedOK))
-	copy(out, fb.deletedOK)
-	return out
-}
-
 // fakeAgent is a per-test stand-in for the nvsnap-agent endpoint —
 // answers DELETE /v1/checkpoints/{id}, records the call.
 type fakeAgent struct {
@@ -101,85 +64,23 @@ func (fa *fakeAgent) handler() http.HandlerFunc {
 	}
 }
 
-func TestCascadeDelete_BlobstoreCalledWithAgentID(t *testing.T) {
-	s := newTestServerWithCatalog(t)
-	fb, fbSrv := newFakeBlobstore()
-	defer fbSrv.Close()
-	s.config.BlobstoreURL = fbSrv.URL
-
-	// Seed a row with the agent-id form in CheckpointPath. The
-	// catalog row's id (server-format) differs from the path basename
-	// (agent-format), and the blobstore is keyed by the latter.
-	if err := s.catalog.UpsertCheckpoint(&db.Checkpoint{
-		ID:             "0-sr-abc-1780000000",
-		CheckpointID:   "0-sr-abc-1780000000",
-		Namespace:      "nvcf-backend",
-		PodName:        "0-sr-abc",
-		NodeName:       "node-1",
-		Status:         "Completed",
-		CheckpointPath: "/var/lib/nvsnap/checkpoints/0-sr-abc__nvcf-backend__20260531-220923",
-		CreatedAt:      time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("seed: %v", err)
+// failingPeerTier registers a peer agent for checkpointID that answers
+// every DELETE with status, so a cascade has one tier that fails.
+func failingPeerTier(t *testing.T, s *Server, checkpointID string, status int) {
+	t.Helper()
+	fa := newFakeAgent(status)
+	srv := httptest.NewServer(fa.handler())
+	t.Cleanup(srv.Close)
+	host, port, _ := splitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	s.config.AgentPort = mustAtoi(port)
+	if _, err := s.kubeClient.CoreV1().Nodes().Create(context.Background(),
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "peer-fail-" + checkpointID},
+			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: host}}}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create node: %v", err)
 	}
-
-	res := s.cascadeDeleteCheckpoint(context.Background(), "0-sr-abc-1780000000",
-		"0-sr-abc__nvcf-backend__20260531-220923", &db.Checkpoint{})
-
-	if res.Blobstores == 0 {
-		t.Errorf("Blobstore=false; result=%+v", res)
-	}
-	gotHashes := fb.deletes()
-	if len(gotHashes) != 1 || gotHashes[0] != "0-sr-abc__nvcf-backend__20260531-220923" {
-		t.Errorf("blobstore got DELETE for: %v; want agent-id form", gotHashes)
-	}
-}
-
-func TestCascadeDelete_BlobstoreSkippedWhenURLEmpty(t *testing.T) {
-	s := newTestServerWithCatalog(t)
-	s.config.BlobstoreURL = "" // disabled
-
-	res := s.cascadeDeleteCheckpoint(context.Background(), "ck-1", "agent-id", nil)
-	if res.Blobstores > 0 {
-		t.Errorf("Blobstore should be skipped when URL empty")
-	}
-}
-
-func TestCascadeDelete_Blobstore404IsNotError(t *testing.T) {
-	// 404 from the blobstore means "manifest already gone" — should
-	// count as a successful cleanup attempt (nothing to delete), not
-	// an audit-row error.
-	s := newTestServerWithCatalog(t)
-	fb, fbSrv := newFakeBlobstore()
-	fb.failHash["already-gone"] = http.StatusNotFound
-	defer fbSrv.Close()
-	s.config.BlobstoreURL = fbSrv.URL
-
-	res := s.cascadeDeleteCheckpoint(context.Background(), "ck-1", "already-gone", nil)
-	if res.Blobstores > 0 {
-		t.Errorf("Blobstore should be false when 404 (nothing actually deleted)")
-	}
-	if len(res.Errors) != 0 {
-		t.Errorf("404 should not surface as error; got %v", res.Errors)
-	}
-}
-
-func TestCascadeDelete_Blobstore5xxIsError(t *testing.T) {
-	s := newTestServerWithCatalog(t)
-	fb, fbSrv := newFakeBlobstore()
-	fb.failHash["server-broken"] = http.StatusInternalServerError
-	defer fbSrv.Close()
-	s.config.BlobstoreURL = fbSrv.URL
-
-	res := s.cascadeDeleteCheckpoint(context.Background(), "ck-1", "server-broken", nil)
-	if len(res.Errors) != 1 {
-		t.Errorf("5xx should yield exactly 1 error; got %v", res.Errors)
-	}
-	if !strings.Contains(res.Errors[0], "500") {
-		t.Errorf("error should mention status code 500; got %q", res.Errors[0])
-	}
-	if res.Status() != "partial" {
-		t.Errorf("Status() = %q, want partial when errors present", res.Status())
+	if err := s.catalog.AddPeer(checkpointID, "peer-fail-"+checkpointID, "http://peer-fail:8081"); err != nil {
+		t.Fatalf("peer-add: %v", err)
 	}
 }
 
@@ -240,10 +141,9 @@ func TestCascadeDelete_AuditSummaryListsAttemptedTiers(t *testing.T) {
 	s := newTestServerWithCatalog(t)
 	res := cascadeDeleteResult{
 		OriginAgents: 3,
-		Blobstores:   1,
 	}
 	got := res.Summary()
-	for _, want := range []string{"3 agent path(s)", "1 blobstore capture(s)"} {
+	for _, want := range []string{"3 agent path(s)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Summary missing %q; got %q", want, got)
 		}
@@ -269,8 +169,6 @@ func TestCascadeDelete_AuditSummaryListsAttemptedTiers(t *testing.T) {
 // written.
 func TestDeleteCheckpoint_HTTP_404WhenNothingFound(t *testing.T) {
 	s := newTestServerWithCatalog(t)
-	// No blobstore configured → no blobstore attempt
-	s.config.BlobstoreURL = ""
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/checkpoints/never-existed", http.NoBody)
 	rr := httptest.NewRecorder()
@@ -294,7 +192,6 @@ func TestDeleteCheckpoint_HTTP_404WhenNothingFound(t *testing.T) {
 // physical tier already evicted it.)
 func TestDeleteCheckpoint_HTTP_204WhenCatalogRowExists(t *testing.T) {
 	s := newTestServerWithCatalog(t)
-	s.config.BlobstoreURL = ""
 
 	if err := s.catalog.UpsertCheckpoint(&db.Checkpoint{
 		ID:           "ck-orphan",
@@ -328,10 +225,7 @@ func TestDeleteCheckpoint_HTTP_204WhenCatalogRowExists(t *testing.T) {
 // what distinguishes them.
 func TestDeleteCheckpoint_HTTP_500WhenEveryTierFails(t *testing.T) {
 	s := newTestServerWithCatalog(t)
-	fb, fbSrv := newFakeBlobstore()
-	fb.failHash["agent-dead"] = http.StatusInternalServerError
-	defer fbSrv.Close()
-	s.config.BlobstoreURL = fbSrv.URL
+	failingPeerTier(t, s, "ck-allfail", http.StatusInternalServerError)
 
 	if err := s.catalog.UpsertCheckpoint(&db.Checkpoint{
 		ID:             "ck-allfail",
@@ -359,10 +253,7 @@ func TestDeleteCheckpoint_HTTP_500WhenEveryTierFails(t *testing.T) {
 // row it deliberately kept was still there.
 func TestDeleteCheckpointByHash_HTTP_500OnPartialCascade(t *testing.T) {
 	s := newTestServerWithCatalog(t)
-	fb, fbSrv := newFakeBlobstore()
-	fb.failHash["agent-dead"] = http.StatusInternalServerError
-	defer fbSrv.Close()
-	s.config.BlobstoreURL = fbSrv.URL
+	failingPeerTier(t, s, "ck-hash", http.StatusInternalServerError)
 
 	const hash = "bbb222bbb222bbb222"
 	if err := s.catalog.UpsertCheckpoint(&db.Checkpoint{
@@ -394,7 +285,6 @@ func TestDeleteCheckpointByHash_HTTP_500OnPartialCascade(t *testing.T) {
 // succeeded still answered 204 with the row in place.
 func TestCascadeDelete_CatalogDeleteErrorSetsRetained(t *testing.T) {
 	s := newTestServerWithCatalog(t)
-	s.config.BlobstoreURL = ""
 
 	// An empty Hash is what isolates this: every other catalog touch in the
 	// cascade (sibling lookup, L2 PVCs, snapshots, leases, capture CM) is
@@ -456,7 +346,6 @@ func mustAtoi(s string) int {
 // 2026-06-02: 6 GPUCheckpoint CRDs survived 6 successful DELETE 204s.
 func TestDeleteCheckpoint_HTTP_AlsoDeletesGPUCheckpointCRD(t *testing.T) {
 	s := newTestServerWithCatalog(t)
-	s.config.BlobstoreURL = ""
 
 	const ns = "nvcf-backend"
 	const id = "0-sr-test-1780000000"
@@ -514,7 +403,6 @@ func TestDeleteCheckpoint_HTTP_AlsoDeletesGPUCheckpointCRD(t *testing.T) {
 // "blobstore 404 isn't an error" pattern.
 func TestCascadeDelete_CRDNotFoundIsNotError(t *testing.T) {
 	s := newTestServerWithCatalog(t)
-	s.config.BlobstoreURL = ""
 
 	const id = "ck-orphan-crd"
 	row := &db.Checkpoint{
@@ -540,7 +428,6 @@ func TestCascadeDelete_CRDNotFoundIsNotError(t *testing.T) {
 // errored.
 func TestCascadeDelete_NoCRDDeleteForRowsWithoutNamespace(t *testing.T) {
 	s := newTestServerWithCatalog(t)
-	s.config.BlobstoreURL = ""
 
 	const id = "a4f7818605da321e__20260602-005042"
 	row := &db.Checkpoint{
@@ -568,10 +455,7 @@ func TestCascadeDelete_NoCRDDeleteForRowsWithoutNamespace(t *testing.T) {
 // The row must be retained on any tier failure so the delete stays retryable.
 func TestCascadeDelete_RetainsCatalogRowWhenATierFails(t *testing.T) {
 	s := newTestServerWithCatalog(t)
-	fb, fbSrv := newFakeBlobstore()
-	fb.failHash["server-broken"] = http.StatusInternalServerError
-	defer fbSrv.Close()
-	s.config.BlobstoreURL = fbSrv.URL
+	failingPeerTier(t, s, "ck-1", http.StatusInternalServerError)
 
 	row := &db.Checkpoint{ID: "ck-1", Hash: "abc123abc123abc123", CheckpointPath: "/var/lib/nvsnap/checkpoints/server-broken"}
 	if err := s.catalog.UpsertCheckpoint(row); err != nil {
@@ -581,7 +465,7 @@ func TestCascadeDelete_RetainsCatalogRowWhenATierFails(t *testing.T) {
 	res := s.cascadeDeleteCheckpoint(context.Background(), "ck-1", "server-broken", row)
 
 	if len(res.Errors) == 0 {
-		t.Fatal("expected a tier error from the failing blobstore")
+		t.Fatal("expected a tier error from the failing peer agent")
 	}
 	if res.CatalogRows != 0 {
 		t.Errorf("CatalogRows = %d, want 0; the row must survive a failed tier delete", res.CatalogRows)
@@ -598,9 +482,6 @@ func TestCascadeDelete_RetainsCatalogRowWhenATierFails(t *testing.T) {
 // The clean path must still delete the row, or nothing is ever reclaimed.
 func TestCascadeDelete_DeletesCatalogRowWhenAllTiersSucceed(t *testing.T) {
 	s := newTestServerWithCatalog(t)
-	_, fbSrv := newFakeBlobstore()
-	defer fbSrv.Close()
-	s.config.BlobstoreURL = fbSrv.URL
 
 	row := &db.Checkpoint{ID: "ck-ok", Hash: "def456def456def456", CheckpointPath: "/var/lib/nvsnap/checkpoints/agent-ok"}
 	if err := s.catalog.UpsertCheckpoint(row); err != nil {

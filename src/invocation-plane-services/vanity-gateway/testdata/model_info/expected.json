@@ -1,0 +1,38 @@
+{
+  "example/plain": {},
+  "example/yaml-key": {"custom_flag": true},
+  "example/yaml-number": {"custom_flag": false},
+  "example/shared": {
+    "winner": "second",
+    "nullable": null,
+    "second_only": true,
+    "custom_flag": false,
+    "context_window": 1048576,
+    "max_output_tokens": 32768,
+    "nested": {"items": [true, false, null, "text", 42], "detail": {"enabled": true}},
+    "capabilities": ["text", "tools"],
+    "displayLabel": "Example model",
+    "on": "yes",
+    "legacy_flag": true,
+    "large_integer": 18446744073709551615,
+    "precise_decimal": 0.12345678901234567890123456789,
+    "scalar_forms": {
+      "mixed_case_text": "yEs", "exponent_text": "1e3", "octal_text": "0o42",
+      "invalid_octal_text": "08", "signed_fraction_text": "-.5",
+      "base60_integer": 80, "base60_float": 80.5, "large_exponent_text": "1e400",
+      "explicit_bool": true, "explicit_false": false, "explicit_exponent": 1000, "explicit_base60": 80,
+      "metadata_keys": {"1e3": "exponent", "0o42": "octal", "yEs": "mixed"}
+    },
+    "middle_only": true,
+    "completion_only": true,
+    "section_winner": "completion",
+    "embedding_only": true,
+    "response_only": true,
+    "image_winner": "response",
+    "generation_only": true,
+    "final_winner": "generation",
+    "edit_only": true,
+    "variation_only": true,
+    "message_only": true
+  }
+}

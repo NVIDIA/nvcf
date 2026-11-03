@@ -23,11 +23,13 @@ Run `make update-config-template` after changing templates under
 `internal/otelconfig/templates/`. Run `make update-examples` after changing
 template source, generator logic, or supported backend examples.
 
-CI subproject id: `byoo-otel-collector`. The umbrella CI lane is declared in
-`tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
-present in this public snapshot; current custom checks include generated example
-drift, generated config drift, and otelconfig validation. Do not add a subtree
-`.gitlab-ci.yml`.
+Run `./scripts/update-go-work-sum.sh` after changing `go.mod` here or in
+`otelcol/`, and commit `go.work.sum`. The Bazel otelcol genrule declares it as
+an input, so a clean checkout must have it. CI fails when it is stale.
+
+Follow the [release workflow](../../../docs/dev/github-release-process.md) for source versions and
+producer handoffs. Keep generated example drift, generated config drift and otelconfig checks.
+Do not add a subtree `.gitlab-ci.yml`.
 
 ## Collector Version Updates
 
@@ -44,7 +46,8 @@ The script updates version references in `otel-collector-build.yaml`,
 You can pass versions with or without the `v` prefix (for example, `v0.160.0`
 or `0.160.0`). Pass the optional `v1.x.y` provider version when the stable
 collector modules need a matching release. After running, regenerate `otelcol/`
-if needed, review `git diff`, and run the relevant build or validation command.
+if needed, run `./scripts/update-go-work-sum.sh`, review `git diff`, and run
+the relevant build or validation command.
 
 GitHub semantic-release calculates the NVIDIA wrapper SemVer from Conventional
 Commits. The tag records both sources as

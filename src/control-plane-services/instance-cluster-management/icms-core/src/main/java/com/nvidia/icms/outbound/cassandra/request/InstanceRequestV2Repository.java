@@ -171,23 +171,6 @@ public class InstanceRequestV2Repository {
     }
 
     @Observed
-    public void updateCreationBucket(
-            String requestId,
-            Instant creationBucket,
-            long writeTimestamp) {
-        try {
-            instanceRequestV2Repo.updateCreationBucket(
-                    requestId, creationBucket, writeTimestamp);
-        } catch (Exception exception) {
-            log.error("Failed to update creation bucket for request {}, error: {}",
-                    requestId, exception.getMessage(), exception);
-            throw new IcmsInternalServerException(
-                    String.format("%s, error: %s", REQUEST_UPDATE_FAILED,
-                            exception.getMessage()), exception);
-        }
-    }
-
-    @Observed
     public Optional<InstanceRequestV2Entity> findRequestById(@Nullable String requestId) {
 
         try {
@@ -316,14 +299,26 @@ public class InstanceRequestV2Repository {
 
             Set<String> allRequestIds = new HashSet<>();
 
+            boolean creationBucketReadsEnabled =
+                    icmsConfigurationProperties.isCreationBucketReadsEnabled();
 
             while (currentDate.isBefore(periodDateEnd)) {
-                List<InstanceRequestV2ByDayEntity> requestsByDay = instanceRequestV2ByDayRepo.findAllByKeyTruncatedTsByDay(currentDate, Limit.unlimited());
-                requestsByDay.forEach(r -> {
-                    if (!r.isMarkedAsDeleted()) {
-                        allRequestIds.add(r.getKey().getRequestId());
-                    }
-                });
+                if (creationBucketReadsEnabled) {
+                    // Deleted requests are removed from the requests table,
+                    // so there are no tombstones to filter out.
+                    instanceRequestV2Repo.findRequestIdsByCreationBucket(currentDate)
+                            .forEach(row -> allRequestIds.add(
+                                    row.getString(InstanceRequestV2Entity.COLUMN_REQUEST_ID)));
+                } else {
+                    List<InstanceRequestV2ByDayEntity> requestsByDay =
+                            instanceRequestV2ByDayRepo.findAllByKeyTruncatedTsByDay(
+                                    currentDate, Limit.unlimited());
+                    requestsByDay.forEach(r -> {
+                        if (!r.isMarkedAsDeleted()) {
+                            allRequestIds.add(r.getKey().getRequestId());
+                        }
+                    });
+                }
                 currentDate = currentDate.plus(1, ChronoUnit.DAYS);
             }
 

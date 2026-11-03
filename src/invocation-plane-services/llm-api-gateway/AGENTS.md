@@ -25,10 +25,8 @@ Bazel is the CI build path:
 bazel test //... --flaky_test_attempts=3
 ```
 
-CI subproject id: `llm-api-gateway`. Release wiring publishes both the main
-gateway image and the rate-limit sync worker image through
-`tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
-present in this public snapshot.
+Follow the [release workflow](../../../docs/dev/github-release-process.md) for source versions and
+producer handoffs. Account for both the main gateway and rate-limit sync worker images.
 
 ## LLM routing BDD
 

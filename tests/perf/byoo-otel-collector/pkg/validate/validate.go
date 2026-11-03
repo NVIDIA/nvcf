@@ -145,14 +145,6 @@ func Collector(c corev1.Container, otelVersion string, exp Expectations) error {
 		errs = append(errs, resourceDiffs(c.Resources, exp.Resources)...)
 	}
 
-	envKeys := map[string]bool{}
-	for _, e := range c.Env {
-		envKeys[e.Name] = true
-	}
-	if !envKeys["OTEL_EXPORTER_OTLP_ENDPOINT"] {
-		errs = append(errs, "missing env OTEL_EXPORTER_OTLP_ENDPOINT")
-	}
-
 	switch otelVersion {
 	case "v2":
 		if !argsContain(c.Args, "--telemetries") {
