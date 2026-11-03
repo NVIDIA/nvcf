@@ -14,7 +14,7 @@ files, excluded from OSS by the `**/*nvidia-internal*/**` rule).
 
 Forward plan: when GitHub Actions builds publish images to ghcr.io,
 the public `<svc>/BUILD.bazel` can call this same macro with a
-`{"ghcr": "ghcr.io/nvidia/nvcf"}` destinations dict. Each environment
+`{"ghcr": "ghcr.io/dsx-ai-factory/nvcf"}` destinations dict. Each environment
 runs only the targets it has wired -- GitLab CI runs the private
 `//nvidia-internal:image_push_<nvcr-key>` targets, GHA runs the
 public `//:image_push_ghcr` target.

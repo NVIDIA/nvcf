@@ -531,7 +531,7 @@ build).
 
 Every workflow that needs the Bazel toolchain runs in the `bazel-ci` job
 container, sourced from the repository variable `BAZEL_CI_IMAGE` (currently
-`ghcr.io/nvidia/nvcf/bazel-ci`). Each workflow carries the current pin as a
+`ghcr.io/dsx-ai-factory/nvcf/bazel-ci`). Each workflow carries the current pin as a
 `||` fallback so CI still runs when the variable is unavailable, for example on
 a fork.
 
