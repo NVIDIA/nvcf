@@ -638,8 +638,6 @@ stateMetrics:
     enabled: false
 
 rateLimiter:
-  image:
-    tag: "1.17.5"
   enabled: true
   replicaCount: 1
   # PDB: enable when replicaCount > 1.

@@ -162,11 +162,7 @@ global:
 EOF
 
 render_values "$work_dir/default-values.yaml"
-for component in rateLimiter; do
-  test "$(yq -r ".$component.image.tag" "$work_dir/default-values.yaml")" = \
-    "$(yq -r ".$component.image.tag" "$stack_dir/environments/base.yaml")" || fail "$component image selection was lost"
-done
-for component in ess notary reval; do
+for component in ess notary reval rateLimiter; do
   assert_yaml_path_absent "$work_dir/default-values.yaml" ".$component.image.tag" "$component chart default"
 done
 assert_yaml_path_absent "$work_dir/default-values.yaml" .cassandra.migrations.image.tag "Cassandra migration chart default"
@@ -214,6 +210,9 @@ global:
   image:
     registry: nvcr.io
     repository: test/nvcf
+rateLimiter:
+  image:
+    tag: "9.8.7-rateLimiter"
 reval:
   image:
     tag: "9.8.7-reval"
@@ -256,7 +255,7 @@ certManager:
 EOF
 
 render_values "$work_dir/override-values.yaml"
-for component in ess notary reval; do
+for component in ess notary reval rateLimiter; do
   test "$(yq -r ".$component.image.tag" "$work_dir/override-values.yaml")" = "9.8.7-$component" || fail "$component image override was lost"
 done
 test "$(yq -r '.cassandra.migrations.image.tag' "$work_dir/override-values.yaml")" = "9.8.7-migrations" || fail "Cassandra migration image override was lost"
