@@ -28,7 +28,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/internal/must",
-        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
         "@com_github_olric_data_olric//:olric",
         "@com_github_olric_data_olric//stats",
         "@com_github_prometheus_client_golang//prometheus",

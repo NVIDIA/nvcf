@@ -12,7 +12,7 @@ go_library(
         "//src/compute-plane-services/worker-task/internal/metrics",
         "//src/compute-plane-services/worker-task/internal/secrets",
         "//src/compute-plane-services/worker-task/pkg/ngc",
-        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_worker//utils",
         "@com_github_samber_lo//:lo",
         "@com_github_valyala_bytebufferpool//:bytebufferpool",
         "@org_golang_x_sync//errgroup",
@@ -33,7 +33,7 @@ go_test(
     deps = [
         "//src/compute-plane-services/worker-task/internal/secrets",
         "//src/compute-plane-services/worker-task/pkg/ngc",
-        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_worker//utils",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],

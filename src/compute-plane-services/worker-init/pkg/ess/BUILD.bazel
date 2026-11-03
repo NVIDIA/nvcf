@@ -26,7 +26,7 @@ go_library(
         "@com_github_hashicorp_hcl_v2//gohcl",
         "@com_github_hashicorp_hcl_v2//hclparse",
         "@com_github_hashicorp_hcl_v2//hclwrite",
-        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_worker//utils",
         "@org_uber_go_zap//:zap",
     ],
 )

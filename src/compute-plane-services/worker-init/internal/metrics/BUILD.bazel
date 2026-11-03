@@ -21,7 +21,7 @@ go_library(
     importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/internal/metrics",
     visibility = ["//src/compute-plane-services/worker-init:__subpackages__"],
     deps = [
-        "@com_github_nvidia_nvcf_src_libraries_go_worker//metrics",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_worker//metrics",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/promauto",
     ],

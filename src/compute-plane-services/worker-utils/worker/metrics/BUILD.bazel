@@ -7,7 +7,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/worker-utils/worker/progress",
-        "@com_github_nvidia_nvcf_src_libraries_go_worker//metrics",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_worker//metrics",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/promauto",
     ],

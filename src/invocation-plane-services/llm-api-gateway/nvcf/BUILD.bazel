@@ -28,7 +28,7 @@ go_library(
         "//src/invocation-plane-services/llm-api-gateway/nvcf/pb",
         "//src/invocation-plane-services/llm-api-gateway/telemetry",
         "@com_github_maypok86_otter_v2//:otter",
-        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/auth",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_lib//pkg/nvkit/auth",
         "@io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc//:otelgrpc",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials",

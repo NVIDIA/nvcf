@@ -10,7 +10,7 @@ go_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "//src/control-plane-services/event-ledger/internal/observability/common",
-        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
         "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
         "@org_uber_go_zap//:zap",
     ],
