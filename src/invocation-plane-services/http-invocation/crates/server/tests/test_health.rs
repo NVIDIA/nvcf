@@ -19,7 +19,7 @@ use axum::body::{to_bytes, Body};
 use axum::response::Response;
 use axum::Router;
 use http::{header, Method, StatusCode};
-use mocks::fixtures;
+use mocks::{fixtures, nvcf_api_mock::HEALTH_CACHE_TTL};
 use nvcf_invocation_service::app::app;
 use std::time::Duration;
 use tower::{Service, ServiceExt};
@@ -76,7 +76,7 @@ async fn test_info_route() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_health_does_not_depend_on_nvcf_api() -> anyhow::Result<()> {
+async fn test_health_cache() -> anyhow::Result<()> {
     let (_localstack, _nats, mock_nvcf_api, config) = fixtures().await;
 
     let mut app = app(config, None).await?;
@@ -84,16 +84,41 @@ async fn test_health_does_not_depend_on_nvcf_api() -> anyhow::Result<()> {
 
     mock_nvcf_api.set_unhealthy().await;
     let response = call_health(app).await?;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    mock_nvcf_api.set_healthy().await;
+    let response = call_health(app).await?;
     assert_eq!(response.status(), StatusCode::OK);
+    mock_nvcf_api.set_unhealthy().await;
+    // Response from cache still says healthy
+    let response = call_health(app).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    // Checking again after nvcf_api health cache expires, should return unhealthy
+    tokio::time::sleep(Duration::from_secs(HEALTH_CACHE_TTL.into())).await;
+    let response = call_health(app).await?;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     Ok(())
 }
 
+// Liveness probes /info, so it must keep answering after /health has observed
+// each dependency fail.
 #[tokio::test]
-async fn test_health_fails_when_nats_disconnects() -> anyhow::Result<()> {
-    let (_localstack, nats, _mock_nvcf_api, config) = fixtures().await;
+async fn test_info_survives_dependency_failures() -> anyhow::Result<()> {
+    let (_localstack, nats, mock_nvcf_api, config) = fixtures().await;
 
     let mut app = app(config, None).await?;
     let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
+    assert_eq!(call_health(app).await?.status(), StatusCode::OK);
+    assert_eq!(call(app, "/info").await?.status(), StatusCode::OK);
+
+    mock_nvcf_api.set_unhealthy().await;
+    tokio::time::sleep(Duration::from_secs(HEALTH_CACHE_TTL.into())).await;
+    assert_eq!(
+        call_health(app).await?.status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(call(app, "/info").await?.status(), StatusCode::OK);
+
+    mock_nvcf_api.set_healthy().await;
     assert_eq!(call_health(app).await?.status(), StatusCode::OK);
 
     nats.stop().await?;
@@ -109,13 +134,18 @@ async fn test_health_fails_when_nats_disconnects() -> anyhow::Result<()> {
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+    assert_eq!(call(app, "/info").await?.status(), StatusCode::OK);
     Ok(())
 }
 
 async fn call_health(app: &mut Router) -> anyhow::Result<Response> {
+    call(app, "/health").await
+}
+
+async fn call(app: &mut Router, uri: &str) -> anyhow::Result<Response> {
     let request = axum::http::Request::builder()
         .method(Method::GET)
-        .uri("/health")
+        .uri(uri)
         .body(Body::empty())?;
     let response = app.call(request).await?;
     Ok(response)

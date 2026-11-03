@@ -26,8 +26,6 @@ use rstest as _;
 use rustls as _;
 #[cfg(test)]
 use testcontainers_modules as _;
-#[cfg(test)]
-use tonic_health as _;
 // Silence unused crate error when mimalloc is enabled but jemalloc takes precedence
 #[cfg(all(feature = "mimalloc", feature = "jemalloc"))]
 use mimalloc as _;
