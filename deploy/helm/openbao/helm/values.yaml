@@ -20,6 +20,12 @@ openbao:
   # secrets, volumes, and bootstrap scripts.
   fullnameOverride: openbao-server
 
+  # legacy keeps published image compatibility. Deploy bridge images in bridge
+  # mode with hooks enabled, rotate every member, then enable versioned mount
+  # creation. Versioned images fail preflight in legacy mode.
+  jwtPluginLifecycle:
+    mode: legacy
+
   hooks:
     initializeCluster:
       podAnnotations: {}
@@ -41,22 +47,15 @@ openbao:
         limits:
           cpu: 250m
           memory: 256Mi
-    refreshJWTPluginCatalog:
-      podAnnotations: {}
-      schedulingGates: []
-      resources:
-        requests:
-          cpu: 50m
-          memory: 64Mi
-        limits:
-          cpu: 250m
-          memory: 256Mi
 
   migrations:
+    # Empty uses the image default. Set "1.36" for Kubernetes 1.35 servers.
+    # Requires an image with NVCF_KUBECTL_MINOR support ("1.36" or "1.37").
+    kubectlMinor: ""
     image:
       registry: ""
       repository: ""
-      tag: 0.23.0
+      tag: 0.23.1
       pullPolicy: IfNotPresent
     issuerDiscovery:
       enabled: false
@@ -84,7 +83,7 @@ openbao:
     image:
       registry: ""
       repository: ""
-      tag: 2.6.3-nv-1.3.6
+      tag: 2.6.3-nv-1.3.7
       pullPolicy: IfNotPresent
 
     podManagementPolicy: Parallel
@@ -289,5 +288,5 @@ openbao:
     agentImage:
       registry: ""
       repository: ""
-      tag: 2.6.3-nv-1.3.6
+      tag: 2.6.3-nv-1.3.7
       pullPolicy: IfNotPresent

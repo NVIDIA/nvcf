@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	echo "github.com/labstack/echo/v4"
 	"go.opentelemetry.io/otel/attribute"
 
@@ -53,6 +54,8 @@ const (
 	headerResponsesModel        = "X-Model"
 	headerResponsesAffinity     = "X-Cache-Affinity-Key"
 	headerResponsesPriority     = "X-Priority"
+
+	msgNativeResponsesNoTerminal = "responses proxy stream ended without a terminal response event"
 )
 
 func (h *ResponsesHandlers) RegisterRoutes(group *echo.Group) {
@@ -229,6 +232,8 @@ func (h *ResponsesHandlers) dispatchNativeResponsesRequest(
 
 	headers := c.Request().Header.Clone()
 	headers.Set(echo.HeaderContentLength, strconv.Itoa(len(body)))
+	// The gateway parses the upstream stream, so it must not arrive compressed.
+	headers.Set(echo.HeaderAcceptEncoding, "identity")
 	headers.Set(headerResponsesInput, strconv.Itoa(request.InputTokens))
 	headers.Set(
 		headerResponsesEstimate,
@@ -299,22 +304,96 @@ func (h *ResponsesHandlers) relayNativeResponsesStream(
 	copyProxyHeaders(c.Response().Header(), resp.Header)
 	setMultiTurnSessionResponseHeader(c)
 	c.Response().WriteHeader(resp.StatusCode)
-	if resp.Body == nil {
-		h.finalizeNativeResponsesUsage(c, request, nil, true)
-		return nil
+	if resp.Body != nil {
+		defer resp.Body.Close()
 	}
-	defer resp.Body.Close()
 
 	start := time.Now()
-	terminalResponse, err := consumeNativeResponsesSSE(
+	stream, err := consumeNativeResponsesSSE(
 		resp.Body,
 		c.Response().Writer,
 	)
-	if terminalResponse != nil {
+	if stream.terminal != nil {
 		h.recordNativeResponsesProviderTime(c, start, true)
 	}
-	h.finalizeNativeResponsesUsage(c, request, terminalResponse, true)
+	h.finalizeNativeResponsesUsage(c, request, stream.terminal, true)
+	// A client that went away is not an upstream failure. A failed write can
+	// come before net/http cancels the request context, so check both.
+	if stream.terminal == nil && !stream.clientWriteFailed && c.Request().Context().Err() == nil {
+		return failNativeResponsesStream(c, stream, err)
+	}
 	return err
+}
+
+// failNativeResponsesStream ends a relayed stream that stopped without a
+// terminal event. The 200 is already sent, so the failure goes to the client
+// as response.failed, and the returned 502 marks the request as failed in
+// logs, metrics and traces.
+func failNativeResponsesStream(c *GatewayContext, stream nativeResponsesStream, cause error) error {
+	failure := echo.NewHTTPError(http.StatusBadGateway, msgNativeResponsesNoTerminal)
+
+	sequenceNumber := 0
+	if stream.sequenceNumber != nil {
+		sequenceNumber = *stream.sequenceNumber + 1
+	}
+	var events bytes.Buffer
+	appendEvent := func(eventType string, response map[string]any) error {
+		data, err := json.Marshal(struct {
+			Type           string         `json:"type"`
+			SequenceNumber int            `json:"sequence_number"`
+			Response       map[string]any `json:"response"`
+		}{Type: eventType, SequenceNumber: sequenceNumber, Response: response})
+		if err != nil {
+			return fmt.Errorf("marshal %s event: %w", eventType, err)
+		}
+		fmt.Fprintf(&events, "event: %s\ndata: %s\n\n", eventType, data)
+		sequenceNumber++
+		return nil
+	}
+
+	// Keep the upstream response.created fields as sent so the failed
+	// response matches the one the client already saw.
+	var created map[string]json.RawMessage
+	if err := json.Unmarshal(stream.createdResponse, &created); err != nil || created["id"] == nil {
+		created = nil
+	}
+	response := make(map[string]any, len(created)+2)
+	for key, value := range created {
+		response[key] = value
+	}
+	if created == nil {
+		response["id"] = "resp_" + uuid.NewString()
+		response["object"] = "response"
+		response["created_at"] = time.Now().Unix()
+		response["output"] = []any{}
+		if reqCtx := c.RequestContext(); reqCtx != nil {
+			response["model"] = reqCtx.Model
+		}
+		// Clients such as the OpenAI SDK reject a stream that does not start
+		// with response.created.
+		response["status"] = "in_progress"
+		if err := appendEvent(openairesponses.EventTypeResponseCreated, response); err != nil {
+			return failure.SetInternal(errors.Join(cause, err))
+		}
+	}
+	response["status"] = "failed"
+	response["error"] = openairesponses.ResponseError{
+		Code:    "server_error",
+		Message: msgNativeResponsesNoTerminal,
+	}
+	if err := appendEvent(openairesponses.EventTypeResponseFailed, response); err != nil {
+		return failure.SetInternal(errors.Join(cause, err))
+	}
+
+	writer := c.Response().Writer
+	_, writeErr := writer.Write(events.Bytes())
+	if flusher, ok := writer.(http.Flusher); ok && writeErr == nil {
+		flusher.Flush()
+	}
+	if internal := errors.Join(cause, writeErr); internal != nil {
+		return failure.SetInternal(internal)
+	}
+	return failure
 }
 
 func (h *ResponsesHandlers) aggregateNativeResponsesStream(
@@ -338,17 +417,15 @@ func (h *ResponsesHandlers) aggregateNativeResponsesStream(
 	}
 
 	start := time.Now()
-	terminalResponse, err := consumeNativeResponsesSSE(resp.Body, nil)
+	stream, err := consumeNativeResponsesSSE(resp.Body, nil)
 	if err != nil {
 		h.finalizeNativeResponsesUsage(c, request, nil, false)
 		return err
 	}
+	terminalResponse := stream.terminal
 	if terminalResponse == nil {
 		h.finalizeNativeResponsesUsage(c, request, nil, false)
-		return echo.NewHTTPError(
-			http.StatusBadGateway,
-			"responses proxy stream ended without a terminal response event",
-		)
+		return echo.NewHTTPError(http.StatusBadGateway, msgNativeResponsesNoTerminal)
 	}
 
 	h.recordNativeResponsesProviderTime(c, start, false)
@@ -365,38 +442,55 @@ type nativeResponsesTerminal struct {
 	usage *openairesponses.ResponseUsage
 }
 
+// nativeResponsesStream is what the gateway keeps from a relayed Responses
+// stream: its terminal response, and the last response.created payload and
+// sequence_number so a failed stream can be ended with a matching event.
+type nativeResponsesStream struct {
+	terminal          *nativeResponsesTerminal
+	createdResponse   json.RawMessage
+	sequenceNumber    *int
+	clientWriteFailed bool
+}
+
+func (s *nativeResponsesStream) observe(block []byte) {
+	eventType, event, ok := decodeNativeResponsesSSEBlock(block)
+	if !ok {
+		return
+	}
+	if sequenceNumber, err := strconv.Atoi(string(event.SequenceNumber)); err == nil {
+		s.sequenceNumber = &sequenceNumber
+	}
+	if eventType == openairesponses.EventTypeResponseCreated && len(event.Response) > 0 {
+		s.createdResponse = event.Response
+	}
+	if terminal := nativeResponsesTerminalFromEvent(eventType, event); terminal != nil {
+		s.terminal = terminal
+	}
+}
+
 func consumeNativeResponsesSSE(
 	reader io.Reader,
 	writer io.Writer,
-) (*nativeResponsesTerminal, error) {
+) (nativeResponsesStream, error) {
+	var stream nativeResponsesStream
 	if reader == nil {
-		return nil, nil
+		return stream, nil
 	}
 
 	lineReader := bufio.NewReader(reader)
-	var (
-		eventBlock       bytes.Buffer
-		terminalResponse *nativeResponsesTerminal
-	)
+	var eventBlock bytes.Buffer
 
+	// Whole events only go to the client, so an event cut off by an upstream
+	// failure never reaches a client parser ahead of response.failed.
 	for {
 		line, err := lineReader.ReadBytes('\n')
-		if len(line) > 0 {
-			if writer != nil {
-				if _, writeErr := writer.Write(line); writeErr != nil {
-					return terminalResponse, writeErr
-				}
+		eventBlock.Write(line)
+		if len(line) > 0 && isSSEBlankLine(line) {
+			if writeErr := stream.relay(writer, eventBlock.Bytes()); writeErr != nil {
+				return stream, writeErr
 			}
-			eventBlock.Write(line)
-			if isSSEBlankLine(line) {
-				if response := parseNativeResponsesSSEBlock(eventBlock.Bytes()); response != nil {
-					terminalResponse = response
-				}
-				eventBlock.Reset()
-				if flusher, ok := writer.(http.Flusher); ok {
-					flusher.Flush()
-				}
-			}
+			stream.observe(eventBlock.Bytes())
+			eventBlock.Reset()
 		}
 		if err == nil {
 			continue
@@ -404,22 +498,54 @@ func consumeNativeResponsesSSE(
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		return terminalResponse, err
+		return stream, err
 	}
 
-	if eventBlock.Len() > 0 {
-		if response := parseNativeResponsesSSEBlock(eventBlock.Bytes()); response != nil {
-			terminalResponse = response
+	// A client drops an event that the stream ends before its blank line, so
+	// a terminal event cut off at EOF is completed and anything else is dropped.
+	if eventBlock.Len() > 0 && stream.terminal == nil {
+		stream.observe(eventBlock.Bytes())
+		if stream.terminal != nil {
+			if !bytes.HasSuffix(eventBlock.Bytes(), []byte("\n")) {
+				eventBlock.WriteByte('\n')
+			}
+			eventBlock.WriteByte('\n')
+			return stream, stream.relay(writer, eventBlock.Bytes())
 		}
 	}
-	return terminalResponse, nil
+	return stream, nil
+}
+
+func (s *nativeResponsesStream) relay(writer io.Writer, block []byte) error {
+	if writer == nil {
+		return nil
+	}
+	if _, err := writer.Write(block); err != nil {
+		s.clientWriteFailed = true
+		return err
+	}
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return nil
 }
 
 func isSSEBlankLine(line []byte) bool {
 	return len(bytes.TrimSpace(line)) == 0
 }
 
-func parseNativeResponsesSSEBlock(block []byte) *nativeResponsesTerminal {
+// nativeResponsesEvent is the part of a Responses stream event the gateway
+// reads. SequenceNumber stays raw so an unexpected value cannot hide a
+// terminal event.
+type nativeResponsesEvent struct {
+	Type           string          `json:"type"`
+	SequenceNumber json.RawMessage `json:"sequence_number"`
+	Response       json.RawMessage `json:"response"`
+}
+
+// decodeNativeResponsesSSEBlock returns the event type and data of one SSE
+// block, or false when the block carries no JSON event.
+func decodeNativeResponsesSSEBlock(block []byte) (string, nativeResponsesEvent, bool) {
 	var (
 		eventType string
 		dataLines []string
@@ -437,25 +563,25 @@ func parseNativeResponsesSSEBlock(block []byte) *nativeResponsesTerminal {
 		}
 	}
 	if len(dataLines) == 0 {
-		return nil
+		return "", nativeResponsesEvent{}, false
 	}
 
 	data := strings.Join(dataLines, "\n")
 	if data == "[DONE]" {
-		return nil
+		return "", nativeResponsesEvent{}, false
 	}
 
-	var event struct {
-		Type     string          `json:"type"`
-		Response json.RawMessage `json:"response"`
-	}
+	var event nativeResponsesEvent
 	if err := json.Unmarshal([]byte(data), &event); err != nil {
-		return nil
+		return "", nativeResponsesEvent{}, false
 	}
 	if eventType == "" {
 		eventType = event.Type
 	}
+	return eventType, event, true
+}
 
+func nativeResponsesTerminalFromEvent(eventType string, event nativeResponsesEvent) *nativeResponsesTerminal {
 	switch eventType {
 	case openairesponses.EventTypeResponseCompleted,
 		openairesponses.EventTypeResponseFailed,
