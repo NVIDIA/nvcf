@@ -66,16 +66,16 @@ func newRecordingLedger(t *testing.T) (*eventledger.Publisher, func() []map[stri
 	}
 }
 
-// newEventDirector returns a director whose invoker records ncaId on the
-// worker token, as the real invoker does after authenticating the client.
+// newEventDirector returns a director whose invoker records the caller's NCA
+// ID on the worker token, as the real invoker does after authenticating the client.
 func newEventDirector(t *testing.T, publisher *eventledger.Publisher) *StreamDirector {
 	t.Helper()
-	director := NewStreamDirector(FunctionInvokerFunc(func(_ context.Context, _ net.Conn, _, _, _ string, requestId *uuid.UUID, onWorkerAuth func(string, uuid.UUID, string, string, string)) (invocation.Result, context.CancelFunc, error) {
+	director := NewStreamDirector(FunctionInvokerFunc(func(_ context.Context, _ net.Conn, _, _, _ string, requestId *uuid.UUID, onWorkerAuth func(invocation.WorkerAuth)) (invocation.Result, context.CancelFunc, error) {
 		result := invocation.Result{RequestId: uuid.New(), WorkerAuthorizationToken: testWorkerToken}
 		if requestId != nil {
 			result.RequestId = *requestId
 		}
-		onWorkerAuth(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId, "nca-1")
+		onWorkerAuth(invocation.WorkerAuth{Token: result.WorkerAuthorizationToken, RequestId: result.RequestId, FunctionId: testFunctionId, FunctionVersionId: testFunctionVersionId, CallerNcaId: "nca-1"})
 		return result, nil, nil
 	}))
 	director.eventLedger = publisher
@@ -115,7 +115,7 @@ func TestRegisterWorkerPublishesAttachmentEstablished(t *testing.T) {
 			info.setupStartedAt = info.setupStartedAt.Add(-1500 * time.Millisecond)
 
 			workerLink, _ := net.Pipe()
-			require.NoError(t, director.RegisterWorker(testWorkerToken, info, workerLink))
+			require.NoError(t, director.RegisterWorker(t.Context(), testWorkerToken, info, workerLink))
 			publisher.Close()
 
 			events := received()
@@ -152,7 +152,7 @@ func TestRegisterWorkerPublishesOnceWhenWorkersRace(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			workerLink, _ := net.Pipe()
-			errs[i] = director.RegisterWorker(testWorkerToken, info, workerLink)
+			errs[i] = director.RegisterWorker(t.Context(), testWorkerToken, info, workerLink)
 		}()
 	}
 	wg.Wait()
@@ -160,4 +160,36 @@ func TestRegisterWorkerPublishesOnceWhenWorkersRace(t *testing.T) {
 
 	assert.ElementsMatch(t, []bool{true, false}, []bool{errs[0] == nil, errs[1] == nil})
 	assert.Len(t, received(), 1)
+}
+
+func TestRegisterWorkerDuringShutdownPublishesNothing(t *testing.T) {
+	publisher, received := newRecordingLedger(t)
+	director := newEventDirector(t, publisher)
+	_, info := setUpSession(t, director, nil)
+	require.NoError(t, director.Close())
+
+	workerLink, _ := net.Pipe()
+	err := director.RegisterWorker(t.Context(), testWorkerToken, info, workerLink)
+	publisher.Close()
+
+	assert.ErrorIs(t, err, errShuttingDown)
+	assert.Empty(t, received())
+}
+
+func TestRegisterWorkerAfterClientLeftPublishesNothing(t *testing.T) {
+	publisher, received := newRecordingLedger(t)
+	director := newEventDirector(t, publisher)
+	client, _ := net.Pipe()
+	tracking := worker.NewConnectionTrackingConn(client)
+	_, err := director.getAndInitWorkerConnection(t.Context(), tracking, "client-auth", testFunctionId, "", nil)
+	require.NoError(t, err)
+	info := director.workerAuth.Get(testWorkerToken).Value()
+	require.NoError(t, tracking.Close())
+
+	// The token is still valid, so the worker attaches exactly as it does today.
+	workerLink, _ := net.Pipe()
+	require.NoError(t, director.RegisterWorker(t.Context(), testWorkerToken, info, workerLink))
+	publisher.Close()
+
+	assert.Empty(t, received())
 }

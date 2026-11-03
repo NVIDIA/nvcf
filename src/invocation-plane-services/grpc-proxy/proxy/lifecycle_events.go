@@ -60,7 +60,7 @@ func newAttachmentEstablished(wc *worker.WorkerConnection, info workerAuthInfo, 
 	event.SetExtension("functionversionid", info.functionVersionId)
 	event.SetExtension("functionid", info.functionId)
 	event.SetExtension("resourceid", info.requestId.String())
-	event.SetExtension("ncaid", info.ncaId)
+	event.SetExtension("ncaid", info.callerNcaId)
 	// Marshalling a struct of strings, numbers and a bool cannot fail.
 	_ = event.SetData(cloudevents.ApplicationJSON, attachmentEstablishedData{
 		SchemaVersion:  ledgerSchemaVersion,

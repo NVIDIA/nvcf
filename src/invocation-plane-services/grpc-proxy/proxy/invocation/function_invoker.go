@@ -127,7 +127,17 @@ type Result struct {
 	QueuedToWorkStream bool
 }
 
-func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.Conn, clientAuth, functionId, functionVersionId string, existingRequestId *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string, ncaId string)) (Result, context.CancelFunc, error) {
+// WorkerAuth is what a worker must present when it connects back for a session.
+type WorkerAuth struct {
+	Token             string
+	RequestId         uuid.UUID
+	FunctionId        string
+	FunctionVersionId string
+	// CallerNcaId is the authenticated client's NCA ID, not the function owner's.
+	CallerNcaId string
+}
+
+func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.Conn, clientAuth, functionId, functionVersionId string, existingRequestId *uuid.UUID, onWorkerAuthSet func(WorkerAuth)) (Result, context.CancelFunc, error) {
 	ctx, span := otel.GetTracerProvider().Tracer("proxy-tracer").Start(ctx, "InvokeStatefulFunction",
 		trace.WithAttributes(
 			attribute.String("function_id", functionId),
@@ -166,7 +176,13 @@ func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.C
 			return Result{}, nil, err
 		}
 
-		onWorkerAuthSet(workerAuthToken, requestId, proxyAuthResponse.FunctionId, functionVersion.FunctionVersionId, proxyAuthResponse.ClientNcaId)
+		onWorkerAuthSet(WorkerAuth{
+			Token:             workerAuthToken,
+			RequestId:         requestId,
+			FunctionId:        proxyAuthResponse.FunctionId,
+			FunctionVersionId: functionVersion.FunctionVersionId,
+			CallerNcaId:       proxyAuthResponse.ClientNcaId,
+		})
 
 		cancelInvokingWorker, queued, err := f.startNewSession(ctx, conn, requestId, proxyAuthResponse, workerAuthToken, functionVersion)
 		if err != nil {
@@ -202,7 +218,13 @@ func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.C
 			return Result{}, nil, fmt.Errorf("existing session invoker NCA ID mismatch for request id %s", requestId)
 		}
 
-		onWorkerAuthSet(workerAuthToken, requestId, existingSession.FunctionId, existingSession.FunctionVersionId, proxyAuthResponse.ClientNcaId)
+		onWorkerAuthSet(WorkerAuth{
+			Token:             workerAuthToken,
+			RequestId:         requestId,
+			FunctionId:        existingSession.FunctionId,
+			FunctionVersionId: existingSession.FunctionVersionId,
+			CallerNcaId:       proxyAuthResponse.ClientNcaId,
+		})
 
 		err = f.joinExistingSession(ctx, requestId, proxyAuthResponse, workerAuthToken)
 		if err != nil {
