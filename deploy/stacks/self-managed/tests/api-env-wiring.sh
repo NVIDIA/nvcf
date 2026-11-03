@@ -184,6 +184,30 @@ assert_render_failure "$work_dir/empty-router-tag.yaml" \
   'addons.llm.requestRouter.image.tag must be set to select matching router and Pylon images' \
   "empty router tag"
 
+# Explicit and legacy Pylon overrides must not bypass router tag validation.
+for pylon_path in \
+  '.api.remoteConfig.configData.nvcf.sidecars."llm-router-client-image"' \
+  '.api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE'; do
+  write_environment <<'EOF'
+addons:
+  llm:
+    enabled: true
+    requestRouter:
+      image:
+        tag: ""
+EOF
+  yq -i "$pylon_path = \"mirror.example.test/team/pylon:9.9.9\"" "$environment_file"
+  assert_render_failure "$work_dir/empty-router-with-pylon.yaml" \
+    'addons.llm.requestRouter.image.tag must be set to select matching router and Pylon images' \
+    "empty router tag with $pylon_path"
+
+  # The disabled addon does not require a router selection.
+  yq -i '.addons.llm.enabled = false' "$environment_file"
+  render_api_values "$work_dir/disabled-router-with-pylon.yaml" >/dev/null
+  assert_yaml_value "$work_dir/disabled-router-with-pylon.yaml" "$remote_pylon_expression" \
+    mirror.example.test/team/pylon:9.9.9 "disabled router with $pylon_path"
+done
+
 # Local BDD fixtures rely on the same computed default after their registry
 # paths are configured. They must not carry unresolved fixture placeholders
 # into the higher-precedence API remote ConfigMap.

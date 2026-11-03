@@ -1,7 +1,7 @@
 # Public developer entry point for the self-managed stack.
 include Makefile.dist
 
-.PHONY: test test-published-charts
+.PHONY: test test-published-charts test-nats-chart
 test:
 	@tests/custom-observability-environment.sh
 	@tests/llm-gateway-auth-transport.sh
@@ -56,5 +56,10 @@ test-published-charts:
 	@tests/llm-router-published-chart.sh
 	@tests/gateway-routes-published-chart.sh
 	@tests/openbao-published-chart.sh
+	@tests/nvcf-ui-published-chart.sh
 	@tests/state-metrics-chart-contract.sh
 	@tests/cassandra-autoscaler-published-compatibility.sh
+
+test-nats-chart:
+	@: "$${NATS_STACK_CHART_DIR:?NATS_STACK_CHART_DIR is required}"
+	@tests/nats-image-overrides.sh
