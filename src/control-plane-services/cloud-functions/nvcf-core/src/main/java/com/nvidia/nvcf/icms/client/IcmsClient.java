@@ -511,14 +511,15 @@ public class IcmsClient {
         }
 
         var env = envStream
-                .map(pair -> pair.getFirst() + "=" + environmentValue(pair.getSecond()))
+                .map(pair -> pair.getFirst() + "=" + encodeEnvironmentValue(pair.getSecond()))
                 .collect(Collectors.joining("\n"));
         return Base64.getEncoder().encodeToString(env.getBytes(StandardCharsets.UTF_8));
     }
 
     // The worker reads one KEY=value entry per line and unquotes Go double-quoted values, so a
-    // value with a control character is quoted to stay one entry. Other values stay unchanged.
-    static String environmentValue(Object value) {
+    // value with a control character is quoted to stay one entry. Other values are not quoted, so
+    // workers see the same bytes as before.
+    static String encodeEnvironmentValue(Object value) {
         var text = String.valueOf(value);
         if (text.chars().noneMatch(Character::isISOControl)) {
             return text;

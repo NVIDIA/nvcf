@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The encoded values are the exact output of IcmsClient.environmentValue in nvcf-core.
+// The encoded values are the exact output of IcmsClient.encodeEnvironmentValue in nvcf-core.
 func TestEnvDecoderText_QuotedValue_StaysOneEntry(t *testing.T) {
 	cases := []struct {
 		name    string

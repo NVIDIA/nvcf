@@ -42,6 +42,6 @@ class IcmsClientEnvironmentEncodingTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("values")
     void valueIsWrittenAsOneEntry(String label, Object value, String expected) {
-        assertThat(IcmsClient.environmentValue(value)).isEqualTo(expected);
+        assertThat(IcmsClient.encodeEnvironmentValue(value)).isEqualTo(expected);
     }
 }
