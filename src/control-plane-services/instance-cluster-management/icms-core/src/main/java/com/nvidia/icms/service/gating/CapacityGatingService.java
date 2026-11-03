@@ -412,10 +412,6 @@ public class CapacityGatingService {
         return allowedClusters.size() == clusters.size() ? clusters : allowedClusters;
     }
 
-    /**
-     * List-shaped counterpart of {@link #retainAllowedClusters(Set, String, Function)}, for the
-     * usage response.
-     */
     private <T> List<T> retainAllowedClusters(List<T> clusters, String ncaId,
                                               Function<T, String> clusterIdOf) {
         if (isListEmptyOrNull(clusters)) {
