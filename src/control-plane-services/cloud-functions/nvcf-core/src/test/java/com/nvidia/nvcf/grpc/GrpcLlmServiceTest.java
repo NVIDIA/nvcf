@@ -66,6 +66,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Slf4j
 class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
@@ -279,6 +280,42 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
         assertThat(response.getAccountInputTokenRateLimit()).isEqualTo("5000-M");
         assertThat(response.hasAccountOutputTokenRateLimit()).isTrue();
         assertThat(response.getAccountOutputTokenRateLimit()).isEqualTo("1000-M");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"invalid", "0-M", "9223372036854775808-S"})
+    void authLlmInvocation_dropsMalformedAccountRateLimitFromApiKeyAuth(String malformed) {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    List.of(new Resource("account-functions", "*")),
+                    List.of(SCOPE_INVOKE_FUNCTION), true,
+                    new RateLimitAttributes(malformed, "1000-M"));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = "nvapi-stg-some-key";
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.hasAccountInputTokenRateLimit()).isFalse();
+        assertThat(response.getAccountOutputTokenRateLimit()).isEqualTo("1000-M");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"invalid", "0-M", "9223372036854775808-S"})
+    void authLlmInvocation_dropsMalformedAccountRateLimitFromJwtAuth(String malformed) {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        MockServiceAccountServer.setTieredRateLimitResponse(new RateLimitAttributes("5000-M", malformed));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.getAccountInputTokenRateLimit()).isEqualTo("5000-M");
+        assertThat(response.hasAccountOutputTokenRateLimit()).isFalse();
     }
 
     @Test

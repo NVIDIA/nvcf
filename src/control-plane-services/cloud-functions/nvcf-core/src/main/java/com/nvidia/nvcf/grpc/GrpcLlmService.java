@@ -29,6 +29,7 @@ import com.nvidia.nvcf.proto.llm_gateway.AuthLlmInvokeResponse;
 import com.nvidia.nvcf.proto.llm_gateway.AuthLlmWorkerRequest;
 import com.nvidia.nvcf.proto.llm_gateway.AuthLlmWorkerResponse;
 import com.nvidia.nvcf.proto.llm_gateway.LlmGatewayGrpc.LlmGatewayImplBase;
+import com.nvidia.nvcf.rest.function.management.dto.LlmConfigValidator;
 import com.nvidia.nvcf.service.account.AccountService;
 import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult;
 import com.nvidia.nvcf.service.apikeys.LlmApiKeyService;
@@ -129,12 +130,10 @@ public class GrpcLlmService extends LlmGatewayImplBase {
 
         resolvedPriority.ifPresent(p -> responseBuilder.setPriority(p.intValue()));
         accountRateLimit.ifPresent(rl -> {
-            if (rl.inputTokenRateLimit() != null) {
-                responseBuilder.setAccountInputTokenRateLimit(rl.inputTokenRateLimit());
-            }
-            if (rl.outputTokenRateLimit() != null) {
-                responseBuilder.setAccountOutputTokenRateLimit(rl.outputTokenRateLimit());
-            }
+            validAccountRate(ncaId, "inputTokenRateLimit", rl.inputTokenRateLimit())
+                    .ifPresent(responseBuilder::setAccountInputTokenRateLimit);
+            validAccountRate(ncaId, "outputTokenRateLimit", rl.outputTokenRateLimit())
+                    .ifPresent(responseBuilder::setAccountOutputTokenRateLimit);
         });
 
         for (var model : functionModels) {
@@ -167,6 +166,18 @@ public class GrpcLlmService extends LlmGatewayImplBase {
                                         .setRoutingKey(workerToken.functionId().toString())
                                         .build());
         responseObserver.onCompleted();
+    }
+
+    // A malformed policy value would fail the gateway's admission, so drop it (no limit) instead.
+    private static Optional<String> validAccountRate(String ncaId, String field, String value) {
+        if (value == null || value.isBlank()) {
+            return Optional.empty();
+        }
+        if (!LlmConfigValidator.isValidTokenRateLimit(value)) {
+            log.warn("Ignoring malformed account {} '{}' for ncaId {}", field, value, ncaId);
+            return Optional.empty();
+        }
+        return Optional.of(value);
     }
 
     // The API-key path's rate limit comes from the LLM-specific apikey.llm_allow evaluation

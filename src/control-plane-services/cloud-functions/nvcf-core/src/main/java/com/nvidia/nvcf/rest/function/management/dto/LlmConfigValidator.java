@@ -42,7 +42,7 @@ public final class LlmConfigValidator {
     }
 
     // Parsed entry by entry rather than with one regex so validation stays linear in length.
-    private static boolean isValidTokenRateLimit(String tokenRateLimit) {
+    public static boolean isValidTokenRateLimit(String tokenRateLimit) {
         var entries = tokenRateLimit.split(",", -1);
         var units = new HashSet<String>();
         for (int i = 0; i < entries.length; i++) {
