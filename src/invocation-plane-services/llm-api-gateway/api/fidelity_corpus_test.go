@@ -56,6 +56,11 @@ import (
 // the X-Input-Tokens and X-Cache-Affinity-Key headers sent upstream must
 // equal them; an empty affinity key means the header is absent.
 //
+// Decisions and System One rewrite only model and relay the upstream JSON
+// unchanged. Their input token estimate counts every string leaf as text and
+// each image slot as the flat default of config.Default().DecisionImageTokens
+// (1024), never the base64.
+//
 // Chat restores the client model in responses and assembles unary responses
 // from SSE deltas. Responses relays SSE or extracts the terminal response
 // object for unary clients. Embeddings relays the upstream JSON unchanged.
@@ -101,7 +106,7 @@ func TestGatewayRequestResponseFidelityCorpus(t *testing.T) {
 			require.NoError(t, decoder.Decode(&fixture))
 			require.Equal(t, io.EOF, decoder.Decode(new(any)), "unexpected trailing fixture data")
 			require.NotEmpty(t, fixture.Description)
-			require.Contains(t, []string{"/v1/chat/completions", "/v1/responses", "/v1/embeddings", "/v1/messages"}, fixture.Path)
+			require.Contains(t, []string{"/v1/chat/completions", "/v1/responses", "/v1/embeddings", "/v1/messages", "/v1/decisions", "/v1/systemone"}, fixture.Path)
 			t.Log(fixture.Description)
 
 			contentType, upstreamBody := fixture.UpstreamResponse.encode(t)
@@ -146,7 +151,8 @@ func TestGatewayRequestResponseFidelityCorpus(t *testing.T) {
 
 // Checks that the gateway keeps because it needs the field for routing, relay
 // mode, admission, token estimates or session affinity. Each row is rejected
-// before the request reaches the backend.
+// before the request reaches the backend. A decision route model that does not
+// declare the route is a 404, covered by TestDecisionRoutesModelNotEnabled.
 func TestGatewayKeptRequestChecks(t *testing.T) {
 	t.Parallel()
 
@@ -155,6 +161,8 @@ func TestGatewayKeptRequestChecks(t *testing.T) {
 		responses  = "/v1/responses"
 		embeddings = "/v1/embeddings"
 		messages   = "/v1/messages"
+		decisions  = "/v1/decisions"
+		systemOne  = "/v1/systemone"
 		model      = `"model":"fn-alpha/company/model"`
 		// newPassthroughAPI allows this model on no route.
 		restricted = `"model":"fn-alpha/company/restricted"`
@@ -212,6 +220,18 @@ func TestGatewayKeptRequestChecks(t *testing.T) {
 		{"messages max_tokens missing", messages, `{` + model + `,"messages":[{"role":"user","content":"hi"}]}`},
 		{"messages stream not a boolean", messages, `{` + model + `,` + msgInput + `,"stream":"yes"}`},
 		{"messages messages empty", messages, `{` + model + `,"max_tokens":16,"messages":[]}`},
+		{"decisions malformed JSON", decisions, `{` + model + `,`},
+		{"decisions body not an object", decisions, `[]`},
+		{"decisions duplicate model member case", decisions, `{` + model + `,"MODEL":"fn-alpha/company/other"}`},
+		{"decisions model missing", decisions, `{"input":"hi"}`},
+		{"decisions model not a string", decisions, `{"model":7}`},
+		{"decisions model without function prefix", decisions, `{"model":"model","input":"hi"}`},
+		{"systemone malformed JSON", systemOne, `{` + model + `,`},
+		{"systemone body not an object", systemOne, `"hi"`},
+		{"systemone duplicate model member case", systemOne, `{` + model + `,"MODEL":"fn-alpha/company/other"}`},
+		{"systemone model missing", systemOne, `{"state":"hi"}`},
+		{"systemone model not a string", systemOne, `{"model":7}`},
+		{"systemone model without function prefix", systemOne, `{"model":"model","state":"hi"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

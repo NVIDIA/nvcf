@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nvstor-server.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvstor-server.labels" . | nindent 4 }}
+data:
+  nvstor-server.toml: |
+    [node]
+    id = 0
+    name = {{ .Values.node.name | quote }}
+
+    [cluster]
+    name = {{ .Values.cluster.name | quote }}
+    bootstrap = {{ .Values.cluster.bootstrap }}
+    seeds = [
+{{ include "nvstor-server.clusterSeeds" . | nindent 4 }}
+    ]
+
+    [storage]
+    data_path = "/data/nvstor"
+    chunk_size = {{ int64 .Values.storage.chunkSize }}
+    direct_io = {{ .Values.storage.directIO }}
+    verify_checksums = {{ .Values.storage.verifyChecksums }}
+    gc_enabled = {{ .Values.storage.gcEnabled }}
+    gc_interval_secs = {{ .Values.storage.gcIntervalSecs }}
+
+    [network]
+    grpc_port = {{ .Values.service.grpc.port }}
+    http_port = {{ .Values.service.http.port }}
+    raft_port = {{ .Values.service.raft.port }}
+    s3_port = {{ .Values.service.s3.port }}
+    nbd_port = {{ .Values.service.nbd.port }}
+    nfs_port = {{ .Values.service.nfs.port }}
+    rdma_port = {{ .Values.network.rdmaPort }}
+
+    [nfs]
+    {{- if kindIs "invalid" .Values.nfs.allowClients }}
+    {{- fail "set nfs.allowClients: the clients that may mount the NFS export (the CSI node plugin uses host networking, so your node CIDRs; the controller mounts from its pod IP) — or [] for loopback only" }}
+    {{- end }}
+    allow_clients = [{{- $first := true }}{{- range .Values.nfs.allowClients }}{{- if . }}{{ if not $first }}, {{ end }}{{ . | quote }}{{- $first = false }}{{- end }}{{- end }}]
+
+    [limits]
+    max_connections = {{ .Values.limits.maxConnections }}
+    request_timeout_secs = {{ .Values.limits.requestTimeoutSecs }}
+    idle_timeout_secs = {{ .Values.limits.idleTimeoutSecs }}
+    max_object_size = {{ int64 .Values.limits.maxObjectSize }}
+
+    [logging]
+    json = {{ .Values.logging.json }}
+    level = {{ .Values.logging.level | quote }}
+
+    {{- if .Values.tls.enabled }}
+    [tls]
+    cert_path = "/etc/nvstor/tls/tls.crt"
+    key_path = "/etc/nvstor/tls/tls.key"
+    {{- else }}
+    # TLS disabled unless both cert_path and key_path are configured.
+    {{- end }}

@@ -38,6 +38,7 @@ import org.springframework.boot.autoconfigure.ssl.PemSslBundleProperties;
 import org.springframework.boot.autoconfigure.ssl.PropertiesSslBundle;
 import org.springframework.boot.autoconfigure.ssl.SslProperties;
 import org.springframework.boot.ssl.SslBundle;
+import org.springframework.boot.ssl.SslBundleRegistry;
 import org.springframework.boot.ssl.SslBundles;
 import org.springframework.cloud.context.scope.refresh.RefreshScopeRefreshedEvent;
 import org.springframework.context.ApplicationContext;
@@ -87,6 +88,7 @@ class RefreshingCqlSessionSslPropertiesRefreshTest {
         var session = new CassandraSslBundleConfiguration.RefreshingCqlSession(
                 applicationContext,
                 sslBundles,
+                mock(SslBundleRegistry.class),
                 environment,
                 sslProperties,
                 "cassandra-ssl",

@@ -70,6 +70,7 @@ Important settings to review before deployment:
 - `llmApiGateway.metrics.enabled` to expose a metrics port on the Service and Deployment (default: `false`)
 - `llmApiGateway.metrics.serviceMonitor.enabled` to create a Prometheus `ServiceMonitor` (requires `metrics.enabled`)
 - `llmApiGateway.config.lastCluster.*` for session last-cluster hints sent to the LLM Request Router (default: disabled)
+- `llmApiGateway.config.decisionImageTokens` for the flat input token estimate of each image on `/v1/decisions` and `/v1/systemone` (default: `1024`)
 - `llmApiGateway.config.exposeRouterErrorCodes` to return the LLM Request Router rejection reason in `error.code` of OpenAI-format error responses (default: `false`)
 - `llmApiGateway.olric.*` for embedded rate-limit and last-cluster state and peer discovery. The Olric node starts whenever `olric.enabled` is `true`, even with rate limiting off
 - `llmApiGateway.vault.*` for JWT authentication path, role, and audience values used by the Vault Agent injector

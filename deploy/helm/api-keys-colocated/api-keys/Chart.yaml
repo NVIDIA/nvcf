@@ -19,4 +19,4 @@ description: NCP Compatible deployment of API Keys service
 
 type: application
 version: 0.0.0 # set by CI, shown in git tags
-appVersion: "0.0.4"
+appVersion: "1.10.9"

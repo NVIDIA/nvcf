@@ -1,0 +1,129 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Source: serves a node-local directory (model weights, a checkpoint) read-only
+# over NFS/RDMA on the node's RDMA rails. Runs on the node that has the data.
+#
+# The server runs in this pod's network namespace and listens on the pod's
+# rail VFs only (NFS/RDMA, [::]:20049). The clients mount with proto=rdma6
+# (rails-mount.sh), so NFS/TCP is off (--no-tcp): nothing listens on the pod
+# IP, and if the RDMA listener fails for good the server exits and the pod
+# restarts instead of running with nothing to serve.
+# It needs the VFs free: if a running vLLM pod on the node already holds all of
+# them, run this container as a sidecar in that pod instead (README.md).
+#
+# Access control is the client address list plus the uid/gid each request
+# claims (NFS AUTH_SYS has no cryptographic client authentication): the
+# server checks those against file modes and squashes root to 65534, so
+# serve world-readable files (or run the workload as a uid they allow). An
+# admitted client can claim any non-root uid. See "Security" in README.md
+# before running this where other tenants share the rails.
+#
+# Edit before applying:
+#   spec.nodeName           the node that has the data
+#   NVSTOR_EXPORT_DIR       host path of the directory to serve
+#   NVSTOR_ALLOW_CLIENTS    required, no default: the client prefixes allowed
+#                           to mount, space separated, e.g. the replica nodes'
+#                           rail addresses as /128s (or their rail /64s if only
+#                           replica nodes are on them). The pod refuses to
+#                           start while it is empty. "::/0 0.0.0.0/0" opens the
+#                           export to every client that can reach it.
+#   NVSTOR_FH_KEY           host path of the filehandle key (32 bytes, 0600),
+#                           created on first start in the writable state
+#                           directory below. Keep it: with the same key,
+#                           clients' handles stay valid across a restart;
+#                           a new key makes every handle stale.
+# The binary is installed on the node by install-binary.sh.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nvstor-source
+  labels: {app: nvstor-source}
+  annotations:
+    # One NAD entry per rail VF (example NAD name: use your cluster's SR-IOV
+    # network, and its RDMA device resource below).
+    k8s.v1.cni.cncf.io/networks: "network-operator/sriov-net,network-operator/sriov-net,network-operator/sriov-net,network-operator/sriov-net"
+spec:
+  nodeName: "<source-node>"
+  restartPolicy: Always
+  tolerations: [{operator: Exists}]
+  containers:
+  - name: nfs-export
+    image: nvcr.io/nvidia/cuda:13.0.0-base-ubuntu22.04
+    imagePullPolicy: IfNotPresent
+    env:
+    - {name: NVSTOR_EXPORT_DIR, value: /var/lib/nvstor/models}
+    - {name: NVSTOR_ALLOW_CLIENTS, value: ""}
+    - {name: NVSTOR_BIN, value: /var/lib/nvstor/bin/nvstor-nfs-export}
+    - {name: NVSTOR_FH_KEY, value: /var/lib/nvstor/state/nfs-export-fh.key}
+    - {name: RUST_LOG, value: info}
+    command:
+    - bash
+    - -c
+    - |
+      set -euf
+      die() { echo "nvstor-source: error: $*" >&2; exit 1; }
+      [ -x "/host$NVSTOR_BIN" ] || die "missing $NVSTOR_BIN on the node (run install-binary.sh)"
+      [ -d "/host$NVSTOR_EXPORT_DIR" ] || die "missing $NVSTOR_EXPORT_DIR on the node"
+      allow=()
+      for c in $NVSTOR_ALLOW_CLIENTS; do allow+=(--allow-client "$c"); done
+      [ "${#allow[@]}" -gt 0 ] || die "NVSTOR_ALLOW_CLIENTS is empty: set it to the client prefixes allowed to mount (the replica nodes' rail addresses), space separated; ::/0 opens the export to everyone"
+      # Wait for the rail VFs' routable (SLAAC) addresses, then print them:
+      # consumers pass these to rails-mount.sh as NVSTOR_SOURCE_ADDRS. The
+      # server advertises the same list (--trunk-addr, as fs_locations), so
+      # a client mounting one of them with trunkdiscovery adds exactly one
+      # transport per rail.
+      for _ in $(seq 60); do
+        n=$(chroot /host ip -6 -o addr show scope global -tentative | awk '$2 ~ /^net[0-9]+$/' | wc -l)
+        [ "$n" -ge 4 ] && break; sleep 1
+      done
+      rails=$(chroot /host ip -6 -o addr show scope global -tentative \
+        | awk '$2 ~ /^net[0-9]+$/ && !seen[$2]++ { split($4, a, "/"); print "nvstor-rail", $2, a[1] }')
+      [ -n "$rails" ] || die "no rail VF has a routable IPv6 address after 60 s"
+      echo "$rails"
+      trunk=()
+      while read -r _ _ addr; do trunk+=(--trunk-addr "$addr"); done <<<"$rails"
+      echo "nvstor-source: allowed clients: $NVSTOR_ALLOW_CLIENTS"
+      # Kernel file handles in NFS filehandles (CAP_DAC_READ_SEARCH, granted
+      # by privileged), sealed with the persistent key, keep clients'
+      # handles valid across a server restart.
+      exec chroot /host "$NVSTOR_BIN" "${allow[@]}" --fh-key "$NVSTOR_FH_KEY" "${trunk[@]}" --no-tcp --rdma-port 20049 --metrics-port 0 "$NVSTOR_EXPORT_DIR"
+    securityContext: {privileged: true}
+    resources:
+      requests: {nvidia.com/mlnxnics: "4"}
+      limits: {nvidia.com/mlnxnics: "4"}
+    volumeMounts:
+    - {name: host, mountPath: /host, readOnly: true}
+    # Writable for the filehandle key only; the rest of the host stays
+    # read-only (the server runs under chroot /host).
+    - {name: state, mountPath: /host/var/lib/nvstor/state}
+  volumes:
+  - name: host
+    hostPath: {path: /}
+  - name: state
+    hostPath: {path: /var/lib/nvstor/state, type: DirectoryOrCreate}
+---
+# Pod network: no ingress at all (the server runs with --no-tcp and serves
+# nothing there). NetworkPolicy does not filter the SR-IOV rail networks;
+# there, NVSTOR_ALLOW_CLIENTS is the only access control.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nvstor-source
+spec:
+  podSelector:
+    matchLabels: {app: nvstor-source}
+  policyTypes: [Ingress]
+  ingress: []

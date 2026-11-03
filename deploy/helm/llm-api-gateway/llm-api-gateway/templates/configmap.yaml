@@ -14,6 +14,9 @@
 # limitations under the License.
 
 {{- $cfg := .Values.llmApiGateway.config }}
+{{- if lt ($cfg.decisionImageTokens | int64) 0 }}
+{{- fail "llmApiGateway.config.decisionImageTokens must be 0 or more" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -32,6 +35,7 @@ data:
   STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT: {{ $cfg.lastCluster.lookupTimeout | quote }}
   STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES: {{ $cfg.lastCluster.localMaxEntries | int64 | toString | quote }}
   NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT: {{ $cfg.inferenceWriteTimeout | quote }}
+  NVCF_DECISION_IMAGE_TOKENS: {{ $cfg.decisionImageTokens | int64 | toString | quote }}
   NVCF_GRPC_ADDR: {{ $cfg.nvcfGrpcAddr | quote }}
   NVCF_GRPC_INSECURE: {{ $cfg.nvcfGrpcInsecure | toString | quote }}
   NVCF_GRPC_TIMEOUT: {{ $cfg.nvcfGrpcTimeout | quote }}

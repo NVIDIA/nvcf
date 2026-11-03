@@ -406,6 +406,18 @@ func (p *StargateProvider) Proxy(
 	if request.Header != nil {
 		outbound.Header = request.Header.Clone()
 	}
+	decisionRoute := isDecisionPath(request.Path)
+	if decisionRoute {
+		// Decision routes clone every client header. Stargate control headers
+		// are gateway-owned there: a client value would override the estimate
+		// or make Stargate answer with a bare 400.
+		for _, name := range stargateControlHeaders {
+			outbound.Header.Del(name)
+		}
+		// Ask for an uncompressed response so the gateway can read the
+		// reported usage, as Messages does.
+		outbound.Header.Set("Accept-Encoding", "identity")
+	}
 	// Send a fixed-length body, not chunked, so Stargate can reject a body over
 	// its size limit before it reads the body.
 	if request.ContentLength > 0 {
@@ -447,19 +459,26 @@ func (p *StargateProvider) Proxy(
 			outbound.Header.Set(headerAuthorization, "Bearer "+bearerToken)
 		}
 	}
-	// Caller credentials authorize NVCF, never the Messages model server.
-	// Enforce this before Stargate so older Pylon workers cannot leak them.
-	if request.Path == "/v1/messages" {
-		outbound.Header.Del(headerAuthorization)
-		outbound.Header.Del("X-API-Key")
-		outbound.Header.Del("Proxy-Authorization")
+	// Caller credentials authorize NVCF, never the Messages or decision model
+	// server. Enforce this before Stargate so Pylon workers that forward
+	// Authorization cannot leak them.
+	if stripsCallerCredentials(request.Path) {
+		for _, name := range callerCredentialHeaders {
+			outbound.Header.Del(name)
+		}
 	}
 
-	if request.InputTokens > 0 {
-		outbound.Header.Set(headerInputTokens, strconv.Itoa(request.InputTokens))
-	}
-	if request.TokenEstimate > 0 {
-		outbound.Header.Set(headerTokenEstimate, strconv.Itoa(request.TokenEstimate))
+	if decisionRoute {
+		// Stargate requires X-Input-Tokens, so send at least 1.
+		outbound.Header.Set(headerInputTokens, strconv.Itoa(max(1, request.InputTokens)))
+		outbound.Header.Set(headerTokenEstimate, strconv.Itoa(max(1, request.TokenEstimate)))
+	} else {
+		if request.InputTokens > 0 {
+			outbound.Header.Set(headerInputTokens, strconv.Itoa(request.InputTokens))
+		}
+		if request.TokenEstimate > 0 {
+			outbound.Header.Set(headerTokenEstimate, strconv.Itoa(request.TokenEstimate))
+		}
 	}
 
 	start := time.Now()
@@ -477,6 +496,27 @@ func (p *StargateProvider) Proxy(
 		Header:     resp.Header.Clone(),
 		Body:       &proxyResponseBody{ReadCloser: resp.Body, cancel: cancel},
 	}, nil
+}
+
+// callerCredentialHeaders carry the caller's NVCF credentials or session.
+var callerCredentialHeaders = []string{headerAuthorization, "X-Api-Key", "Proxy-Authorization", "Cookie"}
+
+// stargateControlHeaders are request headers Stargate reads to admit and
+// route a request.
+var stargateControlHeaders = []string{
+	"X-Max-Wait-Ms", "X-Request-Slo-Ms", headerCacheAffinityKey, headerInputTokens, headerTokenEstimate,
+}
+
+// isDecisionPath reports whether path is a decision route, which forwards
+// every client header and body member.
+func isDecisionPath(path string) bool {
+	return path == "/v1/decisions" || path == "/v1/systemone"
+}
+
+// stripsCallerCredentials reports whether path is a route whose model server
+// must never see the caller's credentials.
+func stripsCallerCredentials(path string) bool {
+	return path == "/v1/messages" || isDecisionPath(path)
 }
 
 type proxyResponseBody struct {
