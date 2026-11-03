@@ -13,6 +13,7 @@ environment_file="$work_dir/self-managed/environments/cert-images-test.yaml"
 printf '{}\n' > "$work_dir/self-managed/secrets/cert-images-test-secrets.yaml"
 manifest="$repo_root/docs/overview/manifest.md"
 if test ! -f "$manifest"; then manifest="$repo_root/docs/user/manifest.md"; fi
+catalog="$repo_root/docs/version-catalog/main.yaml"
 chart="${CERT_MANAGER_STACK_CHART_DIR:-$repo_root/deploy/helm/cert-manager}"
 
 fail() { echo "cert-manager-image-overrides: $*" >&2; exit 1; }
@@ -129,8 +130,10 @@ render
 assert_images
 for component in controller webhook cainjector startupapicheck acmesolver; do
   path="$(image_path "$component")"
+  catalog_version="$(yq -r ".artifacts[] | select(.name == \"cert-manager-$component\" and .type == \"image\") | .version" "$catalog")"
+  test -n "$catalog_version" || fail "missing catalog version for $component"
   assert_equal "$(yq -r ".certManager.$path.tag" "$environment_file")" \
-    "$(yq -r '.appVersion' "$chart/charts/cert-manager/Chart.yaml")" "$component matches selected subchart"
+    "$catalog_version" "$component matches published manifest"
 done
 for name in cert-manager cert-manager-webhook cert-manager-cainjector cert-manager-startupapicheck; do
   assert_equal "$(yq "select((.kind == \"Deployment\" or .kind == \"Job\") and .metadata.name == \"$name\") | .spec.template.spec.securityContext.runAsNonRoot" "$work_dir/rendered.yaml")" true "$name retains nonroot"
