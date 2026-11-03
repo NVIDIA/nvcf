@@ -184,6 +184,7 @@ functionAutoscaler:
 # the LLM addon is enabled, the stack defaults the Pylon image from
 # global.sidecars (or global.image) at version 0.25.0.
 api:
+  podAnnotations: {}
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
   # global.workerEndpoints.essServiceURL. In split-plane deployments that value
@@ -200,6 +201,7 @@ api:
 # Remote config is passed to the NVCT API chart and overrides its packaged
 # application profile, mirroring api.remoteConfig.
 nvctApi:
+  podAnnotations: {}
   essBaseURL: ""
   remoteConfig:
     configData: {}
@@ -234,6 +236,7 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  podAnnotations: {}
   # How workers authenticate to NATS.
   #   nkey: the NVCF API gives every worker the control plane's shared NATS
   #     NKey as NKEY_SEED. The default.
@@ -407,6 +410,7 @@ openbao:
     podDisruptionBudget:
       minAvailable: 1
   server:
+    annotations: {}
     ha:
       # PDB for the HA Raft StatefulSet. The upstream chart enables this by
       # default with maxUnavailable derived from replica count.
@@ -613,6 +617,7 @@ icms:
 # Set enabled: true for any service running more than one replica.
 
 apikeys:
+  podAnnotations: {}
   # Operator-set api-keys service env, deep-merged over the chart defaults
   # (AWS_REGION / SPRING_PROFILES_ACTIVE). Set NVCF_NCA_ID to the NCA the
   # api-keys service authorizes keys against. Leave unset to keep the chart
@@ -625,11 +630,13 @@ apikeys:
     maxUnavailable: 1
 
 ess:
+  podAnnotations: {}
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
 
 invocation:
+  podAnnotations: {}
   env:
     # Keep request subjects aligned with the API and worker consumers.
     NATS_PROPERTIES__REGION: ncp
@@ -778,6 +785,7 @@ ingress:
         # listenerName defaults to llm-quic in the gateway-routes chart.
 
 grpcproxy:
+  podAnnotations: {}
   # PDB: disabled by default. highAvailability.mode replaces it with the HA PDB
   # when it scales grpc-proxy.
   podDisruptionBudget:
