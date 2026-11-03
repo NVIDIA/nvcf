@@ -206,7 +206,19 @@ func validateEditionTransition(previous, current *Catalog) error {
 	return nil
 }
 
+// Editions frozen before the repository moved to dsx-ai-factory publish
+// inventory URLs under the NVIDIA owner. GitHub redirects those URLs, and the
+// release branches that hold them are immutable.
+const (
+	releaseDownloadBase       = "https://github.com/dsx-ai-factory/nvcf/releases/download/"
+	legacyReleaseDownloadBase = "https://github.com/NVIDIA/nvcf/releases/download/"
+)
+
 func manifestForEdition(catalog *Catalog) ([]byte, error) {
+	return manifestForEditionWithBase(catalog, releaseDownloadBase)
+}
+
+func manifestForEditionWithBase(catalog *Catalog, downloadBase string) ([]byte, error) {
 	if catalog.DocsEdition == nil {
 		return nil, fmt.Errorf("catalog has no docs edition")
 	}
@@ -216,7 +228,7 @@ func manifestForEdition(catalog *Catalog) ([]byte, error) {
 	manifest := editionManifest{SchemaVersion: 1, Edition: *catalog.DocsEdition, Stacks: map[string]editionStack{}}
 	for _, name := range releaseSetStackNames {
 		stack, _ := catalog.ReleaseSet.Stacks.byName(name)
-		manifest.Stacks[name] = editionStack{Version: stack.Version, SourceTag: stack.SourceTag, SourceCommit: stack.SourceCommit, InventoryAsset: stack.InventoryAsset, InventoryURL: "https://github.com/dsx-ai-factory/nvcf/releases/download/" + stack.SourceTag + "/" + stack.InventoryAsset}
+		manifest.Stacks[name] = editionStack{Version: stack.Version, SourceTag: stack.SourceTag, SourceCommit: stack.SourceCommit, InventoryAsset: stack.InventoryAsset, InventoryURL: downloadBase + stack.SourceTag + "/" + stack.InventoryAsset}
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	return append(data, '\n'), err
@@ -236,6 +248,15 @@ func syncEditionManifest(repoRoot string, catalog *Catalog, check bool) error {
 		return nil
 	}
 	if check {
+		if readErr == nil {
+			legacy, err := manifestForEditionWithBase(catalog, legacyReleaseDownloadBase)
+			if err != nil {
+				return err
+			}
+			if string(existing) == string(legacy) {
+				return nil
+			}
+		}
 		return fmt.Errorf("%w: docs/edition-manifest.json does not match the edition catalog", ErrCheckFailed)
 	}
 	if readErr != nil && !os.IsNotExist(readErr) {

@@ -178,6 +178,38 @@ func TestEditionManifestDrift(t *testing.T) {
 	}
 }
 
+func TestEditionManifestAcceptsFrozenLegacyDownloadURLs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	catalog := editionTestCatalog()
+	legacy, err := manifestForEditionWithBase(catalog, legacyReleaseDownloadBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(legacy), legacyReleaseDownloadBase) {
+		t.Fatalf("legacy manifest missing legacy base: %s", legacy)
+	}
+	path := filepath.Join(root, "docs", "edition-manifest.json")
+	if err := os.WriteFile(path, legacy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncEditionManifest(root, catalog, true); err != nil {
+		t.Fatalf("frozen legacy manifest rejected: %v", err)
+	}
+	if err := syncEditionManifest(root, catalog, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), releaseDownloadBase) || strings.Contains(string(data), legacyReleaseDownloadBase) {
+		t.Fatalf("regenerated manifest kept legacy URLs: %s", data)
+	}
+}
+
 func TestEditionGeneratedStackLinksPreserveSelection(t *testing.T) {
 	for _, renderer := range []string{"manifest-artifact-registry-paths", "compatibility-matrix"} {
 		t.Run(renderer, func(t *testing.T) {
