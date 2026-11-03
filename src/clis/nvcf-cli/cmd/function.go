@@ -822,9 +822,9 @@ func validateLLMTokenRateLimit(raw string) error {
 		}
 
 		switch unit {
-		case "S", "M", "H", "D", "W":
+		case "S", "M", "H", "D", "W", "MO":
 		default:
-			return fmt.Errorf("invalid tokenRateLimit unit %q: expected S, M, H, D, or W", unit)
+			return fmt.Errorf("invalid tokenRateLimit unit %q: expected S, M, H, D, W, or MO", unit)
 		}
 		if seenUnits[unit] {
 			return fmt.Errorf("invalid tokenRateLimit: duplicate %s unit", unit)
