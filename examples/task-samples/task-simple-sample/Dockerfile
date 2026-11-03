@@ -21,7 +21,7 @@ COPY requirements.txt ./
 
 # Use the fixed OS CA bundle without merging pip's affected bundled emSign roots.
 RUN python3 -m pip install --no-cache-dir --use-deprecated=legacy-certs \
-        --cert /etc/ssl/certs/ca-certificates.crt pip==26.2.2 && \
+        --cert /etc/ssl/certs/ca-certificates.crt 'pip>=26.2.2' && \
     python3 -m pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .

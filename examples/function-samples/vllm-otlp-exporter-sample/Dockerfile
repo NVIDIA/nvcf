@@ -24,7 +24,7 @@ RUN apt-get -y install ca-certificates wget systemctl git python3 python3-pip
 RUN apt-get -y install jq
 # Use the fixed OS CA bundle without merging pip's affected bundled emSign roots.
 RUN python3 -m pip install --no-cache-dir --use-deprecated=legacy-certs \
-        --cert /etc/ssl/certs/ca-certificates.crt pip==26.2.2 && \
+        --cert /etc/ssl/certs/ca-certificates.crt 'pip>=26.2.2' && \
     python3 -m pip install --no-cache-dir certifi==2026.10.19 uv==0.13.4
 RUN wget https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${OTEL_VERSION}/otelcol-contrib_${OTEL_VERSION}_linux_amd64.deb
 RUN dpkg -i otelcol-contrib_${OTEL_VERSION}_linux_amd64.deb

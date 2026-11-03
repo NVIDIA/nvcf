@@ -26,7 +26,7 @@ COPY requirements.txt ./
 
 # Use the updated OS CA bundle to upgrade pip safely; old pip still trusts the affected emSign chains.
 RUN python3 -m pip install --no-cache-dir \
-        --cert /etc/ssl/certs/ca-certificates.crt pip==26.2.2 && \
+        --cert /etc/ssl/certs/ca-certificates.crt 'pip>=26.2.2' && \
     python3 -m pip install --no-cache-dir -r requirements.txt
 
 COPY http_echo_server.py /app/
