@@ -86,8 +86,9 @@ for entry in "${releases[@]}"; do
   fi
 done
 
-# 3. The callout's token-mode restart annotations merge with the operator's,
-#    and win on a clash so the auth mode still restarts the pod.
+# 3. In token mode the callout keeps operator annotations next to the stack's
+#    restart annotation. The restart keys are reserved: an operator copy would
+#    survive a switch back to nkey and stop that switch restarting the callout.
 cat >"$environment_file" <<'EOF'
 nats:
   workerAuth: token
@@ -97,11 +98,17 @@ nats:
 natsAuthCalloutService:
   podAnnotations:
     example.com/owner: operator
-    nvcf.nvidia.com/nats-worker-auth: nkey
 EOF
 values="$work_dir/callout-token.yaml"
 render_values nats-auth-callout-service "$values"
 assert_yaml_value "$values" '.podAnnotations."example.com/owner"' operator "token mode keeps operator annotations"
-assert_yaml_value "$values" '.podAnnotations."nvcf.nvidia.com/nats-worker-auth"' token "token mode restart annotation wins"
+assert_yaml_value "$values" '.podAnnotations."nvcf.nvidia.com/nats-worker-auth"' token "token mode sets the restart annotation"
+
+yq -i '.natsAuthCalloutService.podAnnotations."nvcf.nvidia.com/nats-worker-auth" = "token"' "$environment_file"
+if render_values nats-auth-callout-service "$work_dir/callout-reserved.yaml" 2>"$work_dir/callout-reserved.err"; then
+  fail "reserved callout annotation must fail the render"
+fi
+grep -q 'nvcf.nvidia.com/nats-worker-auth is reserved for the stack' "$work_dir/callout-reserved.err" ||
+  fail "reserved callout annotation: unexpected error: $(tail -3 "$work_dir/callout-reserved.err")"
 
 echo "pod-annotations-wiring: OK"

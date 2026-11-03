@@ -67,9 +67,9 @@ api:
 
 Annotation values must be strings, so quote numbers and booleans (`"8080"`, `"true"`), and do not
 set keys the charts manage themselves, such as `checksum/config`. A change rolls the Deployments and
-NATS. OpenBao uses the `OnDelete` update strategy, so its pods
-pick up new annotations only when they are restarted. With `nats.workerAuth: token`, the auth
-callout's own restart annotations take precedence over a key of the same name.
+NATS. OpenBao uses the `OnDelete` update strategy, so its pods pick up new annotations only when
+they are restarted. Keys starting with `nvcf.nvidia.com/nats-worker-auth` are reserved for the auth
+callout's restart on a worker auth change, and setting them fails the render.
 
 ### Restarting a Service
 

@@ -763,6 +763,13 @@ podDisruptionBudget:
 {{- . | nindent 0 }}
 {{- end }}
 {{- with dig "natsAuthCalloutService" "podAnnotations" dict .Values }}
+{{- /* The stack sets these in token mode so a worker auth change restarts the
+       callout; an operator copy would survive a switch back to nkey and stop it. */}}
+{{- range $key, $_ := . }}
+{{- if hasPrefix "nvcf.nvidia.com/nats-worker-auth" $key }}
+{{- fail (printf "natsAuthCalloutService.podAnnotations: %s is reserved for the stack" $key) }}
+{{- end }}
+{{- end }}
 podAnnotations:
   {{- toYaml . | nindent 2 }}
 {{- end }}
