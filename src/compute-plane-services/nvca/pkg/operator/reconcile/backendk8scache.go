@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,6 +39,7 @@ import (
 	"github.com/imdario/mergo"
 	"github.com/sirupsen/logrus"
 	oteltrace "go.opentelemetry.io/otel/trace"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -953,7 +955,7 @@ func (bc *BackendK8sCache) SyncNVCFBackendHealth(ctx context.Context, nb *nvidia
 	// also check if the number of replicas is as expected.
 	// Otherwise the agent's health is unhealthy or unknown.
 	evType := corev1.EventTypeNormal
-	if nvcaHealthResp.Status == nvidiaiov1.AgentStatusHealthy {
+	if isAgentHealthy(nvcaHealthResp.Status) {
 		dep, err := bc.clients.K8s.AppsV1().Deployments(getSystemNamespace(nb)).Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
 		if err != nil {
 			log.WithError(err).Error("Get NVCA deployment")
@@ -963,6 +965,10 @@ func (bc *BackendK8sCache) SyncNVCFBackendHealth(ctx context.Context, nb *nvidia
 			log.Warn("NVCA deployment has no ready replicas")
 			nvcaHealthResp.Status = nvidiaiov1.AgentStatusUnhealthy
 			evType = corev1.EventTypeWarning
+		} else if agentRolloutStalled(dep) {
+			log.Warn("NVCA deployment rollout exceeded its progress deadline; the previous agent is still serving")
+			nvcaHealthResp.Status = nvidiaiov1.AgentStatusUnhealthy
+			evType = corev1.EventTypeWarning
 		}
 	} else {
 		evType = corev1.EventTypeWarning
@@ -970,7 +976,7 @@ func (bc *BackendK8sCache) SyncNVCFBackendHealth(ctx context.Context, nb *nvidia
 	// A healthy agent may still be the previous replica kept alive because the
 	// operator refused to roll out an invalid configuration. Keep reporting
 	// Unhealthy until the configuration is corrected.
-	if nvcaHealthResp.Status == nvidiaiov1.AgentStatusHealthy {
+	if isAgentHealthy(nvcaHealthResp.Status) {
 		mergeCfg, _, configErr := bc.getRawAgentConfigToMerge(ctx)
 		if configErr == nil {
 			configErr = validateMergedAgentConfig(nb, mergeCfg)
@@ -1059,6 +1065,24 @@ func (bc *BackendK8sCache) getNVCAHealth(ctx context.Context, svcURL string) nvc
 	}
 
 	return nvcaHealthResp
+}
+
+// isAgentHealthy reports whether status from the agent's /healthz is healthy. The
+// agent reports "healthy", while AgentStatusHealthy is "Healthy".
+func isAgentHealthy(status nvidiaiov1.AgentStatus) bool {
+	return strings.EqualFold(string(status), string(nvidiaiov1.AgentStatusHealthy))
+}
+
+// agentRolloutStalled reports whether the agent rollout stopped progressing, for
+// example because the new replica cannot register with ICMS and stays NotReady.
+func agentRolloutStalled(dep *appsv1.Deployment) bool {
+	for _, cond := range dep.Status.Conditions {
+		if cond.Type == appsv1.DeploymentProgressing && cond.Status == corev1.ConditionFalse &&
+			cond.Reason == "ProgressDeadlineExceeded" {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldUpdateNVCFStatus(nbStatus nvidiaiov1.NVCFBackendStatus, nvcaStatus nvcfBackendHealthResponse) bool {
@@ -1303,6 +1327,12 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 
 	// finalizer added proceed with sync
 	if shouldNVCARollout(ctx, nvcaRolloutChecks...) {
+		// Checked only before a rollout because it lists nodes and ICMS requests.
+		if err := bc.validateInfraOverheadForActiveInstances(ctx,
+			effectiveConfigForComparison.OverrideEnvironmentVars, desiredAgentConfigCM); err != nil {
+			return err
+		}
+
 		if nbMerged.Status.Version == "" {
 			bc.eventRecorder.Eventf(nbMerged, corev1.EventTypeNormal,
 				string(nvcaoptypes.EventCategoryInstall), "Starting %v %v installation", AgentName, nbMerged.Spec.Version)

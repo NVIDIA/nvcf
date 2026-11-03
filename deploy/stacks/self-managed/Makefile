@@ -18,6 +18,7 @@ test:
 	@tests/cert-manager-image-overrides.sh
 	@tests/llm-pki-openbao-migration.sh
 	@tests/openbao-injector-image-overrides.sh
+	@tests/openbao-jwt-lifecycle-wiring.sh
 	@tests/service-pki-wiring.sh
 	@tests/nonroot-llm-migrations.sh
 	@tests/api-keys-startup-probe.sh
@@ -27,6 +28,7 @@ test:
 	@tests/llm-pki-release.sh
 	@tests/check-llm-pki-issuer.sh
 	@tests/pdb-value-wiring.sh
+	@tests/pod-annotations-wiring.sh
 	@tests/invocation-env-wiring.sh
 	@tests/invocation-tracing-baggage.sh
 	@tests/java-tracing-env-wiring.sh

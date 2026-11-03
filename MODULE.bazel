@@ -344,7 +344,20 @@ crate.from_cargo(
     ],
     supported_platform_triples = SUPPORTED_TRIPLES,
 )
-use_repo(crate, "nvcf_invocation_crates", "rs_autoscaler_crates", "stargate_crates")
+# nvstor: RDMA storage (src/compute-plane-services/nvstor). Linux only: the
+# crates use ibverbs, io_uring and Linux syscalls. Bazel builds nvstor-peer and
+# the crates it depends on; the target link needs libibverbs (rdma-core) for the
+# target architecture, see the nvstor README.
+crate.from_cargo(
+    name = "nvstor_crates",
+    cargo_lockfile = "//src/compute-plane-services/nvstor:Cargo.lock",
+    manifests = ["//src/compute-plane-services/nvstor:Cargo.toml"],
+    supported_platform_triples = [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+    ],
+)
+use_repo(crate, "nvcf_invocation_crates", "nvstor_crates", "rs_autoscaler_crates", "stargate_crates")
 
 # ============================================================================
 # C++ cross-compilation (multi-arch container builds).
@@ -448,7 +461,7 @@ oci.pull(
 # JDK 25 matches --java_language_version=25 above.
 oci.pull(
     name = "distroless_java",
-    digest = "sha256:9ce84c3c50fb8070b8a922e57711a693b5839d75cb09fc0f95550e17b68ec812",
+    digest = "sha256:3160c01b86a90c2cf11cae052957ac5ce49951b3f668ced7665e12d63d5c6a83",
     image = "nvcr.io/nvidia/distroless/java",
     platforms = [
         "linux/amd64",

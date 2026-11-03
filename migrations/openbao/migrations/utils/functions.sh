@@ -22,6 +22,8 @@ if [[ -n "${_FUNCTIONS_SH_SOURCED:-}" ]]; then
 fi
 readonly _FUNCTIONS_SH_SOURCED=1
 
+source "$(dirname "${BASH_SOURCE[0]}")/jwt_plugin_version.sh"
+
 # Define standard Kubernetes paths as constants for clarity and maintainability.
 readonly K8S_SA_TOKEN_PATH="/var/run/secrets/kubernetes.io/serviceaccount/token"
 
@@ -212,7 +214,15 @@ function enable_secrets_mount() {
     fi
 
     log_step "Enabling $mount_type secrets engine at mount path '$mount_path'"
-    if ! output=$(bao secrets enable -path=$mount_path $mount_type 2>&1); then
+    local enable_args=(secrets enable "-path=$mount_path")
+    if [[ "$mount_type" == "vault-plugin-secrets-jwt" ]]; then
+        local plugin_version
+        plugin_version=$(jwt_plugin_version) || return 1
+        if [[ -n $plugin_version ]]; then
+            enable_args+=("-plugin-version=$plugin_version")
+        fi
+    fi
+    if ! output=$(bao "${enable_args[@]}" "$mount_type" 2>&1); then
         log_error "Error enabling $mount_type secrets engine: $output"
         return 1
     fi

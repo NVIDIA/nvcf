@@ -27,6 +27,7 @@ import com.nvidia.icms.configuration.bean.CapacityGatingProperties;
 import com.nvidia.icms.inbound.rest.model.account.GpuUsageResponse;
 import com.nvidia.icms.inbound.rest.model.account.InstanceTypeAvailabilityResponse;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups;
+import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups.ClustersResponse;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups.GpuResponse;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups.InstanceTypeResponse;
 import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse;
@@ -39,10 +40,13 @@ import com.nvidia.icms.uec.IcmsUnifiedError;
 import com.nvidia.icms.uec.UnifiedErrorReporter;
 import jakarta.annotation.Nullable;
 import jakarta.validation.constraints.NotNull;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -122,14 +126,16 @@ public class CapacityGatingService {
             }
 
             // A group that never listed clusters is left alone, so this only ever removes a
-            // group whose entire cluster list was gated out.
-            if (isSetEmptyOrNull(clusterGroup.getClusters())) {
+            // group whose entire cluster list was gated out. A GPU-only policy admits every
+            // cluster, so it skips the walk entirely rather than rewriting a cluster list it
+            // was always going to return intact -- the same reasoning the nested region walks
+            // already apply through restrictsClusters.
+            if (!restrictsClusters(ncaId) || isSetEmptyOrNull(clusterGroup.getClusters())) {
                 return false;
             }
 
-            clusterGroup.getClusters().removeIf(
-                    cluster -> !capacityGatingProperties.isClusterAllowedForNca(
-                            ncaId, cluster.getId()));
+            clusterGroup.setClusters(retainAllowedClusters(clusterGroup.getClusters(), ncaId,
+                                                           ClustersResponse::getId));
 
             boolean noClustersLeft = isSetEmptyOrNull(clusterGroup.getClusters());
             if (noClustersLeft) {
@@ -385,6 +391,42 @@ public class CapacityGatingService {
     }
 
     /**
+     * Returns the clusters this NCA ID may use, as a new collection rather than by pruning the
+     * one it was handed.
+     *
+     * <p>The original collection is handed back unchanged when every cluster survives, so the
+     * iteration order and the collection type of an untouched response are exactly what they
+     * were before gating ran.
+     */
+    private <T> Set<T> retainAllowedClusters(Set<T> clusters, String ncaId,
+                                             Function<T, String> clusterIdOf) {
+        if (isSetEmptyOrNull(clusters)) {
+            return clusters;
+        }
+
+        Set<T> allowedClusters = clusters.stream()
+                .filter(cluster -> capacityGatingProperties.isClusterAllowedForNca(
+                        ncaId, clusterIdOf.apply(cluster)))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        return allowedClusters.size() == clusters.size() ? clusters : allowedClusters;
+    }
+
+    private <T> List<T> retainAllowedClusters(List<T> clusters, String ncaId,
+                                              Function<T, String> clusterIdOf) {
+        if (isListEmptyOrNull(clusters)) {
+            return clusters;
+        }
+
+        List<T> allowedClusters = clusters.stream()
+                .filter(cluster -> capacityGatingProperties.isClusterAllowedForNca(
+                        ncaId, clusterIdOf.apply(cluster)))
+                .collect(Collectors.toCollection(ArrayList::new));
+
+        return allowedClusters.size() == clusters.size() ? clusters : allowedClusters;
+    }
+
+    /**
      * Prunes the regions of an availability instance type and reports whether nothing is left.
      */
     private boolean isInstanceTypeEmptyAfterGating(
@@ -401,11 +443,9 @@ public class CapacityGatingService {
      */
     private boolean isAvailabilityRegionEmptyAfterGating(
             InstanceTypeAvailabilityResponse.Region region, String ncaId) {
-        if (region.getClusters() != null) {
-            region.getClusters().removeIf(
-                    cluster -> !capacityGatingProperties.isClusterAllowedForNca(
-                            ncaId, cluster.getClusterId()));
-        }
+        region.setClusters(retainAllowedClusters(
+                region.getClusters(), ncaId,
+                InstanceTypeAvailabilityResponse.Cluster::getClusterId));
         return isSetEmptyOrNull(region.getClusters());
     }
 
@@ -425,11 +465,8 @@ public class CapacityGatingService {
      * Prunes the clusters of a usage region and reports whether nothing is left.
      */
     private boolean isUsageRegionEmptyAfterGating(GpuUsageResponse.Region region, String ncaId) {
-        if (region.getClusters() != null) {
-            region.getClusters().removeIf(
-                    cluster -> !capacityGatingProperties.isClusterAllowedForNca(
-                            ncaId, cluster.getClusterId()));
-        }
+        region.setClusters(retainAllowedClusters(region.getClusters(), ncaId,
+                                                 GpuUsageResponse.Cluster::getClusterId));
         return isListEmptyOrNull(region.getClusters());
     }
 

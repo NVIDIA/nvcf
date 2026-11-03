@@ -17,6 +17,8 @@ limitations under the License.
 
 package featureflag
 
+import "strings"
+
 var _ Fetcher = &defaultFetcher{}
 
 // FeatureFlagFetcher allows for fetching the enabled
@@ -65,4 +67,46 @@ func (f *defaultFetcher) IsAttributeEnabled(ff *Attribute) bool {
 		return false
 	}
 	return ff.Enabled()
+}
+
+// NewListFetcher returns a Fetcher for an agent configured with the given feature flag
+// and attribute lists. It evaluates the lists as the agent does at startup, keeping the
+// defaults of unlisted entries and applying implied flags, but leaves the process-wide
+// flag state unchanged, so a caller can evaluate an agent configuration it has not
+// applied. It returns the error the agent would fail startup with for an invalid
+// flag combination.
+func NewListFetcher(featureFlags, attributes []string) (Fetcher, error) {
+	flagVals := listFlagValues{}
+	flagsMutex.Lock()
+	err := applyFlags(strings.Join(featureFlags, ","), flagVals, discardLogger{})
+	flagsMutex.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	attrVals := listAttrValues{}
+	attrMu.Lock()
+	applyAttributes(strings.Join(attributes, ","), attrVals, discardLogger{})
+	attrMu.Unlock()
+
+	return &listFetcher{flags: flagVals, attrs: attrVals}, nil
+}
+
+type listFetcher struct {
+	flags listFlagValues
+	attrs listAttrValues
+}
+
+func (f *listFetcher) IsFeatureFlagEnabled(ff *FeatureFlag) bool {
+	if ff == nil {
+		return false
+	}
+	return f.flags.enabled(ff)
+}
+
+func (f *listFetcher) IsAttributeEnabled(attr *Attribute) bool {
+	if attr == nil {
+		return false
+	}
+	return f.attrs.enabled(attr)
 }
