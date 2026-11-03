@@ -21,6 +21,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 )
@@ -43,4 +46,24 @@ func TestStorageControllerTypes(t *testing.T) {
 		nvcav1new.InternalPersistentStorageRequest,
 		nvcav1new.ModelCacheRequest,
 	}, withCache)
+}
+
+func TestAgentManagerCacheOptionsStripManagedFields(t *testing.T) {
+	opts := agentManagerCacheOptions()
+	require.NotNil(t, opts.DefaultTransform)
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "pod-1",
+		ManagedFields: []metav1.ManagedFieldsEntry{
+			{Manager: "creator", Operation: metav1.ManagedFieldsOperationUpdate},
+		},
+	}}
+	out, err := opts.DefaultTransform(pod)
+	require.NoError(t, err)
+	assert.Nil(t, out.(*corev1.Pod).ManagedFields)
+
+	// A ByObject entry with a transform of its own would not inherit DefaultTransform.
+	for obj, byObject := range opts.ByObject {
+		assert.Nil(t, byObject.Transform, "%T sets its own transform", obj)
+	}
 }

@@ -233,8 +233,55 @@ func parseFlags(f string) error {
 	flagsMutex.Lock()
 	defer flagsMutex.Unlock()
 
-	log := core.GetLogger(core.WithDefaultLogger(context.Background()))
+	return applyFlags(f, globalFlagValues{}, core.GetLogger(core.WithDefaultLogger(context.Background())))
+}
 
+// flagValues holds feature flag settings that override the registered defaults.
+type flagValues interface {
+	enabled(ff *FeatureFlag) bool
+	set(ff *FeatureFlag, enabled *bool)
+}
+
+// globalFlagValues holds settings in the process-wide feature flags.
+type globalFlagValues struct{}
+
+func (globalFlagValues) enabled(ff *FeatureFlag) bool { return ff.Enabled() }
+
+func (globalFlagValues) set(ff *FeatureFlag, enabled *bool) { ff.enabled = enabled }
+
+// listFlagValues holds the settings of a single feature flag list.
+type listFlagValues map[string]bool
+
+func (v listFlagValues) enabled(ff *FeatureFlag) bool {
+	if enabled, ok := v[ff.Key]; ok {
+		return enabled
+	}
+	return ff.defaultValue != nil && *ff.defaultValue
+}
+
+func (v listFlagValues) set(ff *FeatureFlag, enabled *bool) {
+	if enabled == nil {
+		delete(v, ff.Key)
+		return
+	}
+	v[ff.Key] = *enabled
+}
+
+// parseLogger is the part of a logger that flag and attribute parsing uses.
+type parseLogger interface {
+	Infof(format string, args ...any)
+	Warnf(format string, args ...any)
+}
+
+type discardLogger struct{}
+
+func (discardLogger) Infof(string, ...any) {}
+
+func (discardLogger) Warnf(string, ...any) {}
+
+// applyFlags parses the comma-separated feature flag list f into vals.
+// The caller must hold flagsMutex.
+func applyFlags(f string, vals flagValues, log parseLogger) error {
 	for _, s := range strings.Split(strings.TrimSpace(f), ",") {
 		s = strings.TrimSpace(s)
 		if s == "" {
@@ -254,10 +301,10 @@ func parseFlags(f string) error {
 			// If it is a deprecated feature flag log and skip
 			if _, ok := deprecatedFeatureFlags[ff.Key]; ok {
 				log.Infof("FeatureFlag %s is deprecated, will be ignored, and set to default value %t", ff.Key, *ff.defaultValue)
-				ff.enabled = ff.defaultValue
+				vals.set(ff, ff.defaultValue)
 			} else {
 				log.Infof("FeatureFlag %q=%v", ff.Key, enabled)
-				ff.enabled = &enabled
+				vals.set(ff, &enabled)
 			}
 		} else {
 			log.Warnf("Unknown FeatureFlag %q", s)
@@ -265,24 +312,24 @@ func parseFlags(f string) error {
 	}
 
 	// Post-process NGRE feature flags.
-	if EnforceContainerFunctionResourceLimits.Enabled() ||
-		EnforceContainerTaskResourceLimits.Enabled() ||
-		EnforceHelmFunctionResourceLimits.Enabled() ||
-		EnforceHelmTaskResourceLimits.Enabled() {
-		InfraResourceOverhead.enabled = newBool(true)
-		log.Infof("FeatureFlag %q=%v", InfraResourceOverhead.Key, *InfraResourceOverhead.enabled)
+	if vals.enabled(EnforceContainerFunctionResourceLimits) ||
+		vals.enabled(EnforceContainerTaskResourceLimits) ||
+		vals.enabled(EnforceHelmFunctionResourceLimits) ||
+		vals.enabled(EnforceHelmTaskResourceLimits) {
+		vals.set(InfraResourceOverhead, newBool(true))
+		log.Infof("FeatureFlag %q=%v", InfraResourceOverhead.Key, true)
 	}
 
 	// HelmAllowCPUNodes is mutually exclusive with HelmResourceConstraints.
-	if HelmAllowCPUNodes.Enabled() && HelmResourceConstraints.Enabled() {
+	if vals.enabled(HelmAllowCPUNodes) && vals.enabled(HelmResourceConstraints) {
 		return fmt.Errorf("FeatureFlag %q cannot be enabled when %q is enabled",
 			HelmAllowCPUNodes.Key, HelmResourceConstraints.Key)
 	}
 
-	if DynamoOperatorSupport.Enabled() && !AllowWorkloadKubernetesAPIAccess.Enabled() {
-		AllowWorkloadKubernetesAPIAccess.enabled = newBool(true)
+	if vals.enabled(DynamoOperatorSupport) && !vals.enabled(AllowWorkloadKubernetesAPIAccess) {
+		vals.set(AllowWorkloadKubernetesAPIAccess, newBool(true))
 		log.Infof("FeatureFlag %q=%v (force-enabled when %q is enabled)",
-			AllowWorkloadKubernetesAPIAccess.Key, *AllowWorkloadKubernetesAPIAccess.enabled, DynamoOperatorSupport.Key)
+			AllowWorkloadKubernetesAPIAccess.Key, true, DynamoOperatorSupport.Key)
 	}
 
 	return nil

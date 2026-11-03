@@ -115,8 +115,8 @@ func TestSuiteRestoresGeneratedSecretOnSignals(t *testing.T) {
 			case err = <-waitDone:
 			case <-time.After(5 * time.Second):
 				_ = cmd.Process.Kill()
-				<-waitDone
-				t.Fatalf("signal cleanup helper did not exit after %s:\n%s", testCase.name, output.String())
+				err = <-waitDone
+				t.Fatalf("signal cleanup helper did not exit after %s (wait error: %v):\n%s", testCase.name, err, output.String())
 			}
 			var exitErr *exec.ExitError
 			if !errors.As(err, &exitErr) {

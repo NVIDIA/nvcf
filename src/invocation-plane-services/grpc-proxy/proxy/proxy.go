@@ -245,6 +245,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 		if err != nil {
 			return nil, err
 		}
+		director.eventLedger = eventLedger
 	}
 
 	http2Server := createHttp2Server(director, "0.0.0.0:10081", healthManager)

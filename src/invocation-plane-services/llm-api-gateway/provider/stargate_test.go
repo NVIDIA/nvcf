@@ -1445,3 +1445,88 @@ func TestStargateMessagesCredentialsStopBeforeWorker(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 }
+
+func TestStargateDecisionRouteCredentialsStopBeforeWorker(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		t.Run(path, func(t *testing.T) {
+			p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+			require.NoError(t, err)
+			p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie"} {
+					require.Empty(t, r.Header.Values(name), name)
+				}
+				require.Equal(t, "fn-decisions", r.Header.Get(headerRoutingKey))
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+			})}
+			resp, err := p.Proxy(context.Background(),
+				&requestctx.RequestContext{BearerToken: "caller-secret", RoutingKey: "fn-decisions"},
+				&ProxyRequest{Method: "POST", Path: path, Header: http.Header{
+					"Authorization": {"Bearer injected"}, "X-Api-Key": {"secret"},
+					"Proxy-Authorization": {"secret"}, "Cookie": {"session=secret"},
+				}, Body: io.NopCloser(strings.NewReader(`{}`))})
+			require.NoError(t, err)
+			defer resp.Body.Close()
+		})
+	}
+}
+
+func TestStargateDecisionRouteControlHeaders(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		for _, tc := range []struct {
+			name       string
+			estimate   int
+			wantTokens string
+		}{
+			{"positive estimate is sent", 42, "42"},
+			{"zero estimate is sent as one", 0, "1"},
+		} {
+			t.Run(path+"/"+tc.name, func(t *testing.T) {
+				p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+				require.NoError(t, err)
+				var got http.Header
+				p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					got = r.Header.Clone()
+					return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+				})}
+				resp, err := p.Proxy(context.Background(),
+					&requestctx.RequestContext{RoutingKey: "fn-decisions"},
+					&ProxyRequest{Method: "POST", Path: path, Header: http.Header{
+						"X-Input-Tokens":       {"999999"},
+						"X-Token-Estimate":     {"999999"},
+						"X-Max-Wait-Ms":        {"abc"},
+						"X-Request-Slo-Ms":     {"abc"},
+						"X-Cache-Affinity-Key": {"client-key"},
+						"Accept-Encoding":      {"gzip, br"},
+						"X-Vendor":             {"kept"},
+					}, Body: io.NopCloser(strings.NewReader(`{}`)), InputTokens: tc.estimate, TokenEstimate: tc.estimate})
+				require.NoError(t, err)
+				defer resp.Body.Close()
+
+				require.Equal(t, []string{tc.wantTokens}, got.Values(headerInputTokens))
+				require.Equal(t, []string{tc.wantTokens}, got.Values(headerTokenEstimate))
+				for _, name := range []string{"X-Max-Wait-Ms", "X-Request-Slo-Ms", headerCacheAffinityKey} {
+					require.Empty(t, got.Values(name), name)
+				}
+				// Identity keeps the response readable for the usage observer.
+				require.Equal(t, []string{"identity"}, got.Values("Accept-Encoding"))
+				require.Equal(t, "kept", got.Get("X-Vendor"))
+			})
+		}
+	}
+}
+
+func TestStargateNonDecisionRouteKeepsZeroEstimateUnset(t *testing.T) {
+	p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	var got http.Header
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		got = r.Header.Clone()
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+	})}
+	resp, err := p.Proxy(context.Background(), &requestctx.RequestContext{RoutingKey: "fn"},
+		&ProxyRequest{Method: "POST", Path: "/v1/embeddings", Header: http.Header{"Accept-Encoding": {"gzip"}}, Body: io.NopCloser(strings.NewReader(`{}`))})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Empty(t, got.Values(headerInputTokens))
+	require.Equal(t, "gzip", got.Get("Accept-Encoding"))
+}
