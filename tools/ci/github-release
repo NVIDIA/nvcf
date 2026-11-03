@@ -1244,6 +1244,300 @@ def next_patch_version(version):
     return f"{major}.{minor}.{patch + 1}"
 
 
+def available_release_version(root, service, version):
+    """Choose an unused stable version without changing the history baseline.
+
+    Maintenance tags may not be ancestors of HEAD, but their versions are still
+    taken. Stay on the candidate's major/minor line and advance past its highest
+    allocated patch. Prereleases and other release lines do not move this one.
+    """
+    if not re.fullmatch(STABLE_SEMVER_PATTERN, version):
+        raise SystemExit(f"{service['id']}: cannot allocate non-stable version {version!r}")
+    train = version.rsplit(".", 1)[0]
+    tags = set(current_service_tags(root, service))
+    for prefix in legacy_tag_prefixes(service):
+        tags.update(run(["git", "tag", "-l", f"{prefix}*"], cwd=root, capture=True).splitlines())
+    patch = int(version.rsplit(".", 1)[1])
+    for tag in tags:
+        allocated = version_from_tag(service, tag, root)
+        if re.fullmatch(STABLE_SEMVER_PATTERN, allocated) and allocated.rsplit(".", 1)[0] == train:
+            patch = max(patch, int(allocated.rsplit(".", 1)[1]) + 1)
+    selected = f"{train}.{patch}"
+    if selected != version:
+        print(
+            f"[github-release] {service['id']}: {version} is reserved or below an allocated "
+            f"version on {train}; selecting {selected} without changing existing tags"
+        )
+    return selected
+
+
+def computed_local_labels(tree):
+    """A literal package prefix is not the dependency a string expression selects."""
+    label_names = set()
+    collection_names = set()
+
+    def collection(node):
+        return (isinstance(node, (ast.List, ast.Tuple))
+                or (isinstance(node, ast.Name) and node.id in collection_names)
+                or (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)
+                    and (collection(node.left) or collection(node.right))))
+
+    def contains_label(node):
+        return any(
+            (isinstance(item, ast.Constant) and isinstance(item.value, str)
+             and item.value.startswith(("//", "@//", "@@//")))
+            or (isinstance(item, ast.Name) and item.id in label_names)
+            for item in ast.walk(node)
+        )
+
+    assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
+    while True:
+        before = (set(label_names), set(collection_names))
+        for assignment in assignments:
+            names = {target.id for target in assignment.targets if isinstance(target, ast.Name)}
+            if contains_label(assignment.value):
+                label_names.update(names)
+            if collection(assignment.value):
+                collection_names.update(names)
+        if (label_names, collection_names) == before:
+            break
+
+    def nonlabel_template(node, delimiter):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            return False
+        prefix = node.value.split(delimiter, 1)[0]
+        return bool(prefix) and not any(prefix.startswith(start) or start.startswith(prefix)
+                                        for start in ("//", "@//", "@@//"))
+
+    def computes_label(node):
+        if isinstance(node, ast.AugAssign):
+            return not (isinstance(node.op, ast.Add) and collection(node.target))
+        if isinstance(node, ast.BinOp):
+            # Joining dependency lists preserves their labels. A command such
+            # as "$(location %s)" % LABEL also leaves LABEL intact.
+            return not (collection(node) or (isinstance(node.op, ast.Mod)
+                                            and nonlabel_template(node.left, "%")))
+        if isinstance(node, ast.JoinedStr) or (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)):
+            return True
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            return (node.func.attr in string_operations
+                    and not (node.func.attr == "format" and nonlabel_template(node.func.value, "{")))
+        return False
+
+    string_operations = {
+        "format", "join", "replace", "removeprefix", "removesuffix", "split", "rsplit",
+        "partition", "rpartition", "strip", "lstrip", "rstrip", "lower", "upper", "capitalize", "title",
+    }
+    return any(contains_label(node) and computes_label(node) for node in ast.walk(tree))
+
+
+def java_release_inputs_match(root, service, tag, components):
+    """Conservatively compare the inputs of a native Bazel Java image.
+
+    A cherry-pick has different ancestry but can ship the same inputs. Include
+    shared frameworks, local Bazel dependencies, build rules, toolchains, Maven
+    locks and image pins, not just the service directory. Other build backends
+    keep the normal version-allocation path until their inputs are modelled.
+    """
+    if not is_java_service(components, service):
+        return False
+    if not any(
+        isinstance(call.func, ast.Name) and call.func.id == "java_oci_image"
+        for call in service_build_calls(root, service)
+    ):
+        return False
+    paths = {
+        service["path"],
+        "rules", "tools/bazel", "platforms", "maven_install.json",
+        ".bazelrc", ".bazelversion", ".bazelignore", ".bazel_downloader_config", "WORKSPACE.bzlmod",
+    }
+    # Follow literal local package references, including cross-service Java
+    # libraries. Compare source files directly and whole packages for rule
+    # targets rather than evaluating selects, globs or individual Bazel rules.
+    package_paths = set()
+    pending = sorted(paths)
+    while pending:
+        path = pending.pop()
+        entries = run(["git", "ls-tree", "-r", "HEAD", "--", path], cwd=root, capture=True).splitlines()
+        files = [entry.partition("\t")[2] for entry in entries]
+        excluded = []
+        if path in package_paths:
+            # A Bazel package excludes nested packages. Comparing an entire
+            # library family would rebuild users of an unchanged sibling.
+            before = run(["git", "ls-tree", "-r", "--name-only", tag, "--", path], cwd=root, capture=True).splitlines()
+            def nested_builds(names):
+                return {name for name in names if Path(name).name in BUILD_FILE_NAMES
+                        and Path(name).parent.as_posix() != path}
+            if nested_builds(before) != nested_builds(files):
+                return False
+            excluded = [Path(name).parent.as_posix() + "/" for name in nested_builds(files)]
+        changes = run(["git", "diff", "--name-only", tag, "HEAD", "--", path], cwd=root, capture=True).splitlines()
+        if any(not any(name.startswith(prefix) for prefix in excluded) for name in changes):
+            return False
+        if any(entry.startswith("120000 ") and not any(entry.partition("\t")[2].startswith(prefix)
+                                                       for prefix in excluded) for entry in entries):
+            # Git compares a symlink's text, not the bytes Bazel reads through
+            # it. An unchanged link cannot establish unchanged build inputs.
+            return False
+        for filename in files:
+            if any(filename.startswith(prefix) for prefix in excluded):
+                continue
+            if Path(filename).name not in BUILD_FILE_NAMES and not filename.endswith(".bzl"):
+                continue
+            tree = ast.parse(file_at_revision(root, "HEAD", filename), filename=filename)
+            if computed_local_labels(tree):
+                return False
+            parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                    continue
+                label = node.value
+                if label.startswith(("@//", "@@//")):
+                    label = label.lstrip("@")
+                if not label.startswith("//") or label.startswith("//visibility:"):
+                    continue
+                match = re.fullmatch(r"//([A-Za-z0-9_./-]*)(?::[A-Za-z0-9_./+-]+)?", label)
+                if not match or label == "//":
+                    parent = parents.get(node)
+                    if (isinstance(parent, ast.Call) and isinstance(parent.func, ast.Attribute)
+                            and parent.func.attr in {"startswith", "endswith"}):
+                        continue
+                    # Computed labels cannot establish equivalence here.
+                    return False
+                package = match.group(1) or ""
+                target = label.partition(":")[2]
+                source_file = (Path(package) / target).as_posix() if target else ""
+                if source_file and not source_file.endswith(".bzl") and (root / source_file).is_file():
+                    references = [source_file]
+                    references.extend((Path(package) / name).as_posix() for name in BUILD_FILE_NAMES
+                                      if (root / package / name).is_file())
+                else:
+                    if not package:
+                        return False
+                    references = [package]
+                    if not any(package == p or (p not in package_paths and package.startswith(p + "/")) for p in paths):
+                        package_paths.add(package)
+                for reference in references:
+                    if reference == "BUILD.bazel":
+                        # Compared as syntax below, excluding Gazelle comments.
+                        continue
+                    if not any(reference == p or (p not in package_paths and reference.startswith(p + "/")) for p in paths):
+                        paths.add(reference)
+                        pending.append(reference)
+
+    def module_inputs(revision):
+        tree = ast.parse(file_at_revision(root, revision, MODULE_FILE))
+        unrelated_extensions = set()
+        known_extensions = {
+            "go_deps": ("@gazelle//:extensions.bzl", "go_deps"),
+            "crate": ("@rules_rust//crate_universe:extension.bzl", "crate"),
+        }
+        for statement in tree.body:
+            if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
+                continue
+            name, call = statement.targets[0], statement.value
+            if (isinstance(name, ast.Name) and name.id in known_extensions
+                    and isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                    and call.func.id == "use_extension"
+                    and [arg.value for arg in call.args if isinstance(arg, ast.Constant)]
+                    == list(known_extensions[name.id])):
+                unrelated_extensions.add(name.id)
+        # Go/Rust extension usages cannot change the native Java image. Keep
+        # their extension declarations and every bazel_dep/override, so changes
+        # to module resolution or toolchains still prevent reuse.
+        def unrelated_usage(statement):
+            if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+                return False
+            call = statement.value
+            if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
+                return call.func.value.id in unrelated_extensions
+            return (
+                isinstance(call.func, ast.Name) and call.func.id == "use_repo"
+                and call.args and isinstance(call.args[0], ast.Name)
+                and call.args[0].id in unrelated_extensions
+            )
+
+        tree.body = [statement for statement in tree.body if not unrelated_usage(statement)]
+        lock = json.loads(file_at_revision(root, revision, "MODULE.bazel.lock"))
+        lock["moduleExtensions"] = {
+            key: value for key, value in lock.get("moduleExtensions", {}).items()
+            if key not in {
+                "@@rules_rust+//crate_universe:extension.bzl%crate",
+                "@@gazelle+//:extensions.bzl%go_deps",
+            }
+        }
+        # Root BUILD changes may only be Gazelle directives; comments there do
+        # not affect Java. Actual rule changes remain part of the comparison.
+        build = ast.parse(file_at_revision(root, revision, "BUILD.bazel"))
+        return ast.dump(tree), lock, ast.dump(build)
+
+    return module_inputs(tag) == module_inputs("HEAD")
+
+
+class UnverifiedExistingRelease(Exception):
+    """Equivalent source exists, but its release cannot be confirmed published."""
+
+
+def reuse_published_release(root, service, version, components):
+    """Reuse an equivalent published release without moving its tag or rebuilding.
+
+    This wrapper publishes GitHub releases; producer/catalog pipelines own
+    image availability and retrying incomplete image publication. A bare tag,
+    draft, failed lookup or unsupported build is not evidence of a release.
+    """
+    tag = existing_tag_for_version(root, service, version)
+    if not tag:
+        return False
+    try:
+        if not java_release_inputs_match(root, service, tag, components):
+            return False
+    except (SyntaxError, ValueError, subprocess.CalledProcessError, SystemExit) as exc:
+        print(f"[github-release] {service['id']}: cannot establish input equivalence for {tag}: {exc}")
+        return False
+    result = subprocess.run(
+        ["gh", "release", "view", tag, "--json", "tagName,isDraft,isPrerelease,publishedAt"],
+        cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    try:
+        release = json.loads(result.stdout) if result.returncode == 0 else {}
+        published = (
+            release.get("tagName") == tag and release.get("isDraft") is False
+            and release.get("isPrerelease") is False and bool(release.get("publishedAt"))
+        )
+    except (ValueError, AttributeError):
+        published = False
+    if not published:
+        raise UnverifiedExistingRelease(
+            f"{service['id']}: {tag} has equivalent inputs but is not verified as a published release; "
+            "check GitHub access and complete publication of that tag before retrying"
+        )
+    print(
+        f"[github-release] {service['id']}: reusing published {tag}; source and build inputs "
+        "match HEAD. Skipping duplicate publication and continuing; existing tags are unchanged."
+    )
+    return True
+
+
+def semantic_release_changes(root, service, candidate):
+    """Notes and PR commits for a semantic release whose version was reserved."""
+    _version, baseline = release_baseline(root, service)
+    history = f"{baseline}..HEAD" if baseline else "HEAD"
+    commits = run(
+        ["git", "log", "--format=%H", history, "--", service["path"]],
+        cwd=root, capture=True,
+    ).splitlines()
+    changes = run(
+        ["git", "log", "--format=- %h %s%n%b", history, "--", service["path"]],
+        cwd=root, capture=True,
+    ).strip()
+    reason = (
+        f"semantic-release selected {candidate}; the published version advances past "
+        "versions already allocated on this release line.\n\n"
+        f"Changes since {baseline or 'the start of the service history'}:\n"
+    )
+    return reason + changes, commits
+
+
 # Release levels, ordered. `None` is "releases nothing"; comparing by rank is how
 # levels from two owned paths are aggregated.
 RELEASE_LEVEL_RANK = {None: 0, "patch": 1, "minor": 2, "major": 3}
@@ -1439,7 +1733,10 @@ def publish_framework_dependency_release(root, service, components, dry_run, dra
         )
         return False
 
-    version = next_patch_version(current_version)
+    candidate = next_patch_version(current_version)
+    if reuse_published_release(root, service, candidate, components):
+        return True
+    version = available_release_version(root, service, candidate)
     print(
         f"[github-release] {service['id']}: {len(commits)} release-worthy Java framework "
         f"commit(s) since {last_tag} with no service release; cutting dependency patch "
@@ -1665,7 +1962,7 @@ def publish_go_dependency_release(root, service, dry_run, draft):
         )
         return False
 
-    version = next_patch_version(current_version)
+    version = available_release_version(root, service, next_patch_version(current_version))
     print(
         f"[github-release] {service['id']}: {len(commits)} release-worthy Go SDK or base image "
         f"commit(s) since {last_tag} with no service release; cutting dependency patch "
@@ -1712,12 +2009,9 @@ def multi_path_release_version(root, service, owned, semantic_version):
     if not owned_level:
         return (semantic_version, "semantic-release") if semantic_version else (None, "")
 
-    last_tag = latest_service_tag(service, root)
+    current, last_tag = release_baseline(root, service)
     if not last_tag:
         # No baseline to bump from. semantic-release owns the first release.
-        return (semantic_version, "semantic-release") if semantic_version else (None, "")
-    current = version_from_tag(service, last_tag, root)
-    if not re.fullmatch(STABLE_SEMVER_PATTERN, current):
         return (semantic_version, "semantic-release") if semantic_version else (None, "")
 
     owned_version = bump_version(current, owned_level)
@@ -1843,7 +2137,7 @@ def publish_app_version_refresh(root, service, metadata, dry_run, draft):
             "not releasing from a prerelease"
         )
         return
-    version = bump_version(own, level)
+    version = available_release_version(root, service, bump_version(own, level))
     moved = f"{leader_id} moved {shipped or 'none'} -> {current}; " if shipped != current else ""
     print(
         f"[github-release] {service['id']}: {moved}"
@@ -2265,6 +2559,7 @@ def auto_release(args):
     # workflow is inert (dry-run / auto-tagging disabled) these are reported but
     # must not fail the job; publish mode below still fails hard.
     dry_run_failures = []
+    unverified_releases = []
 
     # Services whose semantic-release run hit the behind-the-remote race. These
     # fail the job in publish mode: the release was lost, and a green run would
@@ -2319,99 +2614,78 @@ def auto_release(args):
             )
             install_semantic_release(service_dir)
 
-            if dry_run:
-                code, output = stream(["npx", "semantic-release", "--dry-run", "--no-ci", "--debug"], cwd=service_dir)
-                outcome = finish_semantic_release(
-                    root, service, java_components, code, output, dry_run=True, draft=draft
+            # Preview before any publish: semantic-release only sees reachable
+            # tags and can select a version already shipped on a maintenance branch.
+            preview_cmd = ["npx", "semantic-release", "--dry-run", "--no-ci"]
+            preview_code, preview_output = stream(preview_cmd, cwd=service_dir)
+            preview = resolve_release_outcome(preview_code, preview_output)
+            if preview in ("stale-checkout", "unknown"):
+                reason = (
+                    "semantic-release preview saw a checkout behind main"
+                    if preview == "stale-checkout" else
+                    f"semantic-release preview exited {preview_code} without a trustworthy release decision"
                 )
-                if outcome == "stale-checkout":
-                    reason = "semantic-release dry-run saw a checkout behind main; preview is meaningless"
+                if dry_run:
                     print(f"[github-release] WARNING: {service['id']}: {reason}; continuing (dry-run preview)")
                     dry_run_failures.append((service["id"], reason))
-                elif outcome == "unknown":
-                    # Preview could not compute a version (for example the
-                    # semantic-release child was killed on a large history).
-                    # Do not fail the inert workflow on a preview; record it so
-                    # it is visible and gets resolved before the cutover.
-                    reason = f"semantic-release dry-run exited {code} without a trustworthy release decision"
-                    print(f"[github-release] WARNING: {service['id']}: {reason}; continuing (dry-run preview)")
-                    dry_run_failures.append((service["id"], reason))
-                owned = owned_release_paths(root, service, metadata)
-                if owned and outcome in ("released", "no-release"):
-                    # Preview what publishing would actually do. Without this the
-                    # dry run reports semantic-release's answer alone, which is
-                    # not the answer a service owning extra paths would get.
-                    previewed = parse_next_version(output) if outcome == "released" else ""
-                    version, source = multi_path_release_version(root, service, owned, previewed)
-                    if not version:
-                        print(f"[github-release] {service['id']}: would release nothing")
-                    else:
-                        print(
-                            f"[github-release] {service['id']}: would release {version} "
-                            f"(decided by {source})"
-                        )
-            else:
-                owned = owned_release_paths(root, service, metadata)
-                if owned:
-                    # semantic-release publishes as soon as it computes a
-                    # version, so a service that also owns paths outside its
-                    # directory has to be previewed first. Otherwise a chart-only
-                    # change that demands a larger bump arrives after the smaller
-                    # one is already tagged.
-                    preview_cmd = ["npx", "semantic-release", "--dry-run", "--no-ci"]
-                    preview_code, preview_output = stream(preview_cmd, cwd=service_dir)
-                    preview = resolve_release_outcome(preview_code, preview_output)
-                    if preview == "stale-checkout":
-                        print(
-                            f"[github-release] {service['id']}: preview saw a checkout behind "
-                            "main; not releasing"
-                        )
-                        stale_checkouts.append(service["id"])
-                        continue
-                    if preview == "unknown":
-                        # An unreadable preview is not a "nothing to release".
-                        # Treating it as one would either skip the publish run or
-                        # cut an owned-path tag without a trustworthy baseline.
-                        raise SystemExit(
-                            f"[github-release] ERROR: {service['id']}: semantic-release preview "
-                            f"exited {preview_code} without a trustworthy release decision; "
-                            "not releasing from an unreadable preview"
-                        )
-                    previewed = parse_next_version(preview_output) if preview == "released" else ""
-                    version, source = multi_path_release_version(root, service, owned, previewed)
-                    if source == "owned-paths":
-                        # semantic-release would under-release. Cut the tag here
-                        # instead, the same way the framework fan-out does.
-                        publish_tag_for_version(
-                            root,
-                            service,
-                            version,
-                            dry_run=False,
-                            draft=draft,
-                            reason=f"owned release paths under {service['path']}",
-                        )
-                        continue
-                    if not version:
-                        print(f"[github-release] {service['id']}: no release-worthy commits")
-                        continue
-
-                # Streamed rather than run() so the result is readable: a
-                # dependency fan-out must only fire when semantic-release itself
-                # released nothing.
-                cmd = ["npx", "semantic-release", "--no-ci"]
-                code, output = stream(cmd, cwd=service_dir)
-                if code != 0:
-                    raise subprocess.CalledProcessError(code, cmd)
-                outcome = finish_semantic_release(
-                    root, service, java_components, code, output, dry_run=False, draft=draft
-                )
-                if outcome == "stale-checkout":
+                elif preview == "stale-checkout":
                     stale_checkouts.append(service["id"])
-                elif outcome == "unknown":
-                    print(
-                        f"[github-release] WARNING: {service['id']}: semantic-release reported "
-                        "neither a version nor a no-release result; not cutting a dependency release"
-                    )
+                else:
+                    raise SystemExit(f"[github-release] ERROR: {service['id']}: {reason}; not releasing")
+                continue
+
+            candidate = parse_next_version(preview_output) if preview == "released" else ""
+            owned = owned_release_paths(root, service, metadata)
+            version, source = candidate, "semantic-release"
+            if owned:
+                version, source = multi_path_release_version(root, service, owned, candidate)
+            if not version:
+                finish_semantic_release(
+                    root, service, java_components, preview_code, preview_output, dry_run=dry_run, draft=draft
+                )
+                continue
+
+            # A maintenance release can already contain the same cherry-picked
+            # Java inputs. Owned-path releases also contain chart bytes, so they
+            # must keep their independent allocation/packaging decision.
+            if not owned and reuse_published_release(root, service, version, java_components):
+                continue
+            selected = available_release_version(root, service, version)
+            if source == "owned-paths" or selected != version:
+                reason = f"owned release paths under {service['path']}"
+                included_commits = None
+                if source == "semantic-release":
+                    reason, included_commits = semantic_release_changes(root, service, candidate)
+                publish_tag_for_version(
+                    root, service, selected, dry_run=dry_run, draft=draft,
+                    reason=reason, included_commits=included_commits,
+                )
+                continue
+            if dry_run:
+                print(f"[github-release] {service['id']}: would create {tag_for_version(service, selected, root)}")
+                continue
+
+            # Uncontested versions keep semantic-release's notes and PR comments.
+            cmd = ["npx", "semantic-release", "--no-ci"]
+            code, output = stream(cmd, cwd=service_dir)
+            if code != 0:
+                raise subprocess.CalledProcessError(code, cmd)
+            outcome = finish_semantic_release(
+                root, service, java_components, code, output, dry_run=False, draft=draft
+            )
+            if outcome == "stale-checkout":
+                stale_checkouts.append(service["id"])
+            elif outcome == "unknown":
+                print(
+                    f"[github-release] WARNING: {service['id']}: semantic-release reported "
+                    "neither a version nor a no-release result; not cutting a dependency release"
+                )
+        except UnverifiedExistingRelease as exc:
+            # Finish independent services, but do not turn a lookup failure or
+            # an incomplete release into a second version of the same inputs.
+            unverified_releases.append(str(exc))
+            level = "WARNING" if dry_run else "ERROR"
+            print(f"[github-release] {level}: {exc}; continuing other services")
         finally:
             print("::endgroup::")
 
@@ -2430,17 +2704,27 @@ def auto_release(args):
         for sid, reason in dry_run_failures:
             print(f"[github-release]   - {sid}: {reason}")
 
+    failures = []
+    if unverified_releases:
+        message = "[github-release] unverified existing release(s): " + "; ".join(unverified_releases)
+        if dry_run:
+            print(f"{message} (non-fatal while inert)")
+        else:
+            failures.append(message)
+
     if stale_checkouts:
         # Fail rather than exit green. The release for these services was not
         # cut and nothing else will retry it: the push that should have released
         # them is already behind main, and the concurrency group cancels the
         # queued runs that would otherwise pick it up.
-        raise SystemExit(
+        failures.append(
             f"[github-release] ERROR: {len(stale_checkouts)} service(s) lost a release to a "
             f"checkout behind {branch or 'the release branch'}: {', '.join(sorted(stale_checkouts))}. "
             "Re-run this workflow on the current branch tip (workflow_dispatch, operation=auto) "
             "to cut the missing tags."
         )
+    if failures:
+        raise SystemExit("\n".join(failures))
 
 
 def parse_release_tag(tag, metadata, root=None):
