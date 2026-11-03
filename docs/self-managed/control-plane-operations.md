@@ -518,7 +518,7 @@ Switching back to `nkey` restores the shared key for new workers and restarts th
 
 ### Verifying
 
-The auth callout logs each successful login, with the account and the user it assigned. Worker logins in token mode show the account `APP` and a user named after the function version:
+The auth callout logs successful logins, with the account and the user it assigned. Worker logins in token mode show the account `APP` and a user named after the function version:
 
 ```bash
 kubectl logs -n nats-system -l app.kubernetes.io/instance=nats-auth-callout-service \
@@ -549,9 +549,9 @@ natsAuthCalloutService:
         initial: 0
 ```
 
-`natsAuthCalloutService.serviceConfig` is merged into the auth callout chart's `serviceConfig`, and the stack still sets `service.nats_url`. A change restarts the auth callout.
+Only `natsAuthCalloutService.serviceConfig.logging` reaches the auth callout; the stack ignores other `serviceConfig` keys. A change restarts the auth callout.
 
-If the auth callout logged nothing for a worker, its login didn't reach the auth callout. Check the worker's own logs for its NATS connection error.
+If the auth callout logged nothing for a worker with sampling off, its login didn't reach the auth callout. Check the worker's own logs for its NATS connection error.
 
 ## Observability
 

@@ -53,7 +53,9 @@ write_values() {
 
 write_values "$values_file"
 write_values "$custom_values_file" \
-  --state-values-set nats.authCallout.secretName=custom-auth-callout-nkeys
+  --state-values-set nats.authCallout.secretName=custom-auth-callout-nkeys \
+  --state-values-set natsAuthCalloutService.serviceConfig.logging.sampling.initial=0 \
+  --state-values-set natsAuthCalloutService.serviceConfig.service.nats_url=nats://elsewhere.example.com:4222
 
 expected_repository="registry.example.com/example/nvcf/nvcf-nats-auth-callout-service"
 actual_repository="$(yq -r '.image.repository // ""' "$values_file")"
@@ -134,15 +136,18 @@ test "$plugin_config_arg" = "/etc/plugin-config/plugin.yaml" ||
 test "$(yq -r '.serviceConfig.logging' "$values_file")" = null ||
   fail "serviceConfig.logging must stay chart-owned when unset"
 
-# natsAuthCalloutService.serviceConfig merges into the chart's serviceConfig,
-# and the stack's nats_url still wins.
-service_config_values_file="$work_dir/nats-auth-callout-service-config-values.yaml"
-write_values "$service_config_values_file" \
-  --state-values-set natsAuthCalloutService.serviceConfig.logging.sampling.initial=0 \
-  --state-values-set natsAuthCalloutService.serviceConfig.service.nats_url=nats://elsewhere.example.com:4222
-test "$(yq -r '.serviceConfig.logging.sampling.initial' "$service_config_values_file")" = 0 ||
-  fail "serviceConfig.logging.sampling.initial did not reach the chart"
-test "$(yq -r '.serviceConfig.service.nats_url' "$service_config_values_file")" = "$expected_nats_url" ||
+# Only serviceConfig.logging is passed through: the custom sampling reaches the
+# chart's config, and an operator nats_url does not.
+custom_config_manifest_file="$work_dir/nats-auth-callout-custom-config-manifest.yaml"
+helm template nats-auth-callout-service \
+  "$stack_dir/../../helm/nats-auth-callout" \
+  --namespace nats-system \
+  --values "$custom_values_file" \
+  --show-only templates/configmap.yaml >"$custom_config_manifest_file" ||
+  fail "NATS auth-callout ConfigMap did not render with custom values"
+test "$(yq -r '.data."config.yaml" | from_yaml | .logging.sampling.initial' "$custom_config_manifest_file")" = 0 ||
+  fail "serviceConfig.logging.sampling.initial did not reach the rendered config"
+test "$(yq -r '.data."config.yaml" | from_yaml | .service.nats_url' "$custom_config_manifest_file")" = "$expected_nats_url" ||
   fail "serviceConfig.service.nats_url must stay the stack's"
 
 echo "nats-auth-callout-wiring: ok"

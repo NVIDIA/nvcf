@@ -210,11 +210,6 @@ releases:
       - ../global.yaml.gotmpl
       - image:
           repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
-      {{- with dig "natsAuthCalloutService" "serviceConfig" dict .Values }}
-      # Before the stack's serviceConfig, so its nats_url wins.
-      - serviceConfig:
-          {{- toYaml . | nindent 10 }}
-      {{- end }}
       - serviceConfig:
           service:
             nats_url: "nats://nats.nats-system.svc.cluster.local:4222"
