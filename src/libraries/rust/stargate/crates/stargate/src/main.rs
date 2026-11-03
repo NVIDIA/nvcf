@@ -18,7 +18,8 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
 use stargate::registration::{
-    DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT, DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
+    DEFAULT_DEREGISTERED_MODEL_GRACE, DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT,
+    DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
 };
 use stargate_protocol::parse_explicit_http_uri;
 use stargate_protocol::{BackendConnectivity, TunnelTransportProtocol};
@@ -173,6 +174,16 @@ struct Args {
     /// stops reporting keeps its reservations until it reports or is removed.
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     routing_reservation_ttl_max_ms: u64,
+    /// How long a model stays known after its last backend deregisters.
+    /// Requests in this window get a retryable `503` with `Retry-After`
+    /// instead of `404`, covering backend replacement. 0 disables.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_DEREGISTERED_MODEL_GRACE.as_millis() as u64,
+        env = "STARGATE_DEREGISTERED_MODEL_GRACE_MS",
+        value_name = "MS"
+    )]
+    deregistered_model_grace_ms: u64,
     /// Grace period for shutdown tasks after Stargate starts draining.
     #[arg(long, default_value_t = 30000, value_name = "MS")]
     shutdown_drain_timeout_ms: u64,
@@ -725,6 +736,22 @@ mod tests {
                 .to_string()
                 .contains("minimum must not exceed maximum")
         );
+    }
+
+    #[test]
+    fn deregistered_model_grace_default_and_override_reach_runtime_config() {
+        let args = parse_args("");
+        let config = runtime_config_from_args(&args, proxy_transport(&args))
+            .expect("runtime config should parse");
+        assert_eq!(
+            config.deregistered_model_grace,
+            DEFAULT_DEREGISTERED_MODEL_GRACE
+        );
+
+        let args = parse_args("--deregistered-model-grace-ms 0");
+        let config = runtime_config_from_args(&args, proxy_transport(&args))
+            .expect("runtime config should parse");
+        assert_eq!(config.deregistered_model_grace, Duration::ZERO);
     }
 
     #[test]

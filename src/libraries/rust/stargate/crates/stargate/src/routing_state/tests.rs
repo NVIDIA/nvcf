@@ -66,12 +66,15 @@ impl RegistrationScenario {
             );
         }
         for model_id in absent {
-            assert!(
-                !self
-                    .state
-                    .has_registered_model_for_target(&self.target(model_id))
-            );
+            assert!(!self.known_after_grace(&self.target(model_id)));
         }
+    }
+
+    fn known_after_grace(&self, target: &RoutingTargetKey) -> bool {
+        self.state.registrations.has_registered_model_for_target(
+            target,
+            Instant::now() + DEFAULT_DEREGISTERED_MODEL_GRACE,
+        )
     }
 
     fn start(&self, id: &str, port: u16) -> RunningRegistration {
@@ -465,7 +468,7 @@ async fn assert_stale_cleanup_preserves_replacement(
     let ended = scenario
         .state
         .registrations
-        .end_registration(old)
+        .end_registration(old, Instant::now())
         .expect("exact old registration should be removed");
     assert_eq!(
         ended.registration.cluster_generation.is_retired(),
@@ -654,7 +657,7 @@ async fn inactive_fresh_cluster_generation_clears_retired_routing_state() {
     let ended = scenario
         .state
         .registrations
-        .end_registration(old)
+        .end_registration(old, Instant::now())
         .expect("exact old registration should be removed");
     assert!(ended.registration.cluster_generation.is_retired());
 
@@ -714,7 +717,8 @@ async fn registered_inactive_model_is_known_without_routable_candidates() {
     );
 
     scenario.state.end_registration(running).await;
-    assert!(!scenario.state.has_registered_model_for_target(&target));
+    assert!(scenario.state.has_registered_model_for_target(&target));
+    assert!(!scenario.known_after_grace(&target));
 }
 
 #[tokio::test]
@@ -738,15 +742,144 @@ async fn registered_target_membership_survives_until_final_advertiser_leaves() {
     );
 
     scenario.state.end_registration(running_a).await;
-    assert!(scenario.state.has_registered_model_for_target(&target));
+    assert!(scenario.known_after_grace(&target));
 
     let empty_update = scenario.empty_update(&running_b);
     scenario
         .publish_update(&running_b, &empty_update, Some(10))
         .await;
-    assert!(!scenario.state.has_registered_model_for_target(&target));
+    assert!(scenario.state.has_registered_model_for_target(&target));
+    assert!(!scenario.known_after_grace(&target));
 
     scenario.state.end_registration(running_b).await;
+}
+
+#[tokio::test]
+async fn deregistered_target_stays_known_until_grace_expires() {
+    let grace = Duration::from_secs(60);
+    let scenario = RegistrationScenario {
+        state: StargateState::default().with_deregistered_model_grace(grace),
+        routing_key: Some("rk-grace".to_string()),
+    };
+    let running = scenario.start("inst-grace", 1234);
+    let target = scenario.target("model-grace");
+    scenario.activate(&running, "model-grace").await;
+
+    let before_end = Instant::now();
+    scenario.state.end_registration(running).await;
+    let after_end = Instant::now();
+
+    assert!(scenario.candidates("model-grace").await.is_empty());
+    assert!(scenario.state.has_registered_model_for_target(&target));
+    let registrations = &scenario.state.registrations;
+    assert!(
+        registrations.has_registered_model_for_target(
+            &target,
+            before_end + grace - Duration::from_millis(1)
+        )
+    );
+    assert!(!registrations.has_registered_model_for_target(&target, after_end + grace));
+    assert!(
+        !scenario
+            .state
+            .has_registered_model_for_target(&make_target(Some("rk-other"), "model-grace"))
+    );
+    assert!(
+        !scenario
+            .state
+            .has_registered_model_for_target(&scenario.target("model-never-advertised"))
+    );
+}
+
+#[tokio::test]
+async fn readvertised_target_clears_grace_entry() {
+    let scenario = RegistrationScenario::new(Some("rk-readvertise"));
+    let target = scenario.target("model-readvertise");
+    let old = scenario.start("inst-readvertise-old", 1234);
+    scenario
+        .publish_default_stats(&old, "model-readvertise", Inactive, Some(10))
+        .await;
+    scenario.state.end_registration(old).await;
+    assert_eq!(
+        scenario
+            .state
+            .registrations
+            .recently_advertised_target_count(),
+        1
+    );
+
+    let replacement = scenario.start("inst-readvertise-new", 1235);
+    scenario
+        .publish_default_stats(&replacement, "model-readvertise", Inactive, Some(10))
+        .await;
+    assert_eq!(
+        scenario
+            .state
+            .registrations
+            .recently_advertised_target_count(),
+        0
+    );
+    assert!(scenario.known_after_grace(&target));
+
+    scenario.state.end_registration(replacement).await;
+    assert!(scenario.state.has_registered_model_for_target(&target));
+    assert!(!scenario.known_after_grace(&target));
+}
+
+#[tokio::test]
+async fn expired_grace_entries_are_pruned_when_targets_retire() {
+    let grace = Duration::from_secs(60);
+    let scenario = RegistrationScenario {
+        state: StargateState::default().with_deregistered_model_grace(grace),
+        routing_key: None,
+    };
+    let registrations = &scenario.state.registrations;
+    let started = Instant::now();
+    let running_a = scenario.start("inst-prune-a", 1234);
+    let running_b = scenario.start("inst-prune-b", 1235);
+    for (running, model_id) in [(&running_a, "model-prune-a"), (&running_b, "model-prune-b")] {
+        registrations.begin_advertised_model_update(running, model_set([model_id]), started);
+        registrations.finish_advertised_model_update(running);
+    }
+
+    registrations.end_registration(running_a, started);
+    assert_eq!(registrations.recently_advertised_target_count(), 1);
+
+    let after_expiry = started + grace;
+    registrations.end_registration(running_b, after_expiry);
+    assert_eq!(registrations.recently_advertised_target_count(), 1);
+    assert!(
+        !registrations
+            .has_registered_model_for_target(&scenario.target("model-prune-a"), after_expiry)
+    );
+    assert!(
+        registrations
+            .has_registered_model_for_target(&scenario.target("model-prune-b"), after_expiry)
+    );
+}
+
+#[tokio::test]
+async fn zero_grace_forgets_target_when_last_advertiser_leaves() {
+    let scenario = RegistrationScenario {
+        state: StargateState::default().with_deregistered_model_grace(Duration::ZERO),
+        routing_key: None,
+    };
+    let running = scenario.start("inst-zero-grace", 1234);
+    let target = scenario.target("model-zero-grace");
+    scenario
+        .publish_default_stats(&running, "model-zero-grace", Inactive, Some(10))
+        .await;
+    assert!(scenario.state.has_registered_model_for_target(&target));
+
+    scenario.state.end_registration(running).await;
+    assert!(!scenario.state.has_registered_model_for_target(&target));
+    assert_eq!(
+        scenario
+            .state
+            .registrations
+            .recently_advertised_target_count(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -759,7 +892,7 @@ async fn registration_model_update_publishes_advertised_generation_and_retains_c
         scenario
             .state
             .registrations
-            .begin_advertised_model_update(&running, first.clone())
+            .begin_advertised_model_update(&running, first.clone(), Instant::now())
             .is_empty()
     );
     scenario.assert_registered_models(&["model-a", "model-b"], &[]);
@@ -774,10 +907,11 @@ async fn registration_model_update_publishes_advertised_generation_and_retains_c
 
     let second = model_set(["model-b", "model-c"]);
     assert_eq!(
-        scenario
-            .state
-            .registrations
-            .begin_advertised_model_update(&running, second.clone()),
+        scenario.state.registrations.begin_advertised_model_update(
+            &running,
+            second.clone(),
+            Instant::now()
+        ),
         model_set(["model-a"])
     );
     scenario.assert_registered_models(&["model-b", "model-c"], &["model-a"]);
@@ -801,14 +935,16 @@ async fn registration_model_update_rejects_overlapping_apply() {
     let scenario = RegistrationScenario::new(Some("rk-overlap"));
     let running = scenario.start("inst-overlap", 1234);
 
-    scenario
-        .state
-        .registrations
-        .begin_advertised_model_update(&running, BTreeSet::new());
-    scenario
-        .state
-        .registrations
-        .begin_advertised_model_update(&running, BTreeSet::new());
+    scenario.state.registrations.begin_advertised_model_update(
+        &running,
+        BTreeSet::new(),
+        Instant::now(),
+    );
+    scenario.state.registrations.begin_advertised_model_update(
+        &running,
+        BTreeSet::new(),
+        Instant::now(),
+    );
 }
 
 #[tokio::test]
@@ -819,10 +955,11 @@ async fn registration_cleanup_during_applying_update_removes_previous_and_advert
 
     let model_a = scenario.target("model-a");
     let model_b = scenario.target("model-b");
-    scenario
-        .state
-        .registrations
-        .begin_advertised_model_update(&running, model_set(["model-b"]));
+    scenario.state.registrations.begin_advertised_model_update(
+        &running,
+        model_set(["model-b"]),
+        Instant::now(),
+    );
     scenario
         .state
         .routing
@@ -1397,7 +1534,7 @@ async fn assert_retired_cluster_drop_settles_reservation_gauge(
     let ended = scenario
         .state
         .registrations
-        .end_registration(old)
+        .end_registration(old, Instant::now())
         .expect("exact old registration should be removed");
     assert!(ended.registration.cluster_generation.is_retired());
     let replacement = scenario.start_in(&inference_server_id, &cluster_id, 2222);
@@ -1472,7 +1609,7 @@ async fn assert_detaching_retired_cluster_settles_held_reservations(
     let ended = scenario
         .state
         .registrations
-        .end_registration(old)
+        .end_registration(old, Instant::now())
         .expect("exact old registration should be removed");
     assert!(ended.registration.cluster_generation.is_retired());
     let replacement = scenario.start_in(&inference_server_id, &cluster_id, 2222);
