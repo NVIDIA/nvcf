@@ -42,6 +42,9 @@ infra/cassandra/scripts/fetch-java-libraries-test.sh
 
 # exporter dependency unit test (downloads checksum-pinned Netty jars)
 infra/cassandra/scripts/repack-exporter-netty-test.sh
+
+# built image trust store and runtime version check
+sh infra/cassandra/scripts/test-image.sh <image>
 ```
 
 The `--platform=$BUILDPLATFORM` on the yq stage is intentional: it lets yq

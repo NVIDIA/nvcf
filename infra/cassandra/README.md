@@ -14,6 +14,7 @@ Once built, the image:
 
 - Runs Apache Cassandra at the version pinned by the `FROM cassandra:<version>` line in the `Dockerfile`
 - Rebuilds the base image's `gosu` 1.19 helper with the checksum-pinned source revision and the pinned Go toolchain
+- Replaces the JDK 17 `cacerts` file with the checksum-verified trust store from Temurin 17.0.21+9, while retaining Cassandra 5.0.9 and the base image's JVM binary
 - Wires a Prometheus exporter Java agent into `JVM_EXTRA_OPTS` and exposes port `9500` for scraping, when an exporter jar is supplied
 - Adds the `--add-opens` JVM flags the exporter agent needs to reflect into JDK-internal `com.sun.jmx` classes on the JDK 17 runtime shipped in the official image
 
@@ -66,6 +67,10 @@ docker buildx build \
   -t <your-registry>/<your-org>/nvcf-cassandra:<version> \
   --push .
 ```
+
+Test each built image with `sh scripts/test-image.sh <image>`. The test checks
+the Cassandra and Java versions and rejects the affected root certificates by
+SHA-256 fingerprint in the JDK trust store.
 
 To track a different upstream Cassandra release, edit the `FROM cassandra:<version>` line in the `Dockerfile` directly. The official image tag is the single source of truth for the Cassandra version; there is no separate version build-arg.
 

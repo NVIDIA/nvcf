@@ -29,7 +29,7 @@ preserving the locked paths and checksums.
 
 ## Building the container
 
-The `Dockerfile` uses the official `cassandra:5.0.9` base image and builds both supported architectures from the same pinned sources.
+The `Dockerfile` uses the official `cassandra:5.0.9` base image and builds both supported architectures from the same pinned sources. It replaces the JDK 17 `cacerts` file with the checksum-verified trust store from Temurin 17.0.21+9 without changing the JVM binary.
 
 ```bash
 docker build \
