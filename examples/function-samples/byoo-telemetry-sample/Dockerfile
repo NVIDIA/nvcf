@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM golang:1.23 AS build
+FROM golang:1.26.10-bookworm AS build
 
 WORKDIR /src
 COPY http-server/go.mod ./

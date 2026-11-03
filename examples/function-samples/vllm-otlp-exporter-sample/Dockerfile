@@ -20,8 +20,13 @@ WORKDIR /app
 # install the OpenTelemtry Collector
 ENV OTEL_VERSION=0.140.0
 RUN apt-get update
-RUN apt-get -y install wget systemctl git python3 python3-pip
+RUN apt-get -y install ca-certificates wget systemctl git python3 python3-pip
 RUN apt-get -y install jq
+ADD --checksum=sha256:fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70 \
+    https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl /tmp/pip-26.2.2-py3-none-any.whl
+RUN python3 -m pip install --no-cache-dir --no-index --no-deps /tmp/pip-26.2.2-py3-none-any.whl && \
+    rm /tmp/pip-26.2.2-py3-none-any.whl && \
+    python3 -m pip install --no-cache-dir certifi==2026.10.19 uv==0.13.4
 RUN wget https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${OTEL_VERSION}/otelcol-contrib_${OTEL_VERSION}_linux_amd64.deb
 RUN dpkg -i otelcol-contrib_${OTEL_VERSION}_linux_amd64.deb
 
