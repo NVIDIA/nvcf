@@ -1271,6 +1271,66 @@ def available_release_version(root, service, version):
     return selected
 
 
+def computed_local_labels(tree):
+    """A literal package prefix is not the dependency a string expression selects."""
+    label_names = set()
+    collection_names = set()
+
+    def collection(node):
+        return (isinstance(node, (ast.List, ast.Tuple))
+                or (isinstance(node, ast.Name) and node.id in collection_names)
+                or (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)
+                    and (collection(node.left) or collection(node.right))))
+
+    def contains_label(node):
+        return any(
+            (isinstance(item, ast.Constant) and isinstance(item.value, str)
+             and item.value.startswith(("//", "@//", "@@//")))
+            or (isinstance(item, ast.Name) and item.id in label_names)
+            for item in ast.walk(node)
+        )
+
+    assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
+    while True:
+        before = (set(label_names), set(collection_names))
+        for assignment in assignments:
+            names = {target.id for target in assignment.targets if isinstance(target, ast.Name)}
+            if contains_label(assignment.value):
+                label_names.update(names)
+            if collection(assignment.value):
+                collection_names.update(names)
+        if (label_names, collection_names) == before:
+            break
+
+    def nonlabel_template(node, delimiter):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            return False
+        prefix = node.value.split(delimiter, 1)[0]
+        return bool(prefix) and not any(prefix.startswith(start) or start.startswith(prefix)
+                                        for start in ("//", "@//", "@@//"))
+
+    def computes_label(node):
+        if isinstance(node, ast.AugAssign):
+            return not (isinstance(node.op, ast.Add) and collection(node.target))
+        if isinstance(node, ast.BinOp):
+            # Joining dependency lists preserves their labels. A command such
+            # as "$(location %s)" % LABEL also leaves LABEL intact.
+            return not (collection(node) or (isinstance(node.op, ast.Mod)
+                                            and nonlabel_template(node.left, "%")))
+        if isinstance(node, ast.JoinedStr) or (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)):
+            return True
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            return (node.func.attr in string_operations
+                    and not (node.func.attr == "format" and nonlabel_template(node.func.value, "{")))
+        return False
+
+    string_operations = {
+        "format", "join", "replace", "removeprefix", "removesuffix", "split", "rsplit",
+        "partition", "rpartition", "strip", "lstrip", "rstrip", "lower", "upper", "capitalize", "title",
+    }
+    return any(contains_label(node) and computes_label(node) for node in ast.walk(tree))
+
+
 def java_release_inputs_match(root, service, tag, components):
     """Conservatively compare the inputs of a native Bazel Java image.
 
@@ -1298,7 +1358,8 @@ def java_release_inputs_match(root, service, tag, components):
     pending = sorted(paths)
     while pending:
         path = pending.pop()
-        files = run(["git", "ls-tree", "-r", "--name-only", "HEAD", "--", path], cwd=root, capture=True).splitlines()
+        entries = run(["git", "ls-tree", "-r", "HEAD", "--", path], cwd=root, capture=True).splitlines()
+        files = [entry.partition("\t")[2] for entry in entries]
         excluded = []
         if path in package_paths:
             # A Bazel package excludes nested packages. Comparing an entire
@@ -1313,12 +1374,19 @@ def java_release_inputs_match(root, service, tag, components):
         changes = run(["git", "diff", "--name-only", tag, "HEAD", "--", path], cwd=root, capture=True).splitlines()
         if any(not any(name.startswith(prefix) for prefix in excluded) for name in changes):
             return False
+        if any(entry.startswith("120000 ") and not any(entry.partition("\t")[2].startswith(prefix)
+                                                       for prefix in excluded) for entry in entries):
+            # Git compares a symlink's text, not the bytes Bazel reads through
+            # it. An unchanged link cannot establish unchanged build inputs.
+            return False
         for filename in files:
             if any(filename.startswith(prefix) for prefix in excluded):
                 continue
             if Path(filename).name not in BUILD_FILE_NAMES and not filename.endswith(".bzl"):
                 continue
             tree = ast.parse(file_at_revision(root, "HEAD", filename), filename=filename)
+            if computed_local_labels(tree):
+                return False
             parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
@@ -2616,7 +2684,8 @@ def auto_release(args):
             # Finish independent services, but do not turn a lookup failure or
             # an incomplete release into a second version of the same inputs.
             unverified_releases.append(str(exc))
-            print(f"[github-release] ERROR: {exc}; continuing other services")
+            level = "WARNING" if dry_run else "ERROR"
+            print(f"[github-release] {level}: {exc}; continuing other services")
         finally:
             print("::endgroup::")
 
@@ -2627,9 +2696,6 @@ def auto_release(args):
         finally:
             print("::endgroup::")
 
-    if unverified_releases:
-        raise SystemExit("[github-release] unverified existing release(s): " + "; ".join(unverified_releases))
-
     if dry_run and dry_run_failures:
         print(
             f"[github-release] dry-run preview: {len(dry_run_failures)} service(s) "
@@ -2638,17 +2704,27 @@ def auto_release(args):
         for sid, reason in dry_run_failures:
             print(f"[github-release]   - {sid}: {reason}")
 
+    failures = []
+    if unverified_releases:
+        message = "[github-release] unverified existing release(s): " + "; ".join(unverified_releases)
+        if dry_run:
+            print(f"{message} (non-fatal while inert)")
+        else:
+            failures.append(message)
+
     if stale_checkouts:
         # Fail rather than exit green. The release for these services was not
         # cut and nothing else will retry it: the push that should have released
         # them is already behind main, and the concurrency group cancels the
         # queued runs that would otherwise pick it up.
-        raise SystemExit(
+        failures.append(
             f"[github-release] ERROR: {len(stale_checkouts)} service(s) lost a release to a "
             f"checkout behind {branch or 'the release branch'}: {', '.join(sorted(stale_checkouts))}. "
             "Re-run this workflow on the current branch tip (workflow_dispatch, operation=auto) "
             "to cut the missing tags."
         )
+    if failures:
+        raise SystemExit("\n".join(failures))
 
 
 def parse_release_tag(tag, metadata, root=None):

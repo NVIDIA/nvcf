@@ -2945,21 +2945,22 @@ class ReservedReleaseVersionTest(unittest.TestCase):
         (root / "unrelated.txt").write_text("unrelated\n")
         self.commit_all(root, "fix(other): unrelated change")
 
-    def auto(self, root, dry_run, preview=(0, "The next release version is 1.14.8"), services=None):
+    def auto(self, root, dry_run, preview=(0, "The next release version is 1.14.8"), services=None, output=None):
         metadata = root / "metadata.json"
         metadata.write_text(json.dumps({"version": 1, "services": services or [self.SERVICE]}))
-        output = io.StringIO()
+        output = output if output is not None else io.StringIO()
+        stream_result = {"side_effect": preview} if isinstance(preview, list) else {"return_value": preview}
         with mock.patch.dict(os.environ, {
             "NVCF_GITHUB_AUTO_TAGGING_ENABLED": "true",
             "NVCF_GITHUB_RELEASE_DRY_RUN": str(dry_run).lower(),
             "GITHUB_DEFAULT_BRANCH": "main",
         }), chdir(root), contextlib.redirect_stdout(output), \
                 mock.patch.object(self.github_release, "install_semantic_release"), \
-                mock.patch.object(self.github_release, "stream", return_value=preview) as stream:
+                mock.patch.object(self.github_release, "stream", **stream_result) as stream:
             self.github_release.auto_release(types.SimpleNamespace(metadata=str(metadata), service="" if services else "notary"))
         return output.getvalue(), stream.call_args_list
 
-    def seed_equivalent_java_release(self, root):
+    def seed_equivalent_java_release(self, root, configure=None):
         self.init_repo(root)
         git(root, "switch", "-c", "main")
         self.framework = "src/libraries/java/framework"
@@ -3019,6 +3020,8 @@ class ReservedReleaseVersionTest(unittest.TestCase):
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
+        if configure:
+            configure(root)
         self.commit_all(root, "feat(notary): baseline")
         git(root, "tag", f"{self.SERVICE['path']}/v1.14.7")
         git(root, "switch", "-c", "maintenance")
@@ -3159,6 +3162,103 @@ class ReservedReleaseVersionTest(unittest.TestCase):
                 text, _ = self.auto(root, dry_run=True)
                 self.assertIn("selecting 1.14.9", text)
                 lookup.assert_not_called()
+
+    def test_unverified_release_and_preview_failures_are_both_reported(self):
+        for dry_run in (True, False):
+            with self.subTest(dry_run=dry_run), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.seed_equivalent_java_release(root)
+                self.published_release_lookup(isDraft=True)
+                other = {"id": "other", "path": "src/other", "service_name": "other"}
+                (root / other["path"]).mkdir()
+                (root / other["path"] / "source.txt").write_text("new service\n")
+                self.commit_all(root, "fix(other): unrelated service")
+                git(root, "tag", f"{other['path']}/v0.1.0", "HEAD^")
+                before = git_out(root, "show-ref", "--tags")
+                self.github_release.publish_tag_for_version = mock.Mock()
+                output = io.StringIO()
+                preview = [(0, "The next release version is 1.14.8"),
+                           (0, "unexpected output" if dry_run else "The local branch main is behind the remote one")]
+                if dry_run:
+                    self.auto(root, dry_run=True, preview=preview, services=[self.SERVICE, other], output=output)
+                    text = output.getvalue()
+                    self.assertIn("could not compute a version", text)
+                    self.assertIn("unverified existing release", text)
+                    self.assertIn("non-fatal while inert", text)
+                else:
+                    with self.assertRaises(SystemExit) as raised:
+                        self.auto(root, dry_run=False, preview=preview, services=[self.SERVICE, other], output=output)
+                    text = str(raised.exception)
+                    self.assertIn("unverified existing release", text)
+                    self.assertIn("notary", text)
+                    self.assertIn("checkout behind main: other", text)
+                    self.assertIn("workflow_dispatch, operation=auto", text)
+                self.github_release.publish_tag_for_version.assert_not_called()
+                self.assertEqual(git_out(root, "show-ref", "--tags"), before)
+
+    def test_computed_labels_cannot_hide_changed_dependency_inputs(self):
+        for expression in (
+            '"//src/control-plane-services/shared" + "/core:jar"',
+            '"{}{}".format("//src/control-plane-services/shared", "/core:jar")',
+            'PACKAGE + "/core:jar"',
+            'DERIVED',
+        ):
+            with self.subTest(expression=expression), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                def configure(repo):
+                    build = repo / self.SERVICE["path"] / "BUILD.bazel"
+                    build.write_text('PACKAGE="//src/control-plane-services/shared"\n'
+                                     + ('DERIVED=PACKAGE\nDERIVED += "/core:jar"\n' if expression == 'DERIVED' else '')
+                                     + build.read_text().replace(f'"//{self.other_library}:jar"', expression))
+                self.seed_equivalent_java_release(root, configure)
+                (root / self.other_library / "Core.java").write_text("class Core {int patched;}\n")
+                self.commit_all(root, "fix(shared): patch dependency")
+                lookup = self.published_release_lookup()
+                text, _ = self.auto(root, dry_run=True)
+                self.assertNotIn("reusing published", text)
+                self.assertIn("selecting 1.14.9", text)
+                lookup.assert_not_called()
+
+    def test_literal_label_collections_and_commands_remain_reusable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def configure(repo):
+                build = repo / self.SERVICE["path"] / "BUILD.bazel"
+                build.write_text(build.read_text() + (
+                    f'LABEL="//{self.other_library}:jar"\n'
+                    'DEPS=[LABEL]\n'
+                    'PARAMS={"deps":DEPS}\n'
+                    'PARAMS["user"]="1000:1000"\n'
+                    'filegroup(name="deps", srcs=DEPS + [LABEL])\n'
+                    'genrule(name="copy", srcs=DEPS, outs=["copy.jar"], '
+                    'cmd="cp $(location %s) $@" % LABEL)\n'
+                    'genrule(name="copy2", srcs=DEPS, outs=["copy2.jar"], '
+                    'cmd="cp $(location {}) $@".format(LABEL))\n'
+                ))
+            self.seed_equivalent_java_release(root, configure)
+            lookup = self.published_release_lookup()
+            text, _ = self.auto(root, dry_run=True)
+            self.assertIn("reusing published", text)
+            lookup.assert_called_once()
+
+    def test_symlinked_input_cannot_hide_a_changed_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def configure(repo):
+                target = repo / "shared-source/Shared.java"
+                target.parent.mkdir()
+                target.write_text("class Shared {}\n")
+                link = repo / self.framework / "Shared.java"
+                link.unlink()
+                link.symlink_to(os.path.relpath(target, link.parent))
+            self.seed_equivalent_java_release(root, configure)
+            (root / "shared-source/Shared.java").write_text("class Shared {int patched;}\n")
+            self.commit_all(root, "fix(shared): patch symlink target")
+            lookup = self.published_release_lookup()
+            text, _ = self.auto(root, dry_run=True)
+            self.assertNotIn("reusing published", text)
+            self.assertIn("selecting 1.14.9", text)
+            lookup.assert_not_called()
 
     def test_unsupported_builds_and_unreadable_inputs_are_not_reused(self):
         for change in ("non-java", "non-bazel", "invalid-build", "missing-lock"):
