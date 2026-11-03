@@ -7,7 +7,7 @@ set -eu
 chart_dir="${1:-./llm-request-router}"
 release="${RELEASE:-llm-request-router}"
 namespace="${NAMESPACE:-nvcf}"
-compatible_stargate_version="0.26.1"
+compatible_stargate_version="$(yq -r '.appVersion' "${chart_dir}/Chart.yaml")"
 tmp_dir="$(mktemp -d)"
 
 cleanup() {
@@ -74,7 +74,7 @@ service_field() {
 default_manifest="${tmp_dir}/default.yaml"
 render "${default_manifest}"
 
-[ "$(yq -r '.appVersion' "${chart_dir}/Chart.yaml")" = "${compatible_stargate_version}" ] || fail "chart appVersion must identify the compatible Stargate ${compatible_stargate_version} release"
+[ "$(yq -r '.llmRequestRouter.backendRouter.image.tag' "${chart_dir}/values.yaml")" = "${compatible_stargate_version}" ] || fail "default router images must use the same release"
 [ "$(workload_field "${default_manifest}" Deployment .kind)" = "Deployment" ] || fail "default render did not create Deployment"
 [ -z "$(workload_field "${default_manifest}" StatefulSet .kind)" ] || fail "default render also created StatefulSet"
 [ "$(workload_field "${default_manifest}" Deployment .spec.replicas)" = "3" ] || fail "default replica count is not 3"
