@@ -243,7 +243,7 @@ configuration before adding validation.
 
 ## Commit Messages
 
-Use Conventional Commits v1.0.0. Include issue references in the footer when required by the change type. For GitHub PR work, use a public `NVIDIA/nvcf` issue reference.
+Use Conventional Commits v1.0.0. Include issue references in the footer when required by the change type. For GitHub PR work, use a public `dsx-ai-factory/nvcf` issue reference.
 
 Sign off every commit with `git commit -s` (Developer Certificate of Origin,
 see `CONTRIBUTING.md`). The DCO check rejects pull requests with unsigned
@@ -268,8 +268,8 @@ Use Conventional Commit format for Pull Request titles, as described in the
 Commit Messages section. Release automation depends on this format. Examples:
 `feat:`, `fix:`, `chore:`, `docs:`.
 
-For GitHub PRs, agents must create or link a public `NVIDIA/nvcf` issue in
-`## Issues` using `Closes #123`, `Fixes #123`, `Resolves NVIDIA/nvcf#123`, or
+For GitHub PRs, agents must create or link a public `dsx-ai-factory/nvcf` issue in
+`## Issues` using `Closes #123`, `Fixes #123`, `Resolves dsx-ai-factory/nvcf#123`, or
 `Relates to #123`. If context is private, create a generic public issue. Do not
 use `NO-REF`, Jira keys, private tracker or bug IDs, private URLs, title-only
 refs, other-repo issues, or invented issue numbers for agent-authored PRs.

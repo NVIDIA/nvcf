@@ -57,14 +57,22 @@ func TestEditionQualificationAndCombination(t *testing.T) {
 		{"development", func(*Catalog) {}, ""},
 		{"qualification", func(c *Catalog) {
 			c.DocsEdition.Status = ReleaseSetQualified
+			c.DocsEdition.Qualification = "https://github.com/dsx-ai-factory/nvcf/pull/123"
+		}, ""},
+		{"pre-move qualification", func(c *Catalog) {
+			c.DocsEdition.Status = ReleaseSetQualified
 			c.DocsEdition.Qualification = "https://github.com/NVIDIA/nvcf/pull/123"
 		}, ""},
+		{"other repository qualification", func(c *Catalog) {
+			c.DocsEdition.Status = ReleaseSetQualified
+			c.DocsEdition.Qualification = "https://github.com/other/nvcf/pull/123"
+		}, "requires a public"},
 		{"missing approval", func(c *Catalog) { c.DocsEdition.Status = ReleaseSetQualified }, "requires a public"},
 		{"private evidence", func(c *Catalog) {
 			c.DocsEdition.Status = ReleaseSetQualified
 			c.DocsEdition.Qualification = "https://example.com/approval"
 		}, "requires a public"},
-		{"development approval", func(c *Catalog) { c.DocsEdition.Qualification = "https://github.com/NVIDIA/nvcf/pull/123" }, "must not claim"},
+		{"development approval", func(c *Catalog) { c.DocsEdition.Qualification = "https://github.com/dsx-ai-factory/nvcf/pull/123" }, "must not claim"},
 		{"missing stack", func(c *Catalog) { c.ReleaseSet.Stacks.ComputePlane = StackReleaseMetadata{} }, "version"},
 		{"missing matrix", func(c *Catalog) { c.Compatibility = nil }, "no compatibility"},
 		{"incompatible", func(c *Catalog) { c.Compatibility[0].CompatibleWith[releaseSetStackComputePlane] = "99.0.0+" }, "requires compute-plane"},
@@ -251,7 +259,7 @@ func TestEditionCommandRejectsImplicitInputs(t *testing.T) {
 	for _, args := range [][]string{
 		{"prepare", "--repo", t.TempDir()},
 		{"prepare", "--repo", t.TempDir(), "--source", strings.Repeat("a", 40), "--version", "1.0.0", "--change", "initial", "--self-managed", "latest"},
-		{"check", "--repo", t.TempDir(), "--qualification", "https://github.com/NVIDIA/nvcf/pull/123"},
+		{"check", "--repo", t.TempDir(), "--qualification", "https://github.com/dsx-ai-factory/nvcf/pull/123"},
 		{"register", "--repo", t.TempDir(), "--version", "1.0.0", "--commit", "main"},
 	} {
 		if err := runEdition(args); err == nil {
@@ -263,7 +271,7 @@ func TestEditionCommandRejectsImplicitInputs(t *testing.T) {
 func TestEditionQualifiedCatalogCannotBeRefreshed(t *testing.T) {
 	catalog := editionTestCatalog()
 	catalog.DocsEdition.Status = ReleaseSetQualified
-	catalog.DocsEdition.Qualification = "https://github.com/NVIDIA/nvcf/pull/123"
+	catalog.DocsEdition.Qualification = "https://github.com/dsx-ai-factory/nvcf/pull/123"
 	if _, err := updateCatalogFromGitHubInventories(t.TempDir(), nil, catalog); err == nil || !strings.Contains(err.Error(), "cannot refresh") {
 		t.Fatalf("qualified edition refresh was allowed: %v", err)
 	}
@@ -281,7 +289,7 @@ func TestEditionSummaryUsesSelectedCombination(t *testing.T) {
 		}
 	}
 	catalog.DocsEdition.Status = ReleaseSetQualified
-	catalog.DocsEdition.Qualification = "https://github.com/NVIDIA/nvcf/pull/123"
+	catalog.DocsEdition.Qualification = "https://github.com/dsx-ai-factory/nvcf/pull/123"
 	for _, name := range releaseSetStackNames {
 		summary, err := Render("edition-"+name, catalog)
 		if err != nil {

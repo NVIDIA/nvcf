@@ -23,7 +23,7 @@ print_github_commit_guidance() {
 ERROR: ${reason}
 
 Why this is required:
-  The NVCF OSS snapshot pipeline publishes sanitized changes to github.com/NVIDIA/nvcf.
+  The NVCF OSS snapshot pipeline publishes sanitized changes to github.com/dsx-ai-factory/nvcf.
   nvossctl reads the final "Github commit:" section from the GitLab MR description.
   Everything after the marker becomes the exact public GitHub commit message.
 

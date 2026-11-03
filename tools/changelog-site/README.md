@@ -79,7 +79,7 @@ labeled `gitlab`, `github`, or `both`, shown as a chip in the UI and a short
 `GL`/`GH`/`GH+GL` marker in the version picker, so a code audit can tell at a
 glance where a release tag was cut.
 
-The mirror defaults to `https://github.com/NVIDIA/nvcf.git`; override with
+The mirror defaults to `https://github.com/dsx-ai-factory/nvcf.git`; override with
 `--github-repo` or `NVCF_GITHUB_REMOTE`, or set it empty to disable the GitHub
 source. `GITHUB_TOKEN` is used when set (the mirror is public, so it only lifts
 rate limits). If the mirror is unreachable, the build degrades to GitLab-only

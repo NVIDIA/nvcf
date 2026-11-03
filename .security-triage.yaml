@@ -4,7 +4,7 @@ last_updated: "2026-07-23T23:43:11Z"
 
 repository_exposure_classification:
   visibility: "Public"
-  basis: "NVIDIA/nvcf is a public repository on GitHub"
+  basis: "dsx-ai-factory/nvcf is a public repository on GitHub"
   confirmed_by: "FamousDirector"
   date: "2026-07-23"
 
