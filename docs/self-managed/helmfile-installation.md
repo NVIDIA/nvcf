@@ -614,11 +614,11 @@ repositories point to the upstream Quay images:
 
 For private mirrors, use the digest of each image in the destination registry.
 Upgrade only after the 0.1.1 chart and all mirrored v1.20.5 images are
-published. Render the cert-manager dependency stage and confirm the four pod
-images and the controller's `--acme-http01-solver-image` argument use v1.20.5:
+published. From the extracted stack bundle root, render the cert-manager
+dependency stage. Confirm the four pod images and the controller's
+`--acme-http01-solver-image` argument use v1.20.5:
 
 ```bash
-cd deploy/stacks/self-managed
 HELMFILE_ENV=<environment-name> helmfile \
   -f helmfile.d/01-dependencies.yaml.gotmpl \
   --selector name=cert-manager template
