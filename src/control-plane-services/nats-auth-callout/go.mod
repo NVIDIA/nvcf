@@ -115,3 +115,5 @@ require (
 )
 
 replace google.golang.org/grpc => google.golang.org/grpc v1.79.3
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib

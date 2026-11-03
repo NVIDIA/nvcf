@@ -9,7 +9,7 @@ go_library(
         "sign.go",
         "utils.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volc-sdk-golang/base",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volc-sdk-golang/base",
     importpath = "github.com/volcengine/volc-sdk-golang/base",
     visibility = ["//visibility:public"],
     deps = ["//src/compute-plane-services/nvca/vendor/github.com/google/uuid"],

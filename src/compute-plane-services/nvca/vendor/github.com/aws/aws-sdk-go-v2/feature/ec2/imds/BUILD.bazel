@@ -18,7 +18,7 @@ go_library(
         "request_middleware.go",
         "token_provider.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds",
     importpath = "github.com/aws/aws-sdk-go-v2/feature/ec2/imds",
     visibility = ["//visibility:public"],
     deps = [

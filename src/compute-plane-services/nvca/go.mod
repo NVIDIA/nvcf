@@ -5,9 +5,9 @@ go 1.26.0
 require (
 	github.com/NVIDIA/KAI-scheduler v0.12.6
 	github.com/NVIDIA/k8s-dra-driver-gpu v0.0.0-20251017125642-cfe35ffd3d2c
-	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260722095202-f5e2792f5630
 	github.com/aws/aws-sdk-go v1.55.5
 	github.com/bombsimon/logrusr/v4 v4.1.0
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260722095202-f5e2792f5630
 	github.com/evanphx/json-patch/v5 v5.9.11
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-logr/logr v1.4.3

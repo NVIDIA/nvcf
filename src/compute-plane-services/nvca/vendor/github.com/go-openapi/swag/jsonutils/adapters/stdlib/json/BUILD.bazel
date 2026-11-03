@@ -11,7 +11,7 @@ go_library(
         "register.go",
         "writer.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/jsonutils/adapters/stdlib/json",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/jsonutils/adapters/stdlib/json",
     importpath = "github.com/go-openapi/swag/jsonutils/adapters/stdlib/json",
     visibility = ["//visibility:public"],
     deps = [

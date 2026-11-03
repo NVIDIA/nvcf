@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "cached",
     srcs = ["cache.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/cached",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/cached",
     importpath = "k8s.io/kube-openapi/pkg/cached",
     visibility = ["//visibility:public"],
 )

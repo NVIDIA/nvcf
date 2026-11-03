@@ -217,3 +217,5 @@ replace (
 	k8s.io/apimachinery => k8s.io/apimachinery v0.33.3
 	k8s.io/client-go => k8s.io/client-go v0.33.3
 )
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib

@@ -7,7 +7,7 @@ go_library(
         "fake_event.go",
         "fake_events_client.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/events/v1/fake",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/events/v1/fake",
     importpath = "k8s.io/client-go/kubernetes/typed/events/v1/fake",
     visibility = ["//visibility:public"],
     deps = [

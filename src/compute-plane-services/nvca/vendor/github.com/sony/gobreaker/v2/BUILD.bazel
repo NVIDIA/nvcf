@@ -8,7 +8,7 @@ go_library(
         "gobreaker.go",
         "twostep_gobreaker.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/sony/gobreaker/v2",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/sony/gobreaker/v2",
     importpath = "github.com/sony/gobreaker/v2",
     visibility = ["//visibility:public"],
 )

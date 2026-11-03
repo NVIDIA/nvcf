@@ -9,7 +9,7 @@ go_library(
         "sort.go",
         "sql.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/blang/semver/v4",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/blang/semver/v4",
     importpath = "github.com/blang/semver/v4",
     visibility = ["//visibility:public"],
 )

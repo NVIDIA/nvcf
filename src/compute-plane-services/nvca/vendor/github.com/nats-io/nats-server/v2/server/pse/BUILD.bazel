@@ -15,7 +15,7 @@ go_library(
         "pse_windows.go",
     ],
     cgo = True,
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server/pse",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server/pse",
     importpath = "github.com/nats-io/nats-server/v2/server/pse",
     visibility = ["//visibility:public"],
     deps = select({

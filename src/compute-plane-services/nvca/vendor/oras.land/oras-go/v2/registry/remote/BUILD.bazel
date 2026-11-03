@@ -11,7 +11,7 @@ go_library(
         "utils.go",
         "warning.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote",
     importpath = "oras.land/oras-go/v2/registry/remote",
     visibility = ["//visibility:public"],
     deps = [

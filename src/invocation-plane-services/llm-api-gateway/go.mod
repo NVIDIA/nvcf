@@ -161,3 +161,5 @@ require (
 replace github.com/olric-data/olric => github.com/max007-008/olric v0.0.0-20260904024039-0e35b781a2f3
 
 replace k8s.io/client-go v11.0.0+incompatible => k8s.io/client-go v0.34.2
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib

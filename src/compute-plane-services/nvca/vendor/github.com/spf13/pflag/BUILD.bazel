@@ -46,7 +46,7 @@ go_library(
         "uint8.go",
         "uint_slice.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/pflag",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/pflag",
     importpath = "github.com/spf13/pflag",
     visibility = ["//visibility:public"],
 )

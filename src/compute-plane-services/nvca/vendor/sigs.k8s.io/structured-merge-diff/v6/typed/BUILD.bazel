@@ -14,7 +14,7 @@ go_library(
         "typed.go",
         "validate.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/typed",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/typed",
     importpath = "sigs.k8s.io/structured-merge-diff/v6/typed",
     visibility = ["//visibility:public"],
     deps = [
