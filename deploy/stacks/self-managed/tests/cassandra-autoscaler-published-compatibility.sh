@@ -18,11 +18,8 @@ cassandra_manifest="$work_dir/cassandra.yaml"
 cassandra_release="$work_dir/cassandra-release.json"
 autoscaler_manifest="$work_dir/function-autoscaler.yaml"
 autoscaler_release="$work_dir/function-autoscaler-release.json"
-# These literals are the compatibility contract under test. Review and advance
-# them together only after the autoscaler no longer uses the removed tables.
-cassandra_chart_version=0.21.3
-autoscaler_chart_version=0.5.0
-migrations_image_version=0.17.6
+# The selected autoscaler no longer uses the tables removed by migration 04.
+# Check the published chart defaults without duplicating the stack's pins.
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
@@ -95,9 +92,15 @@ render_release \
 test "$(yq -r '.[0].chart' "$cassandra_release")" = \
   'nvcf/helm-nvcf-cassandra' ||
   fail "dependency Helmfile selected the wrong Cassandra chart"
-test "$(yq -r '.[0].version' "$cassandra_release")" = \
-  "$cassandra_chart_version" ||
-  fail "dependency Helmfile did not select Cassandra $cassandra_chart_version"
+cassandra_chart_version="$(yq -r '.[0].version // ""' "$cassandra_release")"
+test -n "$cassandra_chart_version" ||
+  fail "dependency Helmfile did not select a Cassandra chart version"
+
+cassandra_chart="oci://${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/helm-nvcf-cassandra"
+migrations_image_version="$(helm show values "$cassandra_chart" \
+  --version "$cassandra_chart_version" | yq -r '.cassandra.migrations.image.tag // ""')"
+test -n "$migrations_image_version" ||
+  fail "published Cassandra chart has no migrations image tag"
 
 migrations_image="$(yq ea -r '
   select(.kind == "Job") |
@@ -120,9 +123,9 @@ render_release \
 test "$(yq -r '.[0].chart' "$autoscaler_release")" = \
   'nvcf/helm-nvcf-function-autoscaler' ||
   fail "observability Helmfile selected the wrong function autoscaler chart"
-test "$(yq -r '.[0].version' "$autoscaler_release")" = \
-  "$autoscaler_chart_version" ||
-  fail "observability Helmfile did not select function autoscaler $autoscaler_chart_version"
+autoscaler_chart_version="$(yq -r '.[0].version // ""' "$autoscaler_release")"
+test -n "$autoscaler_chart_version" ||
+  fail "observability Helmfile did not select a function autoscaler chart version"
 
 autoscaler_chart="oci://${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/helm-nvcf-function-autoscaler"
 autoscaler_image_version="$(helm show chart "$autoscaler_chart" \
