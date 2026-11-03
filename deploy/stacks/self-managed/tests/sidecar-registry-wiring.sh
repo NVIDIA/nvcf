@@ -80,7 +80,7 @@ assert_sidecars() {
   assert_env "$values_file" NVCT_SIDECARS_HOSTNAME "$host" "$label"
   assert_env "$values_file" NVCT_SIDECARS_REPOSITORY "$repo" "$label"
   local api_key api_reference base_reference
-  for api_key in ess-agent-container llm-credential-manager-image; do
+  for api_key in ess-agent-container; do
     api_reference="$(yq -r ".api.remoteConfig.configData.nvcf.sidecars.\"$api_key\"" "$values_file")"
     base_reference="$(yq -r ".api.remoteConfig.configData.nvcf.sidecars.\"$api_key\"" "$stack_dir/environments/base.yaml")"
     [[ "$api_reference" == "$base_reference" ]] || fail "$label: API $api_key selection was lost"

@@ -60,7 +60,7 @@ releases:
 
   # --- NVCF Services ---
   - name: api-keys
-    version: 1.9.2
+    version: 1.9.3
     namespace: api-keys
     inherit:
       - template: service
@@ -69,7 +69,7 @@ releases:
     {{- $sisChartPath := dig "sis" "chartPath" "" .Values }}
     chart: {{ $sisChartPath | default "nvcf/helm-nvcf-sis" | quote }}
     {{- if not $sisChartPath }}
-    version: 2.6.1
+    version: 2.6.2
     {{- end }}
     namespace: sis
     condition: icms.enabled
@@ -80,7 +80,7 @@ releases:
       release-group: services
 
   - name: api
-    version: 1.33.2
+    version: 1.34.0
     namespace: nvcf
     inherit:
       - template: service
@@ -101,7 +101,7 @@ releases:
       - nvcf/reval
 
   - name: nvct-api
-    version: 1.8.2
+    version: 1.10.0
     namespace: nvcf
     inherit:
       - template: service
@@ -129,7 +129,7 @@ releases:
       - nvcf/api
 
   - name: grpc-proxy
-    version: 1.13.0
+    version: 1.14.0
     namespace: nvcf
     inherit:
       - template: service
@@ -149,13 +149,13 @@ releases:
       - nvcf/api
 
   - name: ess-api
-    version: 1.11.0
+    version: 1.11.1
     namespace: ess
     inherit:
       - template: service
 
   - name: notary-service
-    version: 1.7.0
+    version: 1.9.1
     namespace: nvcf
     inherit:
       - template: service
@@ -195,7 +195,7 @@ releases:
 
   - name: reval
     chart: nvcf/helm-reval
-    version: 1.5.0
+    version: 1.6.0
     namespace: nvcf
     values:
       - ../global.yaml.gotmpl
@@ -247,7 +247,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.18.0
+    version: 1.18.2
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
@@ -260,7 +260,7 @@ releases:
 
   - name: llm-api-gateway
     chart: nvcf/helm-nvcf-llm-api-gateway
-    version: 1.8.1
+    version: 1.11.0
     namespace: nvcf
     condition: addons.llm.enabled
     values:
@@ -293,7 +293,7 @@ releases:
 
   - name: event-ledger
     chart: nvcf/helm-nvcf-event-ledger
-    version: 0.9.0
+    version: 0.10.0
     namespace: nvcf
     condition: addons.eventLedger.enabled
     values:

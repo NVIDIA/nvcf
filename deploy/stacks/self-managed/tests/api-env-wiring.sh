@@ -171,6 +171,19 @@ assert_yaml_value "$default_values" "$remote_pylon_expression" \
 assert_yaml_value "$default_values" '.llmRequestRouter.podAnnotations."release-artifact-llm-router-client-image"' \
   "$(yq -r "$remote_pylon_expression" "$default_values")" "computed Pylon inventory"
 
+# An empty router selection must not silently advertise an older Pylon image.
+write_environment <<'EOF'
+addons:
+  llm:
+    enabled: true
+    requestRouter:
+      image:
+        tag: ""
+EOF
+assert_render_failure "$work_dir/empty-router-tag.yaml" \
+  'addons.llm.requestRouter.image.tag must be set to select matching router and Pylon images' \
+  "empty router tag"
+
 # Local BDD fixtures rely on the same computed default after their registry
 # paths are configured. They must not carry unresolved fixture placeholders
 # into the higher-precedence API remote ConfigMap.

@@ -197,7 +197,6 @@ api:
       nvcf:
         sidecars:
           ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.4
-          llm-credential-manager-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-llm-credentials-oss:1.1.5
 
 # NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
@@ -372,9 +371,6 @@ cassandra:
   # Do not use small for default cloud installs. Cassandra can OOM during
   # first boot and leave migrations in a failed or dirty state.
   resourcesPreset: "xlarge"
-  migrations:
-    image:
-      tag: 0.17.7
   # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
   # The default image name is `cassandra` under global.image.repository.
   # Override here when pulling from a registry that uses a different path or tag.
@@ -461,8 +457,10 @@ addons:
   llm:
     enabled: false
     requestRouter:
+      # Keep router and Pylon on the same release. This tag also selects the
+      # Pylon sidecar advertised by the API.
       image:
-        tag: "0.26.1"
+        tag: "0.29.2"
       # replicaCount defaults to the request-router chart value. Set it here
       # only when the stack needs a different topology.
       # replicaCount: 3
@@ -671,15 +669,9 @@ apikeys:
     maxUnavailable: 1
 
 ess:
-  image:
-    tag: "0.5.7"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
-
-notary:
-  image:
-    tag: "1.14.8"
 
 invocation:
   env:
@@ -720,8 +712,6 @@ functionautoscaler:
     maxUnavailable: 1
 
 reval:
-  image:
-    tag: "0.20.3"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1

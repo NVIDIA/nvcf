@@ -941,7 +941,7 @@ natsAuthCalloutService:
 {{- else if $legacyPylonImageConfigured }}
 {{- $effectivePylonImage = $legacyPylonImage }}
 {{- else if $llmEnabled }}
-{{- $pylonImageTag := dig "addons" "llm" "requestRouter" "image" "tag" "" .Values | default "0.26.1" }}
+{{- $pylonImageTag := dig "addons" "llm" "requestRouter" "image" "tag" "" .Values | required "addons.llm.requestRouter.image.tag must be set to select matching router and Pylon images" }}
 {{- $effectivePylonImage = printf "%s/%s/pylon:%s" $sidecarsHost $sidecarsRepo $pylonImageTag }}
 {{- end }}
 {{- $stackApiRemoteConfigData := dict }}

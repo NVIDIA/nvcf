@@ -162,10 +162,14 @@ global:
 EOF
 
 render_values "$work_dir/default-values.yaml"
-for component in rateLimiter ess notary reval; do
+for component in rateLimiter; do
   test "$(yq -r ".$component.image.tag" "$work_dir/default-values.yaml")" = \
     "$(yq -r ".$component.image.tag" "$stack_dir/environments/base.yaml")" || fail "$component image selection was lost"
 done
+for component in ess notary reval; do
+  assert_yaml_path_absent "$work_dir/default-values.yaml" ".$component.image.tag" "$component chart default"
+done
+assert_yaml_path_absent "$work_dir/default-values.yaml" .cassandra.migrations.image.tag "Cassandra migration chart default"
 for component in container reloader; do
   test "$(yq -r ".nats.$component.merge.securityContext.runAsNonRoot" "$work_dir/default-values.yaml")" = true || fail "NATS $component must run without root"
   test "$(yq -r ".nats.$component.merge.securityContext.runAsUser" "$work_dir/default-values.yaml")" = \
@@ -210,7 +214,19 @@ global:
   image:
     registry: nvcr.io
     repository: test/nvcf
+reval:
+  image:
+    tag: "9.8.7-reval"
+ess:
+  image:
+    tag: "9.8.7-ess"
+notary:
+  image:
+    tag: "9.8.7-notary"
 cassandra:
+  migrations:
+    image:
+      tag: "9.8.7-migrations"
   image:
     registry: mirror.example.com
     repository: mirror/cassandra-server
@@ -240,6 +256,10 @@ certManager:
 EOF
 
 render_values "$work_dir/override-values.yaml"
+for component in ess notary reval; do
+  test "$(yq -r ".$component.image.tag" "$work_dir/override-values.yaml")" = "9.8.7-$component" || fail "$component image override was lost"
+done
+test "$(yq -r '.cassandra.migrations.image.tag' "$work_dir/override-values.yaml")" = "9.8.7-migrations" || fail "Cassandra migration image override was lost"
 assert_image "$work_dir/override-values.yaml" \
   mirror/cassandra-server mirror.example.com 5.0.8-nv-2.0.1 "cassandra full override"
 assert_image "$work_dir/override-values.yaml" \
