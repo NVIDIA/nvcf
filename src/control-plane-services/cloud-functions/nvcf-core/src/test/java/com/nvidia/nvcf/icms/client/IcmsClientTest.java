@@ -454,9 +454,9 @@ class IcmsClientTest {
         var deploymentId = functionDeploymentEntity.getDeploymentId();
         icmsAllocatorService.scheduleNewInstance(function, deploymentId, gpuSpecification, 1);
 
-        // Assert: the line feed is written as \u000a inside a quoted value, so it stays one
-        // entry. Without encoding, the raw line feed would split it into two entries and
-        // INFERENCE_CONTAINER_ARGS would be "a".
+        // Assert: the line feed is escaped inside a quoted value, so it stays one entry.
+        // Without the encoding, the raw line feed would split the value into two entries and
+        // INFERENCE_CONTAINER_ARGS would hold only the text before it.
         List<ServeEvent> allServeEvents = MockIcmsServer.getMockIcmsServer().getAllServeEvents();
         String formUrlEncodedBody = allServeEvents.getFirst().getRequest().getBodyAsString();
         var params = parseRequestParams(formUrlEncodedBody);
