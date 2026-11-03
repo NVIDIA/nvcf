@@ -274,9 +274,10 @@ func TestRWXReadOnly_FailedWriterRemovesUnpopulatedClaim(t *testing.T) {
 	var zero int32
 	failed.Spec.BackoffLimit = &zero
 	failed.Status.Failed = 1
-	c, k8s := rwxTestBackend(nil, boundSharedClaim(false), failed)
+	req := rwxRequest(t, rwxSelection(t))
+	c, k8s := rwxTestBackend(req, boundSharedClaim(false), failed)
 
-	state, _ := c.setupRWXReadOnlyModelCachingForRequest(ctx, rwxRequest(t, rwxSelection(t)), pvc, job, rwxSelection(t))
+	state, _ := c.setupRWXReadOnlyModelCachingForRequest(ctx, req, pvc, job, rwxSelection(t))
 	assert.Equal(t, ModelCachingFailed, state)
 
 	_, err := k8s.CoreV1().PersistentVolumeClaims(rwxTestNamespace).Get(ctx, pvc.Name, metav1.GetOptions{})

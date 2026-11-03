@@ -60,6 +60,9 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 
 	// If requested instances are already created, aggregate instance status.
 	if int(instCount) == len(activeInstances) {
+		if err := c.retryTaskModelCacheCleanup(ctx, req); err != nil {
+			log.WithError(err).Warn("failed to retry model cache cleanup")
+		}
 		return c.bk8s.ApplyICMSRequestStatusChange(ctx, req)
 	}
 

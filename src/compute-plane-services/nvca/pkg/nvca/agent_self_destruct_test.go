@@ -484,6 +484,21 @@ func (m *MockICMSRequestHelper) ComputeCleanupCacheReferences(ctx context.Contex
 	return args.Error(0)
 }
 
+// RetryFailedModelCacheCleanup is recorded only when a test expects it, so tests that do not care
+// about model cache cleanup need no expectation for it.
+func (m *MockICMSRequestHelper) RetryFailedModelCacheCleanup(ctx context.Context, req *nvcav2beta1.ICMSRequest) error {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "RetryFailedModelCacheCleanup" {
+			args := m.Called(ctx, req)
+			if run, ok := args.Get(0).(func(context.Context, *nvcav2beta1.ICMSRequest) error); ok {
+				return run(ctx, req)
+			}
+			return args.Error(0)
+		}
+	}
+	return nil
+}
+
 func (m *MockICMSRequestHelper) AllInstancesTerminatedAndReported(ctx context.Context, req *nvcav2beta1.ICMSRequest) bool {
 	args := m.Called(ctx, req)
 	return args.Bool(0)
