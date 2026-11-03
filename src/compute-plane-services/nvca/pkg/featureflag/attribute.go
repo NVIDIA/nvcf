@@ -185,8 +185,37 @@ func parseAttributes(f string) {
 	attrMu.Lock()
 	defer attrMu.Unlock()
 
-	log := core.GetLogger(core.WithDefaultLogger(context.Background()))
+	applyAttributes(f, globalAttrValues{}, core.GetLogger(core.WithDefaultLogger(context.Background())))
+}
 
+// attrValues holds attribute settings that override the registered defaults.
+type attrValues interface {
+	set(attr *Attribute, enabled bool, val string)
+}
+
+// globalAttrValues holds settings in the process-wide attributes.
+type globalAttrValues struct{}
+
+func (globalAttrValues) set(attr *Attribute, enabled bool, val string) {
+	attr.enabled = &enabled
+	attr.val = val
+}
+
+// listAttrValues holds the settings of a single attribute list.
+type listAttrValues map[string]bool
+
+func (v listAttrValues) set(attr *Attribute, enabled bool, _ string) { v[attr.Key] = enabled }
+
+func (v listAttrValues) enabled(attr *Attribute) bool {
+	if enabled, ok := v[attr.Key]; ok {
+		return enabled
+	}
+	return attr.defaultEnabled != nil && *attr.defaultEnabled
+}
+
+// applyAttributes parses the comma-separated attribute list f into vals.
+// The caller must hold attrMu.
+func applyAttributes(f string, vals attrValues, log parseLogger) {
 	f = strings.TrimSpace(f)
 
 	for _, s := range strings.Split(f, ",") {
@@ -220,8 +249,7 @@ func parseAttributes(f string) {
 				enabledStr = "enabled"
 			}
 			log.Infof("Attribute %s: %q=%s", enabledStr, ff.Key, val)
-			ff.enabled = &enabled
-			ff.val = val
+			vals.set(ff, enabled, val)
 		} else {
 			log.Warnf("Unknown Attribute %q", s)
 		}
