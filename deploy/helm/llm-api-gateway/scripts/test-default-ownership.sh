@@ -96,12 +96,12 @@ if helm template llm-api-gateway "$chart_dir" \
   >/dev/null 2>"$invalid_error"; then
   fail "a negative maxRequestBodyBytes should fail to render"
 fi
-grep -Fq 'llmApiGateway.config.maxRequestBodyBytes must be a whole number 0 or more' "$invalid_error" ||
+grep -Fq 'llmApiGateway.config.maxRequestBodyBytes must be a whole number from 0 to 9223372036854775807' "$invalid_error" ||
   fail "negative maxRequestBodyBytes returned the wrong error"
 
 for bad in "--set-string llmApiGateway.config.maxRequestBodyBytes=50Mi" \
-  "--set llmApiGateway.config.maxRequestBodyBytes=null" \
-  "--set llmApiGateway.config.maxRequestBodyBytes=1.5"; do
+  "--set llmApiGateway.config.maxRequestBodyBytes=1.5" \
+  "--set-json llmApiGateway.config.maxRequestBodyBytes=9223372036854775808"; do
   # shellcheck disable=SC2086
   if helm template llm-api-gateway "$chart_dir" \
     --namespace nvcf \
@@ -109,9 +109,19 @@ for bad in "--set-string llmApiGateway.config.maxRequestBodyBytes=50Mi" \
     $bad >/dev/null 2>"$invalid_error"; then
     fail "maxRequestBodyBytes must reject: $bad"
   fi
-  grep -Fq 'llmApiGateway.config.maxRequestBodyBytes must be a whole number 0 or more' "$invalid_error" ||
+  grep -Fq 'llmApiGateway.config.maxRequestBodyBytes must be a whole number from 0 to 9223372036854775807' "$invalid_error" ||
     fail "maxRequestBodyBytes ($bad) returned the wrong error"
 done
+
+# An unset value, as left by helm upgrade --reuse-values from an older chart,
+# omits the env var so the gateway's own 50 MiB default applies.
+helm template llm-api-gateway "$chart_dir" \
+  --namespace nvcf \
+  --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
+  --set llmApiGateway.config.maxRequestBodyBytes=null \
+  >"$override_manifest"
+test "$(yq ea -r 'select(.kind == "ConfigMap" and .data.PORT != null) | .data | has("NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES")' "$override_manifest")" = false ||
+  fail "an unset maxRequestBodyBytes must omit NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES"
 
 if ! helm template llm-api-gateway "$chart_dir" \
   --namespace nvcf \
