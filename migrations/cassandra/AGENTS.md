@@ -11,5 +11,8 @@ Run from `migrations/cassandra`:
 
 Use POSIX shell. Keep dependency archives, builder images, and Java libraries
 checksum-pinned. Preserve numeric non-root image users and runtime tool coverage.
+Update the Cassandra base tag and digest together. Keep the copied trust store's
+`NOTICE` and pinned source revision current.
+
 Security backports must not introduce unrelated schema migrations. Verify both
 platforms and the consuming migration Job before releasing a replacement image.

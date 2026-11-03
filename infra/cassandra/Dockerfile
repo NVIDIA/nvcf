@@ -99,6 +99,7 @@ RUN if [ -s /tmp/exporter-input.jar ] && [ -z "${EXPORTER_JAVAAGENT}" ]; then \
 FROM cassandra:5.0.9@sha256:ae4cc2e4b62a5b2a2dd1645ba827cb50c589cc7531bcffe8b8b60ac3b1adc79d
 
 COPY --from=patched-cacerts --chmod=0644 /out/cacerts /opt/java/openjdk/lib/security/cacerts
+COPY --chmod=0644 NOTICE /usr/share/doc/cacerts-NOTICE
 COPY --from=gosu-builder --chmod=0555 /out/gosu /usr/local/bin/gosu
 
 # Refresh the OpenSSL runtime packages independently of the upstream image

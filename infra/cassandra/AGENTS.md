@@ -8,8 +8,11 @@ Container image that runs Apache Cassandra for NVCF, built on the official
 ## Image facts
 
 - Base: `cassandra:5.0.9` (official Apache Cassandra, Docker Hub). Bump the
-  Cassandra version by editing the `FROM cassandra:<version>` line; that tag is
-  the single source of truth, there is no version build-arg.
+  Cassandra version by updating both the tag and digest in the
+  `FROM cassandra:<version>@sha256:<digest>` line. The tag is the source of
+  truth for the expected version; there is no version build-arg.
+- Trust store: the image copies Temurin's MPL-2.0 `cacerts` file. Keep `NOTICE`
+  and its source revision current when changing that file.
 - yq: fetched in a pinned `alpine:3.21` build stage and checksum-verified. The
   chart's config init container uses it to deep-merge cassandra.yaml overrides.
 - Exporter agent: not redistributed here. `files/` ships only `.gitkeep`, and the

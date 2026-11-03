@@ -4,8 +4,16 @@
 set -eu
 
 image=${1:?Usage: test-image.sh IMAGE}
+subtree_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+expected_version=$(sed -n 's/^FROM cassandra:\([^@[:space:]]*\)@sha256:[[:xdigit:]]\{64\}$/\1/p' "$subtree_dir/Dockerfile")
+test -n "$expected_version" || { echo 'missing pinned Cassandra base image' >&2; exit 1; }
 
-docker run --rm --entrypoint cassandra "$image" -v | grep -Fx '5.0.9'
+actual_version=$(docker run --rm --entrypoint cassandra "$image" -v | tail -n 1)
+test "$actual_version" = "$expected_version" || {
+  echo "Cassandra version mismatch: Dockerfile expects $expected_version, image has $actual_version" >&2
+  exit 1
+}
+docker run --rm -i --entrypoint cmp "$image" - /usr/share/doc/cacerts-NOTICE < "$subtree_dir/NOTICE"
 docker run --rm --entrypoint java "$image" -version 2>&1 | grep -E '^openjdk version "17\.'
 
 certs=$(docker run --rm --entrypoint keytool "$image" -list -v -cacerts -storepass changeit)

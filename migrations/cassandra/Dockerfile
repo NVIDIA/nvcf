@@ -66,6 +66,7 @@ ARG GIT_SHA
 USER root
 
 COPY --from=patched-cacerts --chmod=0644 /out/cacerts /opt/java/openjdk/lib/security/cacerts
+COPY --chmod=0644 NOTICE /usr/share/doc/cacerts-NOTICE
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \

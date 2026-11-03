@@ -1,0 +1,18 @@
+Eclipse Temurin 17.0.21+9 cacerts trust store
+
+This image replaces /opt/java/openjdk/lib/security/cacerts with the unchanged
+file from the Eclipse Temurin 17.0.21+9 JRE. The trust store is licensed under
+the Mozilla Public License 2.0 (MPL-2.0).
+
+Corresponding source, including certdata.txt and mk-cacerts.sh:
+https://github.com/adoptium/temurin-build/tree/1cf43d7a3e77886bfea7d550a902e151a87d724d/security
+
+The certificate data comes from the NSS_3_131_1_RTM release:
+https://hg.mozilla.org/projects/nss/raw-file/NSS_3_131_1_RTM/lib/ckfw/builtins/certdata.txt
+
+License text:
+https://www.mozilla.org/en-US/MPL/2.0/
+
+Release build metadata for the AMD64 and ARM64 JRE archives:
+https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jre_x64_linux_hotspot_17.0.21_9.tar.gz.json
+https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jre_aarch64_linux_hotspot_17.0.21_9.tar.gz.json
