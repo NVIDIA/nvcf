@@ -32,6 +32,8 @@ package runtime
 import (
 	"context"
 	"errors"
+
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // ErrNotFound is returned when a container cannot be found by the given selector.
@@ -86,6 +88,11 @@ type Runtime interface {
 
 	// ListContainers returns all K8s containers known to the runtime.
 	ListContainers(ctx context.Context) ([]ContainerInfo, error)
+
+	// ContainerSpec returns the OCI runtime spec a container was created
+	// with, by its full runtime ID. Unlike the lookups above it answers for
+	// a container that has exited, as long as the runtime keeps it.
+	ContainerSpec(ctx context.Context, id string) (*specs.Spec, error)
 
 	// Type returns the runtime type (for logging / telemetry).
 	Type() Type

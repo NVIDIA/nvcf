@@ -899,7 +899,7 @@ func (a *Agent) restoreHandler(w http.ResponseWriter, r *http.Request) {
 	metrics.ActiveOperations.WithLabelValues("restore").Inc()
 	start := time.Now()
 
-	result, err := a.Restore(r.Context(), req)
+	result, err := a.restoreProbed(r.Context(), req)
 
 	metrics.ActiveOperations.WithLabelValues("restore").Dec()
 	duration := time.Since(start).Seconds()
@@ -908,7 +908,7 @@ func (a *Agent) restoreHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		metrics.RestoreTotal.WithLabelValues("failed", workload, "default").Inc()
 		a.log.WithError(err).Error("Restore failed")
-		http.Error(w, fmt.Sprintf("restore failed: %v", err), http.StatusInternalServerError)
+		writeRestoreFailure(w, err)
 		return
 	}
 

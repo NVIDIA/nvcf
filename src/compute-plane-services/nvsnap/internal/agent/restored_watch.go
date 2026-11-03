@@ -158,6 +158,7 @@ func onlyPlaceholderLeft(procBase string, hostPID int) bool {
 // restore (ref), not from the pod.
 func (c *criuAutoRestorer) failRestored(ctx context.Context, pod *corev1.Pod, ref restoredRef, cause error) {
 	ctx = context.WithoutCancel(ctx)
+	cause = c.a.onPodGPUFault(ctx, pod, probedContainer(pod), cause, logrus.NewEntry(c.a.log))
 	if ref.group != "" {
 		c.endGroup(ctx, pod, ref.group, true, true, cause, c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "criuGroup": ref.group}))
 		return
@@ -165,7 +166,14 @@ func (c *criuAutoRestorer) failRestored(ctx context.Context, pod *corev1.Pod, re
 	id := ref.checkpoint
 	log := c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "checkpoint": id})
 	// Only a record of this checkpoint is touched (recordFailure).
-	if c.failedRestoreBlocks(ctx, pod.Annotations[webhook.CRIUGroupAnnotation], id, cause, log) {
+	if fault := onFaultyGPU(cause); fault != nil {
+		log.WithError(cause).Warn("CRIU restore failed after it ran, on a faulty GPU; it is not counted against the checkpoint, and the pod is deleted so its replacement restores again")
+		if key := pod.Annotations[webhook.CRIUGroupAnnotation]; key != "" {
+			if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool { return recordGPUFault(d, id, fault) }); err != nil && !apierrors.IsNotFound(err) {
+				log.WithError(err).Warn("CRIU restore: cannot update the group record")
+			}
+		}
+	} else if c.failedRestoreBlocks(ctx, pod.Annotations[webhook.CRIUGroupAnnotation], id, cause, log) {
 		log.WithError(cause).Error("CRIU restore failed after it ran; blocking the checkpoint and deleting the pod so its replacement starts fresh")
 		if err := c.markFailed(ctx, id, cause); err != nil {
 			log.WithError(err).Error("CRIU restore: could not block the checkpoint")

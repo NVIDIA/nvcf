@@ -276,6 +276,82 @@ static int visible_gpus(CUuuid *out, int max)
     return n < max ? n : max;
 }
 
+/*
+ * probe: is the GPU visible here usable without libnvsnap_gpushare? The
+ * caller makes one GPU visible (CUDA_VISIBLE_DEVICES=<UUID>); the probe
+ * opens a context on it, fills a buffer, reads it back and frees it. It
+ * prints "ok", or the step that failed and the driver's error name
+ * ("context CUDA_ERROR_UNKNOWN"), and exits 0 or 2. It exits 1, with the
+ * reason on stderr, when it cannot ask the driver at all: the driver
+ * library does not load or lacks an entry point.
+ */
+static const char *libcuda_path = "libcuda.so.1";  /* --libcuda */
+
+#define PROBE_BYTES (1 << 20)
+
+static int probe_failed(const char *step, CUresult r, __typeof__(cuGetErrorName) *name)
+{
+    const char *s = NULL;
+    if (!name || name(r, &s) != CUDA_SUCCESS || !s)
+        s = "CUDA_ERROR_UNRECOGNIZED";
+    printf("%s %s\n", step, s);
+    return 2;
+}
+
+static int probe(void)
+{
+    void *h = dlopen(libcuda_path, RTLD_NOW | RTLD_LOCAL);
+    if (!h) { fprintf(stderr, "cannot load %s: %s\n", libcuda_path, dlerror()); return 1; }
+    __typeof__(cuInit) *init = dlsym(h, "cuInit");
+    __typeof__(cuGetErrorName) *name = dlsym(h, "cuGetErrorName");
+    __typeof__(cuDeviceGetCount) *count = dlsym(h, "cuDeviceGetCount");
+    __typeof__(cuDeviceGet) *get = dlsym(h, "cuDeviceGet");
+    __typeof__(cuDevicePrimaryCtxRetain) *retain = dlsym(h, "cuDevicePrimaryCtxRetain");
+    __typeof__(cuDevicePrimaryCtxRelease) *release = dlsym(h, "cuDevicePrimaryCtxRelease_v2");
+    __typeof__(cuCtxSetCurrent) *set = dlsym(h, "cuCtxSetCurrent");
+    __typeof__(cuMemAlloc) *alloc = dlsym(h, "cuMemAlloc_v2");
+    __typeof__(cuMemsetD8) *fill = dlsym(h, "cuMemsetD8_v2");
+    __typeof__(cuMemcpyDtoH) *dtoh = dlsym(h, "cuMemcpyDtoH_v2");
+    __typeof__(cuCtxSynchronize) *sync = dlsym(h, "cuCtxSynchronize");
+    __typeof__(cuMemFree) *mfree = dlsym(h, "cuMemFree_v2");
+    if (!init || !count || !get || !retain || !release || !set || !alloc || !fill || !dtoh || !sync || !mfree) {
+        fprintf(stderr, "%s lacks an entry point the probe uses\n", libcuda_path);
+        return 1;
+    }
+    CUresult r = init(0);
+    if (r != CUDA_SUCCESS) return probe_failed("init", r, name);
+    int n = 0;
+    if ((r = count(&n)) != CUDA_SUCCESS) return probe_failed("count", r, name);
+    if (n != 1) {
+        /* The caller names one GPU: none visible is the driver not
+         * offering it; more is a caller that named none. */
+        if (n == 0) return probe_failed("count", CUDA_ERROR_NO_DEVICE, name);
+        fprintf(stderr, "%d GPUs visible; the probe checks one (set CUDA_VISIBLE_DEVICES)\n", n);
+        return 1;
+    }
+    CUdevice d;
+    CUcontext ctx;
+    CUdeviceptr buf;
+    static unsigned char back[PROBE_BYTES];
+    if ((r = get(&d, 0)) != CUDA_SUCCESS) return probe_failed("device", r, name);
+    if ((r = retain(&ctx, d)) != CUDA_SUCCESS) return probe_failed("context", r, name);
+    if ((r = set(ctx)) != CUDA_SUCCESS) return probe_failed("context", r, name);
+    if ((r = alloc(&buf, PROBE_BYTES)) != CUDA_SUCCESS) return probe_failed("alloc", r, name);
+    if ((r = fill(buf, 0xa5, PROBE_BYTES)) != CUDA_SUCCESS) return probe_failed("write", r, name);
+    if ((r = sync()) != CUDA_SUCCESS) return probe_failed("write", r, name);
+    if ((r = dtoh(back, buf, PROBE_BYTES)) != CUDA_SUCCESS) return probe_failed("read", r, name);
+    for (size_t i = 0; i < PROBE_BYTES; i++) {
+        if (back[i] != 0xa5) {
+            printf("read MISMATCH\n");
+            return 2;
+        }
+    }
+    if ((r = mfree(buf)) != CUDA_SUCCESS) return probe_failed("free", r, name);
+    if ((r = release(d)) != CUDA_SUCCESS) return probe_failed("context", r, name);
+    printf("ok\n");
+    return 0;
+}
+
 #define MAX_GPUS 64
 static const char *gpu_map_file;
 static const char *store_dir, *ckpt_dir, *cache_dir, *fabric_dir;
@@ -1497,6 +1573,9 @@ static void usage(const char *prog)
         "         resume       (restore + unlock all, then thaw)\n"
         "         open         (after resume --hold-gate: let the pids' GPU launches through)\n"
         "         gpus [FILE]  (print or write the visible GPU UUIDs, for --gpu-map)\n"
+        "         probe        (is the one visible GPU usable? prints ok or the failing\n"
+        "                       step and CUDA error; exit 0, 2 on a failure, 1 if it cannot ask)\n"
+        "--libcuda PATH: (probe) the driver library to load (default libcuda.so.1)\n"
         "--timeout-ms N: lock timeout per pid (default 10000, 0 = wait forever)\n"
         "--gpu-map FILE: restore GPUs listed in FILE onto the GPUs visible here\n"
         "--store S --ckpt-dir C: (suspend) libnvsnap_gpushare processes save GPU memory\n"
@@ -1539,6 +1618,8 @@ int main(int argc, char **argv)
             cache_dir = argv[argi + 1];
         else if (strcmp(argv[argi], "--fabric-map") == 0)
             fabric_dir = argv[argi + 1];
+        else if (strcmp(argv[argi], "--libcuda") == 0)
+            libcuda_path = argv[argi + 1];
         else
             break;
         argi += 2;
@@ -1552,6 +1633,8 @@ int main(int argc, char **argv)
         return cache_prefetch(argv[argi + 1], argv[argi + 2], argv[argi + 3]) ? 1 : 0;
     if (argc - argi == 3 && strcmp(argv[argi], "cache-gc") == 0)
         return cache_gc(argv[argi + 1], strtoull(argv[argi + 2], NULL, 10) << 30) ? 1 : 0;
+    if (argc - argi == 1 && strcmp(argv[argi], "probe") == 0)
+        return probe();
     if (argi < argc && strcmp(argv[argi], "gpus") == 0) {
         /* gpus [FILE]: the caller can keep the map out of the workload's filesystem. */
         CUuuid u[MAX_GPUS];
