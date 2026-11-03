@@ -123,6 +123,24 @@ kubectl -n sis get configmaps -o yaml | \
 The value must be `"true"`. If the line is missing or the value is `"false"`,
 SIS does not publish to the v3 API.
 
+## Enable gRPC proxy session events
+
+The gRPC proxy can publish an event each time a worker attaches to a session.
+These events are off by default. Event Ledger stores one record per attachment
+and does not expire them yet, so storage grows with session count. To enable
+them, set:
+
+```yaml
+addons:
+  eventLedger:
+    enabled: true
+    grpcProxyEvents:
+      enabled: true
+```
+
+Applying the change restarts the grpc-proxy Pods. Set `enabled: false` under
+`grpcProxyEvents` to stop these events without removing Event Ledger.
+
 ## Enable the compute-plane collector
 
 Configure each compute-plane environment separately in

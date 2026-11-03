@@ -534,6 +534,10 @@ addons:
   # When enabled, deploys the event-ledger service backed by Cassandra.
   eventLedger:
     enabled: true
+    # gRPC proxy session events: one record per worker attachment, never
+    # expired. Off until Event Ledger can expire them.
+    grpcProxyEvents:
+      enabled: false
 
   # Vanity Gateway addon for optional vanity and OpenAI-compatible invocation routes.
   # Disabled by default; enabling this deploys the vanity-gateway service and its
