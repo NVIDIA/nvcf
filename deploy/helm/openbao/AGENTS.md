@@ -9,7 +9,9 @@ Run focused checks from the repository root:
 ```sh
 bash deploy/helm/openbao/tests/init-tool-requirements.sh
 bash deploy/helm/openbao/tests/auto-unseal-sidecar.sh
-bash deploy/helm/openbao/tests/plugin-catalog-refresh-hook.sh
+bash deploy/helm/openbao/tests/jwt-plugin-lifecycle.sh
+python3 -m unittest discover -s infra/openbao/tests
+bash migrations/openbao/tests/jwt-plugin-version-test.sh
 ```
 
 The chart render test requires Helm and yq. Build chart dependencies with

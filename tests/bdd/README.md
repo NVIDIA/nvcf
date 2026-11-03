@@ -134,6 +134,51 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   go test -run '^TestMultiClusterHelmfileLLMLastClusterAffinity$' -timeout 120m -v
 ```
 
+### OpenBao JWT plugin lifecycle
+
+`TestOpenBaoJWTPluginLifecycle` exercises real file-backed OpenBao restarts,
+declarative registration, version tuning, plugin reload, rollback, and gated
+cleanup. The test verifies JWT signatures, retained public keys, and recovery
+when migrations have not created their first JWT mount. It uses new disposable
+Docker containers without installing a Kubernetes stack. It starts the
+published legacy server binary, upgrades to the bridge server binary, and tests
+legacy, bridge, and target-only plugin layouts with retained storage. The test
+does not qualify Helm hooks, HA failover, or multi-architecture release images.
+
+Follow the root local QA rules before running. Use a fresh worktree containing
+the candidate changes, inventory existing Docker and cluster state, and choose
+an isolated environment with the operator. Use unique image tags and container
+names. Do not reuse a container from a previous run. The test leaves its
+container and artifacts in place for inspection; removal needs operator approval.
+
+From the repository root, build the bridge and test images. The verifier uses
+the same pinned Go image as the production Dockerfile:
+
+```bash
+OPENBAO_JWT_TEST_ID=<unique-run-id>
+OPENBAO_JWT_BRIDGE_IMAGE="nvcf-openbao:jwt-bridge-$OPENBAO_JWT_TEST_ID"
+OPENBAO_JWT_TEST_IMAGE="nvcf-openbao:jwt-test-$OPENBAO_JWT_TEST_ID"
+export OPENBAO_JWT_TEST_CONTAINER="nvcf-jwt-test-$OPENBAO_JWT_TEST_ID"
+export OPENBAO_JWT_RECOVERY_CONTAINER="nvcf-jwt-recovery-$OPENBAO_JWT_TEST_ID"
+GO_IMAGE=$(sed -n 's/^ARG GO_IMAGE=//p' infra/openbao/Dockerfile)
+JWT_LEGACY_IMAGE=$(sed -n 's/^ARG JWT_LEGACY_IMAGE=//p' infra/openbao/Dockerfile)
+docker buildx build --load -t "$OPENBAO_JWT_BRIDGE_IMAGE" infra/openbao
+docker buildx build --load -f infra/openbao/tests/Dockerfile \
+  --build-arg "OPENBAO_IMAGE=$OPENBAO_JWT_BRIDGE_IMAGE" \
+  --build-arg "GO_IMAGE=$GO_IMAGE" \
+  --build-arg "JWT_LEGACY_IMAGE=$JWT_LEGACY_IMAGE" \
+  -t "$OPENBAO_JWT_TEST_IMAGE" infra/openbao
+docker run -d --name "$OPENBAO_JWT_TEST_CONTAINER" \
+  --network none "$OPENBAO_JWT_TEST_IMAGE"
+docker run -d --name "$OPENBAO_JWT_RECOVERY_CONTAINER" \
+  --network none "$OPENBAO_JWT_TEST_IMAGE"
+cd tests/bdd
+go test -run '^TestOpenBaoJWTPluginLifecycle$' -timeout 15m -v
+```
+
+The `-short` suite runs a separate fake-runner wiring check. It does not
+validate an OpenBao deployment.
+
 ### BYOO features
 
 `byoo-render.feature` renders the compute-plane stack for each observability

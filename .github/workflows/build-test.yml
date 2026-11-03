@@ -190,8 +190,11 @@ jobs:
       - name: Test OpenBao auto-unseal retry behavior
         run: bash deploy/helm/openbao/tests/auto-unseal-sidecar.sh
 
-      - name: Test OpenBao plugin catalog refresh hook
-        run: bash deploy/helm/openbao/tests/plugin-catalog-refresh-hook.sh
+      - name: Test OpenBao declarative JWT lifecycle
+        run: |
+          bash deploy/helm/openbao/tests/jwt-plugin-lifecycle.sh
+          python3 -B -m unittest discover -s infra/openbao/tests
+          bash migrations/openbao/tests/jwt-plugin-version-test.sh
 
       - name: Test OpenBao initialization tool requirements
         run: bash deploy/helm/openbao/tests/init-tool-requirements.sh

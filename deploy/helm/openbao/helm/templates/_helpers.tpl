@@ -51,6 +51,24 @@ Resolve the fullname used by the embedded OpenBao chart.
 {{- end -}}
 {{- end -}}
 
+{{- define "nvcf-openbao.jwtLifecycleMode" -}}
+{{- $lifecycle := .Values.openbao.jwtPluginLifecycle | default dict -}}
+{{- $mode := get $lifecycle "mode" | default "legacy" -}}
+{{- if not (has $mode (list "legacy" "bridge" "versioned")) -}}
+{{- fail "openbao.jwtPluginLifecycle.mode must be legacy, bridge, or versioned" -}}
+{{- end -}}
+{{- $mode -}}
+{{- end -}}
+
+{{- define "nvcf-openbao.adminEnvironment" -}}
+export BAO_ADDR="http://{{ include "nvcf-openbao.serverFullname" . }}-active:8200"
+export BAO_TOKEN="$(cat /secrets/root_token/root_token)"
+{{- end -}}
+
+{{- define "nvcf-openbao.copyJWTManifest" -}}
+cp /openbao/jwt-plugin-versions.env /versions/manifest.env
+{{- end -}}
+
 {{/*
 Allow the release namespace to be overridden.
 */}}
