@@ -486,9 +486,10 @@ oci.pull(
 # so cannot use distroless_static. arm64/v8, not arm64: nvcr.io/nvidia/distroless
 # publishes its aarch64 manifest under the v8 variant, and rules_oci matches the
 # platform string literally when it names the generated child repository.
+# v4.1.8. The CA bundle no longer includes the distrusted emSign roots.
 oci.pull(
     name = "distroless_cc",
-    digest = "sha256:1c3f23958b14384dd07e57696954c6722861c3ee5de372fdc2af75a8e4b75313",
+    digest = "sha256:6578cff0c733f579a3d3dcc9134b7d65fb414dd0b13490d56e2546291222b203",
     image = "nvcr.io/nvidia/distroless/cc",
     platforms = [
         "linux/amd64",
