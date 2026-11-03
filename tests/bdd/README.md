@@ -39,6 +39,31 @@ AGENTS.md   Rules for working in this directory.
 
 ## Running
 
+`TestUpgradeProfileExistingInstall` checks profile export against an existing
+single-cluster installation with `addons.llm.enabled: false` in its selected
+environment. Initialize a dedicated CLI config first. Use an isolated copy of
+the installed stack, including its site values: export writes
+`out/control-plane-profile.yaml`. Set these absolute paths and site identifiers:
+
+```sh
+export UPGRADE_CLI_CONFIG=/absolute/path/to/site-cli.yaml
+export UPGRADE_STACK=/absolute/path/to/isolated-self-managed-stack
+export UPGRADE_ENV=site
+export UPGRADE_CLUSTER=site-cluster
+export UPGRADE_KUBECONFIG=/absolute/path/to/dedicated-kubeconfig
+export UPGRADE_CONTEXT=site-context
+unset BDD_CLEANUP_MODE
+cd tests/bdd
+go test -run '^TestUpgradeProfileExistingInstall$' -timeout 15m -v
+```
+
+The dedicated kubeconfig must select `UPGRADE_CONTEXT`. This suite builds the
+current CLI, checks OpenBao readiness, exports the profile, and validates its
+compute-reachable fields. It does not install or upgrade releases. Profile
+validation checks configuration structure; subsequent compute registration and
+workload checks establish reachability. Test the selected released CLI separately
+when qualifying an upgrade.
+
 Wiring tests use a fake CommandRunner and do not touch a cluster. Safe in
 CI; fast.
 
