@@ -4,8 +4,8 @@ cloud.google.com/go/compute/metadata v0.9.0/go.mod h1:E0bWwX5wTnLPedCKqk3pJmVgCB
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/KimMachineGun/automemlimit v0.7.5 h1:RkbaC0MwhjL1ZuBKunGDjE/ggwAX43DwZrJqVwyveTk=
 github.com/KimMachineGun/automemlimit v0.7.5/go.mod h1:QZxpHaGOQoYvFhv/r4u3U0JTC2ZcOwbSr11UZF46UBM=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3 h1:pBymv2IQia2bswak0wHracVj2kdDXB5xcCgm3BVxfmg=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3/go.mod h1:nj3yBW2weO0qzi1ML45tBqviLa2Y/KG9qCalxQuJVB8=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26 h1:P9OSmvy6MQPqfzRgaLl0XpvK5UYHAFtNnQQb+yk+6b0=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26/go.mod h1:nj3yBW2weO0qzi1ML45tBqviLa2Y/KG9qCalxQuJVB8=
 github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20261015164739-acd237d2f0af h1:soFYq0vgzfcMHQjknpcS+lzjIdwXn3m7WxXgAj5YzK4=
 github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20261015164739-acd237d2f0af/go.mod h1:pAaQjAZWVM1J8+eKUkkHn+gMjnHR6CsZlRCdQyaLDWk=
 github.com/antithesishq/antithesis-sdk-go v0.4.3-default-no-op h1:+OSa/t11TFhqfrX0EOSqQBDJ0YlpmK0rDSiB19dg9M0=

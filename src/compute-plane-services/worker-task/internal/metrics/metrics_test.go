@@ -70,6 +70,37 @@ func TestNamespaceConstants(t *testing.T) {
 	}
 }
 
+func TestInfoRequestDurationInitialized(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(InfoRequestDuration)
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(families) != 1 {
+		t.Fatalf("got %d metric families, want 1", len(families))
+	}
+	metrics := families[0].GetMetric()
+	if len(metrics) != 2 {
+		t.Fatalf("got %d histogram children, want 2", len(metrics))
+	}
+	wantCodes := map[string]bool{"200": true, "405": true}
+	for _, metric := range metrics {
+		labels := metric.GetLabel()
+		if len(labels) != 1 || labels[0].GetName() != "code" {
+			t.Fatalf("unexpected histogram labels: %v", labels)
+		}
+		code := labels[0].GetValue()
+		if !wantCodes[code] {
+			t.Errorf("unexpected or duplicate status code %q", code)
+		}
+		delete(wantCodes, code)
+		if metric.GetHistogram() == nil || metric.GetHistogram().GetSampleCount() != 0 {
+			t.Errorf("histogram for status %s is not initialized with zero observations: %v", code, metric)
+		}
+	}
+}
+
 // Exercise each counter and verify the observed value so the collectors are
 // confirmed wired to a working metric, not merely non-nil.
 func TestCountersRecordValues(t *testing.T) {

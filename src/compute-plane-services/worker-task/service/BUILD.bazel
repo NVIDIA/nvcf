@@ -41,6 +41,7 @@ go_test(
         "//src/compute-plane-services/worker-task/internal/types",
         "//src/compute-plane-services/worker-task/internal/worker",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//test/testutils",
         "@com_github_spf13_viper//:viper",
         "@com_github_stretchr_testify//assert",
