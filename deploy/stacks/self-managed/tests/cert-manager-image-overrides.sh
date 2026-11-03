@@ -17,6 +17,18 @@ chart="${CERT_MANAGER_STACK_CHART_DIR:-$repo_root/deploy/helm/cert-manager}"
 
 fail() { echo "cert-manager-image-overrides: $*" >&2; exit 1; }
 assert_equal() { test "$1" = "$2" || fail "$3: got $1, expected $2"; }
+selected_version=v1.20.5
+assert_equal "$(yq -r '.appVersion' "$chart/charts/cert-manager/Chart.yaml")" \
+  "$selected_version" "patched upstream chart"
+assert_equal "$(yq -r '.dependencies[0].version' "$chart/Chart.yaml")" \
+  "$selected_version" "wrapper dependency"
+assert_equal "$(yq -r '.dependencies[0].version' "$chart/Chart.lock")" \
+  "$selected_version" "wrapper lock"
+assert_equal "v$(yq -r '.appVersion' "$chart/Chart.yaml")" \
+  "$selected_version" "wrapper app version"
+stack_chart_version="$(awk '$0 == "  - name: cert-manager" {getline; print $2; exit}' "$stack_dir/helmfile.d/01-dependencies.yaml.gotmpl")"
+assert_equal "$stack_chart_version" "$(yq -r '.version' "$chart/Chart.yaml")" \
+  "stack wrapper version"
 write_values() {
   HELMFILE_ENV=cert-images-test HELMFILE_CACHE_HOME="$work_dir/cache" \
     helmfile -f "$work_dir/self-managed/helmfile.d/01-dependencies.yaml.gotmpl" \
@@ -63,6 +75,16 @@ assert_images() {
 printf '{}\n' > "$environment_file"
 render
 cp "$work_dir/rendered.yaml" "$work_dir/default.yaml"
+base_registry="$(yq -r '.global.image.registry' "$work_dir/self-managed/environments/base.yaml")"
+base_repository="$(yq -r '.global.image.repository' "$work_dir/self-managed/environments/base.yaml")"
+for component in controller webhook cainjector startupapicheck; do
+  assert_equal "$(rendered_image "$component")" \
+    "$base_registry/$base_repository/cert-manager-$component:$selected_version" \
+    "$component default mirror image"
+done
+assert_equal "$(rendered_image acmesolver)" \
+  "quay.io/jetstack/cert-manager-acmesolver:$selected_version" \
+  "ACME solver default upstream image"
 # Test each values-template input independently, without rendering a chart.
 # Unspecified fields and other components must retain their global defaults.
 printf 'global:\n  image:\n    registry: global.example.com\n    repository: private\n' > "$environment_file"

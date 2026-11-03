@@ -5,7 +5,7 @@ RELEASE_NAME ?= cert-manager
 NAMESPACE ?= cert-manager
 VALUES_FILE := $(CHART_DIR)/values.yaml
 CHART_NAME := helm-nvcf-cert-manager
-CHART_VERSION := 0.1.0
+CHART_VERSION := 0.1.1
 
 all: install
 

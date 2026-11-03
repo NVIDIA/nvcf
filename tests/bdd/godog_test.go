@@ -2360,6 +2360,12 @@ func seedUpstreamImageRenderOutput(t *testing.T, repoRoot string) {
 		"01-nats/templates/nats.yaml": `# Source: helm-nvcf-nats/templates/nkey-secret.yaml
 image: docker.io/natsio/nats-server-config-reloader:fixture-tag
 `,
+		"01-cert-manager/templates/cert-manager.yaml": `image: nvcr.io/nvidia/nvcf/cert-manager-controller:fixture-tag
+image: nvcr.io/nvidia/nvcf/cert-manager-webhook:fixture-tag
+image: nvcr.io/nvidia/nvcf/cert-manager-cainjector:fixture-tag
+image: nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:fixture-tag
+--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:fixture-tag
+`,
 		"02-cassandra/templates/cassandra.yaml": "image: nvcf-cassandra-migrations:latest\n",
 		"03-api/templates/api.yaml":             "image: docker.io/alpine/k8s:fixture-tag\n",
 	}
