@@ -182,6 +182,55 @@ func TestAgreeingChartIsPlanned(t *testing.T) {
 	}
 }
 
+func TestManualDeployKeepsAllPinsAndOtherChartsCanAdvance(t *testing.T) {
+	for _, write := range []bool{false, true} {
+		t.Run(fmt.Sprintf("write=%t", write), func(t *testing.T) {
+			f := newFixture(t, `{"services":[
+ {"id":"svc","path":"src/svc"},
+ {"id":"held","path":"deploy/helm/held","deploys":[{
+   "service":"svc","values_paths":["image.tag"],"app_version":true,
+   "values_files":[{"file":"upgrade.yaml","paths":["image.tag"]}],
+   "manual_bump_reason":"Requires a staged plugin migration"
+ }]},
+ {"id":"automatic","path":"deploy/helm/automatic","deploys":["svc"]}
+]}`)
+			f.chart(t, "held", "1.0.0", "image:\n  tag: 1.0.0")
+			f.source(t, "deploy/helm/held/upgrade.yaml", "image:\n  tag: 1.0.0\n")
+			f.chart(t, "automatic", "1.0.0", "image:\n  tag: 1.0.0")
+			before := map[string]string{}
+			for _, name := range []string{"Chart.yaml", "values.yaml", "upgrade.yaml"} {
+				before[name] = f.read(t, "held", name)
+			}
+			code, out, errOut := f.run(t, "src/svc/v1.0.1", write)
+			if code != 0 || errOut != "" {
+				t.Fatalf("intentional manual selection must not fail: exit %d, %s", code, errOut)
+			}
+			if !strings.Contains(out, "manual review required: Requires a staged plugin migration") {
+				t.Fatalf("missing manual upgrade reason: %s", out)
+			}
+			for name, want := range before {
+				if got := f.read(t, "held", name); got != want {
+					t.Errorf("manual pin changed in %s:\n%s", name, got)
+				}
+			}
+			wantVersion := "1.0.0"
+			if write {
+				wantVersion = "1.0.1"
+			}
+			if got := f.read(t, "automatic", "values.yaml"); !strings.Contains(got, wantVersion) {
+				t.Errorf("automatic chart did not retain normal bump behavior: %s", got)
+			}
+			metadata, err := LoadMetadata(f.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(metadata.ChartsDeploying("svc")); got != 2 {
+				t.Fatalf("manual dependency disappeared from inventory: got %d edges", got)
+			}
+		})
+	}
+}
+
 func TestChartWithNoTagMovesAppVersionOnly(t *testing.T) {
 	_, out, _ := full(t).run(t, "src/svc/v2.0.0", false)
 	if !strings.Contains(out, "notag: 1.0.0 -> 2.0.0 (no image tag set)") {
