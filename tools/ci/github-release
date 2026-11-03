@@ -1271,6 +1271,185 @@ def available_release_version(root, service, version):
     return selected
 
 
+def java_release_inputs_match(root, service, tag, components):
+    """Conservatively compare the inputs of a native Bazel Java image.
+
+    A cherry-pick has different ancestry but can ship the same inputs. Include
+    shared frameworks, local Bazel dependencies, build rules, toolchains, Maven
+    locks and image pins, not just the service directory. Other build backends
+    keep the normal version-allocation path until their inputs are modelled.
+    """
+    if not is_java_service(components, service):
+        return False
+    if not any(
+        isinstance(call.func, ast.Name) and call.func.id == "java_oci_image"
+        for call in service_build_calls(root, service)
+    ):
+        return False
+    paths = {
+        service["path"],
+        "rules", "tools/bazel", "platforms", "maven_install.json",
+        ".bazelrc", ".bazelversion", ".bazelignore", ".bazel_downloader_config", "WORKSPACE.bzlmod",
+    }
+    # Follow literal local package references, including cross-service Java
+    # libraries. Compare source files directly and whole packages for rule
+    # targets rather than evaluating selects, globs or individual Bazel rules.
+    package_paths = set()
+    pending = sorted(paths)
+    while pending:
+        path = pending.pop()
+        files = run(["git", "ls-tree", "-r", "--name-only", "HEAD", "--", path], cwd=root, capture=True).splitlines()
+        excluded = []
+        if path in package_paths:
+            # A Bazel package excludes nested packages. Comparing an entire
+            # library family would rebuild users of an unchanged sibling.
+            before = run(["git", "ls-tree", "-r", "--name-only", tag, "--", path], cwd=root, capture=True).splitlines()
+            def nested_builds(names):
+                return {name for name in names if Path(name).name in BUILD_FILE_NAMES
+                        and Path(name).parent.as_posix() != path}
+            if nested_builds(before) != nested_builds(files):
+                return False
+            excluded = [Path(name).parent.as_posix() + "/" for name in nested_builds(files)]
+        changes = run(["git", "diff", "--name-only", tag, "HEAD", "--", path], cwd=root, capture=True).splitlines()
+        if any(not any(name.startswith(prefix) for prefix in excluded) for name in changes):
+            return False
+        for filename in files:
+            if any(filename.startswith(prefix) for prefix in excluded):
+                continue
+            if Path(filename).name not in BUILD_FILE_NAMES and not filename.endswith(".bzl"):
+                continue
+            tree = ast.parse(file_at_revision(root, "HEAD", filename), filename=filename)
+            parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                    continue
+                label = node.value
+                if label.startswith(("@//", "@@//")):
+                    label = label.lstrip("@")
+                if not label.startswith("//") or label.startswith("//visibility:"):
+                    continue
+                match = re.fullmatch(r"//([A-Za-z0-9_./-]*)(?::[A-Za-z0-9_./+-]+)?", label)
+                if not match or label == "//":
+                    parent = parents.get(node)
+                    if (isinstance(parent, ast.Call) and isinstance(parent.func, ast.Attribute)
+                            and parent.func.attr in {"startswith", "endswith"}):
+                        continue
+                    # Computed labels cannot establish equivalence here.
+                    return False
+                package = match.group(1) or ""
+                target = label.partition(":")[2]
+                source_file = (Path(package) / target).as_posix() if target else ""
+                if source_file and not source_file.endswith(".bzl") and (root / source_file).is_file():
+                    references = [source_file]
+                    references.extend((Path(package) / name).as_posix() for name in BUILD_FILE_NAMES
+                                      if (root / package / name).is_file())
+                else:
+                    if not package:
+                        return False
+                    references = [package]
+                    if not any(package == p or (p not in package_paths and package.startswith(p + "/")) for p in paths):
+                        package_paths.add(package)
+                for reference in references:
+                    if reference == "BUILD.bazel":
+                        # Compared as syntax below, excluding Gazelle comments.
+                        continue
+                    if not any(reference == p or (p not in package_paths and reference.startswith(p + "/")) for p in paths):
+                        paths.add(reference)
+                        pending.append(reference)
+
+    def module_inputs(revision):
+        tree = ast.parse(file_at_revision(root, revision, MODULE_FILE))
+        unrelated_extensions = set()
+        known_extensions = {
+            "go_deps": ("@gazelle//:extensions.bzl", "go_deps"),
+            "crate": ("@rules_rust//crate_universe:extension.bzl", "crate"),
+        }
+        for statement in tree.body:
+            if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
+                continue
+            name, call = statement.targets[0], statement.value
+            if (isinstance(name, ast.Name) and name.id in known_extensions
+                    and isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                    and call.func.id == "use_extension"
+                    and [arg.value for arg in call.args if isinstance(arg, ast.Constant)]
+                    == list(known_extensions[name.id])):
+                unrelated_extensions.add(name.id)
+        # Go/Rust extension usages cannot change the native Java image. Keep
+        # their extension declarations and every bazel_dep/override, so changes
+        # to module resolution or toolchains still prevent reuse.
+        def unrelated_usage(statement):
+            if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+                return False
+            call = statement.value
+            if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
+                return call.func.value.id in unrelated_extensions
+            return (
+                isinstance(call.func, ast.Name) and call.func.id == "use_repo"
+                and call.args and isinstance(call.args[0], ast.Name)
+                and call.args[0].id in unrelated_extensions
+            )
+
+        tree.body = [statement for statement in tree.body if not unrelated_usage(statement)]
+        lock = json.loads(file_at_revision(root, revision, "MODULE.bazel.lock"))
+        lock["moduleExtensions"] = {
+            key: value for key, value in lock.get("moduleExtensions", {}).items()
+            if key not in {
+                "@@rules_rust+//crate_universe:extension.bzl%crate",
+                "@@gazelle+//:extensions.bzl%go_deps",
+            }
+        }
+        # Root BUILD changes may only be Gazelle directives; comments there do
+        # not affect Java. Actual rule changes remain part of the comparison.
+        build = ast.parse(file_at_revision(root, revision, "BUILD.bazel"))
+        return ast.dump(tree), lock, ast.dump(build)
+
+    return module_inputs(tag) == module_inputs("HEAD")
+
+
+class UnverifiedExistingRelease(Exception):
+    """Equivalent source exists, but its release cannot be confirmed published."""
+
+
+def reuse_published_release(root, service, version, components):
+    """Reuse an equivalent published release without moving its tag or rebuilding.
+
+    This wrapper publishes GitHub releases; producer/catalog pipelines own
+    image availability and retrying incomplete image publication. A bare tag,
+    draft, failed lookup or unsupported build is not evidence of a release.
+    """
+    tag = existing_tag_for_version(root, service, version)
+    if not tag:
+        return False
+    try:
+        if not java_release_inputs_match(root, service, tag, components):
+            return False
+    except (SyntaxError, ValueError, subprocess.CalledProcessError, SystemExit) as exc:
+        print(f"[github-release] {service['id']}: cannot establish input equivalence for {tag}: {exc}")
+        return False
+    result = subprocess.run(
+        ["gh", "release", "view", tag, "--json", "tagName,isDraft,isPrerelease,publishedAt"],
+        cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    try:
+        release = json.loads(result.stdout) if result.returncode == 0 else {}
+        published = (
+            release.get("tagName") == tag and release.get("isDraft") is False
+            and release.get("isPrerelease") is False and bool(release.get("publishedAt"))
+        )
+    except (ValueError, AttributeError):
+        published = False
+    if not published:
+        raise UnverifiedExistingRelease(
+            f"{service['id']}: {tag} has equivalent inputs but is not verified as a published release; "
+            "check GitHub access and complete publication of that tag before retrying"
+        )
+    print(
+        f"[github-release] {service['id']}: reusing published {tag}; source and build inputs "
+        "match HEAD. Skipping duplicate publication and continuing; existing tags are unchanged."
+    )
+    return True
+
+
 def semantic_release_changes(root, service, candidate):
     """Notes and PR commits for a semantic release whose version was reserved."""
     _version, baseline = release_baseline(root, service)
@@ -1486,7 +1665,10 @@ def publish_framework_dependency_release(root, service, components, dry_run, dra
         )
         return False
 
-    version = available_release_version(root, service, next_patch_version(current_version))
+    candidate = next_patch_version(current_version)
+    if reuse_published_release(root, service, candidate, components):
+        return True
+    version = available_release_version(root, service, candidate)
     print(
         f"[github-release] {service['id']}: {len(commits)} release-worthy Java framework "
         f"commit(s) since {last_tag} with no service release; cutting dependency patch "
@@ -2309,6 +2491,7 @@ def auto_release(args):
     # workflow is inert (dry-run / auto-tagging disabled) these are reported but
     # must not fail the job; publish mode below still fails hard.
     dry_run_failures = []
+    unverified_releases = []
 
     # Services whose semantic-release run hit the behind-the-remote race. These
     # fail the job in publish mode: the release was lost, and a green run would
@@ -2394,6 +2577,11 @@ def auto_release(args):
                 )
                 continue
 
+            # A maintenance release can already contain the same cherry-picked
+            # Java inputs. Owned-path releases also contain chart bytes, so they
+            # must keep their independent allocation/packaging decision.
+            if not owned and reuse_published_release(root, service, version, java_components):
+                continue
             selected = available_release_version(root, service, version)
             if source == "owned-paths" or selected != version:
                 reason = f"owned release paths under {service['path']}"
@@ -2424,6 +2612,11 @@ def auto_release(args):
                     f"[github-release] WARNING: {service['id']}: semantic-release reported "
                     "neither a version nor a no-release result; not cutting a dependency release"
                 )
+        except UnverifiedExistingRelease as exc:
+            # Finish independent services, but do not turn a lookup failure or
+            # an incomplete release into a second version of the same inputs.
+            unverified_releases.append(str(exc))
+            print(f"[github-release] ERROR: {exc}; continuing other services")
         finally:
             print("::endgroup::")
 
@@ -2433,6 +2626,9 @@ def auto_release(args):
             deferred_publisher(service)(root, service, metadata, dry_run=dry_run, draft=draft)
         finally:
             print("::endgroup::")
+
+    if unverified_releases:
+        raise SystemExit("[github-release] unverified existing release(s): " + "; ".join(unverified_releases))
 
     if dry_run and dry_run_failures:
         print(

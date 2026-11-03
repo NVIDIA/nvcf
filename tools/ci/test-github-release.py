@@ -2945,9 +2945,9 @@ class ReservedReleaseVersionTest(unittest.TestCase):
         (root / "unrelated.txt").write_text("unrelated\n")
         self.commit_all(root, "fix(other): unrelated change")
 
-    def auto(self, root, dry_run, preview=(0, "The next release version is 1.14.8")):
+    def auto(self, root, dry_run, preview=(0, "The next release version is 1.14.8"), services=None):
         metadata = root / "metadata.json"
-        metadata.write_text(json.dumps({"version": 1, "services": [self.SERVICE]}))
+        metadata.write_text(json.dumps({"version": 1, "services": services or [self.SERVICE]}))
         output = io.StringIO()
         with mock.patch.dict(os.environ, {
             "NVCF_GITHUB_AUTO_TAGGING_ENABLED": "true",
@@ -2956,8 +2956,240 @@ class ReservedReleaseVersionTest(unittest.TestCase):
         }), chdir(root), contextlib.redirect_stdout(output), \
                 mock.patch.object(self.github_release, "install_semantic_release"), \
                 mock.patch.object(self.github_release, "stream", return_value=preview) as stream:
-            self.github_release.auto_release(types.SimpleNamespace(metadata=str(metadata), service="notary"))
+            self.github_release.auto_release(types.SimpleNamespace(metadata=str(metadata), service="" if services else "notary"))
         return output.getvalue(), stream.call_args_list
+
+    def seed_equivalent_java_release(self, root):
+        self.init_repo(root)
+        git(root, "switch", "-c", "main")
+        self.framework = "src/libraries/java/framework"
+        self.other_library = "src/control-plane-services/shared/core"
+        files = {
+            f"{self.SERVICE['path']}/source.txt": "baseline\n",
+            f"{self.SERVICE['path']}/bazel-java-ci.json": json.dumps({"component_kind": "java-service"}),
+            f"{self.SERVICE['path']}/BUILD.bazel": (
+                'load("//rules/oci:defs.bzl", "java_oci_image")\n'
+                'load("@//build-support:helper.bzl", "helper")\n'
+                f'java_oci_image(name="image", jar="//{self.other_library}:jar")\n'
+                'filegroup(name="metadata", srcs=["//src/libraries/java:metadata.json"])\n'
+                'filegroup(name="inventory", srcs=["//src/libraries/java:inventory"])\n'
+            ),
+            "src/libraries/java/metadata.json": '{}\n',
+            "src/libraries/java/BUILD.bazel": 'filegroup(name="inventory", srcs=["metadata.json"])\n',
+            "src/libraries/java/unused/BUILD.bazel": 'java_library(name="jar", srcs=["Unused.java"])\n',
+            "src/libraries/java/unused/Unused.java": "class Unused {}\n",
+            f"{self.framework}/bazel-java-ci.json": json.dumps({"component_kind": "java-framework"}),
+            f"{self.framework}/BUILD.bazel": 'java_library(name="jar", srcs=["Shared.java"])\n',
+            f"{self.framework}/Shared.java": "class Shared {}\n",
+            f"{self.other_library}/BUILD.bazel": (
+                f'java_library(name="jar", srcs=["Core.java"], deps=["//{self.framework}:jar"])\n'
+            ),
+            f"{self.other_library}/Core.java": "class Core {}\n",
+            "rules/oci/defs.bzl": 'BASE="@distroless_java"\n',
+            "build-support/BUILD.bazel": 'exports_files(["helper.bzl"])\n',
+            "build-support/helper.bzl": 'load(":params.bzl", "FLAGS")\n',
+            "build-support/params.bzl": 'FLAGS=[]\n',
+            "rules/java/defs.bzl": 'JVM_FLAGS=[]\n',
+            "tools/bazel/java/BUILD.bazel": 'exports_files(["tool.jar"])\n',
+            "platforms/BUILD.bazel": 'platform(name="linux_arm64")\n',
+            ".bazelrc": "build --java_language_version=25\n",
+            ".bazelversion": "9.1.1\n",
+            "WORKSPACE.bzlmod": "",
+            "BUILD.bazel": 'exports_files(["maven_install.json"])\n',
+            "maven_install.json": '{"dependencies":{"library":"1.0"}}\n',
+            "MODULE.bazel": (
+                'bazel_dep(name="rules_java", version="1.0")\n'
+                'go_deps=use_extension("@gazelle//:extensions.bzl", "go_deps")\n'
+                'use_repo(go_deps, "go_library")\n'
+                'crate=use_extension("@rules_rust//crate_universe:extension.bzl", "crate")\n'
+                'crate.from_cargo(name="rust_library")\n'
+                'use_repo(crate, "rust_library")\n'
+                'oci.pull(name="distroless_java", digest="sha256:aaa")\n'
+                'maven.install(name="maven", artifacts=["library:1.0"])\n'
+            ),
+            "MODULE.bazel.lock": json.dumps({
+                "lockFileVersion": 1, "registryFileHashes": {"rules_java": "hash"},
+                "moduleExtensions": {
+                    "@@rules_rust+//crate_universe:extension.bzl%crate": {"digest": "aaa"},
+                    "@@rules_jvm_external+//:extensions.bzl%maven": {"digest": "bbb"},
+                },
+            }),
+        }
+        for name, text in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        self.commit_all(root, "feat(notary): baseline")
+        git(root, "tag", f"{self.SERVICE['path']}/v1.14.7")
+        git(root, "switch", "-c", "maintenance")
+        source = root / self.SERVICE["path"] / "source.txt"
+        source.write_text("patched\n")
+        self.commit_all(root, "fix(notary): maintenance fix")
+        git(root, "tag", "-a", f"{self.SERVICE['path']}/v1.14.8", "-m", "published")
+        git(root, "switch", "main")
+        (root / "unrelated.txt").write_text("unrelated\n")
+        self.commit_all(root, "fix(other): independent change")
+        source.write_text("patched\n")
+        self.commit_all(root, "fix(notary): same fix on main")
+
+    def published_release_lookup(self, **overrides):
+        release = {
+            "tagName": f"{self.SERVICE['path']}/v1.14.8", "isDraft": False,
+            "isPrerelease": False, "publishedAt": "2026-01-01T00:00:00Z", **overrides,
+        }
+        lookup = mock.Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(release), ""))
+        def run(args, **kwargs):
+            if args[:3] == ["gh", "release", "view"]:
+                return lookup(args, **kwargs)
+            return subprocess.run(args, **kwargs)
+        self.github_release.subprocess = SubprocessShim(run)
+        return lookup
+
+    def test_equivalent_published_java_release_is_reused_and_batch_continues(self):
+        for dry_run in (True, False):
+            with self.subTest(dry_run=dry_run), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.seed_equivalent_java_release(root)
+                other = {"id": "other", "path": "src/other", "service_name": "other"}
+                (root / other["path"]).mkdir()
+                (root / other["path"] / "source.txt").write_text("new service\n")
+                self.commit_all(root, "fix(other): unrelated service")
+                git(root, "tag", f"{other['path']}/v0.1.0", "HEAD^")
+                before = git_out(root, "show-ref", "--tags")
+                head = git_out(root, "rev-parse", "HEAD")
+                lookup = self.published_release_lookup()
+                self.github_release.publish_tag_for_version = mock.Mock()
+                for _ in range(2):
+                    text, calls = self.auto(root, dry_run=dry_run, services=[self.SERVICE, other])
+                    self.assertIn("reusing published", text)
+                    self.assertNotIn("selecting 1.14.9", text)
+                    self.assertEqual([c.kwargs["cwd"].relative_to(root.resolve()).as_posix() for c in calls],
+                                     [self.SERVICE["path"], other["path"]] + ([] if dry_run else [other["path"]]))
+                self.assertEqual(lookup.call_count, 2)
+                self.assertEqual(git_out(root, "show-ref", "--tags"), before)
+                self.assertEqual(git_out(root, "rev-parse", "HEAD"), head)
+                self.github_release.publish_tag_for_version.assert_not_called()
+
+    def test_unrelated_go_rust_usage_and_root_comments_allow_java_reuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_equivalent_java_release(root)
+            module = root / "MODULE.bazel"
+            module.write_text(module.read_text().replace('"go_library"', '"another_go_library"')
+                              .replace('"rust_library"', '"another_rust_library"'))
+            lock = root / "MODULE.bazel.lock"
+            lock.write_text(lock.read_text().replace('"aaa"', '"ccc"'))
+            (root / "BUILD.bazel").write_text((root / "BUILD.bazel").read_text() + "# gazelle:exclude other\n")
+            # An existing, unreferenced sibling package can change independently.
+            unused = root / "src/libraries/java/unused"
+            (unused / "Unused.java").write_text("class Unused {int changed;}\n")
+            self.commit_all(root, "fix(other): unrelated dependencies")
+            self.published_release_lookup()
+            text, _ = self.auto(root, dry_run=True)
+            self.assertIn("reusing published", text)
+
+    def test_changed_java_inputs_allocate_a_new_patch(self):
+        changes = [
+            (f"{self.SERVICE['path']}/source.txt", "new behavior\n"),
+            ("src/libraries/java/framework/Shared.java", "class Shared {int n;}\n"),
+            ("src/control-plane-services/shared/core/Core.java", "class Core {int n;}\n"),
+            ("maven_install.json", '{"dependencies":{"library":"2.0"}}\n'),
+            ("src/libraries/java/metadata.json", '{"updated":true}\n'),
+            ("rules/java/defs.bzl", "JVM_FLAGS=['-Xmx1g']\n"),
+            ("rules/oci/defs.bzl", "BASE='@another_base'\n"),
+            ("build-support/params.bzl", "FLAGS=['changed']\n"),
+            (".bazelrc", "build --java_language_version=26\n"),
+            ("tools/bazel/java/BUILD.bazel", 'exports_files(["new-tool.jar"])\n'),
+            ("BUILD.bazel", 'exports_files(["new-file"])\n'),
+            ("MODULE.bazel", 'oci.pull(name="distroless_java", digest="sha256:new")\n'),
+            ("MODULE.bazel.lock", '{"registryFileHashes":{"rules_java":"new"}}\n'),
+        ]
+        for path, contents in changes:
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.seed_equivalent_java_release(root)
+                (root / path).write_text(contents)
+                self.commit_all(root, "fix(notary): changed build inputs")
+                lookup = self.published_release_lookup()
+                text, _ = self.auto(root, dry_run=True)
+                self.assertIn("would create src/control-plane-services/notary/v1.14.9", text)
+                self.assertNotIn("reusing published", text)
+                lookup.assert_not_called()
+
+    def test_unverified_release_is_reported_after_other_services_continue(self):
+        cases = [{"isDraft": True}, {"isPrerelease": True}, {"publishedAt": None}, {"tagName": "wrong"}]
+        for fields in cases + ["missing", "unauthorized", "invalid-json"]:
+            with self.subTest(fields=fields), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.seed_equivalent_java_release(root)
+                lookup = self.published_release_lookup(**(fields if isinstance(fields, dict) else {}))
+                if isinstance(fields, str):
+                    lookup.return_value = subprocess.CompletedProcess([], 1 if fields != "invalid-json" else 0, "invalid", fields)
+                other = {"id": "other", "path": "src/other", "service_name": "other"}
+                (root / other["path"]).mkdir()
+                (root / other["path"] / "source.txt").write_text("new service\n")
+                self.commit_all(root, "fix(other): unrelated service")
+                git(root, "tag", f"{other['path']}/v0.1.0", "HEAD^")
+                before = git_out(root, "show-ref", "--tags")
+                self.github_release.publish_tag_for_version = mock.Mock()
+                with mock.patch.object(self.github_release, "finish_semantic_release") as finish:
+                    with self.assertRaisesRegex(SystemExit, "unverified existing release"):
+                        self.auto(root, dry_run=False, services=[self.SERVICE, other])
+                    self.assertEqual(finish.call_args.args[1], other)
+                self.github_release.publish_tag_for_version.assert_not_called()
+                self.assertEqual(git_out(root, "show-ref", "--tags"), before)
+
+    def test_java_module_and_lock_changes_prevent_reuse(self):
+        changes = [
+            ("MODULE.bazel", 'digest="sha256:aaa"', 'digest="sha256:new"'),
+            ("MODULE.bazel", 'artifacts=["library:1.0"]', 'artifacts=["library:2.0"]'),
+            ("MODULE.bazel", 'version="1.0"', 'version="2.0"'),
+            ("MODULE.bazel.lock", '"digest": "bbb"', '"digest": "new"'),
+            ("MODULE.bazel.lock", '"rules_java": "hash"', '"rules_java": "new"'),
+        ]
+        for path, old, new in changes:
+            with self.subTest(input=new), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.seed_equivalent_java_release(root)
+                target = root / path
+                self.assertIn(old, target.read_text())
+                target.write_text(target.read_text().replace(old, new))
+                self.commit_all(root, "fix(notary): update shared build input")
+                lookup = self.published_release_lookup()
+                text, _ = self.auto(root, dry_run=True)
+                self.assertIn("selecting 1.14.9", text)
+                lookup.assert_not_called()
+
+    def test_unsupported_builds_and_unreadable_inputs_are_not_reused(self):
+        for change in ("non-java", "non-bazel", "invalid-build", "missing-lock"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.seed_equivalent_java_release(root)
+                if change == "non-java":
+                    (root / self.SERVICE["path"] / "bazel-java-ci.json").unlink()
+                elif change == "non-bazel":
+                    (root / self.SERVICE["path"] / "BUILD.bazel").write_text('java_binary(name="app")\n')
+                elif change == "invalid-build":
+                    (root / "rules/java/defs.bzl").write_text("unparseable (\n")
+                else:
+                    (root / "MODULE.bazel.lock").unlink()
+                self.commit_all(root, "fix(notary): inputs cannot establish equivalence")
+                lookup = self.published_release_lookup()
+                text, _ = self.auto(root, dry_run=True)
+                self.assertIn("selecting 1.14.9", text)
+                lookup.assert_not_called()
+
+    def test_framework_fanout_reuses_equivalent_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_equivalent_java_release(root)
+            self.published_release_lookup()
+            self.github_release.publish_tag_for_version = mock.Mock()
+            with mock.patch.object(self.github_release, "release_worthy_framework_commits_since", return_value=["abc fix: shared"]):
+                self.assertTrue(self.github_release.publish_framework_dependency_release(
+                    root, self.SERVICE, self.github_release.java_ci_components(root), dry_run=False, draft=False,
+                ))
+            self.github_release.publish_tag_for_version.assert_not_called()
 
     def test_collision_publishes_next_patch_and_preserves_tags_and_history(self):
         with tempfile.TemporaryDirectory() as tmp:
