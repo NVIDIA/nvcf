@@ -137,8 +137,9 @@ public class ServiceAccountClient {
                 .bodyToMono(ApiKeyValidationResponse.class)
                 .retryWhen(RETRY_SPEC)
                 .switchIfEmpty(Mono.error(() -> new UpstreamException("No response from NAK")))
-                .map(response -> jsonMapper.convertValue(response.getResult(),
-                                                          ApiKeyValidationResult.RateLimitAttributes.class))
+                .mapNotNull(response -> jsonMapper.convertValue(response.getResult(),
+                                                                 ApiKeyValidationResult.RateLimitAttributes.class))
+                .defaultIfEmpty(new ApiKeyValidationResult.RateLimitAttributes(null, null))
                 .block();
     }
 }

@@ -6,8 +6,11 @@ package com.nvidia.nvcf.rest.function.management.dto;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import com.nvidia.boot.exceptions.BadRequestException;
+import java.time.Duration;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -49,12 +52,22 @@ class LlmConfigValidatorTest {
         "10-M,5-M",  // duplicate unit
         "10-MO,5-MO", // duplicate MO unit
         "10-M,",     // trailing empty fragment
-        "10-M,bad"   // one bad fragment
+        "10-M,bad",  // one bad fragment
+        "1-MO,\n2-MO", // duplicate unit across a line break
+        "9223372036854775808-S" // exceeds int64
     })
     void invalidTokenRateLimitsRejected(String tokenRateLimit) {
         assertThatThrownBy(() -> LlmConfigValidator.validateTokenRateLimit(MODEL, tokenRateLimit))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("tokenRateLimit")
                 .hasMessageContaining(MODEL);
+    }
+
+    @Test
+    void longInvalidTokenRateLimitRejectedQuickly() {
+        var tokenRateLimit = "1-SO,".repeat(200_000);
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
+                assertThatThrownBy(() -> LlmConfigValidator.validateTokenRateLimit(MODEL, tokenRateLimit))
+                        .isInstanceOf(BadRequestException.class));
     }
 }

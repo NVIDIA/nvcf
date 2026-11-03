@@ -6,6 +6,7 @@ package com.nvidia.nvcf.rest.function.management.dto;
 
 import com.nvidia.boot.exceptions.BadRequestException;
 import jakarta.annotation.Nullable;
+import java.util.HashSet;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -19,15 +20,9 @@ public final class LlmConfigValidator {
 
     private LlmConfigValidator() {}
 
-    // Comma-separated '<positiveInteger>-<unit>' entries, no unit repeated. "M(?!O)" keeps
-    // Minute and Month disjoint in both directions: the initial capture won't let "M" match
-    // the first letter of a later "MO", and the trailing (?!O) on the backreference stops a
-    // duplicate-check false positive where an earlier "M" backreferences into a later "MO"'s
-    // leading "M".
-    private static final Pattern TOKEN_RATE_LIMIT_PATTERN = Pattern.compile(
-            "^(?!.*-(MO|M(?!O)|S|H|D|W).*-\\1(?!O))"
-                    + "[1-9]\\d*-(?:MO|M(?!O)|S|H|D|W)"
-                    + "(,\\s*[1-9]\\d*-(?:MO|M(?!O)|S|H|D|W))*$");
+    // One '<positiveInteger>-<unit>' entry; whitespace is allowed only after a comma.
+    private static final Pattern TOKEN_RATE_LIMIT_ENTRY = Pattern.compile(
+            "([1-9]\\d*)-(MO|S|M|H|D|W)");
 
     private static final String MESG_INVALID_TOKEN_RATE_LIMIT =
             "Invalid request: 'llmConfig.tokenRateLimit' for model '%s' is invalid; expected "
@@ -39,10 +34,29 @@ public final class LlmConfigValidator {
         if (StringUtils.isBlank(tokenRateLimit)) {
             return;
         }
-        if (!TOKEN_RATE_LIMIT_PATTERN.matcher(tokenRateLimit).matches()) {
+        if (!isValidTokenRateLimit(tokenRateLimit)) {
             var mesg = MESG_INVALID_TOKEN_RATE_LIMIT.formatted(modelName);
             log.warn(mesg);
             throw new BadRequestException(mesg);
         }
+    }
+
+    // Parsed entry by entry rather than with one regex so validation stays linear in length.
+    private static boolean isValidTokenRateLimit(String tokenRateLimit) {
+        var entries = tokenRateLimit.split(",", -1);
+        var units = new HashSet<String>();
+        for (int i = 0; i < entries.length; i++) {
+            var entry = i == 0 ? entries[i] : entries[i].stripLeading();
+            var matcher = TOKEN_RATE_LIMIT_ENTRY.matcher(entry);
+            if (!matcher.matches() || !units.add(matcher.group(2))) {
+                return false;
+            }
+            try {
+                Long.parseLong(matcher.group(1));
+            } catch (NumberFormatException e) {
+                return false;
+            }
+        }
+        return true;
     }
 }
