@@ -71,7 +71,7 @@ func stopGrpcServer(server *grpc.Server, drainTimeout time.Duration) {
 
 func main() {
 	setupLogger()
-	setupMetrics()
+	setupMetrics(metricsAddr)
 	setupPprof()
 	rootCmd := NewRootCommand()
 	err := rootCmd.Execute()
@@ -87,11 +87,13 @@ func setupLogger() *logs.ZapLogger {
 	return zapLogger
 }
 
-func setupMetrics() {
+const metricsAddr = "0.0.0.0:7776"
+
+func setupMetrics(addr string) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	go func() {
-		err := http.ListenAndServe("0.0.0.0:7776", mux)
+		err := http.ListenAndServe(addr, mux)
 		if err != nil {
 			zap.L().Error("metrics server failed", zap.Error(err))
 		}
