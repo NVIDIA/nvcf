@@ -6,7 +6,8 @@ Manual queue recovery is not a routine upgrade step.
 
 ## Task worker images
 
-When to use: every upgrade if you run tasks. Otherwise, skip this section.
+When to use: upgrading from Self-Managed 1.0.1 to 1.0.8 if you run tasks.
+Otherwise, skip this section.
 
 Task init and worker image names and registry wiring changed between
 Self-Managed 1.0.1 and 1.0.8. Mirror the target version's images to the locations
