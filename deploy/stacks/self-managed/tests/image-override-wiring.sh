@@ -58,8 +58,8 @@ test "$acme_solver_default_namespace" = "jetstack" ||
   fail "cert-manager chart must own the upstream ACME solver namespace default"
 test "$acme_solver_default_name" = "cert-manager-acmesolver" ||
   fail "cert-manager chart must own the upstream ACME solver image name default"
-test "$acme_solver_default_tag" = "1.20.2" ||
-  fail "cert-manager wrapper must pin the ACME solver app version"
+test "v$acme_solver_default_tag" = "$(yq -r '.appVersion' "$cert_manager_chart/charts/cert-manager/Chart.yaml")" ||
+  fail "cert-manager wrapper must match the ACME solver app version"
 
 mkdir -p "$test_stack_dir"
 cp -R "$stack_dir"/. "$test_stack_dir"
@@ -68,7 +68,7 @@ printf '{}\n' >"$secrets_file"
 helm template cert-manager "$cert_manager_chart" --namespace cert-manager \
   >"$work_dir/cert-manager-default.yaml"
 grep -qF -- \
-  '--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.20.2' \
+  "--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v$acme_solver_default_tag" \
   "$work_dir/cert-manager-default.yaml" ||
   fail "cert-manager chart must render the upstream ACME solver image"
 

@@ -369,7 +369,7 @@ certManager:
   # and has no namespace. The nvcf-pki Helm release that creates it and the
   # cert-manager ServiceAccount it authenticates as both live in the
   # cert-manager namespace. The bundled helm-nvcf-cert-manager chart ships
-  # installCRDs=true by default. Set this to false when cert-manager is
+  # crds.enabled=true by default. Set enabled to false when cert-manager is
   # installed outside this stack; that external installation must still
   # provide ServiceAccount/cert-manager in the cert-manager namespace.
   enabled: true
@@ -378,7 +378,7 @@ certManager:
   # acmesolver:
   #   image:
   #     repository: nvcr.io/YOUR_ORG/YOUR_TEAM/cert-manager-acmesolver
-  #     tag: "v1.20.2"
+  #     tag: "v1.20.5"
 
 openbao:
   enabled: true
