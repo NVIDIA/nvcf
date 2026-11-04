@@ -134,7 +134,9 @@ pub(super) enum NoRoutingFinalization {
 pub(super) fn classify_no_routing_choice(inputs: NoRoutingChoiceInputs) -> NoRoutingChoiceAction {
     if inputs.num_candidates > 0 && inputs.eligible_candidate_count > 0 && inputs.retry_allowed {
         NoRoutingChoiceAction::RetryRouting
-    } else if inputs.num_candidates == 0 && inputs.target_registered {
+    } else if inputs.eligible_candidate_count == 0
+        && (inputs.num_candidates > 0 || inputs.target_registered)
+    {
         NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoReadyBackends)
     } else if inputs.num_candidates == 0
         && inputs.failed_backend_count == 0
@@ -470,7 +472,7 @@ mod tests {
                 failed_cluster_count: 1,
                 ..no_routing_inputs(2, 0)
             }),
-            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
+            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoReadyBackends)
         );
         assert_eq!(
             classify_no_routing_choice(NoRoutingChoiceInputs {

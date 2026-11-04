@@ -231,7 +231,7 @@ Common errors:
 | `500` | `internal_error` | Stargate could not build the response. | Treat as serving failure. |
 | `502` | `upstream_unreachable` | Tunnel or transport failure. | Treat as serving failure. |
 | `503` | `no_available_backend` | No backend could take the request. | Treat as serving failure. |
-| `503` | `no_ready_backends` | Known target with no ready backend, including a recently deregistered one. Carries `Retry-After`. | Retryable. Relay `Retry-After`. |
+| `503` | `no_ready_backends` | Known target with no ready backend: inactive, recently deregistered, or every backend failed this request. Carries `Retry-After`. | Retryable. Relay `Retry-After`. |
 | `503` | `overloaded_error` | Capacity or admission rejection. | Treat as serving failure. |
 | `503` | `local_connect_failure` | Pylon could not connect to its model server. | Treat as serving failure. |
 | `503` | `model_generation_unavailable` | Pylon has not admitted the model generation. | Treat as serving failure. |
