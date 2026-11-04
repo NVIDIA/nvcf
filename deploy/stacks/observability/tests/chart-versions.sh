@@ -15,9 +15,10 @@
 # limitations under the License.
 #
 # A stack release publishes each chart under charts/ at its Chart.yaml version.
-# Fail when a chart differs from the latest stack release but keeps the chart
-# version of that release, so the next release cannot ship new chart content
-# under an already published version.
+# Compare each chart with every published stack release and release candidate,
+# on any train. Fail when the chart content differs from a release but keeps
+# that release's chart version or appVersion, so no release can ship new chart
+# content under an already published version.
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,33 +37,54 @@ if ! git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
   exit 0
 fi
 
-release_tag="$(
-  git -C "$repo_dir" tag --list "$stack_path/v*" --sort=-v:refname |
-    grep -E "^$stack_path/v[0-9]+\.[0-9]+\.[0-9]+$" |
-    head -n 1 || true
+release_tags="$(
+  git -C "$repo_dir" tag --list "$stack_path/v*" |
+    grep -E "^$stack_path/v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$" || true
 )"
-if [[ -z "$release_tag" ]]; then
+if [[ -z "$release_tags" ]]; then
   echo "chart-versions: skipped, no $stack_path release tag; fetch tags to run this check"
   exit 0
 fi
 
+# chart_changed_since <tag> <chart path> succeeds when the working tree chart
+# differs from the chart at <tag>, including untracked files.
+chart_changed_since() {
+  local tag="$1" chart_path="$2" status=0
+  if [[ -n "$(git -C "$repo_dir" ls-files --others --exclude-standard -- "$chart_path")" ]]; then
+    return 0
+  fi
+  git -C "$repo_dir" diff --quiet "$tag" -- "$chart_path" || status=$?
+  case "$status" in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) fail "git diff against $tag failed for $chart_path" ;;
+  esac
+}
+
+release_count="$(wc -l <<<"$release_tags" | tr -d ' ')"
 for chart_yaml in "$stack_dir"/charts/*/Chart.yaml; do
   chart_path="$(dirname "${chart_yaml#"$repo_dir"/}")"
-  released_chart_yaml="$(git -C "$repo_dir" show "$release_tag:$chart_path/Chart.yaml" 2>/dev/null)" ||
-    continue
   current_version="$(yq -r '.version' "$chart_yaml")"
-  released_version="$(yq -r '.version' <<<"$released_chart_yaml")"
-  [[ "$current_version" == "$released_version" ]] || continue
-
-  status=0
-  git -C "$repo_dir" diff --quiet "$release_tag" -- "$chart_path" || status=$?
-  case "$status" in
-    0) ;;
-    1)
-      fail "$chart_path changed since $release_tag but keeps chart version $current_version; bump version and appVersion in $chart_path/Chart.yaml"
-      ;;
-    *) fail "git diff against $release_tag failed for $chart_path" ;;
-  esac
+  current_app_version="$(yq -r '.appVersion' "$chart_yaml")"
+  while IFS= read -r tag; do
+    released_chart_yaml="$(git -C "$repo_dir" show "$tag:$chart_path/Chart.yaml" 2>/dev/null)" ||
+      continue
+    released_version="$(yq -r '.version' <<<"$released_chart_yaml")"
+    released_app_version="$(yq -r '.appVersion' <<<"$released_chart_yaml")"
+    same_version=false
+    same_app_version=false
+    [[ "$current_version" == "$released_version" ]] && same_version=true
+    [[ "$current_app_version" != null && "$current_app_version" == "$released_app_version" ]] &&
+      same_app_version=true
+    if [[ "$same_version" == false && "$same_app_version" == false ]]; then
+      continue
+    fi
+    chart_changed_since "$tag" "$chart_path" || continue
+    if [[ "$same_version" == true ]]; then
+      fail "$chart_path differs from $tag but keeps its chart version $current_version; bump version and appVersion in $chart_path/Chart.yaml"
+    fi
+    fail "$chart_path differs from $tag but keeps its appVersion $current_app_version; bump appVersion with version in $chart_path/Chart.yaml"
+  done <<<"$release_tags"
 done
 
-echo "chart-versions: all checks passed against $release_tag"
+echo "chart-versions: all checks passed against $release_count $stack_path releases"
