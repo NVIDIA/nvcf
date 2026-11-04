@@ -37,7 +37,9 @@ All Pod specs in your helm chart will be updated with pull secrets at runtime, s
 
    - NVCF uses `helmChartServiceName` for readiness checks and function
      metrics. It must match the service that exposes the `mini-service` entry
-     point. Templated service names are not supported.
+     point. Templated service names are not supported. The name must be a DNS
+     label: at most 63 letters, digits, or hyphens, starting and ending with a
+     letter or digit. The API rejects other values.
 
    - Important: The Helm chart name should not contain underscores or other special symbols, as that may cause issues during deployment.
 
@@ -58,7 +60,7 @@ curl -s -X POST "http://${GATEWAY_ADDR}/v2/nvcf/functions" \
     "inferenceUrl": "v2/models/model_name/versions/model_version/infer",
     "inferencePort": 8001,
     "helmChart": "oci://'${REGISTRY}'/'${REPOSITORY}'/charts/inference-test-1.0.tgz",
-    "helmChartServiceName": "service_name",
+    "helmChartServiceName": "entrypoint",
     "apiBodyFormat": "CUSTOM"
 }'
 ```

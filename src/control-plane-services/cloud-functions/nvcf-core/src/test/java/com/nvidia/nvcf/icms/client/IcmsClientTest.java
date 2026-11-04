@@ -403,6 +403,74 @@ class IcmsClientTest {
 
     @Test
     @SneakyThrows
+    void testContainerArgsWithControlCharacterStaysOneEnvEntry() {
+        // A control character in an owner-controlled value must not forge a new environment
+        // entry. getEnvironment quotes it, so the worker reads it back as one value.
+        // Arrange
+        when(clock.instant()).thenReturn(Instant.parse("2023-11-23T06:00:00Z"));
+        var containerArgsWithNewline = "a\nb";
+        var function = FunctionEntity.builder()
+                .functionId(TEST_FUNCTION_ID)
+                .functionVersionId(TEST_VERSION_ID_1)
+                .functionName(TEST_FUNCTION_NAME)
+                .functionStatus(FunctionStatus.INACTIVE)
+                .ncaId(TEST_NCA_ID)
+                .containerArgs(containerArgsWithNewline)
+                .containerImage(TEST_NGC_CONTAINER_IMAGE.toString())
+                .apiBodyFormat(CUSTOM)
+                .inferenceUrl(TEST_INFERENCE_URL.toString())
+                .modelSpecs(functionMapperService.toModelSpecs(List.of(
+                        FunctionModelDto.builder()
+                                .name("model-1")
+                                .uri(URI.create(TEST_MODEL_URL_1))
+                                .build()
+                )))
+                .utilsContainerImage(GO)
+                .tags(TEST_TAGS)
+                .description(TEST_DESCRIPTION)
+                .health(createHealthUdt())
+                .createdAt(Instant.now())
+                .build();
+        functionsRepository.save(function);
+        var functionDeploymentEntity = testService.createDeploymentEntity(
+                TEST_FUNCTION_ID,
+                TEST_VERSION_ID_1,
+                TEST_DEPLOYMENT_ID,
+                TEST_NCA_ID);
+        gpuSpecification = GpuSpecificationEntity.builder()
+                .key(GpuSpecificationKey.builder()
+                             .ncaId(TEST_NCA_ID)
+                             .deploymentId(TEST_DEPLOYMENT_ID)
+                             .gpuSpecificationId(TEST_GPU_SPEC_ID)
+                             .build())
+                .gpu(T10)
+                .instanceType(T10_INSTANCE_TYPE)
+                .maxInstances(40)
+                .minInstances(1)
+                .maxRequestConcurrency(9)
+                .build();
+
+        // Act
+        var deploymentId = functionDeploymentEntity.getDeploymentId();
+        icmsAllocatorService.scheduleNewInstance(function, deploymentId, gpuSpecification, 1);
+
+        // Assert: the line feed is escaped inside a quoted value, so it stays one entry.
+        // Without the encoding, the raw line feed would split the value into two entries and
+        // INFERENCE_CONTAINER_ARGS would hold only the text before it.
+        List<ServeEvent> allServeEvents = MockIcmsServer.getMockIcmsServer().getAllServeEvents();
+        String formUrlEncodedBody = allServeEvents.getFirst().getRequest().getBodyAsString();
+        var params = parseRequestParams(formUrlEncodedBody);
+        var envRaw = new String(Base64.getDecoder().decode(
+                URLDecoder.decode(params.get("LaunchSpecification.Environment"),
+                                  StandardCharsets.UTF_8)));
+        var env = Arrays.stream(envRaw.split("\n"))
+                .collect(Collectors.toMap(x -> x.split("=")[0],
+                                          x -> x.substring(x.indexOf("=") + 1)));
+        assertThat(env.get("INFERENCE_CONTAINER_ARGS")).isEqualTo("\"a\\u000ab\"");
+    }
+
+    @Test
+    @SneakyThrows
     void testSendCredentialsFromEssForHelmBasedFunctionWithCanaryRegistries() {
         // Arrange
         when(clock.instant()).thenReturn(Instant.parse("2023-11-23T06:00:00Z"));
