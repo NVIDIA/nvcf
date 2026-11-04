@@ -19,6 +19,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -46,6 +47,7 @@ func TestNVCFAuthHTTPErrorMapsCodes(t *testing.T) {
 		{"not found -> 404", status.Error(codes.NotFound, "not found"), http.StatusNotFound},
 		{"deadline -> 504", status.Error(codes.DeadlineExceeded, "slow"), http.StatusGatewayTimeout},
 		{"unavailable -> 503", status.Error(codes.Unavailable, "down"), http.StatusServiceUnavailable},
+		{"failed precondition -> 503", status.Error(codes.FailedPrecondition, "degraded"), http.StatusServiceUnavailable},
 		{"internal -> 502", status.Error(codes.Internal, "boom"), http.StatusBadGateway},
 	}
 
@@ -555,6 +557,7 @@ func TestNVCFAuthMiddlewareUsesProjectScopedRateLimitKeyWhenPresent(t *testing.T
 
 type stubInvocationAuthClient struct {
 	authResponse        *nvcf.InvocationAuthResponse
+	authErr             error
 	authorizeCalls      int
 	authorizeToken      string
 	authorizeRoutingKey string
@@ -568,7 +571,98 @@ func (s *stubInvocationAuthClient) AuthorizeInvocation(
 	s.authorizeCalls++
 	s.authorizeToken = clientAuthorizationToken
 	s.authorizeRoutingKey = routingKey
-	return s.authResponse, nil
+	return s.authResponse, s.authErr
+}
+
+func TestNVCFAuthMiddlewareFunctionNotReadyIsRetryable(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		path     string
+		body     string
+		wantType string
+	}{
+		{"openai", "/v1/chat/completions", `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hello"}]}`, "server_error"},
+		{"anthropic", messagesEndpointPath, messagesTestBody, "api_error"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			authClient := &stubInvocationAuthClient{
+				authErr: status.Error(codes.FailedPrecondition, "Function id 'fn-alpha': DEGRADED function cannot be invoked"),
+			}
+			e := echo.New()
+			e.HTTPErrorHandler = newHTTPErrorHandler(false)
+			e.Use(NewContextMiddleware(config.Default()))
+			e.Use(NewNVCFAuthMiddleware(authClient))
+			e.POST(tc.path, func(c echo.Context) error {
+				t.Fatal("handler must not run when auth fails")
+				return nil
+			})
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			req.Header.Set(echo.HeaderAuthorization, "Bearer sk-live")
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+			}
+			if got := rec.Header().Get("Retry-After"); got != "30" {
+				t.Fatalf("Retry-After = %q, want 30", got)
+			}
+			var body struct {
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body: %v: %s", err, rec.Body.String())
+			}
+			if body.Error.Type != tc.wantType {
+				t.Fatalf("error type = %q, want %q", body.Error.Type, tc.wantType)
+			}
+			if body.Error.Message != "model temporarily unavailable" {
+				t.Fatalf("error message = %q, want model temporarily unavailable", body.Error.Message)
+			}
+		})
+	}
+}
+
+func TestNVCFAuthMiddlewareOmitsRetryAfterForOtherErrors(t *testing.T) {
+	t.Parallel()
+
+	authClient := &stubInvocationAuthClient{authErr: status.Error(codes.Unavailable, "down")}
+	e := echo.New()
+	e.Use(NewContextMiddleware(config.Default()))
+	e.Use(NewNVCFAuthMiddleware(authClient))
+	e.POST("/v1/chat/completions", func(c echo.Context) error {
+		return c.NoContent(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hello"}]}`),
+	)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer sk-live")
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("Retry-After = %q, want unset", got)
+	}
 }
 
 func TestNVCFAuthHTTPErrorDoesNotLeakTransportDetail(t *testing.T) {
