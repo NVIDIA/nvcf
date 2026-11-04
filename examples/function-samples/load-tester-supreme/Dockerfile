@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM golang:1.26.10-bookworm AS http-server-build
+FROM golang:1.26.10 AS http-server-build
 
 WORKDIR /go/src/http-app
 COPY http-server .
