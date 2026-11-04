@@ -2371,7 +2371,9 @@ func seedUpstreamImageRenderOutput(t *testing.T, repoRoot string) {
 	t.Helper()
 	manifests := map[string]string{
 		"01-nats/templates/nats.yaml": `# Source: helm-nvcf-nats/templates/nkey-secret.yaml
+image: docker.io/synadia/nats-server:fixture-tag
 image: docker.io/natsio/nats-server-config-reloader:fixture-tag
+image: docker.io/natsio/nats-box:fixture-tag
 `,
 		"02-cassandra/templates/cassandra.yaml": "image: nvcf-cassandra-migrations:latest\n",
 		"03-api/templates/api.yaml":             "image: docker.io/alpine/k8s:fixture-tag\n",

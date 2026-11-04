@@ -561,12 +561,12 @@ nats:
       {{- end }}
     {{- end }}
     image:
-      registry: {{ dig "nats" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
-      repository: {{ dig "nats" "container" "image" "repository" "" .Values | default (printf "%s/nats-server" .Values.global.image.repository) }}
-      tag: {{ dig "nats" "container" "image" "tag" "" .Values | default "2.14.6-alpine3.22" | quote }}
+      registry: {{ dig "nats" "container" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "nats" "container" "image" "repository" "" .Values | default "synadia/nats-server" }}
+      tag: {{ dig "nats" "container" "image" "tag" "" .Values | default "2.14.9-alpine3.22" | quote }}
   {{- $natsReloaderRegistry := dig "nats" "reloader" "image" "registry" "" .Values }}
   {{- $natsReloaderRepository := dig "nats" "reloader" "image" "repository" "" .Values }}
-  {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values }}
+  {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values | default "0.25.0" }}
   {{- $natsReloaderSecurityContext := dig "nats" "reloader" "merge" "securityContext" dict .Values }}
   {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag $natsReloaderSecurityContext }}
   reloader:

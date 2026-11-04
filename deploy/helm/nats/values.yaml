@@ -39,9 +39,9 @@ nats:
         capabilities:
           drop: [ALL]
     image:
-      registry: ""
-      repository: ""
-      tag: 2.11.17-alpine3.22
+      registry: docker.io
+      repository: library/nats
+      tag: 2.14.9-alpine3.22
       pullPolicy: IfNotPresent
     env:
       NKEY_USER_KEY:
@@ -67,7 +67,7 @@ nats:
     # Use js-server-only health probes. With explicit accounts (AUTH/APP),
     # the default $G account has no streams, causing the standard JetStream
     # health check to fail with 503.
-    # js-server-only must be set to an explicit "true". nats-server 2.11.17
+    # js-server-only must be set to an explicit "true". nats-server 2.14.9
     # parses the valueless "?js-server-only" query arg as false, which leaves
     # the full account/stream/consumer JetStream health check active. During a
     # rolling upgrade a rejoining node can stay 503 on stream-current errors,
@@ -96,15 +96,15 @@ nats:
     image:
       registry: docker.io
       repository: natsio/nats-server-config-reloader
-      tag: 0.24.0
+      tag: 0.25.0
       pullPolicy: IfNotPresent
   natsBox:
     enabled: true
     container:
       image:
-        registry: ""
-        repository: ""
-        tag: 0.19.5-nonroot
+        registry: docker.io
+        repository: natsio/nats-box
+        tag: 0.20.1-nonroot
         pullPolicy: IfNotPresent
     # Add contexts configuration to mount the nkeys secret
     contexts:
