@@ -4,6 +4,79 @@ This tool keeps top-of-tree documentation aligned with three released stack
 inventories. It renders the cross-stack compatibility matrix and prepares
 branch-based SemVer docs editions for qualified three-stack combinations.
 
+## Chart image catalogs
+
+NATS, cert-manager, OpenBao and Cassandra declare stable image identifiers
+under `thirdPartyImages` or `ownedImages` in wrapper values. Entries point to
+existing image values objects. Versions stay in those objects or the
+dependency's `Chart.yaml` appVersion. NVCF rebuilds retain their own identities
+and release provenance.
+
+Build dependencies, then inspect the effective catalog:
+
+```sh
+make -C deploy/helm/nats deps
+go run -C tools/docs-version-sync . images inspect \
+  --chart ../../deploy/helm/nats
+```
+
+Repeat `-f /absolute/path/values.yaml` in Helm precedence order to supply the
+deployment's effective values. OpenBao and Cassandra require their image
+registry/repository settings. Helm resolves dependency defaults; the command
+checks workload images, hooks, ACME solver arguments and the injector's agent
+image against the catalog. It does not install resources or edit chart sources.
+
+Create a mapping with one entry per catalog identifier. Each `source` must
+match its `Reference` from `images inspect`. Each `destination` identifies the
+already-published mirror image:
+
+```yaml
+images:
+  natsServer:
+    source: source.example/nats-server:qualified
+    destination: mirror.example/platform/renamed-server:qualified
+  # Include natsReloader and natsBox with their inspected source references.
+```
+
+After mirroring the selected images, generate overrides:
+
+```sh
+go run -C tools/docs-version-sync . images mirror \
+  --chart ../../deploy/helm/nats \
+  --mapping /absolute/path/nats-mapping.yaml \
+  > /absolute/path/nats-mirror-values.yaml
+```
+
+This requires skopeo and uses existing registry authentication with TLS
+verification enabled. Use
+`--registry-cert-dir /absolute/path/certs` for a registry with a custom CA
+or client certificate. The command compares source and destination manifest
+digests for `linux/amd64` and `linux/arm64`,
+then re-renders the chart to check every mapped destination. Coverage,
+identity or routing failures stop override output. Mirror repository names
+may differ. Split registry/repository fields and cert-manager's full
+repository fields support their native tag/digest forms.
+
+Apply generated overrides after the inspected values. Approved deployment
+profiles must map all selected images; changing the NVCF service registry
+alone does not remap third-party dependencies. Retain the generated profile
+with qualification inputs and record effective images in the owning released
+stack inventory. Requalify changed selections and follow root QA rules.
+
+Run the focused checks:
+
+```sh
+go test -C tools/docs-version-sync -run '^TestImage(Catalog|Mirror)' -count=1
+NVCF_IMAGE_CATALOG_E2E=1 go test -C tools/docs-version-sync -run '^TestImageCatalogCharts$' -count=1
+```
+
+The second command downloads pinned dependencies into test-owned copies and
+validates source/mirror rendering for the four supported charts. Fixture
+destinations do not establish registry availability or live qualification.
+
+The [registry BDD suite](../../tests/bdd/image-catalog.md) exercises the
+operator command against real source/mirror artifacts for all four charts.
+
 ## Release and documentation flow
 
 ```text

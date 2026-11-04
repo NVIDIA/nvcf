@@ -14,6 +14,12 @@
 # limitations under the License.
 
 ---
+# NVCF server and migration builds retain their owning image releases.
+# Catalog paths are consumed by docs-version-sync images, not by Helm.
+ownedImages:
+  cassandraServer: cassandra.image
+  cassandraMigrations: cassandra.migrations.image
+
 cassandra:
   # Namespace to deploy chart resources. Defaults to the release namespace.
   namespace: ""

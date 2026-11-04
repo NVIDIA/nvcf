@@ -13,6 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Catalog paths are consumed by docs-version-sync images, not by Helm.
+thirdPartyImages:
+  natsServer: nats.container.image
+  natsReloader: nats.reloader.image
+  natsBox: nats.natsBox.container.image
+
 # NATS Configuration (reference: https://github.com/nats-io/k8s/tree/main/helm/charts/nats)
 nats:
   enabled: true

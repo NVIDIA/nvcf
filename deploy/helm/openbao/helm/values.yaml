@@ -13,6 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Catalog paths preserve the separate injector and injected-agent identities.
+# NVCF rebuilds remain owned images with their own release provenance.
+thirdPartyImages:
+  vaultInjector: openbao.injector.image
+ownedImages:
+  openbaoServer: openbao.server.image
+  openbaoAgent: openbao.injector.agentImage
+  openbaoMigrations: openbao.migrations.image
+
 openbao:
   # Namespace to deploy wrapper chart resources. Defaults to the release namespace.
   namespace: ""

@@ -13,6 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Keep image versions in the dependency values and Chart.yaml appVersion.
+# Catalog paths are consumed by docs-version-sync images, not by Helm.
+thirdPartyImages:
+  certManagerController: cert-manager.image
+  certManagerWebhook: cert-manager.webhook.image
+  certManagerCAInjector: cert-manager.cainjector.image
+  certManagerStartupAPICheck: cert-manager.startupapicheck.image
+  certManagerACMESolver: cert-manager.acmesolver.image
+
 cert-manager:
   crds:
     enabled: true
