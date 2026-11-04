@@ -41,5 +41,5 @@ dependency floors against the module metadata embedded in each binary.
 The final image requires Alpine `ca-certificates` and
 `ca-certificates-bundle` 20261020-r0 or newer. Run
 `scripts/test-runtime-packages.sh` with `RUNTIME_IMAGE` to verify the installed
-packages, check that the affected emSign root is absent from the CA bundle,
+packages, check that the affected emSign root is absent from Go-loaded CA paths,
 and inspect the server and target plugin binaries copied into the image.
