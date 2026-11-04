@@ -6,7 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "util",
     srcs = ["pod_resources.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util",
     visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
     deps = ["//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core"],
 )

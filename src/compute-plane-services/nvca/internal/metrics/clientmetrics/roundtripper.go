@@ -21,8 +21,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv/httpsemconv"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv/httpsemconv"
 )
 
 // TransportOption configures the metrics RoundTripper.

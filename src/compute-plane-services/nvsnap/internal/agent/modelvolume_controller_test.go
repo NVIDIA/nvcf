@@ -6,7 +6,7 @@ package agent
 import (
 	"context"
 	"fmt"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tarstream"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/tarstream"
 	"github.com/gorilla/mux"
 	"k8s.io/apimachinery/pkg/types"
 	"net/http"
@@ -30,9 +30,9 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
 // mvURI is a model identity as the webhook stamps it: scoped to the tenant

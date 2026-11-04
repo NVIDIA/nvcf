@@ -22,7 +22,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/otelconfig"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/internal/otelconfig"
 )
 
 func writeConfig(data []byte, outputPath string) error {

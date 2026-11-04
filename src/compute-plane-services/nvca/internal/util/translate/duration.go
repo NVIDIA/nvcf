@@ -21,7 +21,7 @@ import (
 	"math"
 	"time"
 
-	translateutil "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
+	translateutil "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
 )
 
 func ParseMaxRuntimeDuration(maxRuntimeDurationStr string) (time.Duration, error) {

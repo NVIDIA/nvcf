@@ -7,7 +7,7 @@ go_library(
         "groupversion.go",
         "typeconverter.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/openapi",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/openapi",
     importpath = "k8s.io/client-go/openapi",
     visibility = ["//visibility:public"],
     deps = [

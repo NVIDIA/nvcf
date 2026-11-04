@@ -13,7 +13,7 @@ go_library(
         "zz_generated.prerelease-lifecycle.go",
         "zz_generated.validations.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/api/extensions/v1beta1",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/api/extensions/v1beta1",
     importpath = "k8s.io/api/extensions/v1beta1",
     visibility = ["//visibility:public"],
     deps = [

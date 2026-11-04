@@ -7,7 +7,7 @@ go_library(
         "factory.go",
         "generic.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers",
     importpath = "k8s.io/client-go/informers",
     visibility = ["//visibility:public"],
     deps = [

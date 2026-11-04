@@ -10,7 +10,7 @@ go_library(
         "salsa20_noasm.go",
         "salsa20_ref.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/salsa20/salsa",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/salsa20/salsa",
     importpath = "golang.org/x/crypto/salsa20/salsa",
     visibility = ["//visibility:public"],
 )

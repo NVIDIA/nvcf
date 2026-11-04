@@ -20,7 +20,7 @@ package webhook
 import (
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // TestCoalesceExtractCacheRoots_CollapsesCacheSiblings: 22 sibling

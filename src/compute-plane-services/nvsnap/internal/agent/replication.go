@@ -28,8 +28,8 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/objectstore"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/objectstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
 
 // objectStoreUploadConcurrency is the number of parallel object PUTs during

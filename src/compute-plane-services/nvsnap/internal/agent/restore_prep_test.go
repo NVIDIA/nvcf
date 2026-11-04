@@ -28,7 +28,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // fakePreparer is an in-memory stub. Each PrepareOverlay sleeps `delay`

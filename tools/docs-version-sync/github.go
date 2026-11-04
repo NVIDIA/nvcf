@@ -19,7 +19,7 @@ import (
 
 const (
 	defaultGitHubAPIURL             = "https://api.github.com"
-	defaultGitHubOwner              = "NVIDIA"
+	defaultGitHubOwner              = "dsx-ai-factory"
 	defaultGitHubRepo               = "nvcf"
 	resolvedStackInventoryAssetName = "nvcf-self-managed-stack-inventory.json"
 	resolvedStackInventoryMaxBytes  = 10 << 20

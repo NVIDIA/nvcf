@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
 
 	"github.com/stretchr/testify/assert"
 )

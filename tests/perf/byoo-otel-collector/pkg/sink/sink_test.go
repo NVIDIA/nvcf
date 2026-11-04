@@ -23,7 +23,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/labels"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/labels"
 )
 
 const testNS = "byoo-perf"

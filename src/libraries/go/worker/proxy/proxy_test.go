@@ -35,6 +35,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -42,20 +44,18 @@ import (
 	"github.com/quic-go/quic-go/integrationtests/tools"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/handlerisolationconn"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/quicconn"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/rp"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils/middleware"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils/pool"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/handlerisolationconn"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/quicconn"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/rp"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/test/testutils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils/middleware"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils/pool"
 )
 
 func TestGrpcProxy(t *testing.T) {

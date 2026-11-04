@@ -27,7 +27,7 @@ go_library(
         "resourcemetricsource.go",
         "resourcemetricstatus.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/autoscaling/v2",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/autoscaling/v2",
     importpath = "k8s.io/client-go/applyconfigurations/autoscaling/v2",
     visibility = ["//visibility:public"],
     deps = [

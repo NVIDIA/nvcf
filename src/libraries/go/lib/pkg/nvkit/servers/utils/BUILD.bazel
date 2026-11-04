@@ -21,7 +21,7 @@ go_library(
         "header.go",
         "util.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/servers/utils",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/servers/utils",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_go_kit_kit//transport/grpc",

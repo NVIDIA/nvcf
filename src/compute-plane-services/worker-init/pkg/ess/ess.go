@@ -28,7 +28,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 )
 
 const (

@@ -6,7 +6,7 @@ go_library(
         "identifier.go",
         "mib.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/text/encoding/internal/identifier",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/text/encoding/internal/identifier",
     importpath = "golang.org/x/text/encoding/internal/identifier",
     visibility = ["//src/compute-plane-services/nvca/vendor/golang.org/x/text/encoding:__subpackages__"],
 )

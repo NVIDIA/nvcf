@@ -6,7 +6,7 @@ go_library(
         "provider.go",
         "reference.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/ref",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/ref",
     importpath = "github.com/google/cel-go/common/types/ref",
     visibility = ["//visibility:public"],
     deps = [

@@ -35,9 +35,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/httpstream"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
-	pb "github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker/httpstream"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metering"
+	pb "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
 )
 
 // newRequestStreamHandler stands up a minimal request-attach server (the GET

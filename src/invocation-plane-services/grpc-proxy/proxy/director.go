@@ -30,7 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	nverrors "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
 	"github.com/jellydator/ttlcache/v3"

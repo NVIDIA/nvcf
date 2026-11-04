@@ -22,7 +22,7 @@ go_library(
         "tls.go",
         "tokenstore.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/lib/pkg/nvkit/errors",

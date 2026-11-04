@@ -7,7 +7,7 @@ go_library(
         "registry.go",
         "repository.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry",
     importpath = "oras.land/oras-go/v2/registry",
     visibility = ["//visibility:public"],
     deps = [

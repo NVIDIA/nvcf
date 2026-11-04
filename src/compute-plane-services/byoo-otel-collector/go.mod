@@ -1,4 +1,4 @@
-module github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector
+module github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector
 
 go 1.26.10
 

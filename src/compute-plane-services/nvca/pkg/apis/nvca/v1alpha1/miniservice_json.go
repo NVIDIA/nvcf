@@ -20,9 +20,9 @@ package v1alpha1
 import (
 	"encoding/json"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/internal/compat"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/internal/compat"
 )
 
 // miniServiceSpecJSON is the compatibility wire representation of MiniServiceSpec.

@@ -1,9 +1,9 @@
-module github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval
+module github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval
 
 go 1.26.10
 
 require (
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
 	github.com/felixge/httpsnoop v1.0.4
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-chi/render v1.0.3
@@ -217,3 +217,5 @@ replace (
 	k8s.io/apimachinery => k8s.io/apimachinery v0.33.3
 	k8s.io/client-go => k8s.io/client-go v0.33.3
 )
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib

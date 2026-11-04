@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/trustbundle"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/trustbundle"
 )
 
 func TestRunWritesMergedBundle(t *testing.T) {

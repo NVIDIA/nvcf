@@ -20,7 +20,7 @@ package servers
 import (
 	"os"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/shutdown"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/shutdown"
 )
 
 // awaitShutdownSignal blocks until a shutdown signal arrives or the run group

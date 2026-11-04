@@ -33,15 +33,15 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/config"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
-	sharedTypes "github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/config"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	sharedTypes "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/types"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/configs"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/types"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/worker"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/configs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/worker"
 )
 
 // ------------------------------------------------------------------------

@@ -18,10 +18,10 @@ limitations under the License.
 package main
 
 import (
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/api/startup"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/constants"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/cmd/api/startup"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/pkg/constants"
 )
 
 func main() {

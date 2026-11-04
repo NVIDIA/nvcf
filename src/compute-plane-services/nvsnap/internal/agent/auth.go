@@ -24,7 +24,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
 	"github.com/sirupsen/logrus"
 )
 

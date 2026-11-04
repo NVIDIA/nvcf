@@ -33,11 +33,11 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	taskMetrics "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/types"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/upload"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvct"
-	sharedTypes "github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
+	taskMetrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/upload"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvct"
+	sharedTypes "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/types"
 )
 
 const initializeTimeout = 2 * time.Hour

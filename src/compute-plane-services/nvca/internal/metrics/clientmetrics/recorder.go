@@ -45,7 +45,7 @@ const (
 )
 
 // meterName is the instrumentation scope for all client metrics.
-const meterName = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
+const meterName = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 
 // DurationBucketsSeconds are the explicit histogram boundaries for operation
 // duration, in seconds. They follow the OpenTelemetry Semantic Conventions

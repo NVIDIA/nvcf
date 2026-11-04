@@ -8,7 +8,7 @@ go_library(
         "real.go",
         "time.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/samber/lo/internal/xtime",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/samber/lo/internal/xtime",
     importpath = "github.com/samber/lo/internal/xtime",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/samber/lo:__subpackages__"],
 )

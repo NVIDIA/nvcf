@@ -6,7 +6,7 @@ go_library(
         "modelvolume.go",
         "reaper.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
         "@com_github_sirupsen_logrus//:logrus",

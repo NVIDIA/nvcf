@@ -29,7 +29,7 @@ import (
 	"github.com/senseyeio/duration"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/semaphore"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/semaphore"
 )
 
 func AcquireUpToMax(ctx context.Context, currentProcessing *semaphore.Weighted) (uint32, error) {

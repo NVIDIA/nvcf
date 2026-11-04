@@ -23,7 +23,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
+	pdpv1 "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

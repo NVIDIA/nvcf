@@ -30,26 +30,26 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSCreationMessageInfo":           schema_pkg_apis_nvca_v2beta1_ICMSCreationMessageInfo(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequest":                       schema_pkg_apis_nvca_v2beta1_ICMSRequest(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestList":                   schema_pkg_apis_nvca_v2beta1_ICMSRequestList(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestSpec":                   schema_pkg_apis_nvca_v2beta1_ICMSRequestSpec(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestStatus":                 schema_pkg_apis_nvca_v2beta1_ICMSRequestStatus(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSTerminationMessageInfo":        schema_pkg_apis_nvca_v2beta1_ICMSTerminationMessageInfo(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBinding":                 schema_pkg_apis_nvca_v2beta1_ModelCacheBinding(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingDecision":         schema_pkg_apis_nvca_v2beta1_ModelCacheBindingDecision(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingIdentity":         schema_pkg_apis_nvca_v2beta1_ModelCacheBindingIdentity(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingList":             schema_pkg_apis_nvca_v2beta1_ModelCacheBindingList(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRealizedState":    schema_pkg_apis_nvca_v2beta1_ModelCacheBindingRealizedState(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRequestReference": schema_pkg_apis_nvca_v2beta1_ModelCacheBindingRequestReference(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingResourceIntent":   schema_pkg_apis_nvca_v2beta1_ModelCacheBindingResourceIntent(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingSpec":             schema_pkg_apis_nvca_v2beta1_ModelCacheBindingSpec(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingStatus":           schema_pkg_apis_nvca_v2beta1_ModelCacheBindingStatus(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheStorageClassSnapshot":    schema_pkg_apis_nvca_v2beta1_ModelCacheStorageClassSnapshot(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequest":                    schema_pkg_apis_nvca_v2beta1_StorageRequest(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestList":                schema_pkg_apis_nvca_v2beta1_StorageRequestList(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestSpec":                schema_pkg_apis_nvca_v2beta1_StorageRequestSpec(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestStatus":              schema_pkg_apis_nvca_v2beta1_StorageRequestStatus(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSCreationMessageInfo":           schema_pkg_apis_nvca_v2beta1_ICMSCreationMessageInfo(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequest":                       schema_pkg_apis_nvca_v2beta1_ICMSRequest(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestList":                   schema_pkg_apis_nvca_v2beta1_ICMSRequestList(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestSpec":                   schema_pkg_apis_nvca_v2beta1_ICMSRequestSpec(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestStatus":                 schema_pkg_apis_nvca_v2beta1_ICMSRequestStatus(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSTerminationMessageInfo":        schema_pkg_apis_nvca_v2beta1_ICMSTerminationMessageInfo(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBinding":                 schema_pkg_apis_nvca_v2beta1_ModelCacheBinding(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingDecision":         schema_pkg_apis_nvca_v2beta1_ModelCacheBindingDecision(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingIdentity":         schema_pkg_apis_nvca_v2beta1_ModelCacheBindingIdentity(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingList":             schema_pkg_apis_nvca_v2beta1_ModelCacheBindingList(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRealizedState":    schema_pkg_apis_nvca_v2beta1_ModelCacheBindingRealizedState(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRequestReference": schema_pkg_apis_nvca_v2beta1_ModelCacheBindingRequestReference(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingResourceIntent":   schema_pkg_apis_nvca_v2beta1_ModelCacheBindingResourceIntent(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingSpec":             schema_pkg_apis_nvca_v2beta1_ModelCacheBindingSpec(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingStatus":           schema_pkg_apis_nvca_v2beta1_ModelCacheBindingStatus(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheStorageClassSnapshot":    schema_pkg_apis_nvca_v2beta1_ModelCacheStorageClassSnapshot(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequest":                    schema_pkg_apis_nvca_v2beta1_StorageRequest(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestList":                schema_pkg_apis_nvca_v2beta1_StorageRequestList(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestSpec":                schema_pkg_apis_nvca_v2beta1_StorageRequestSpec(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestStatus":              schema_pkg_apis_nvca_v2beta1_StorageRequestStatus(ref),
 		v1.APIGroup{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_APIGroup(ref),
 		v1.APIGroupList{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_APIGroupList(ref),
 		v1.APIResource{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_APIResource(ref),
@@ -255,7 +255,7 @@ func schema_pkg_apis_nvca_v2beta1_ICMSCreationMessageInfo(ref common.ReferenceCa
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.LaunchArtifact"),
+										Ref:     ref("github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.LaunchArtifact"),
 									},
 								},
 							},
@@ -263,12 +263,12 @@ func schema_pkg_apis_nvca_v2beta1_ICMSCreationMessageInfo(ref common.ReferenceCa
 					},
 					"functionLaunchSpecification": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.LaunchSpecification"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.LaunchSpecification"),
 						},
 					},
 					"taskLaunchSpecification": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task.LaunchSpecification"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task.LaunchSpecification"),
 						},
 					},
 				},
@@ -276,7 +276,7 @@ func schema_pkg_apis_nvca_v2beta1_ICMSCreationMessageInfo(ref common.ReferenceCa
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.LaunchArtifact", "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.LaunchSpecification", "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task.LaunchSpecification"},
+			"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.LaunchArtifact", "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.LaunchSpecification", "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task.LaunchSpecification"},
 	}
 }
 
@@ -310,20 +310,20 @@ func schema_pkg_apis_nvca_v2beta1_ICMSRequest(ref common.ReferenceCallback) comm
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestSpec"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestSpec"),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestStatus"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestStatus"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestSpec", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestStatus", v1.ObjectMeta{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestSpec", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestStatus", v1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -360,7 +360,7 @@ func schema_pkg_apis_nvca_v2beta1_ICMSRequestList(ref common.ReferenceCallback) 
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequest"),
+										Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequest"),
 									},
 								},
 							},
@@ -371,7 +371,7 @@ func schema_pkg_apis_nvca_v2beta1_ICMSRequestList(ref common.ReferenceCallback) 
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequest", v1.ListMeta{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequest", v1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -415,27 +415,27 @@ func schema_pkg_apis_nvca_v2beta1_ICMSRequestSpec(ref common.ReferenceCallback) 
 					"creationMsgInfo": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSCreationMessageInfo"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSCreationMessageInfo"),
 						},
 					},
 					"terminationMsgInfo": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSTerminationMessageInfo"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSTerminationMessageInfo"),
 						},
 					},
 					"functionDetails": {
 						SchemaProps: spec.SchemaProps{
 							Description: "FunctionDetails will be set if the message is for creating a function.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.Details"),
+							Ref:         ref("github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.Details"),
 						},
 					},
 					"taskDetails": {
 						SchemaProps: spec.SchemaProps{
 							Description: "TaskDetails will be set if the message is for creating a task.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task.Details"),
+							Ref:         ref("github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task.Details"),
 						},
 					},
 					"functionId": {
@@ -457,7 +457,7 @@ func schema_pkg_apis_nvca_v2beta1_ICMSRequestSpec(ref common.ReferenceCallback) 
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSCreationMessageInfo", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSTerminationMessageInfo", "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.Details", "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task.Details"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSCreationMessageInfo", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSTerminationMessageInfo", "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function.Details", "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task.Details"},
 	}
 }
 
@@ -503,7 +503,7 @@ func schema_pkg_apis_nvca_v2beta1_ICMSRequestStatus(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InstanceStatus"),
+										Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InstanceStatus"),
 									},
 								},
 							},
@@ -530,7 +530,7 @@ func schema_pkg_apis_nvca_v2beta1_ICMSRequestStatus(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestSpanContextConfig"),
+										Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestSpanContextConfig"),
 									},
 								},
 							},
@@ -540,7 +540,7 @@ func schema_pkg_apis_nvca_v2beta1_ICMSRequestStatus(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestSpanContextConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InstanceStatus", v1.Time{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ICMSRequestSpanContextConfig", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InstanceStatus", v1.Time{}.OpenAPIModelName()},
 	}
 }
 
@@ -606,13 +606,13 @@ func schema_pkg_apis_nvca_v2beta1_ModelCacheBinding(ref common.ReferenceCallback
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingSpec"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingSpec"),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingStatus"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingStatus"),
 						},
 					},
 				},
@@ -620,7 +620,7 @@ func schema_pkg_apis_nvca_v2beta1_ModelCacheBinding(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingSpec", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingStatus", v1.ObjectMeta{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingSpec", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingStatus", v1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -787,7 +787,7 @@ func schema_pkg_apis_nvca_v2beta1_ModelCacheBindingList(ref common.ReferenceCall
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBinding"),
+										Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBinding"),
 									},
 								},
 							},
@@ -798,7 +798,7 @@ func schema_pkg_apis_nvca_v2beta1_ModelCacheBindingList(ref common.ReferenceCall
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBinding", v1.ListMeta{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBinding", v1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -1000,25 +1000,25 @@ func schema_pkg_apis_nvca_v2beta1_ModelCacheBindingSpec(ref common.ReferenceCall
 					"identity": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingIdentity"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingIdentity"),
 						},
 					},
 					"decision": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingDecision"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingDecision"),
 						},
 					},
 					"storageClass": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheStorageClassSnapshot"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheStorageClassSnapshot"),
 						},
 					},
 					"resources": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingResourceIntent"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingResourceIntent"),
 						},
 					},
 				},
@@ -1026,7 +1026,7 @@ func schema_pkg_apis_nvca_v2beta1_ModelCacheBindingSpec(ref common.ReferenceCall
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingDecision", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingIdentity", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingResourceIntent", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheStorageClassSnapshot"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingDecision", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingIdentity", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingResourceIntent", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheStorageClassSnapshot"},
 	}
 }
 
@@ -1063,7 +1063,7 @@ func schema_pkg_apis_nvca_v2beta1_ModelCacheBindingStatus(ref common.ReferenceCa
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRequestReference"),
+										Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRequestReference"),
 									},
 								},
 							},
@@ -1071,7 +1071,7 @@ func schema_pkg_apis_nvca_v2beta1_ModelCacheBindingStatus(ref common.ReferenceCa
 					},
 					"realized": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRealizedState"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRealizedState"),
 						},
 					},
 					"conditions": {
@@ -1099,7 +1099,7 @@ func schema_pkg_apis_nvca_v2beta1_ModelCacheBindingStatus(ref common.ReferenceCa
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRealizedState", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRequestReference", v1.Condition{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRealizedState", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheBindingRequestReference", v1.Condition{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
 	}
 }
 
@@ -1174,20 +1174,20 @@ func schema_pkg_apis_nvca_v2beta1_StorageRequest(ref common.ReferenceCallback) c
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestSpec"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestSpec"),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestStatus"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestStatus"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestSpec", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestStatus", v1.ObjectMeta{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestSpec", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequestStatus", v1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -1224,7 +1224,7 @@ func schema_pkg_apis_nvca_v2beta1_StorageRequestList(ref common.ReferenceCallbac
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequest"),
+										Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequest"),
 									},
 								},
 							},
@@ -1235,7 +1235,7 @@ func schema_pkg_apis_nvca_v2beta1_StorageRequestList(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequest", v1.ListMeta{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.StorageRequest", v1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -1269,17 +1269,17 @@ func schema_pkg_apis_nvca_v2beta1_StorageRequestSpec(ref common.ReferenceCallbac
 					},
 					"modelCache": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheSpec"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheSpec"),
 						},
 					},
 					"sharedStorage": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.SharedStorageSpec"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.SharedStorageSpec"),
 						},
 					},
 					"internalPersistentStorage": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InternalPersistentStorageSpec"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InternalPersistentStorageSpec"),
 						},
 					},
 				},
@@ -1287,7 +1287,7 @@ func schema_pkg_apis_nvca_v2beta1_StorageRequestSpec(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InternalPersistentStorageSpec", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheSpec", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.SharedStorageSpec"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InternalPersistentStorageSpec", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheSpec", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.SharedStorageSpec"},
 	}
 }
 
@@ -1323,24 +1323,24 @@ func schema_pkg_apis_nvca_v2beta1_StorageRequestStatus(ref common.ReferenceCallb
 					},
 					"modelCache": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheStatus"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheStatus"),
 						},
 					},
 					"sharedStorage": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.SharedStorageStatus"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.SharedStorageStatus"),
 						},
 					},
 					"internalPersistentStorage": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InternalPersistentStorageStatus"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InternalPersistentStorageStatus"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InternalPersistentStorageStatus", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheStatus", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.SharedStorageStatus", v1.Condition{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.InternalPersistentStorageStatus", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.ModelCacheStatus", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1.SharedStorageStatus", v1.Condition{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
 	}
 }
 

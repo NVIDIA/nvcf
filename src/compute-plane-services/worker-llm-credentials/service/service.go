@@ -29,13 +29,13 @@ import (
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/config"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/config"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/types"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-llm-credentials/configs"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-llm-credentials/internal/worker"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-llm-credentials/configs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-llm-credentials/internal/worker"
 )
 
 func Run() {

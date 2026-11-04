@@ -32,8 +32,8 @@ import (
 	"github.com/goccy/go-json"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
-	nvcfMetrics "github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metering"
+	nvcfMetrics "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics/nvcf"
 )
 
 type Progress struct {

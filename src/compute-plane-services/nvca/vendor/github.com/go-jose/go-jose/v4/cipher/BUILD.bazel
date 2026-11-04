@@ -8,7 +8,7 @@ go_library(
         "ecdh_es.go",
         "key_wrap.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4/cipher",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4/cipher",
     importpath = "github.com/go-jose/go-jose/v4/cipher",
     visibility = ["//visibility:public"],
 )

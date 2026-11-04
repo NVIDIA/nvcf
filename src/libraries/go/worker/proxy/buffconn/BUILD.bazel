@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "buffconn",
     srcs = ["buffconn.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/buffconn",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/buffconn",
     visibility = ["//visibility:public"],
 )
 

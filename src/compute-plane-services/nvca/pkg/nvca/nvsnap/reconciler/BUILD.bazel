@@ -11,7 +11,7 @@ go_library(
         "state.go",
         "sweep.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap/reconciler",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap/reconciler",
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/nvca/internal/otel",

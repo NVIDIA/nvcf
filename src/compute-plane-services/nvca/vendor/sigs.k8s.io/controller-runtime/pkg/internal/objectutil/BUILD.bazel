@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "objectutil",
     srcs = ["objectutil.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/objectutil",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/objectutil",
     importpath = "sigs.k8s.io/controller-runtime/pkg/internal/objectutil",
     visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
     deps = [

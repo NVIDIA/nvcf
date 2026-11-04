@@ -28,8 +28,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/hellofresh/health-go/v5"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
@@ -38,8 +38,8 @@ import (
 
 	healthgrpc "github.com/hellofresh/health-go/v5/checks/grpc"
 
-	nvcfMetrics "github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	nvcfMetrics "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 )
 
 const healthCheckTimeInterval = 10 * time.Second

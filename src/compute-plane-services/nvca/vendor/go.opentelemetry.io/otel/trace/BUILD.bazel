@@ -16,7 +16,7 @@ go_library(
         "tracer.go",
         "tracestate.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace",
     importpath = "go.opentelemetry.io/otel/trace",
     visibility = ["//visibility:public"],
     deps = [

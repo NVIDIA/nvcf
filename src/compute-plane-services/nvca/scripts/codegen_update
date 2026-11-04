@@ -17,7 +17,7 @@ go install "k8s.io/code-generator/cmd/informer-gen@v${CODEGEN_VERSION}"
 
 deepcopy() {
   local -r header_file="${repo_root}/scripts/boilerplate.go.txt"
-  local -r pkg_name="github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+  local -r pkg_name="github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca"
   local -r api=${1:?"API path needed"}
 
   cd "${repo_root}"
@@ -32,7 +32,7 @@ deepcopy() {
 
 clientgen_all() {
   local -r header_file="${repo_root}/scripts/boilerplate.go.txt"
-  local -r pkg_name="github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+  local -r pkg_name="github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca"
 
   cd "${repo_root}"
 

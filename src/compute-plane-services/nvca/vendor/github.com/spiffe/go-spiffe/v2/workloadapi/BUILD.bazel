@@ -20,7 +20,7 @@ go_library(
         "x509context.go",
         "x509source.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/workloadapi",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/workloadapi",
     importpath = "github.com/spiffe/go-spiffe/v2/workloadapi",
     visibility = ["//visibility:public"],
     deps = [

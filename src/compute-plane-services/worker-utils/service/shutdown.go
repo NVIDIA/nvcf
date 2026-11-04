@@ -17,7 +17,7 @@ limitations under the License.
 
 package service
 
-import "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker"
+import "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker"
 
 // isFatalRunError reports whether a terminal error from the root command is a
 // genuine failure rather than the expected response to a shutdown signal.

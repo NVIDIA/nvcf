@@ -35,7 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	sigsyaml "sigs.k8s.io/yaml"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/db"
 )
 
 // DemoPhase represents the current phase of the demo session.

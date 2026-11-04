@@ -6,7 +6,7 @@ go_library(
         "extension.pb.go",
         "extensions.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/gnostic-models/extensions",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/gnostic-models/extensions",
     importpath = "github.com/google/gnostic-models/extensions",
     visibility = ["//visibility:public"],
     deps = [

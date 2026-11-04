@@ -19,7 +19,7 @@ go_library(
     name = "olrictest",
     testonly = True,
     srcs = ["olrictest.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/olrictest",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/olrictest",
     visibility = ["//src/invocation-plane-services/llm-api-gateway:__subpackages__"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/config",

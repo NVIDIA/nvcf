@@ -23,8 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/templating/testhelpers"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/templating/tools"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/templating/testhelpers"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/templating/tools"
 )
 
 func TestParseTools(t *testing.T) {

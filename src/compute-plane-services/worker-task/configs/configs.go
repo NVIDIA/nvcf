@@ -18,7 +18,7 @@ limitations under the License.
 package configs
 
 import (
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/types"
 	"time"
 )
 

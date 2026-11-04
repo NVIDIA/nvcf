@@ -27,7 +27,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"

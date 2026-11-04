@@ -25,7 +25,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	volcenginecr "github.com/volcengine/volcengine-go-sdk/service/cr"

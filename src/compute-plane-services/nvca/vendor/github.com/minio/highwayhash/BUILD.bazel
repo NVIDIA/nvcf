@@ -15,7 +15,7 @@ go_library(
         "highwayhash_ppc64le.s",
         "highwayhash_ref.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/minio/highwayhash",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/minio/highwayhash",
     importpath = "github.com/minio/highwayhash",
     visibility = ["//visibility:public"],
     deps = select({

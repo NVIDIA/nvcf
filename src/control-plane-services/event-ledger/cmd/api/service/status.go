@@ -22,9 +22,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/middleware"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 )
 
 // statusResponse holds data for the overall status response

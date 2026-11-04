@@ -6,7 +6,7 @@ go_library(
         "iot_response.go",
         "special_conf.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/special",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/special",
     importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/special",
     visibility = ["//visibility:public"],
     deps = ["//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/response"],

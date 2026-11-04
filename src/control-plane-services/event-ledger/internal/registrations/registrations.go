@@ -22,9 +22,9 @@ import (
 
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/db_client/cassandra"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/data_access"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/db_client/cassandra"
 )
 
 type DBProvider interface {
