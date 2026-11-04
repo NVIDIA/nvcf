@@ -1041,6 +1041,21 @@ func (p *StargateProvider) readStream(
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), sseMaxToken)
 
+	// A canceled context means the client went away and may not read again. A
+	// missed request deadline must reach the reader, or the stream ends like a
+	// finished one; the API layer drains the stream if it stops reading early.
+	sendContextErr := func() {
+		ctxErr := ctx.Err()
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			events <- StreamEvent{Err: fmt.Errorf("%w: %w", ErrStreamIncomplete, ctxErr)}
+			return
+		}
+		select {
+		case events <- StreamEvent{Err: ctxErr}:
+		default:
+		}
+	}
+
 	var dataLines []string
 	emit := func() bool {
 		if len(dataLines) == 0 {
@@ -1071,10 +1086,7 @@ func (p *StargateProvider) readStream(
 
 		select {
 		case <-ctx.Done():
-			select {
-			case events <- StreamEvent{Err: ctx.Err()}:
-			default:
-			}
+			sendContextErr()
 			return false
 		case events <- StreamEvent{Chunk: &chunk, Raw: json.RawMessage(payload)}:
 			return true
@@ -1101,11 +1113,8 @@ func (p *StargateProvider) readStream(
 		return
 	}
 
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		select {
-		case events <- StreamEvent{Err: ctxErr}:
-		default:
-		}
+	if ctx.Err() != nil {
+		sendContextErr()
 		return
 	}
 	if err := scanner.Err(); err != nil {

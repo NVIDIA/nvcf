@@ -780,6 +780,54 @@ func TestStargateProviderReadStreamDoesNotBlockOnFullEventChannelAfterCancellati
 	}
 }
 
+// A missed request deadline must reach a reader that is behind, or the stream
+// ends like a finished one ([DONE] or a partial 200).
+func TestStargateProviderReadStreamDeliversDeadlineToSlowReader(t *testing.T) {
+	t.Parallel()
+
+	chunk := sseChatBody(t, models.ChatCompletionChunk{
+		ID:      "chatcmpl-deadline",
+		Object:  models.ObjectChatCompletionChunk,
+		Choices: []models.ChatCompletionChunkChoice{{Delta: models.ChatCompletionChunkDelta{Content: ptr.To("hi")}}},
+	})
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "deadline while sending a chunk", body: chunk},
+		{name: "deadline at end of stream", body: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			t.Cleanup(cancel)
+			// A full buffer stands for a reader that has not caught up yet.
+			events := make(chan StreamEvent, 1)
+			events <- StreamEvent{Chunk: &models.ChatCompletionChunk{}}
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				(&StargateProvider{}).readStream(ctx, cancel, io.NopCloser(strings.NewReader(tt.body)), events)
+			}()
+			// Read only after readStream has returned or is waiting to send, so the
+			// reader is behind when the deadline is reported.
+			select {
+			case <-done:
+			case <-time.After(100 * time.Millisecond):
+			}
+
+			<-events
+			event, ok := <-events
+			require.True(t, ok, "the stream closed without reporting the deadline")
+			require.ErrorIs(t, event.Err, context.DeadlineExceeded)
+			require.ErrorIs(t, event.Err, ErrStreamIncomplete)
+		})
+	}
+}
+
 func TestStargateProviderCompletePropagatesTraceContext(t *testing.T) {
 	oldPropagator := otel.GetTextMapPropagator()
 	otel.SetTextMapPropagator(propagation.TraceContext{})

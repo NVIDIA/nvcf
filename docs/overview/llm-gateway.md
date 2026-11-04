@@ -179,8 +179,9 @@ chunks and terminates with `data: [DONE]`. The gateway relays the upstream
 response; it does not synthesize model output or token usage.
 
 The gateway treats the upstream stream as failed when it closes before
-`data: [DONE]`, when the upstream connection fails, or when the upstream sends
-an error event such as `data: {"error":{...}}`. A non-streaming client receives
+`data: [DONE]`, when the upstream connection fails, when the gateway request
+timeout ends it, or when the upstream sends an error event such as
+`data: {"error":{...}}`. A non-streaming client receives
 HTTP 502. A streaming client has already received HTTP 200, so the gateway ends
 the stream with an error event instead of `data: [DONE]`:
 `data: {"error":{"message":"upstream stream ended before completion","type":"server_error","param":null,"code":null}}`.

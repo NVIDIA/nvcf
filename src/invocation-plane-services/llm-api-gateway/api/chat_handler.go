@@ -179,6 +179,16 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 		stream,
 		finalization,
 	)
+	if wrappedStream != nil {
+		// A handler that stops reading early, for example after a failed client write,
+		// must not strand the stream goroutines: drain until the provider closes the stream.
+		defer func() {
+			go func() {
+				for range wrappedStream {
+				}
+			}()
+		}()
+	}
 	if overrideStreamResponseSender != nil {
 		return overrideStreamResponseSender(c, wrappedStream, request)
 	}

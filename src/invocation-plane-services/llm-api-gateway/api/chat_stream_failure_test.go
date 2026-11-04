@@ -26,9 +26,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	echo "github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
+
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 const chatStreamPartialChunk = `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"company-name/model-name","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"
@@ -168,4 +174,51 @@ func TestChatCompletionsStreamSendsNoErrorEventWhenClientGoesAway(t *testing.T) 
 	require.NotContains(t, body, "data: [DONE]")
 	var httpErr *echo.HTTPError
 	require.False(t, errors.As(*handlerErr, &httpErr), "client disconnect recorded as %v", *handlerErr)
+}
+
+// feedStreamProvider streams the events the test sends, so the test sees when
+// nobody reads them any more.
+type feedStreamProvider struct {
+	*stubStreamProvider
+	events chan provider.StreamEvent
+}
+
+func (p *feedStreamProvider) Stream(
+	context.Context,
+	*requestctx.RequestContext,
+	*provider.NormalizedRequest,
+) (<-chan provider.StreamEvent, error) {
+	return p.events, nil
+}
+
+// A handler that stops early, here because the client write failed, must not
+// strand the goroutines that relay the upstream stream.
+func TestChatCompletionsStreamDrainsUpstreamAfterClientWriteFails(t *testing.T) {
+	t.Parallel()
+
+	events := make(chan provider.StreamEvent)
+	handlers := NewHandlers(nil, &feedStreamProvider{stubStreamProvider: &stubStreamProvider{}, events: events}, nil, nil)
+	gc, _ := newRateLimitGatewayContext()
+	gc.Response().Writer = &failingWriteRecorder{ResponseRecorder: httptest.NewRecorder()}
+	request := &provider.NormalizedRequest{ChatRequest: &models.ChatCompletionRequest{
+		Model:    "fn-chat/company-name/model-name",
+		Messages: &[]models.ChatMessage{{Role: models.ChatCompletionRoleUser, Content: models.SingleTextContent("hi")}},
+	}}
+	chunk := provider.StreamEvent{Chunk: &models.ChatCompletionChunk{
+		Choices: []models.ChatCompletionChunkChoice{{Delta: models.ChatCompletionChunkDelta{Content: ptr.To("hi")}}},
+	}}
+
+	handlerErr := make(chan error, 1)
+	go func() { handlerErr <- handlers.AsOpenAIChatHandlers().streamChatCompletion(gc, request) }()
+	events <- chunk
+	require.ErrorIs(t, <-handlerErr, errClientGone)
+
+	for range 3 {
+		select {
+		case events <- chunk:
+		case <-time.After(time.Second):
+			t.Fatal("the upstream stream is not read after the handler returned")
+		}
+	}
+	close(events)
 }
