@@ -836,7 +836,17 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 			zap.L().Warn("failed to open stateful work request", zap.Error(err), zap.String("function id", functionId), zap.Stringer("request id", requestId))
 			return nil, fmt.Errorf("failed to open stateful work request: %w", err)
 		}
-		s.eventLedger.Publish(ctx, newWorkDispatched(minted, isRejoin, time.Now()))
+		if invokeResponse.StreamingDispatch == nil {
+			s.eventLedger.Publish(ctx, newWorkDispatched(minted, isRejoin, time.Now()))
+		} else {
+			// A streaming request is dispatched once a worker answers it. The
+			// sender always reports, so this goroutine always ends.
+			go func() {
+				if <-invokeResponse.StreamingDispatch {
+					s.eventLedger.Publish(ctx, newWorkDispatched(minted, isRejoin, time.Now()))
+				}
+			}()
+		}
 
 		// Remembered until the worker CONNECTs back, so a shutdown can find the
 		// requests whose tokens are about to be lost with this pod and drop

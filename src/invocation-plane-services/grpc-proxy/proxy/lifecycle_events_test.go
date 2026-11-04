@@ -256,6 +256,39 @@ func TestDispatchFailurePublishesSetupFailed(t *testing.T) {
 	}
 }
 
+func TestStreamingDispatchWaitsForAWorker(t *testing.T) {
+	setUp := func(t *testing.T) (*eventledger.Publisher, func() []map[string]any, chan<- bool) {
+		publisher, received := newRecordingLedger(t)
+		answered := make(chan bool, 1)
+		director := NewStreamDirector(FunctionInvokerFunc(func(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuth func(invocation.WorkerAuth)) (invocation.Result, context.CancelFunc, error) {
+			result := invocation.Result{RequestId: uuid.New(), WorkerAuthorizationToken: testWorkerToken, StreamingDispatch: answered}
+			onWorkerAuth(invocation.WorkerAuth{Token: testWorkerToken, RequestId: result.RequestId, FunctionId: testFunctionId, FunctionVersionId: testFunctionVersionId, CallerNcaId: "nca-1"})
+			return result, nil, nil
+		}))
+		director.eventLedger = publisher
+		t.Cleanup(func() { _ = director.Close() })
+		client, _ := net.Pipe()
+		_, err := director.getAndInitWorkerConnection(t.Context(), worker.NewConnectionTrackingConn(client), "client-auth", testFunctionId, "", nil)
+		require.NoError(t, err)
+		return publisher, received, answered
+	}
+
+	t.Run("not before a worker answers", func(t *testing.T) {
+		publisher, received, _ := setUp(t)
+		// Close delivers everything published so far.
+		publisher.Close()
+		assert.Empty(t, received())
+	})
+	t.Run("once a worker answers", func(t *testing.T) {
+		publisher, received, answered := setUp(t)
+		answered <- true
+		require.Eventually(t, func() bool {
+			return len(ofType(received(), eventTypeWorkDispatched)) == 1
+		}, 5*time.Second, 10*time.Millisecond)
+		publisher.Close()
+	})
+}
+
 func TestAttachmentEndEvent(t *testing.T) {
 	tests := []struct {
 		name                   string
