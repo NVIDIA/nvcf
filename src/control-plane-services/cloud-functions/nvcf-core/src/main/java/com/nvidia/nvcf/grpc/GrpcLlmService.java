@@ -186,6 +186,9 @@ public class GrpcLlmService extends LlmGatewayImplBase {
     private Optional<ApiKeyValidationResult.RateLimitAttributes> resolveAccountRateLimit(
             Authentication authentication,
             String ncaId) {
+        if (!accountTokenRateLimitEnabled) {
+            return Optional.empty();
+        }
         if (authentication instanceof JwtAuthenticationToken) {
             return Optional.ofNullable(serviceAccountService.getTieredRateLimit(ncaId));
         }
