@@ -10,7 +10,7 @@ Rebuild the workloads and update the pinned references before you run these scri
 
 - Build the task image from `examples/task-samples/task-byoo-sample` and update `TASK_CONTAINER_IMAGE`.
 - Package the task chart from `examples/task-samples/task-helmchart-byoo-sample` with its `image` values pointing at that build, and update `TASK_HELM_CHART`.
-- Rebuild the function image with an OTLP exporter setup that accepts `http/protobuf`. Update `FUNCTION_CONTAINER_IMAGE` and the image in `scripts/values-function.yaml`, and repackage the `byoo-validation` chart if it pins an older image.
+- Rebuild the function image with an OTLP exporter setup that accepts `http/protobuf`. Update `FUNCTION_CONTAINER_IMAGE` and the image in `scripts/values-function.yaml`, and repackage the `byoo-validation` chart if it pins an older image. If the repackaged chart gets a new version or URI, update `FUNCTION_HELM_CHART` in both `scripts/deploy_function_gfn_helm.sh` and `scripts/deploy_function_non-gfn_helm.sh`.
 
 ## Usage
 
