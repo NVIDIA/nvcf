@@ -6,8 +6,8 @@ Manual queue recovery is not a routine upgrade step.
 
 ## Task worker images
 
-When to use: upgrading from Self-Managed 1.0.1 to 1.0.8 if you run tasks.
-Otherwise, skip this section.
+When to use: upgrading from Self-Managed 1.0.1 or earlier to 1.0.8 or later
+versions, if you run tasks. Otherwise, skip this section.
 
 Task init and worker image names and registry wiring changed between
 Self-Managed 1.0.1 and 1.0.8. Mirror the target version's images to the locations
@@ -20,12 +20,6 @@ selected by your site configuration, then verify them:
    [image mirroring guide](../overview/image-mirroring.md) to mirror the exact
    init and worker images, including required architectures, to those paths.
    Verify the compute cluster can pull them.
-1. In the upgrade rehearsal, run a new container task. Confirm it uses the
-   expected init and worker images, completes successfully, and returns results.
-
-If the target still selects `nvcf_worker_init:2.107.0` or
-`nvcf_worker_task:2.107.0`, stop before maintenance and use a corrected stack
-combination from your upgrade guide.
 
 ## Deployments stuck after a NATS restart
 
