@@ -19,7 +19,7 @@ Feature: Register an LLM worker securely with routers in two local regions
         | global.helm.sources.repository                                   | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                                  |
         | global.image.repository                                          | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                                  |
         | addons.llm.requestRouter.discovery.remoteWatchUrls[0]             | https://region-b-watch.nvcf.svc.cluster.local:50071                                    |
-        | addons.llm.requestRouter.grpcTls.dnsNames[1]                      | region-b-watch.nvcf.svc.cluster.local                                                  |
+        | addons.llm.requestRouter.grpcTls.dnsNames[0]                      | region-b-watch.nvcf.svc.cluster.local                                                  |
         # Updating a YAML list replaces the inherited list, so retain the two
         # stack identities before adding the Region B identities.
         | addons.llm.pki.dnsNames[0]                                        | llm-request-router.nvcf.svc.cluster.local                                               |
@@ -59,7 +59,6 @@ Feature: Register an LLM worker securely with routers in two local regions
         | llmRequestRouter.replicaCount                                | 2                                                                      |
         | llmRequestRouter.workload.kind                               | StatefulSet                                                            |
         | llmRequestRouter.service.headlessName                        | llm-request-router-region-b-headless                                   |
-        | llmRequestRouter.kubernetes.advertisedHostnameTemplate       | {pod_name}.llm-request-router-region-b-headless.nvcf.svc.cluster.local |
         | llmRequestRouter.discovery.remoteWatchUrls                   | []                                                                     |
         | llmRequestRouter.backendRouter.enabled                       | true                                                                   |
         | llmRequestRouter.backendRouter.pylonGrpcDialAddress          | https://region-b-watch.nvcf.svc.cluster.local:50071                    |
@@ -70,6 +69,8 @@ Feature: Register an LLM worker securely with routers in two local regions
         | llmRequestRouter.certificate.enabled                         | false                                                                  |
         | llmRequestRouter.tls.mode                                    | existingSecret                                                         |
         | llmRequestRouter.tls.secretName                              | stargate-quic-tls                                                      |
+      And I update yaml file "tests/bdd/out/region-b-values.yaml" with keys:
+        | llmRequestRouter.kubernetes.advertisedHostnameTemplate | {pod_name}.llm-request-router-region-b-headless.nvcf.svc.cluster.local |
       # Region B gateway resources: GRPCRoute, BackendTrafficPolicy, and
       # cross-namespace ReferenceGrant.
       And Kubernetes manifest "region-b-gateway" is:

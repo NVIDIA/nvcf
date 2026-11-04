@@ -1748,6 +1748,7 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 		key  string
 		want string
 	}{
+		{key: "llmRequestRouter.kubernetes.advertisedHostnameTemplate", want: strconv.Quote("{pod_name}.llm-request-router-region-b-headless.nvcf.svc.cluster.local")},
 		{key: "llmRequestRouter.backendRouter.enabled", want: "true"},
 		{key: "llmRequestRouter.serviceAccount.create", want: "false"},
 		{key: "llmRequestRouter.pki.enabled", want: "false"},
@@ -1813,11 +1814,14 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 	if err != nil {
 		t.Fatalf("resolve multi-region environment: %v", err)
 	}
+	if err := dsl.MatchYAMLSubtree(environmentPath, "addons.llm.requestRouter.grpcTls.dnsNames",
+		"- region-b-watch.nvcf.svc.cluster.local", dsl.MatchExact); err != nil {
+		t.Fatalf("additional Gateway TLS DNS names must form a dense list: %v", err)
+	}
 	for _, expectation := range []struct {
 		key  string
 		want string
 	}{
-		{key: "addons.llm.requestRouter.grpcTls.dnsNames[1]", want: "region-b-watch.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.dnsNames[2]", want: "region-b-watch.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.dnsNames[3]", want: "*.llm-request-router-region-b-headless.nvcf.svc.cluster.local"},
 	} {
