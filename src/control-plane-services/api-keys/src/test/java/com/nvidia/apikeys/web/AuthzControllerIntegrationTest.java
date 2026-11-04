@@ -303,7 +303,7 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
     void runAuthz_shouldReturnTieredRateLimitForServiceAccountRuleBypassingApiKeyIntrospection() {
         // Arrange
         String namespace = "nvcf";
-        String policyName = "ssa.allow";
+        String policyName = "account.allow";
         String requestBody = """
                 {
                     "input": {
@@ -327,14 +327,14 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
                 """
                         {"namespace":"nvcf",\
                         "result":{"inputTokenRateLimit":null,"outputTokenRateLimit":null},\
-                        "rule_name":"ssa.allow"}""", response.getBody());
+                        "rule_name":"account.allow"}""", response.getBody());
     }
 
     @Test
     void runAuthz_shouldReturnErrorForMissingTieredRateKey() {
         // Arrange
         String namespace = "nvcf";
-        String policyName = "ssa.allow";
+        String policyName = "account.allow";
         String requestBody = """
                 {
                     "input": {}
@@ -358,14 +358,14 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
                         "title":"Bad Request",\
                         "status":400,\
                         "detail":"Tiered rate key is not provided",\
-                        "instance":"/v1/namespaces/nvcf/evaluations/ssa.allow"}""", response.getBody());
+                        "instance":"/v1/namespaces/nvcf/evaluations/account.allow"}""", response.getBody());
     }
 
     @Test
     void runAuthz_shouldReturnErrorForUnconfiguredNamespaceOnTieredRateLimitRule() {
         // Arrange
         String namespace = "unknown-ns";
-        String policyName = "ssa.allow";
+        String policyName = "account.allow";
         String requestBody = """
                 {
                     "input": {
@@ -391,6 +391,6 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
                         "title":"Bad Request",\
                         "status":400,\
                         "detail":"Namespace 'unknown-ns' is not configured",\
-                        "instance":"/v1/namespaces/unknown-ns/evaluations/ssa.allow"}""", response.getBody());
+                        "instance":"/v1/namespaces/unknown-ns/evaluations/account.allow"}""", response.getBody());
     }
 }

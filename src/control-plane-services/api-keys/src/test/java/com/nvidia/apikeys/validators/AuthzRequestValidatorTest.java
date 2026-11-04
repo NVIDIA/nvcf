@@ -91,15 +91,15 @@ class AuthzRequestValidatorTest {
 
     @Test
     void validate_shouldBypassApiKeyIntrospectionForTieredRateLimitRule() {
-        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("ssa.allow");
+        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("account.allow");
         AuthzRequest request = new AuthzRequest(
                 ApiKeyInput.builder().tieredRateKey("test-nca-id").build());
 
-        PolicyEvaluationRequestVo result = validator.validate(NAMESPACE, "ssa.allow", request);
+        PolicyEvaluationRequestVo result = validator.validate(NAMESPACE, "account.allow", request);
 
         assertThat(result).isEqualTo(PolicyEvaluationRequestVo.builder()
                 .namespace(NAMESPACE)
-                .policyName("ssa.allow")
+                .policyName("account.allow")
                 .tieredRateKey("test-nca-id")
                 .build());
     }
@@ -108,13 +108,13 @@ class AuthzRequestValidatorTest {
     @NullSource
     @EmptySource
     void validate_shouldThrowWhenTieredRateKeyMissing(String tieredRateKey) {
-        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("ssa.allow");
+        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("account.allow");
         AuthzRequest request = new AuthzRequest(
                 ApiKeyInput.builder().tieredRateKey(tieredRateKey).build());
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> validator.validate(NAMESPACE, "ssa.allow", request),
+                () -> validator.validate(NAMESPACE, "account.allow", request),
                 "Tiered rate key is not provided");
     }
 
@@ -160,13 +160,13 @@ class AuthzRequestValidatorTest {
 
     @Test
     void validate_shouldThrowWhenNamespaceNotConfiguredForTieredRateLimitRule() {
-        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("ssa.allow");
+        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("account.allow");
         AuthzRequest request = new AuthzRequest(
                 ApiKeyInput.builder().tieredRateKey("test-nca-id").build());
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> validator.validate("unknown-ns", "ssa.allow", request),
+                () -> validator.validate("unknown-ns", "account.allow", request),
                 "Namespace 'unknown-ns' is not configured");
     }
 

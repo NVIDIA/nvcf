@@ -54,10 +54,10 @@ public class MockServiceAccountServer {
 
     @SneakyThrows
     public static void setTieredRateLimitResponse(RateLimitAttributes rateLimit) {
-        var response = new ApiKeyValidationResponse("nvcf", "ssa.allow", rateLimit);
+        var response = new ApiKeyValidationResponse("nvcf", "account.allow", rateLimit);
         byte[] responseBytes = OBJECT_MAPPER.writeValueAsBytes(response);
         mockServiceAccountServer.stubFor(
-                post(urlPathEqualTo("/v1/namespaces/nvcf/evaluations/ssa.allow"))
+                post(urlPathEqualTo("/v1/namespaces/nvcf/evaluations/account.allow"))
                         .willReturn(aResponse().withStatus(200)
                                             .withHeader(HttpHeaders.CONTENT_TYPE,
                                                         MediaType.APPLICATION_JSON_VALUE)
@@ -66,7 +66,7 @@ public class MockServiceAccountServer {
 
     public static void setUnavailable() {
         mockServiceAccountServer.stubFor(
-                post(urlPathEqualTo("/v1/namespaces/nvcf/evaluations/ssa.allow"))
+                post(urlPathEqualTo("/v1/namespaces/nvcf/evaluations/account.allow"))
                         .willReturn(aResponse().withStatus(503)));
     }
 

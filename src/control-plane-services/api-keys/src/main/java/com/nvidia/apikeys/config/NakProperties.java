@@ -56,7 +56,7 @@ public class NakProperties {
     // Matches ServiceAccountClient's default evaluation-uri rule-name segment on the nvcf-core
     // side.
     @Builder.Default
-    private String tieredRateLimitRuleName = "ssa.allow";
+    private String tieredRateLimitRuleName = "account.allow";
 
     // api key properties
     @NotBlank

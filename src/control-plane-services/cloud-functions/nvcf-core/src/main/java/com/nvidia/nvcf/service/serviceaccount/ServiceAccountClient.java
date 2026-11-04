@@ -70,7 +70,7 @@ public class ServiceAccountClient {
     // properties if that stops being true.
     public ServiceAccountClient(
             @Value("${nvcf.service-account.base-url:${nvcf.api-keys.base-url}}") String baseUrl,
-            @Value("${nvcf.service-account.evaluation-uri:/v1/namespaces/nvcf/evaluations/ssa.allow}")
+            @Value("${nvcf.service-account.evaluation-uri:/v1/namespaces/nvcf/evaluations/account.allow}")
             String evaluationUri,
             // matches the input.<name>_key naming this evaluation expects
             @Value("${nvcf.service-account.request-property-name:tiered_rate_key}")
