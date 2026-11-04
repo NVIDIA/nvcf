@@ -178,13 +178,14 @@ For streaming requests, the upstream container returns OpenAI-compatible SSE
 chunks and terminates with `data: [DONE]`. The gateway relays the upstream
 response; it does not synthesize model output or token usage.
 
-If the upstream stream closes before `data: [DONE]`, a non-streaming client
-receives HTTP 502. A streaming client has already received HTTP 200, so the
-gateway ends the stream with an error event instead of `data: [DONE]`:
+The gateway treats the upstream stream as failed when it closes before
+`data: [DONE]`, when the upstream connection fails, or when the upstream sends
+an error event such as `data: {"error":{...}}`. A non-streaming client receives
+HTTP 502. A streaming client has already received HTTP 200, so the gateway ends
+the stream with an error event instead of `data: [DONE]`:
 `data: {"error":{"message":"upstream stream ended before completion","type":"server_error","param":null,"code":null}}`.
-This also applies when the upstream
-connection fails during a streaming response. The gateway records these cases
-as 502 in its logs and metrics.
+Both responses use this message, and the upstream error text stays in the
+gateway logs. The gateway records these cases as 502 in its logs and metrics.
 
 ### Routing checks versus token-generation tests
 

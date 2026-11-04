@@ -1012,6 +1012,21 @@ func (a *chatCompletionChoiceAccumulator) buildToolCalls() []models.ChatCompleti
 	return toolCalls
 }
 
+// streamErrorMember returns the error object that engines such as vLLM send in
+// place of a chunk when they fail after the 200, or nil for any other payload.
+func streamErrorMember(payload string) json.RawMessage {
+	var event struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal([]byte(payload), &event) != nil {
+		return nil
+	}
+	if len(event.Error) == 0 || bytes.Equal(event.Error, []byte("null")) {
+		return nil
+	}
+	return event.Error
+}
+
 func (p *StargateProvider) readStream(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -1044,6 +1059,15 @@ func (p *StargateProvider) readStream(
 				Err: fmt.Errorf("%w: decode stargate stream chunk: %w", ErrStreamIncomplete, err),
 			}
 			return false
+		}
+		// Error events carry neither choices nor usage, so ordinary chunks are not parsed twice.
+		if len(chunk.Choices) == 0 && chunk.Usage == nil {
+			if upstreamErr := streamErrorMember(payload); upstreamErr != nil {
+				events <- StreamEvent{
+					Err: fmt.Errorf("%w: upstream error event: %s", ErrStreamIncomplete, upstreamErr),
+				}
+				return false
+			}
 		}
 
 		select {
