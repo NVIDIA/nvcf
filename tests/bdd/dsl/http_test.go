@@ -192,3 +192,13 @@ func TestCLIStateAPIKeyRequiresKeyAndDoesNotDiscloseState(t *testing.T) {
 		t.Fatal("missing state accepted")
 	}
 }
+
+func TestJSONFieldNumericComparisonsRejectNaN(t *testing.T) {
+	const raw = `{"score":"NaN"}`
+	if err := JSONFieldLessThan(raw, "score", 1); err == nil {
+		t.Fatal("JSONFieldLessThan accepted NaN")
+	}
+	if err := JSONFieldAtLeast(raw, "score", 0); err == nil {
+		t.Fatal("JSONFieldAtLeast accepted NaN")
+	}
+}
