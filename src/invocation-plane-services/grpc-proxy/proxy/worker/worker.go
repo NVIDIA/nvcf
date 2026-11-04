@@ -71,6 +71,11 @@ type WorkerConnection struct {
 	// AttachmentId identifies this tunnel. A request ID can have several over a
 	// session's life, one per rejoin.
 	AttachmentId uuid.UUID
+	// CallerNcaId is set before the connection enters the cache and never after.
+	CallerNcaId string
+	// Established records that this tunnel's attachment event was published,
+	// so only those attachments later report a close.
+	Established atomic.Bool
 	// CreatedAt is when this connection entered the worker connection cache.
 	// Used to report how long a tunnel stayed open when it is closed.
 	CreatedAt time.Time

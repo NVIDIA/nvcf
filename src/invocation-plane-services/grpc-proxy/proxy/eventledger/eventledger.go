@@ -51,6 +51,10 @@ type Publisher struct {
 	client    cloudevents.Client
 	transport *transport
 
+	// mu orders every wg.Add before Close's wg.Wait: a Publish that loses the
+	// race to Close sees closed and drops its event instead of racing the Wait.
+	mu       sync.RWMutex
+	closed   bool
 	inflight chan struct{}
 	wg       sync.WaitGroup
 }
@@ -81,6 +85,12 @@ func New(addr, secretsPath, oauth2Fqdn string) (*Publisher, error) {
 // its cancellation, so it outlives the request that produced the event.
 func (p *Publisher) Publish(ctx context.Context, event cloudevents.Event) {
 	if p == nil {
+		return
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		metrics.EventLedgerPublishCounter.WithLabelValues(event.Type(), "dropped").Inc()
 		return
 	}
 	select {
@@ -135,9 +145,16 @@ func (p *Publisher) sendOnce(ctx context.Context, event cloudevents.Event) error
 }
 
 // Close waits for in-flight sends, which each end within the send timeout,
-// then releases the transport. Publish must not be called after Close.
+// then releases the transport. Events published after Close are dropped.
 func (p *Publisher) Close() {
 	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	alreadyClosed := p.closed
+	p.closed = true
+	p.mu.Unlock()
+	if alreadyClosed {
 		return
 	}
 	p.wg.Wait()
