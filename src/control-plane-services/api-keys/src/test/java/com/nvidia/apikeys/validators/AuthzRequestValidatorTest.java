@@ -91,15 +91,15 @@ class AuthzRequestValidatorTest {
 
     @Test
     void validate_shouldBypassApiKeyIntrospectionForTieredRateLimitRule() {
-        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("account.allow");
+        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("serviceaccount.allow");
         AuthzRequest request = new AuthzRequest(
                 ApiKeyInput.builder().tieredRateKey("test-nca-id").build());
 
-        PolicyEvaluationRequestVo result = validator.validate(NAMESPACE, "account.allow", request);
+        PolicyEvaluationRequestVo result = validator.validate(NAMESPACE, "serviceaccount.allow", request);
 
         assertThat(result).isEqualTo(PolicyEvaluationRequestVo.builder()
                 .namespace(NAMESPACE)
-                .policyName("account.allow")
+                .policyName("serviceaccount.allow")
                 .tieredRateKey("test-nca-id")
                 .build());
     }
@@ -108,13 +108,13 @@ class AuthzRequestValidatorTest {
     @NullSource
     @EmptySource
     void validate_shouldThrowWhenTieredRateKeyMissing(String tieredRateKey) {
-        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("account.allow");
+        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("serviceaccount.allow");
         AuthzRequest request = new AuthzRequest(
                 ApiKeyInput.builder().tieredRateKey(tieredRateKey).build());
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> validator.validate(NAMESPACE, "account.allow", request),
+                () -> validator.validate(NAMESPACE, "serviceaccount.allow", request),
                 "Tiered rate key is not provided");
     }
 
@@ -160,13 +160,13 @@ class AuthzRequestValidatorTest {
 
     @Test
     void validate_shouldThrowWhenNamespaceNotConfiguredForTieredRateLimitRule() {
-        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("account.allow");
+        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("serviceaccount.allow");
         AuthzRequest request = new AuthzRequest(
                 ApiKeyInput.builder().tieredRateKey("test-nca-id").build());
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> validator.validate("unknown-ns", "account.allow", request),
+                () -> validator.validate("unknown-ns", "serviceaccount.allow", request),
                 "Namespace 'unknown-ns' is not configured");
     }
 

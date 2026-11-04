@@ -36,7 +36,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 class ServiceAccountClientTest {
 
-    private static final String EVALUATION_URI = "/v1/namespaces/nvcf/evaluations/account.allow";
+    private static final String EVALUATION_URI = "/v1/namespaces/nvcf/evaluations/serviceaccount.allow";
 
     private WireMockServer server;
     private ServiceAccountClient client;
@@ -69,7 +69,7 @@ class ServiceAccountClientTest {
     @Test
     void fetchTieredRateLimit_returnsRates() {
         stubResponse("""
-                {"namespace":"nvcf","rule_name":"account.allow",
+                {"namespace":"nvcf","rule_name":"serviceaccount.allow",
                  "result":{"inputTokenRateLimit":"1000-M","outputTokenRateLimit":"500-M"}}
                 """);
 
@@ -80,7 +80,7 @@ class ServiceAccountClientTest {
     @Test
     void fetchTieredRateLimit_returnsNoLimitWhenResultAbsent() {
         stubResponse("""
-                {"namespace":"nvcf","rule_name":"account.allow"}
+                {"namespace":"nvcf","rule_name":"serviceaccount.allow"}
                 """);
 
         assertThat(client.fetchTieredRateLimit("nca-1"))
