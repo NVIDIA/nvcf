@@ -6,7 +6,7 @@ go_library(
         "error.go",
         "types.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr",
     importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr",
     visibility = ["//visibility:public"],
 )

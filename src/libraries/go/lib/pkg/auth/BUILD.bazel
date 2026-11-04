@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "auth",
     srcs = ["auth_token_fetcher.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/auth",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/lib/pkg/core",

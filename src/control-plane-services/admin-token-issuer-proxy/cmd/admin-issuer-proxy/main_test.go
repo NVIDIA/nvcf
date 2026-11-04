@@ -31,8 +31,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/models"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/models"
 )
 
 func TestTerminationContextHandlesSIGTERM(t *testing.T) {

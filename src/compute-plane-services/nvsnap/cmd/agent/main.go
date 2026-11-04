@@ -32,7 +32,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/agent"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/agent"
 )
 
 func main() {

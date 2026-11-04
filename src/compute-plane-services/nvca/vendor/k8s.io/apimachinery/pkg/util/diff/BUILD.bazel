@@ -6,7 +6,7 @@ go_library(
         "diff.go",
         "legacy_diff.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/diff",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/diff",
     importpath = "k8s.io/apimachinery/pkg/util/diff",
     visibility = ["//visibility:public"],
     deps = [

@@ -6,7 +6,7 @@ go_library(
         "main.go",
         "prewarm.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-rootfs-restore",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-rootfs-restore",
     visibility = ["//visibility:private"],
     deps = ["@org_golang_x_sys//unix"],
 )

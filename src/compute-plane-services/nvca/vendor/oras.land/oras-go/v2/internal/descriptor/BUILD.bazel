@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "descriptor",
     srcs = ["descriptor.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/descriptor",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/descriptor",
     importpath = "oras.land/oras-go/v2/internal/descriptor",
     visibility = ["//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2:__subpackages__"],
     deps = [

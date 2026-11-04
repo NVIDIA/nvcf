@@ -10,7 +10,7 @@ go_library(
         "route.go",
         "test_helpers.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/gorilla/mux",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/gorilla/mux",
     importpath = "github.com/gorilla/mux",
     visibility = ["//visibility:public"],
 )

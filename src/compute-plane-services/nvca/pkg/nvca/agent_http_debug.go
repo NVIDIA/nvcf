@@ -24,7 +24,7 @@ import (
 	"net/http/pprof"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 )
 
 // The debug server exposes pprof endpoints under the /debug/pprof root.

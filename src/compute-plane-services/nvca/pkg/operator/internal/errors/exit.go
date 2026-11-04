@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 )
 
 var ErrNotInKubernetesEnv = errors.New("not running in Kubernetes environment")

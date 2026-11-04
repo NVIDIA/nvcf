@@ -102,7 +102,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap
+        - github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap
   exclusions:
     generated: lax
     paths:

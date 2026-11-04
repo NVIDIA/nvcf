@@ -6,7 +6,7 @@ go_library(
         "alias.go",
         "alias_purego.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/internal/alias",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/internal/alias",
     importpath = "golang.org/x/crypto/internal/alias",
     visibility = ["//src/compute-plane-services/nvca/vendor/golang.org/x/crypto:__subpackages__"],
 )

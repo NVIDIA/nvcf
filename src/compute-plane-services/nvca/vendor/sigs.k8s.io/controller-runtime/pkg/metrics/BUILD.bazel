@@ -9,7 +9,7 @@ go_library(
         "registry.go",
         "workqueue.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/metrics",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/metrics",
     importpath = "sigs.k8s.io/controller-runtime/pkg/metrics",
     visibility = ["//visibility:public"],
     deps = [

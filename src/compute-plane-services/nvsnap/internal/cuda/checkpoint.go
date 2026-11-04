@@ -21,7 +21,7 @@ package cuda
 import (
 	"context"
 	"fmt"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/hostlibs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/hostlibs"
 	"os"
 	"os/exec"
 	"path/filepath"

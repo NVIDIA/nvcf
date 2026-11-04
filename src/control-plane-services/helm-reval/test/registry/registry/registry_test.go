@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/test/registry/registry"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/test/registry/registry"
 )
 
 var silentLogger = log.New(io.Discard, "", 0)

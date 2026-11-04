@@ -7,7 +7,7 @@ go_library(
         "fake_apiserverinternal_client.go",
         "fake_storageversion.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/apiserverinternal/v1alpha1/fake",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/apiserverinternal/v1alpha1/fake",
     importpath = "k8s.io/client-go/kubernetes/typed/apiserverinternal/v1alpha1/fake",
     visibility = ["//visibility:public"],
     deps = [

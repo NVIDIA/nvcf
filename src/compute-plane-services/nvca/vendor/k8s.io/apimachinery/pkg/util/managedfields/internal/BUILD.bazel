@@ -24,7 +24,7 @@ go_library(
         "versioncheck.go",
         "versionconverter.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/managedfields/internal",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/managedfields/internal",
     importpath = "k8s.io/apimachinery/pkg/util/managedfields/internal",
     visibility = ["//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/managedfields:__subpackages__"],
     deps = [

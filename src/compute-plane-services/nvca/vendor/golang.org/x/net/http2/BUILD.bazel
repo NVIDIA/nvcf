@@ -34,7 +34,7 @@ go_library(
         "writesched_random.go",
         "writesched_roundrobin.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/net/http2",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/net/http2",
     importpath = "golang.org/x/net/http2",
     visibility = ["//visibility:public"],
     deps = [

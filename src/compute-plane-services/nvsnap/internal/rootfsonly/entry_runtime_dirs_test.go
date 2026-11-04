@@ -26,7 +26,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // fakeContainerRoot builds a <procRoot>/<fixturePID>/root tree and returns

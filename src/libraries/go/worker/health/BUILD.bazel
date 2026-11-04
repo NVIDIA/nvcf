@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "health",
     srcs = ["health.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/health",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/health",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/lib/pkg/nvkit/clients",

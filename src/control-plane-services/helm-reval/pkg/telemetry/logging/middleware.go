@@ -21,7 +21,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/zapotelspan"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/zapotelspan"
 	"github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
 )

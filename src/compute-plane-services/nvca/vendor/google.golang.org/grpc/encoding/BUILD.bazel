@@ -6,7 +6,7 @@ go_library(
         "encoding.go",
         "encoding_v2.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/encoding",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/encoding",
     importpath = "google.golang.org/grpc/encoding",
     visibility = ["//visibility:public"],
     deps = [

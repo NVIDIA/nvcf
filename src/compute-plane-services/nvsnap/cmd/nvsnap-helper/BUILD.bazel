@@ -6,7 +6,7 @@ go_library(
         "main.go",
         "pidfloor.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-helper",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-helper",
     visibility = ["//visibility:private"],
 )
 

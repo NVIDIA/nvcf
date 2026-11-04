@@ -23,7 +23,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/NVIDIA/nvcf/tools/ncp-local-cluster/credential-provider-go/internal/provider"
+	"github.com/dsx-ai-factory/nvcf/tools/ncp-local-cluster/credential-provider-go/internal/provider"
 )
 
 func main() {

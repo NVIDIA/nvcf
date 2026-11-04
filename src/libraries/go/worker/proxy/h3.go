@@ -34,10 +34,10 @@ import (
 	"github.com/quic-go/quic-go/qlog"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/ca"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/ca"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics/nvcf"
 )
 
 var quicInsecure = os.Getenv("QUIC_INSECURE") == "true"

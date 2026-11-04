@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/manifests"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/manifests"
 )
 
 func main() {

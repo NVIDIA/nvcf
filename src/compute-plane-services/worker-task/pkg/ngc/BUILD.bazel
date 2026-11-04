@@ -6,14 +6,14 @@ go_library(
         "ngc.go",
         "types.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/pkg/ngc",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/pkg/ngc",
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/worker-task/internal/metrics",
         "@com_github_cenkalti_backoff_v4//:backoff",
         "@com_github_goccy_go_json//:go-json",
-        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/clients",
-        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_lib//pkg/nvkit/clients",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_worker//utils",
         "@org_uber_go_zap//:zap",
     ],
 )

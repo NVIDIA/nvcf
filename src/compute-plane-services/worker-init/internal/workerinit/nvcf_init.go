@@ -20,13 +20,13 @@ package workerinit
 import (
 	"context"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/configs"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/pkg/ess"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/tracing"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/configs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/pkg/ess"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metering"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 
 	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"

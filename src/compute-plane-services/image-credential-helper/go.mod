@@ -1,4 +1,4 @@
-module github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper
+module github.com/dsx-ai-factory/nvcf/src/compute-plane-services/image-credential-helper
 
 go 1.26.10
 
@@ -36,7 +36,7 @@ replace (
 	k8s.io/client-go => k8s.io/client-go v0.35.3
 )
 
-require github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00
+require github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
@@ -78,14 +78,14 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/volcengine/volc-sdk-golang v1.0.23 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	go.yaml.in/yaml/v2 v2.4.3 // indirect
+	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/term v0.40.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/term v0.43.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
@@ -100,3 +100,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib

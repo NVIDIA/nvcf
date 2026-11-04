@@ -7,7 +7,7 @@ go_library(
         "service.go",
         "token_provider.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/ec2metadata",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/ec2metadata",
     importpath = "github.com/aws/aws-sdk-go/aws/ec2metadata",
     visibility = ["//visibility:public"],
     deps = [

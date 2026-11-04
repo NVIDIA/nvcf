@@ -10,7 +10,7 @@ go_library(
         "jwt.go",
         "validation.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4/jwt",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4/jwt",
     importpath = "github.com/go-jose/go-jose/v4/jwt",
     visibility = ["//visibility:public"],
     deps = [

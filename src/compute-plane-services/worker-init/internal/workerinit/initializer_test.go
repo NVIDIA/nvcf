@@ -26,10 +26,10 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/configs"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/internal/downloader"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/configs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/internal/downloader"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metering"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/types"
 )
 
 func validConfig() configs.InitConfig {

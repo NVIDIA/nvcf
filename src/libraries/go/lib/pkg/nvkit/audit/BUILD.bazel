@@ -22,7 +22,7 @@ go_library(
         "log_auditor.go",
         "noop_auditor.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/audit",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/audit",
     visibility = ["//visibility:public"],
     deps = [
         "@org_uber_go_zap//:zap",

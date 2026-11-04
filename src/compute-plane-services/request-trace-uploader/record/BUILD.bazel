@@ -6,7 +6,7 @@ go_library(
         "reader.go",
         "record.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/record",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/record",
     visibility = ["//visibility:public"],
 )
 

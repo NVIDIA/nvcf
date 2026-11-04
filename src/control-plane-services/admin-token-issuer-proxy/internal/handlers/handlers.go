@@ -22,10 +22,10 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/models"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/platform/vault"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/servicecache"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/models"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/platform/vault"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/servicecache"
 )
 
 // vaultClientFactory is a function that creates a VaultSigner.

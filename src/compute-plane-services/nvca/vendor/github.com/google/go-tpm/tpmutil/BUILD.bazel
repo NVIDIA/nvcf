@@ -11,7 +11,7 @@ go_library(
         "run_windows.go",
         "structures.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-tpm/tpmutil",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-tpm/tpmutil",
     importpath = "github.com/google/go-tpm/tpmutil",
     visibility = ["//visibility:public"],
     deps = select({

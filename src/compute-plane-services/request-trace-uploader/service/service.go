@@ -14,10 +14,10 @@ import (
 
 	"log/slog"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/health"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/segment"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/backend"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/config"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/internal/health"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/segment"
 )
 
 // Service owns local readiness checks and the sidecar HTTP server. It

@@ -24,8 +24,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
 )
 
 func TestDefaultAuthorizerFactory_AuthDisabled_ReturnsEmptyChain(t *testing.T) {

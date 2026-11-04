@@ -6,7 +6,7 @@ go_library(
         "locked_source.go",
         "read.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/internal/sdkrand",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/internal/sdkrand",
     importpath = "github.com/volcengine/volcengine-go-sdk/internal/sdkrand",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk:__subpackages__"],
 )

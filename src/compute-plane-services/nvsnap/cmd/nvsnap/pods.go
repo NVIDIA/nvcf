@@ -33,7 +33,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/podtimings"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/podtimings"
 )
 
 func podsCmd() *cobra.Command {

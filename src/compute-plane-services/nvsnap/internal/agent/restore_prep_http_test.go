@@ -29,7 +29,7 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // httpGet issues a GET with a background context (test helper for noctx).

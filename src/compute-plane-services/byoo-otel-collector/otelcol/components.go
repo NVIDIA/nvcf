@@ -3,7 +3,7 @@
 package main
 
 import (
-	logchunkprocessor "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor"
+	logchunkprocessor "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor"
 	azuremonitorexporter "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/azuremonitorexporter"
 	datadogexporter "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/datadogexporter"
 	prometheusexporter "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusexporter"
@@ -149,7 +149,7 @@ func components() (otelcol.Factories, error) {
 		metricstransformprocessor.NewFactory().Type():     "github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.160.0",
 		probabilisticsamplerprocessor.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/processor/probabilisticsamplerprocessor v0.160.0",
 		transformprocessor.NewFactory().Type():            "github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.160.0",
-		logchunkprocessor.NewFactory().Type():             "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor v0.0.0",
+		logchunkprocessor.NewFactory().Type():             "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor v0.0.0",
 	})
 
 	factories.Connectors, err = otelcol.MakeFactoryMap[connector.Factory]()

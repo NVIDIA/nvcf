@@ -27,7 +27,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/test/registry/registry"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/test/registry/registry"
 )
 
 func main() {

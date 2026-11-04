@@ -24,7 +24,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/common/core/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/fnds/common/core/utils"
 )
 
 type DeploymentStats struct {

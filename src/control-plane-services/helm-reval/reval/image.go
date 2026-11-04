@@ -25,8 +25,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
-	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	credhelper "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/sourcegraph/conc/pool"
 	"go.uber.org/zap"
@@ -39,7 +39,7 @@ import (
 	orasremote "oras.land/oras-go/v2/registry/remote"
 	orasauth "oras.land/oras-go/v2/registry/remote/auth"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/reval/cache"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/reval/cache"
 )
 
 func collectImages(set sets.Set[string], podSpec corev1.PodSpec) {

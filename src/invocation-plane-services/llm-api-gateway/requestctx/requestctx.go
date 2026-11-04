@@ -18,7 +18,7 @@ limitations under the License.
 package requestctx
 
 import (
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 )
 
 // Session sources recorded in RequestContext.SessionSource.
