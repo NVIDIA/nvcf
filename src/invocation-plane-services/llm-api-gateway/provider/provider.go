@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -33,6 +34,22 @@ var ErrProxyNotSupported = errors.New("openai proxy endpoints are not supported 
 
 // ErrStreamIncomplete marks a chat stream that failed after the upstream answered 200.
 var ErrStreamIncomplete = errors.New("upstream chat stream incomplete")
+
+// UpstreamStreamError is an error event the upstream sent in place of a chat
+// chunk after it answered 200. It unwraps to ErrStreamIncomplete.
+type UpstreamStreamError struct {
+	// Message is the upstream error message; empty when the event has no string message.
+	Message string
+	Raw     json.RawMessage
+}
+
+func (e *UpstreamStreamError) Error() string {
+	return fmt.Sprintf("%s: upstream error event: %s", ErrStreamIncomplete, e.Raw)
+}
+
+func (e *UpstreamStreamError) Unwrap() error {
+	return ErrStreamIncomplete
+}
 
 type AdmissionPlan interface {
 	FinalizeTokens(

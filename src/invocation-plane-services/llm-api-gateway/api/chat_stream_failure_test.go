@@ -44,9 +44,11 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 	const siblingFinished = partial +
 		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"company-name/model-name","choices":[{"index":1,"delta":{"role":"assistant","content":"HEADS"},"finish_reason":"stop"}]}` + "\n\n"
 	// vLLM and LiteLLM report a failure after the 200 as an error event, then send [DONE].
-	const engineError = partial +
-		`data: {"error":{"message":"engine failed","type":"InternalServerError","param":null,"code":500}}` + "\n\n" +
-		"data: [DONE]\n\n"
+	// vLLM's error object has a numeric code, which the OpenAI error schema does not allow.
+	upstreamError := func(member string) string {
+		return partial + `data: {"error":` + member + "}\n\n" + "data: [DONE]\n\n"
+	}
+	const vllmError = `{"message":"engine failed","type":"InternalServerError","param":null,"code":500}`
 
 	tests := []struct {
 		name         string
@@ -55,16 +57,26 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 		// dropMidway aborts the upstream connection, which is what the gateway
 		// sees once the tunnel propagates the Pylon reset.
 		dropMidway bool
+		// streamMessage is the message of the streaming error event; empty means msgChatStreamIncomplete.
+		streamMessage string
 	}{
 		{name: "stream clean end after output", stream: true, upstreamBody: partial},
 		{name: "stream clean end before output", stream: true},
 		{name: "stream clean end n=2 one choice finished", stream: true, upstreamBody: siblingFinished},
 		{name: "stream connection drops after output", stream: true, upstreamBody: partial, dropMidway: true},
-		{name: "stream upstream error event after output", stream: true, upstreamBody: engineError},
+		{
+			name: "stream upstream error event after output", stream: true,
+			upstreamBody: upstreamError(vllmError), streamMessage: "engine failed",
+		},
+		{
+			name: "stream upstream error string after output", stream: true,
+			upstreamBody: upstreamError(`"engine failed"`), streamMessage: "engine failed",
+		},
+		{name: "stream upstream error event without message", stream: true, upstreamBody: upstreamError(`{"code":500}`)},
 		{name: "unary clean end after output", upstreamBody: partial},
 		{name: "unary clean end n=2 one choice finished", upstreamBody: siblingFinished},
 		{name: "unary connection drops after output", upstreamBody: partial, dropMidway: true},
-		{name: "unary upstream error event after output", upstreamBody: engineError},
+		{name: "unary upstream error event after output", upstreamBody: upstreamError(vllmError)},
 	}
 
 	for _, tt := range tests {
@@ -92,7 +104,7 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 			clientBody := `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hi"}],"stream":` + streamJSON + `}`
 			rec := servePassthroughRequest(t, e, "/v1/chat/completions", clientBody)
 			body := rec.Body.String()
-			require.NotContains(t, body, "engine failed", "the upstream error message stays in the gateway log")
+			require.NotContains(t, body, "InternalServerError", "the upstream error event is not relayed as is")
 
 			if !tt.stream {
 				require.Equal(t, http.StatusBadGateway, rec.Code, body)
@@ -115,7 +127,11 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 			var event openAIErrorResponse
 			require.NoError(t, json.Unmarshal([]byte(last), &event), "last event must be an error event: %q", body)
 			require.Equal(t, "server_error", event.Error.Type)
-			require.Equal(t, msgChatStreamIncomplete, event.Error.Message)
+			wantMessage := tt.streamMessage
+			if wantMessage == "" {
+				wantMessage = msgChatStreamIncomplete
+			}
+			require.Equal(t, wantMessage, event.Error.Message)
 		})
 	}
 }
