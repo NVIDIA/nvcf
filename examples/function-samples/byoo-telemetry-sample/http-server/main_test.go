@@ -76,11 +76,11 @@ func startSample(t *testing.T, sink *fakeSink) (*httptest.Server, *telemetry) {
 	t.Helper()
 	cfg, warnings := loadConfig(envMap(map[string]string{
 		"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":    sink.server.URL + "/v1/logs",
-		"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL":    "http",
+		"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL":    "http/protobuf",
 		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": sink.server.URL + "/v1/metrics",
-		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL": "http",
+		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL": "http/protobuf",
 		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT":  sink.server.URL + "/v1/traces",
-		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL":  "http",
+		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL":  "http/protobuf",
 		"NVCF_FUNCTION_ID":                    "fn-123",
 	}))
 	if len(warnings) != 0 {
