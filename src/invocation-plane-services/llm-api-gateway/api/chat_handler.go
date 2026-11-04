@@ -153,7 +153,9 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 	finalizeCtx := context.WithoutCancel(c.UserContext())
 	finalization := &streamFinalizationState{}
 	defer func() {
-		if finalization.IsFinalized() {
+		// The drain below can still deliver a usage chunk, so claim the state:
+		// a release followed by a finalize charges the input tokens twice.
+		if !finalization.MarkFinalized() {
 			return
 		}
 		h.handlers.releaseReservedTokenConsumption(finalizeCtx, request)
@@ -275,13 +277,6 @@ func (s *streamFinalizationState) MarkFinalized() bool {
 
 	s.finalized = true
 	return true
-}
-
-func (s *streamFinalizationState) IsFinalized() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.finalized
 }
 
 func (h *OpenAIChatHandlers) wrapStreamForFinalization(

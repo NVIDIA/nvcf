@@ -34,6 +34,7 @@ import (
 	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
 	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
 	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
@@ -227,4 +228,56 @@ func TestChatCompletionsStreamDrainsUpstreamAfterClientWriteFails(t *testing.T) 
 		}
 	}
 	close(events)
+}
+
+// The drain keeps reading after the handler releases the output reservation, so a late
+// usage chunk must not finalize the tokens again and charge the input twice.
+func TestChatCompletionsStreamDoesNotFinalizeTokensAfterRelease(t *testing.T) {
+	t.Parallel()
+
+	limiter := &recordingRateLimiter{}
+	plan := ratelimit.NewAdmissionPlan(
+		limiter,
+		ratelimit.ResourceLimit{
+			SubjectKey:      rateLimitSubjectKey("nca-456", "", "fn-chat"),
+			SubjectRepr:     "org `nca-456` function `fn-chat`",
+			Level:           ratelimit.LevelOrg,
+			TokensPerMinute: 100,
+		},
+		"req-release",
+	)
+	_, err := plan.Commit(context.Background(), ratelimit.ResourceRequest{InputTokens: 4, OutputTokens: 6})
+	require.NoError(t, err)
+
+	events := make(chan provider.StreamEvent)
+	handlers := NewHandlers(nil, &feedStreamProvider{stubStreamProvider: &stubStreamProvider{}, events: events}, limiter, nil)
+	gc, _ := newRateLimitGatewayContext()
+	gc.Response().Writer = &failingWriteRecorder{ResponseRecorder: httptest.NewRecorder()}
+	request := &provider.NormalizedRequest{
+		ChatRequest:     &models.ChatCompletionRequest{Model: "fn-chat/company-name/model-name"},
+		InputTokens:     4,
+		MaxOutputTokens: 6,
+		AdmissionPlan:   plan,
+	}
+	chunk := provider.StreamEvent{Chunk: &models.ChatCompletionChunk{
+		Choices: []models.ChatCompletionChunkChoice{{Delta: models.ChatCompletionChunkDelta{Content: ptr.To("hi")}}},
+	}}
+	usageChunk := provider.StreamEvent{Chunk: &models.ChatCompletionChunk{
+		Usage: &models.ChatCompletionUsage{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 5},
+	}}
+
+	handlerErr := make(chan error, 1)
+	go func() { handlerErr <- handlers.AsOpenAIChatHandlers().streamChatCompletion(gc, request) }()
+	events <- chunk
+	require.ErrorIs(t, <-handlerErr, errClientGone)
+
+	// The relay handles an event before it reads the next one, so the second send
+	// returns only after the usage chunk is handled.
+	events <- usageChunk
+	events <- chunk
+	close(events)
+
+	calls := limiter.Calls()
+	require.Len(t, calls, 2, "want only the commit and the release, got %+v", calls)
+	require.Equal(t, int64(-6), calls[1].tokensRequested)
 }
