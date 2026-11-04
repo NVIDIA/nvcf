@@ -366,7 +366,10 @@ it. Otherwise the sample estimates one token per four body bytes.
 
 These two routes accept bodies up to 16 MiB. The other routes keep 10 MiB.
 Bodies must be one JSON object, otherwise the response is 400 with a JSON
-error. A `null` body is a 400, and so is a `model` that is not a string. Add `?mock_error=429` for a 429 with `Retry-After: 7`, or
+error. A `null` body is a 400, and so is a `model` that is not a string,
+including `null`. More than 1000 questions is a 400.
+When `X-Input-Tokens` is too large to add the output token to, the sample
+uses its own estimate. Add `?mock_error=429` for a 429 with `Retry-After: 7`, or
 `?mock_error=400` for a 400. The 400 body is FastAPI style
 (`{"detail":[...]}`) on System One and OpenAI style on Decisions.
 

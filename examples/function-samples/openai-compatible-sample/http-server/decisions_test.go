@@ -19,8 +19,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -249,6 +252,7 @@ func TestDecisionRoutesExplainWhichPartOfTheBodyIsInvalid(t *testing.T) {
 			`null`:                         "request body must be a JSON object",
 			`[1,2]`:                        "request body must be a JSON object",
 			`{"model":1,"questions":[]}`:   "model must be a string",
+			`{"model":null}`:               "model must be a string",
 			`{"model":"m","questions":[]}`: "",
 		} {
 			t.Run(path+" "+body, func(t *testing.T) {
@@ -557,5 +561,48 @@ func TestSystemOneMatchesDocumentedTypes(t *testing.T) {
 	}
 	if score, ok := s["score"].(float64); !ok || score < 0 || score > 2 {
 		t.Fatalf("score = %#v", s["score"])
+	}
+}
+
+func TestDecisionsUsageStaysPositiveForHugeInputTokenHeader(t *testing.T) {
+	recorder := postJSONWithHeaders(t, "/v1/decisions", `{"model":"m","questions":[]}`,
+		map[string]string{"X-Input-Tokens": strconv.Itoa(math.MaxInt)})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	usage := responseMap(t, recorder)["usage"].(map[string]any)
+	if total := usage["total_tokens"].(float64); total <= 0 {
+		t.Fatalf("total_tokens = %v, want positive", total)
+	}
+}
+
+func TestDecisionRoutesRejectTooManyQuestions(t *testing.T) {
+	list := func(n int) string {
+		return "[" + strings.TrimSuffix(strings.Repeat(`{"type":"predicate"},`, n), ",") + "]"
+	}
+	byName := func(n int) string {
+		parts := make([]string, n)
+		for i := range parts {
+			parts[i] = fmt.Sprintf(`"q%d":{"type":"noul"}`, i)
+		}
+		return "{" + strings.Join(parts, ",") + "}"
+	}
+	for _, tc := range []struct {
+		path      string
+		questions func(int) string
+	}{
+		{"/v1/decisions", list},
+		{"/v1/systemone", byName},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			ok := postJSON(t, tc.path, `{"model":"m","questions":`+tc.questions(maxDecisionQuestions)+`}`)
+			if ok.Code != http.StatusOK {
+				t.Fatalf("at the limit: status = %d, want 200: %s", ok.Code, ok.Body.String())
+			}
+			over := postJSON(t, tc.path, `{"model":"m","questions":`+tc.questions(maxDecisionQuestions+1)+`}`)
+			if over.Code != http.StatusBadRequest || !strings.Contains(over.Body.String(), "too many questions") {
+				t.Fatalf("over the limit: status = %d, body = %s, want 400 too many questions", over.Code, over.Body.String())
+			}
+		})
 	}
 }

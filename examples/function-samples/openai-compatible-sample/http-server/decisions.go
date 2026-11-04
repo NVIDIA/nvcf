@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -57,6 +58,10 @@ var decisionCredentialHeaders = []string{
 	"Proxy-Authorization",
 	"Cookie",
 }
+
+// maxDecisionQuestions bounds the answers one request can build, so a large
+// body of tiny questions cannot make the sample buffer millions of answers.
+const maxDecisionQuestions = 1000
 
 type decisionRequest struct {
 	Model     string          `json:"model"`
@@ -206,7 +211,31 @@ func parseDecisionRequest(raw []byte) (decisionRequest, error) {
 		}
 		return request, errors.New("request body must be a JSON object")
 	}
+	// A JSON null leaves a string field unchanged, so check the literal.
+	var model struct {
+		Model json.RawMessage `json:"model"`
+	}
+	if err := json.Unmarshal(body, &model); err == nil && bytes.Equal(bytes.TrimSpace(model.Model), []byte("null")) {
+		return request, errors.New("model must be a string")
+	}
+	if questionCount(request.Questions) > maxDecisionQuestions {
+		return request, fmt.Errorf("too many questions: at most %d", maxDecisionQuestions)
+	}
 	return request, nil
+}
+
+// questionCount counts a Decisions question list or a System One question
+// map. Other shapes count as zero and get the default answer.
+func questionCount(questions json.RawMessage) int {
+	var list []json.RawMessage
+	if json.Unmarshal(questions, &list) == nil {
+		return len(list)
+	}
+	var byName map[string]json.RawMessage
+	if json.Unmarshal(questions, &byName) == nil {
+		return len(byName)
+	}
+	return 0
 }
 
 func hasCredentials(header http.Header) bool {
@@ -221,7 +250,8 @@ func hasCredentials(header http.Header) bool {
 // estimateDecisionInputTokens prefers the gateway estimate when the caller
 // sends one, so usage lines up with what the gateway metered.
 func estimateDecisionInputTokens(r *http.Request, raw []byte) int {
-	if value, err := strconv.Atoi(r.Header.Get("X-Input-Tokens")); err == nil && value >= 0 {
+	// Below MaxInt so that adding the output token cannot overflow.
+	if value, err := strconv.Atoi(r.Header.Get("X-Input-Tokens")); err == nil && value >= 0 && value < math.MaxInt {
 		return value
 	}
 	return len(raw)/4 + 1
