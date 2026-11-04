@@ -252,7 +252,6 @@ class DeploymentToClusterTest {
                 case MISSING_CLUSTER_GROUP:
                 case MISSING_GPUS:
                 case MISSING_GPU:
-                case WITH_ERROR_BODY_400:
                     assertThatExceptionOfType(BadRequestException.class)
                             .isThrownBy(() -> deploymentService
                                     .createFunctionDeployment(TEST_NCA_ID,
@@ -265,6 +264,7 @@ class DeploymentToClusterTest {
 
                     break;
 
+                case WITH_ERROR_BODY_400:
                 case WITHOUT_ERROR_BODY_500:
                 case MISSING_INSTANCE_TYPES:
                 case MISSING_INSTANCE_TYPE_DEFAULT:

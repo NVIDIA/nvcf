@@ -773,7 +773,7 @@ class TaskManagementControllerTest {
                              secrets,
                              TEST_RESULTS_LOCATION_1,
                              TEST_CONTAINER_ENVIRONMENT,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Missing scope.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT, List.of(), 100),
                              TEST_CONTAINER_IMAGE,
@@ -1165,7 +1165,7 @@ class TaskManagementControllerTest {
                              secrets,
                              TEST_UNKNOWN_ORG_NAME + "/" + TEST_MODEL_NAME,
                              TEST_CONTAINER_ENVIRONMENT,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Invalid/unknown team name in resultsLocation.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
                                                              List.of(SCOPE_LAUNCH_TASK, SCOPE_LIST_TASKS),
@@ -1183,7 +1183,7 @@ class TaskManagementControllerTest {
                              TEST_VALID_ORG_NAME + "/" + TEST_UNKNOWN_TEAM_NAME + "/" +
                                      TEST_MODEL_NAME,
                              TEST_CONTAINER_ENVIRONMENT,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Invalid resultsLocation with just org name and resultsHandlingStrategy NONE.
                 // resultsLocation is not validated if resultHandlingStrategy is NONE.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
@@ -1790,7 +1790,7 @@ class TaskManagementControllerTest {
                                                              List.of(SCOPE_LIST_TASKS),
                                                              100),
                              List.of(),
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Missing scope.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_ID, List.of(), 100),
                              List.of(),
@@ -1904,7 +1904,7 @@ class TaskManagementControllerTest {
                                                           SCOPE_DELETE_TASK),
                                                              100),
                              TEST_TASK_ID_1,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Missing scope.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_ID, List.of(), 100),
                              TEST_TASK_ID_1,
@@ -2047,7 +2047,7 @@ class TaskManagementControllerTest {
                                                              100),
                              TEST_TASK_ID_1,
                              QUEUED,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Task status is CANCELED already
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_ID,
                                                              List.of(SCOPE_TASK_DETAILS,
@@ -2214,7 +2214,7 @@ class TaskManagementControllerTest {
                                                           SCOPE_DELETE_TASK),
                                                              100),
                              TEST_TASK_ID_1,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Missing scope.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_ID, List.of(), 100),
                              TEST_TASK_ID_1,
