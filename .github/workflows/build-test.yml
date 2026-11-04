@@ -193,6 +193,7 @@ jobs:
       - name: Test OpenBao declarative JWT lifecycle
         run: |
           bash deploy/helm/openbao/tests/jwt-plugin-lifecycle.sh
+          sh infra/openbao/tests/verify-runtime-ca-test.sh
           python3 -B -m unittest discover -s infra/openbao/tests
           bash migrations/openbao/tests/jwt-plugin-version-test.sh
 
