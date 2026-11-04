@@ -18,7 +18,8 @@
 # Compare each chart with every published stack release and release candidate,
 # on any train. Fail when the chart content differs from a release but keeps
 # that release's chart version or appVersion, so no release can ship new chart
-# content under an already published version.
+# content under an already published version. Every chart must declare an
+# appVersion, since it moves with the chart version.
 set -euo pipefail
 
 # Inspect the repository that holds this script, not one named by variables
@@ -70,7 +71,9 @@ release_count="$(wc -l <<<"$release_tags" | tr -d ' ')"
 for chart_yaml in "$stack_dir"/charts/*/Chart.yaml; do
   chart_path="$(dirname "${chart_yaml#"$repo_dir"/}")"
   current_version="$(yq -r '.version' "$chart_yaml")"
-  current_app_version="$(yq -r '.appVersion' "$chart_yaml")"
+  current_app_version="$(yq -r '.appVersion // ""' "$chart_yaml")"
+  [[ -n "$current_app_version" ]] ||
+    fail "$chart_path/Chart.yaml has no appVersion; set it and bump it with version"
   while IFS= read -r tag; do
     released_chart_yaml="$(git -C "$repo_dir" show "$tag:$chart_path/Chart.yaml" 2>/dev/null)" ||
       continue
@@ -79,8 +82,7 @@ for chart_yaml in "$stack_dir"/charts/*/Chart.yaml; do
     same_version=false
     same_app_version=false
     [[ "$current_version" == "$released_version" ]] && same_version=true
-    [[ "$current_app_version" != null && "$current_app_version" == "$released_app_version" ]] &&
-      same_app_version=true
+    [[ "$current_app_version" == "$released_app_version" ]] && same_app_version=true
     if [[ "$same_version" == false && "$same_app_version" == false ]]; then
       continue
     fi

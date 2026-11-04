@@ -161,9 +161,9 @@ git diff -- tests/golden/profile-matrix.txt
 A stack release publishes each chart under `charts/` at its `Chart.yaml`
 version. When a chart changes after a stack release, bump its `version` and
 `appVersion`. `tests/chart-versions.sh` compares each chart with every
-published stack release and release candidate, on any train. It fails when the
-content differs from a release but keeps that release's `version` or
-`appVersion`. Untracked files in a chart count as changes. It skips the check
+published stack release and release candidate, on any train. It fails when a
+chart has no `appVersion`, or when the content differs from a release but keeps
+that release's `version` or `appVersion`. Untracked files in a chart count as changes. It skips the check
 when no release tag is available locally. `tests/chart-versions-selftest.sh`
 runs it against a scratch repository.
 

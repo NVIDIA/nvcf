@@ -117,4 +117,8 @@ git init -q "$other"
   expect fail 'inherited repository variables' "differs from $tag_prefix/v1.2.0-rc.1"
 )
 
+# Every chart bumps appVersion with version, so a chart must declare one.
+printf 'apiVersion: v2\nname: demo\nversion: 0.4.0\n' >"$chart/Chart.yaml"
+expect fail 'missing appVersion' 'has no appVersion'
+
 echo "chart-versions-selftest: all checks passed"
