@@ -331,6 +331,11 @@ func (h *ResponsesHandlers) relayNativeResponsesStream(
 // logs, metrics and traces.
 func failNativeResponsesStream(c *GatewayContext, stream nativeResponsesStream, cause error) error {
 	failure := echo.NewHTTPError(http.StatusBadGateway, msgNativeResponsesNoTerminal)
+	message := msgNativeResponsesNoTerminal
+	if stream.upstreamError != nil && stream.upstreamError.Message != "" {
+		message = stream.upstreamError.Message
+	}
+	cause = stream.failureCause(cause)
 
 	sequenceNumber := 0
 	if stream.sequenceNumber != nil {
@@ -379,7 +384,7 @@ func failNativeResponsesStream(c *GatewayContext, stream nativeResponsesStream, 
 	response["status"] = "failed"
 	response["error"] = openairesponses.ResponseError{
 		Code:    "server_error",
-		Message: msgNativeResponsesNoTerminal,
+		Message: message,
 	}
 	if err := appendEvent(openairesponses.EventTypeResponseFailed, response); err != nil {
 		return failure.SetInternal(errors.Join(cause, err))
@@ -423,7 +428,7 @@ func (h *ResponsesHandlers) aggregateNativeResponsesStream(
 	terminalResponse := stream.terminal
 	if terminalResponse == nil {
 		h.finalizeNativeResponsesUsage(c, request, nil, false)
-		return echo.NewHTTPError(http.StatusBadGateway, msgNativeResponsesNoTerminal).SetInternal(err)
+		return echo.NewHTTPError(http.StatusBadGateway, msgNativeResponsesNoTerminal).SetInternal(stream.failureCause(err))
 	}
 
 	h.recordNativeResponsesProviderTime(c, start, false)
@@ -448,13 +453,27 @@ type nativeResponsesStream struct {
 	createdResponse   json.RawMessage
 	sequenceNumber    *int
 	clientWriteFailed bool
+	// upstreamError is an error event that came before any terminal event. It
+	// ends the stream, and its message goes into the gateway's response.failed.
+	upstreamError *provider.UpstreamStreamError
+}
+
+// failureCause joins a read error with the upstream error event, if any, for the request log.
+func (s *nativeResponsesStream) failureCause(readErr error) error {
+	if s.upstreamError == nil {
+		return readErr
+	}
+	return errors.Join(readErr, s.upstreamError)
 }
 
 func (s *nativeResponsesStream) observe(block []byte) {
 	eventType, event, ok := decodeNativeResponsesSSEBlock(block)
-	if !ok {
-		return
+	if ok {
+		s.observeEvent(eventType, event)
 	}
+}
+
+func (s *nativeResponsesStream) observeEvent(eventType string, event nativeResponsesEvent) {
 	if sequenceNumber, err := strconv.Atoi(string(event.SequenceNumber)); err == nil {
 		s.sequenceNumber = &sequenceNumber
 	}
@@ -484,10 +503,23 @@ func consumeNativeResponsesSSE(
 		line, err := lineReader.ReadBytes('\n')
 		eventBlock.Write(line)
 		if len(line) > 0 && isSSEBlankLine(line) {
+			eventType, event, ok := decodeNativeResponsesSSEBlock(eventBlock.Bytes())
+			// An upstream error event ends the stream unrelayed: the caller reports
+			// its message in the gateway's response.failed.
+			if ok && eventType == openairesponses.EventTypeError && stream.terminal == nil {
+				_, data, _ := splitNativeResponsesSSEBlock(eventBlock.Bytes())
+				stream.upstreamError = &provider.UpstreamStreamError{
+					Message: provider.UpstreamErrorMessage([]byte(data)),
+					Raw:     json.RawMessage(data),
+				}
+				return stream, nil
+			}
 			if writeErr := stream.relay(writer, eventBlock.Bytes()); writeErr != nil {
 				return stream, writeErr
 			}
-			stream.observe(eventBlock.Bytes())
+			if ok {
+				stream.observeEvent(eventType, event)
+			}
 			eventBlock.Reset()
 		}
 		if err == nil {
@@ -541,31 +573,28 @@ type nativeResponsesEvent struct {
 	Response       json.RawMessage `json:"response"`
 }
 
-// decodeNativeResponsesSSEBlock returns the event type and data of one SSE
-// block, or false when the block carries no JSON event.
-func decodeNativeResponsesSSEBlock(block []byte) (string, nativeResponsesEvent, bool) {
-	var (
-		eventType string
-		dataLines []string
-	)
-
+// splitNativeResponsesSSEBlock returns the event field and the joined data
+// lines of one SSE block. ok is false when the block has no data line.
+func splitNativeResponsesSSEBlock(block []byte) (eventType, data string, ok bool) {
+	var dataLines []string
 	for _, rawLine := range strings.Split(string(block), "\n") {
 		line := strings.TrimSuffix(rawLine, "\r")
 		switch {
 		case strings.HasPrefix(line, "event:"):
 			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
-			data := strings.TrimPrefix(line, "data:")
-			data = strings.TrimPrefix(data, " ")
-			dataLines = append(dataLines, data)
+			value := strings.TrimPrefix(line, "data:")
+			dataLines = append(dataLines, strings.TrimPrefix(value, " "))
 		}
 	}
-	if len(dataLines) == 0 {
-		return "", nativeResponsesEvent{}, false
-	}
+	return eventType, strings.Join(dataLines, "\n"), len(dataLines) > 0
+}
 
-	data := strings.Join(dataLines, "\n")
-	if data == "[DONE]" {
+// decodeNativeResponsesSSEBlock returns the event type and data of one SSE
+// block, or false when the block carries no JSON event.
+func decodeNativeResponsesSSEBlock(block []byte) (string, nativeResponsesEvent, bool) {
+	eventType, data, ok := splitNativeResponsesSSEBlock(block)
+	if !ok || data == "[DONE]" {
 		return "", nativeResponsesEvent{}, false
 	}
 

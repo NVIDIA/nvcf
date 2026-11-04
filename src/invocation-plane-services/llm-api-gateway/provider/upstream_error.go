@@ -136,6 +136,12 @@ func (e *UpstreamError) Message() string {
 	return "upstream request failed"
 }
 
+// UpstreamErrorMessage returns the message of an upstream error event sent
+// after the 200, read and capped like an error body, or "" when it has none.
+func UpstreamErrorMessage(event []byte) string {
+	return truncateMessage(strings.TrimSpace(upstreamErrorMessage(event)))
+}
+
 // upstreamErrorMessage returns the message from the error body shapes the
 // router, pylon, and model servers produce:
 //
