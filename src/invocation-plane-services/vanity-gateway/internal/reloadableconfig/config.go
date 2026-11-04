@@ -41,6 +41,22 @@ var (
 	ReloadDelay    = 25 * time.Millisecond
 )
 
+// transientReloadError marks reload failures that routinely occur for a moment
+// while a writer replaces the file (missing file, zero-length file). They are
+// only reported to the reload error callback when they persist to a poll tick.
+type transientReloadError struct{ err error }
+
+func (e transientReloadError) Error() string { return e.err.Error() }
+func (e transientReloadError) Unwrap() error { return e.err }
+
+// fileState identifies the on-disk file a failed reload was attempted against,
+// so one bad edit is reported once instead of on every poll tick.
+type fileState struct {
+	modTime time.Time
+	size    int64
+	valid   bool
+}
+
 type ReloadableConfig[T any] interface {
 	Get() *T
 	AddOnReloadFunc(func() error)
@@ -60,6 +76,7 @@ type configData[T any] struct {
 	unmarshal     func([]byte, *T) error
 	validators    []func(*T) error
 	postLoadHooks []func(*T) error
+	onReloadError func(error)
 }
 
 func WithPreLoadInitializer[T any](initialize func(*T) error) ConfigOption[T] {
@@ -89,6 +106,14 @@ func WithValidateFunc[T any](validator func(*T) error) ConfigOption[T] {
 func WithPostLoadFunc[T any](postLoadHook func(*T) error) ConfigOption[T] {
 	return func(cd *configData[T]) {
 		cd.postLoadHooks = append(cd.postLoadHooks, postLoadHook)
+	}
+}
+
+// WithReloadErrorFunc registers a callback invoked when a file-watcher
+// triggered reload fails. The previous config stays in place.
+func WithReloadErrorFunc[T any](onReloadError func(error)) ConfigOption[T] {
+	return func(cd *configData[T]) {
+		cd.onReloadError = onReloadError
 	}
 }
 
@@ -156,10 +181,10 @@ func (c *configData[T]) reloadConfig() error {
 
 	stat, err := os.Stat(c.filename)
 	if err != nil {
-		return err
+		return transientReloadError{err}
 	}
 	if stat.Size() == 0 {
-		return fmt.Errorf("config file %q is zero-length", c.filename)
+		return transientReloadError{fmt.Errorf("config file %q is zero-length", c.filename)}
 	}
 
 	newData := new(T)
@@ -212,11 +237,34 @@ func (c *configData[T]) setupFileWatcher(ctx context.Context) error {
 		}
 	}
 
-	reload := func() {
+	// reload runs only on the watcher goroutine, so lastReported needs no lock.
+	var lastReported fileState
+	reload := func(fromPoll bool) {
 		zap.L().Info("Config file updated, reloading")
-		if err := c.reloadConfig(); err != nil {
-			zap.L().Error("could not reload config", zap.Error(err))
+		err := c.reloadConfig()
+		if err == nil {
+			lastReported = fileState{}
+			return
 		}
+		zap.L().Error("could not reload config", zap.Error(err))
+		if c.onReloadError == nil {
+			return
+		}
+		// A transient failure seen on a file event usually heals within
+		// ReloadDelay; only report it if it is still failing on a poll tick.
+		if errors.As(err, new(transientReloadError)) && !fromPoll {
+			return
+		}
+		// The poll tick retries a bad file until it changes; report it once.
+		state := fileState{}
+		if stat, statErr := os.Stat(c.filename); statErr == nil {
+			state = fileState{modTime: stat.ModTime(), size: stat.Size(), valid: true}
+		}
+		if state == lastReported {
+			return
+		}
+		lastReported = state
+		c.onReloadError(err)
 	}
 
 	go func() {
@@ -255,12 +303,12 @@ func (c *configData[T]) setupFileWatcher(ctx context.Context) error {
 				}
 				reloadC = nil
 				reloadTimer = nil
-				reload()
+				reload(false)
 			case <-ticker.C:
 				stat, err := os.Stat(c.filename)
 				lastModTime := c.modTime.Load()
 				if err == nil && lastModTime != nil && stat.ModTime().After(*lastModTime) {
-					reload()
+					reload(true)
 				}
 			case <-ctx.Done():
 				return

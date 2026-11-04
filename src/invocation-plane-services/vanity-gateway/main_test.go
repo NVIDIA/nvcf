@@ -28,7 +28,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -267,6 +269,7 @@ func startNvcfServer() *http.Server {
 }
 
 func TestGatewayService(t *testing.T) {
+	startedAt := time.Now()
 	// set up gateway to watch a temporary test config file
 	tempDir := t.TempDir()
 	setUpTempConfigFile(t, tempDir)
@@ -302,6 +305,8 @@ func TestGatewayService(t *testing.T) {
 	client := http.Client{
 		Timeout: 3 * time.Second,
 	}
+
+	testConfigReloadMetricsExposed(t, client, startedAt)
 
 	testVanityNonExistFunction(t, client)
 
@@ -425,6 +430,26 @@ func stagedConfigPath(t *testing.T, tempDir string) string {
 		t.Fatal(err)
 	}
 	return filepath.Join(stagingDir, tempTestConfigName)
+}
+
+func testConfigReloadMetricsExposed(t *testing.T, client http.Client, startedAt time.Time) {
+	t.Run("Testing config reload metrics are exposed", func(t *testing.T) {
+		res, err := client.Get("http://localhost:10083/metrics")
+		require.NoError(t, err)
+		defer res.Body.Close()
+		body, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+
+		for _, stage := range []string{"load", "router_build"} {
+			require.Regexp(t, `(?m)^nvcf_vanity_gateway_config_reload_failures_total\{[^}]*stage="`+stage+`"[^}]*\} \d+(\.\d+)?$`, string(body))
+		}
+		match := regexp.MustCompile(`(?m)^nvcf_vanity_gateway_last_successful_config_reload_timestamp_seconds(?:\{[^}]*\})? (\S+)$`).FindStringSubmatch(string(body))
+		require.NotNil(t, match, "the gauge must be set once the initial router is built")
+		lastReload, err := strconv.ParseFloat(match[1], 64)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, lastReload, float64(startedAt.Unix()))
+		require.LessOrEqual(t, lastReload, float64(time.Now().Unix()))
+	})
 }
 
 func testVanityNonExistFunction(t *testing.T, client http.Client) {
