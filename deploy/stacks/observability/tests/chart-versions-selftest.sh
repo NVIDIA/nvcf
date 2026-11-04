@@ -28,7 +28,8 @@ fail() {
 }
 
 # Keep the scratch repository independent of the caller's Git settings.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_INDEX_FILE
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
 export GIT_AUTHOR_NAME=selftest GIT_AUTHOR_EMAIL=selftest@example.com
 export GIT_COMMITTER_NAME=selftest GIT_COMMITTER_EMAIL=selftest@example.com
@@ -106,5 +107,14 @@ commit 'release candidate'
 git -C "$repo" tag "$tag_prefix/v1.2.0-rc.1"
 set_value 5
 expect fail 'changed after release candidate' "differs from $tag_prefix/v1.2.0-rc.1"
+
+# Repository variables inherited from the caller, such as from a Git hook,
+# must not point the check at another repository without release tags.
+other="$work_dir/other"
+git init -q "$other"
+(
+  export GIT_DIR="$other/.git" GIT_WORK_TREE="$other"
+  expect fail 'inherited repository variables' "differs from $tag_prefix/v1.2.0-rc.1"
+)
 
 echo "chart-versions-selftest: all checks passed"

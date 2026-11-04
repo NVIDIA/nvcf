@@ -21,6 +21,11 @@
 # content under an already published version.
 set -euo pipefail
 
+# Inspect the repository that holds this script, not one named by variables
+# inherited from the caller, such as from a Git hook.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_INDEX_FILE
+
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo_dir="$(cd "$stack_dir/../../.." && pwd)"
 stack_path="${stack_dir#"$repo_dir"/}"
