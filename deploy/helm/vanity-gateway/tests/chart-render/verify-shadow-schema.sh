@@ -287,6 +287,27 @@ write_toplevel_values typesafeSystemOne "            shadows:
                   - random"
 assert_renders "ordered bearer sampling renders in typesafeSystemOne"
 
+# Decision routes return backend 429 bodies unchanged, so the gateway rejects
+# tooManyRequestsMessage there; other sections keep it.
+write_values decisions '            tooManyRequestsMessage: "Try again later."'
+assert_rejected "tooManyRequestsMessage" "tooManyRequestsMessage is rejected in decisions"
+
+write_toplevel_values typesafeSystemOne '            tooManyRequestsMessage: "Try again later."'
+assert_rejected "tooManyRequestsMessage" "tooManyRequestsMessage is rejected in typesafeSystemOne"
+
+# The gateway reads keys in any letter case.
+write_values decisions '            TooManyRequestsMessage: "Try again later."'
+assert_rejected "TooManyRequestsMessage" "tooManyRequestsMessage is rejected in decisions in any letter case"
+
+write_toplevel_values typesafeSystemOne '            toomanyrequestsmessage: "Try again later."'
+assert_rejected "toomanyrequestsmessage" "tooManyRequestsMessage is rejected in typesafeSystemOne in any letter case"
+
+write_values decisions '            tooManyRequestsMessage: ""'
+assert_renders "an empty tooManyRequestsMessage renders in decisions"
+
+write_values embeddings '            tooManyRequestsMessage: "Try again later."'
+assert_renders "tooManyRequestsMessage renders in embeddings"
+
 write_anthropic_values "            promptCacheKeyHeaders:
               - x-session-id
             shadows:
