@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.nvidia.nvcf.service.serviceaccount;
+package com.nvidia.nvcf.service.accountratelimit;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -31,7 +31,7 @@ import org.springframework.web.reactive.function.client.WebClientRequestExceptio
 
 @Slf4j
 @Service
-public class ServiceAccountService {
+public class AccountRateLimitService {
     private static final String MESG_RATE_LIMIT_FROM_BACKUP_CACHE =
             "Returning tiered rate limit from backup cache as NAK is not reachable - '{}'";
     private static final String MESG_RATE_LIMIT_NOT_IN_BACKUP_CACHE =
@@ -39,7 +39,7 @@ public class ServiceAccountService {
     private static final String MESG_TIERED_RATE_LIMIT = "Tiered rate limit for ncaId '{}': '{}'";
     private static final RateLimitAttributes NO_RATE_LIMIT = new RateLimitAttributes(null, null);
 
-    private final ServiceAccountClient serviceAccountClient;
+    private final AccountRateLimitClient accountRateLimitClient;
     private final boolean tieredRateLimitEnabled;
     private final LoadingCache<String, RateLimitAttributes> tieredRateLimitCache =
             Caffeine.newBuilder()
@@ -53,16 +53,16 @@ public class ServiceAccountService {
                     .build();
 
     // Off by default: the lookup fails closed, so enable only where the policy evaluation exists.
-    public ServiceAccountService(
-            ServiceAccountClient serviceAccountClient,
+    public AccountRateLimitService(
+            AccountRateLimitClient accountRateLimitClient,
             @Value("${nvcf.account-token-rate-limit-enabled:false}") boolean tieredRateLimitEnabled) {
-        this.serviceAccountClient = serviceAccountClient;
+        this.accountRateLimitClient = accountRateLimitClient;
         this.tieredRateLimitEnabled = tieredRateLimitEnabled;
     }
 
     private RateLimitAttributes fetchTieredRateLimit(String ncaId) {
         try {
-            var result = serviceAccountClient.fetchTieredRateLimit(ncaId);
+            var result = accountRateLimitClient.fetchTieredRateLimit(ncaId);
             log.debug(MESG_TIERED_RATE_LIMIT, ncaId, result);
             tieredRateLimitBackupCache.put(ncaId, result);
             return result;

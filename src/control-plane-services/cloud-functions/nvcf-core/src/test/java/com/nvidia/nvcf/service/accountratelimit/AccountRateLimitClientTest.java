@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.nvidia.nvcf.service.serviceaccount;
+package com.nvidia.nvcf.service.accountratelimit;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
-import com.nvidia.nvcf.configuration.staticclientauth.StaticClientAuthConfiguration.StaticClientServiceAccountProperties;
+import com.nvidia.nvcf.configuration.staticclientauth.StaticClientAuthConfiguration.StaticClientApiKeysProperties;
 import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult.RateLimitAttributes;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
@@ -34,20 +34,20 @@ import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
 import tools.jackson.databind.json.JsonMapper;
 
-class ServiceAccountClientTest {
+class AccountRateLimitClientTest {
 
-    private static final String EVALUATION_URI = "/v1/namespaces/nvcf/evaluations/serviceaccount.allow";
+    private static final String EVALUATION_URI = "/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit";
 
     private WireMockServer server;
-    private ServiceAccountClient client;
+    private AccountRateLimitClient client;
 
     @BeforeEach
     void setUp() {
         server = new WireMockServer(WireMockConfiguration.options().dynamicPort());
         server.start();
-        var staticProperties = new StaticClientServiceAccountProperties();
+        var staticProperties = new StaticClientApiKeysProperties();
         staticProperties.setToken("test-token");
-        client = new ServiceAccountClient(
+        client = new AccountRateLimitClient(
                 server.baseUrl(), EVALUATION_URI, "tiered_rate_key",
                 "unused", "unused", "unused", "unused",
                 Optional.of(staticProperties), WebClient.builder(), new JsonMapper());
@@ -69,7 +69,7 @@ class ServiceAccountClientTest {
     @Test
     void fetchTieredRateLimit_returnsRates() {
         stubResponse("""
-                {"namespace":"nvcf","rule_name":"serviceaccount.allow",
+                {"namespace":"nvcf","rule_name":"apikey.account_rate_limit",
                  "result":{"inputTokenRateLimit":"1000-M","outputTokenRateLimit":"500-M"}}
                 """);
 
@@ -80,7 +80,7 @@ class ServiceAccountClientTest {
     @Test
     void fetchTieredRateLimit_returnsNoLimitWhenResultAbsent() {
         stubResponse("""
-                {"namespace":"nvcf","rule_name":"serviceaccount.allow"}
+                {"namespace":"nvcf","rule_name":"apikey.account_rate_limit"}
                 """);
 
         assertThat(client.fetchTieredRateLimit("nca-1"))

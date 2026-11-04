@@ -91,30 +91,43 @@ class AuthzRequestValidatorTest {
 
     @Test
     void validate_shouldBypassApiKeyIntrospectionForTieredRateLimitRule() {
-        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("serviceaccount.allow");
+        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("apikey.account_rate_limit");
         AuthzRequest request = new AuthzRequest(
                 ApiKeyInput.builder().tieredRateKey("test-nca-id").build());
 
-        PolicyEvaluationRequestVo result = validator.validate(NAMESPACE, "serviceaccount.allow", request);
+        PolicyEvaluationRequestVo result = validator.validate(NAMESPACE, "apikey.account_rate_limit", request);
 
         assertThat(result).isEqualTo(PolicyEvaluationRequestVo.builder()
                 .namespace(NAMESPACE)
-                .policyName("serviceaccount.allow")
+                .policyName("apikey.account_rate_limit")
                 .tieredRateKey("test-nca-id")
                 .build());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"apikey.other_rate_limit", "apikey.account_rate_limit.extra"})
+    void validate_shouldRejectNamesThatOnlyResembleTieredRateLimitRule(String ruleName) {
+        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("apikey.account_rate_limit");
+        AuthzRequest request = new AuthzRequest(
+                ApiKeyInput.builder().tieredRateKey("test-nca-id").build());
+
+        assertThrowsExceptionWithDetails(
+                BadRequestException.class,
+                () -> validator.validate(NAMESPACE, ruleName, request),
+                "Rule name is not supported: " + ruleName);
     }
 
     @ParameterizedTest
     @NullSource
     @EmptySource
     void validate_shouldThrowWhenTieredRateKeyMissing(String tieredRateKey) {
-        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("serviceaccount.allow");
+        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("apikey.account_rate_limit");
         AuthzRequest request = new AuthzRequest(
                 ApiKeyInput.builder().tieredRateKey(tieredRateKey).build());
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> validator.validate(NAMESPACE, "serviceaccount.allow", request),
+                () -> validator.validate(NAMESPACE, "apikey.account_rate_limit", request),
                 "Tiered rate key is not provided");
     }
 
@@ -160,13 +173,13 @@ class AuthzRequestValidatorTest {
 
     @Test
     void validate_shouldThrowWhenNamespaceNotConfiguredForTieredRateLimitRule() {
-        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("serviceaccount.allow");
+        when(nakProperties.getTieredRateLimitRuleName()).thenReturn("apikey.account_rate_limit");
         AuthzRequest request = new AuthzRequest(
                 ApiKeyInput.builder().tieredRateKey("test-nca-id").build());
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> validator.validate("unknown-ns", "serviceaccount.allow", request),
+                () -> validator.validate("unknown-ns", "apikey.account_rate_limit", request),
                 "Namespace 'unknown-ns' is not configured");
     }
 

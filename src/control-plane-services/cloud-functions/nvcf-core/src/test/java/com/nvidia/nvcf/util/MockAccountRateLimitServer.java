@@ -32,32 +32,32 @@ import org.springframework.http.MediaType;
 import tools.jackson.databind.json.JsonMapper;
 
 @UtilityClass
-public class MockServiceAccountServer {
+public class MockAccountRateLimitServer {
 
     private static final JsonMapper OBJECT_MAPPER = new JsonMapper();
     @Getter
-    private static WireMockServer mockServiceAccountServer;
+    private static WireMockServer mockAccountRateLimitServer;
 
     @SneakyThrows
-    public static void start(String serviceAccountBaseUrl) {
+    public static void start(String accountRateLimitBaseUrl) {
         stop();
-        mockServiceAccountServer = new WireMockServer(new URI(serviceAccountBaseUrl).getPort());
-        mockServiceAccountServer.start();
+        mockAccountRateLimitServer = new WireMockServer(new URI(accountRateLimitBaseUrl).getPort());
+        mockAccountRateLimitServer.start();
         resetToDefault();
     }
 
     public static void stop() {
-        if (mockServiceAccountServer != null) {
-            mockServiceAccountServer.stop();
+        if (mockAccountRateLimitServer != null) {
+            mockAccountRateLimitServer.stop();
         }
     }
 
     @SneakyThrows
     public static void setTieredRateLimitResponse(RateLimitAttributes rateLimit) {
-        var response = new ApiKeyValidationResponse("nvcf", "serviceaccount.allow", rateLimit);
+        var response = new ApiKeyValidationResponse("nvcf", "apikey.account_rate_limit", rateLimit);
         byte[] responseBytes = OBJECT_MAPPER.writeValueAsBytes(response);
-        mockServiceAccountServer.stubFor(
-                post(urlPathEqualTo("/v1/namespaces/nvcf/evaluations/serviceaccount.allow"))
+        mockAccountRateLimitServer.stubFor(
+                post(urlPathEqualTo("/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit"))
                         .willReturn(aResponse().withStatus(200)
                                             .withHeader(HttpHeaders.CONTENT_TYPE,
                                                         MediaType.APPLICATION_JSON_VALUE)
@@ -65,8 +65,8 @@ public class MockServiceAccountServer {
     }
 
     public static void setUnavailable() {
-        mockServiceAccountServer.stubFor(
-                post(urlPathEqualTo("/v1/namespaces/nvcf/evaluations/serviceaccount.allow"))
+        mockAccountRateLimitServer.stubFor(
+                post(urlPathEqualTo("/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit"))
                         .willReturn(aResponse().withStatus(503)));
     }
 

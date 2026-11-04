@@ -14,11 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.nvidia.nvcf.service.serviceaccount;
+package com.nvidia.nvcf.service.accountratelimit;
 
 import com.nvidia.boot.exceptions.UpstreamException;
 import com.nvidia.nvcf.configuration.staticclientauth.FixedBearerExchangeFilterFunction;
-import com.nvidia.nvcf.configuration.staticclientauth.StaticClientAuthConfiguration.StaticClientServiceAccountProperties;
+import com.nvidia.nvcf.configuration.staticclientauth.StaticClientAuthConfiguration.StaticClientApiKeysProperties;
 import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult;
 import com.nvidia.nvcf.service.apikeys.dto.ApiKeyValidationRequest;
 import com.nvidia.nvcf.service.apikeys.dto.ApiKeyValidationResponse;
@@ -43,7 +43,7 @@ import tools.jackson.databind.json.JsonMapper;
 @Service
 @RefreshScope
 @Slf4j
-public class ServiceAccountClient {
+public class AccountRateLimitClient {
 
     private static final RetryBackoffSpec RETRY_SPEC = Retry.backoff(2, Duration.ofMillis(200))
             .jitter(0.75)
@@ -57,43 +57,33 @@ public class ServiceAccountClient {
                         "Failed to get response from external system after retries.");
             });
 
-    private static final String CLIENT_REGISTRATION_ID = "service-account";
+    private static final String CLIENT_REGISTRATION_ID = "api-keys";
 
     private final WebClient webClient;
     private final JsonMapper jsonMapper;
     private final String evaluationUri;
     private final String requestPropertyName;
 
-    // This evaluation is expected to be served by the same gateway as apikey.allow, so every
-    // property here defaults to that client's config; override the
-    // nvcf.service-account.*/spring.security.oauth2.client.registration.service-account.*
-    // properties if that stops being true.
-    public ServiceAccountClient(
-            @Value("${nvcf.service-account.base-url:${nvcf.api-keys.base-url}}") String baseUrl,
-            @Value("${nvcf.service-account.evaluation-uri:/v1/namespaces/nvcf/evaluations/serviceaccount.allow}")
+    // Defaults to ApiKeysClient's own connection config - same evaluations gateway.
+    public AccountRateLimitClient(
+            @Value("${nvcf.account-rate-limit.base-url:${nvcf.api-keys.base-url}}") String baseUrl,
+            @Value("${nvcf.account-rate-limit.evaluation-uri:/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit}")
             String evaluationUri,
-            // matches the input.<name>_key naming this evaluation expects
-            @Value("${nvcf.service-account.request-property-name:tiered_rate_key}")
+            @Value("${nvcf.account-rate-limit.request-property-name:tiered_rate_key}")
             String requestPropertyName,
-            @Value("${spring.security.oauth2.client.registration.service-account.client-id:"
-                    + "${spring.security.oauth2.client.registration.api-keys.client-id}}")
+            @Value("${spring.security.oauth2.client.registration.api-keys.client-id}")
             String clientId,
-            @Value("${spring.security.oauth2.client.registration.service-account.client-secret:"
-                    + "${spring.security.oauth2.client.registration.api-keys.client-secret}}")
+            @Value("${spring.security.oauth2.client.registration.api-keys.client-secret}")
             String clientSecret,
-            @Value("${spring.security.oauth2.client.registration.service-account.scope:"
-                    + "${spring.security.oauth2.client.registration.api-keys.scope}}")
-            String scope,
-            @Value("${spring.security.oauth2.client.provider.service-account.token-uri:"
-                    + "${spring.security.oauth2.client.provider.api-keys.token-uri}}")
-            String tokenUri,
-            Optional<StaticClientServiceAccountProperties> staticClientServiceAccountProperties,
+            @Value("${spring.security.oauth2.client.registration.api-keys.scope}") String scope,
+            @Value("${spring.security.oauth2.client.provider.api-keys.token-uri}") String tokenUri,
+            Optional<StaticClientApiKeysProperties> staticClientApiKeysProperties,
             WebClient.Builder webClientBuilder,
             JsonMapper jsonMapper) {
         this.evaluationUri = evaluationUri;
         this.requestPropertyName = requestPropertyName;
         this.jsonMapper = jsonMapper;
-        var authFilter = oauthFilter(staticClientServiceAccountProperties, webClientBuilder,
+        var authFilter = oauthFilter(staticClientApiKeysProperties, webClientBuilder,
                                      clientId, clientSecret, scope, tokenUri);
         this.webClient = webClientBuilder
                 .baseUrl(baseUrl)
@@ -102,13 +92,13 @@ public class ServiceAccountClient {
     }
 
     private static ExchangeFilterFunction oauthFilter(
-            Optional<StaticClientServiceAccountProperties> staticClientServiceAccountProperties,
+            Optional<StaticClientApiKeysProperties> staticClientApiKeysProperties,
             WebClient.Builder webClientBuilder,
             String clientId,
             String clientSecret,
             String scope,
             String tokenUri) {
-        return staticClientServiceAccountProperties
+        return staticClientApiKeysProperties
                 .map(p -> (ExchangeFilterFunction)
                         new FixedBearerExchangeFilterFunction(p::getToken))
                 .orElseGet(() -> NvcfOAuth2ClientUtils

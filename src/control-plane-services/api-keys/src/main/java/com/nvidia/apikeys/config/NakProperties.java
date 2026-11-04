@@ -53,10 +53,10 @@ public class NakProperties {
     private Map<String, String> serviceIdMap;
 
     // Rule name of the account-scoped rate-limit lookup, keyed by ncaId instead of an api key.
-    // Matches ServiceAccountClient's default evaluation-uri rule-name segment on the nvcf-core
+    // Matches AccountRateLimitClient's default evaluation-uri rule-name segment on the nvcf-core
     // side.
     @Builder.Default
-    private String tieredRateLimitRuleName = "serviceaccount.allow";
+    private String tieredRateLimitRuleName = "apikey.account_rate_limit";
 
     // api key properties
     @NotBlank
