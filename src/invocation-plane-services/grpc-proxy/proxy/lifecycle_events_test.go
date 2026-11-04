@@ -274,10 +274,12 @@ func TestStreamingDispatchWaitsForAWorker(t *testing.T) {
 	}
 
 	t.Run("not before a worker answers", func(t *testing.T) {
-		publisher, received, _ := setUp(t)
+		publisher, received, answered := setUp(t)
 		// Close delivers everything published so far.
 		publisher.Close()
 		assert.Empty(t, received())
+		// Abandon the request so the waiting goroutine ends.
+		answered <- false
 	})
 	t.Run("once a worker answers", func(t *testing.T) {
 		publisher, received, answered := setUp(t)
