@@ -82,7 +82,9 @@ model and do not translate between the two formats. The gateway reads only
 `model` and replaces its value with the function's model name. The request
 body is forwarded unchanged except for the model value: key order, spacing,
 escapes, numbers, and duplicate keys are kept. The response body is relayed
-unchanged. Responses are not streamed; `stream` is ignored.
+unchanged. The routes are meant for non-streaming responses: the gateway does
+not read `stream` and does not ask for an event stream. Whether a backend
+streams depends on the request it receives.
 
 - A model is enabled for a route only when its function declares the route in
   the model's `uris`, for example `--llm-model name=<model>,uris=/v1/decisions`.

@@ -15,6 +15,8 @@ clients.
 | `POST /v1/responses` | Responses API JSON or SSE output |
 | `POST /v1/embeddings` | Embeddings for one string or an array of strings |
 | `POST /v1/messages` | Anthropic Messages JSON or SSE output |
+| `POST /v1/decisions` | Canned Decisions answers, one per question, in order |
+| `POST /v1/systemone` | Canned System One answers, keyed by question name |
 | `GET /v1/models` | Lists the sample model |
 | `GET /v1/models/{id}` | Returns metadata for a model ID |
 | `GET /health` | Health check returning 200 |
@@ -343,6 +345,34 @@ ulimit -n 65536
   -e LOAD_TESTER_OUTPUT_CHUNKS=12000
 ```
 
+## Decision routes
+
+`POST /v1/decisions` and `POST /v1/systemone` return fixed answers for test
+use. Decisions returns `answers` as a list in question order. System One
+returns `answers` keyed by question name. Both include `model` and `usage`.
+Benchmark controls do not apply. Only `X-Load-Tester-Echo` and the
+`x_load_tester_echo` body field are read, and they add the request body as
+`request_body`.
+
+Every successful response has an `echo` object with the request headers
+`typesafe-danger-zone-images`, `x-model`, `x-input-tokens`, `x-request-id`
+and `x-vendor-test` when present, plus `body_length` and
+`credentials_received`. `credentials_received` is `true` when the request
+carried `Authorization`, `X-Api-Key`, `Proxy-Authorization` or `Cookie`. The
+values are never echoed. When `TypeSafe-Danger-Zone-Images` is sent, a
+successful response also sets `x-mock-echo-typesafe-danger-zone-images`.
+When `X-Input-Tokens` is a non-negative integer, `usage.input_tokens` mirrors
+it. Otherwise the sample estimates one token per four body bytes.
+
+These two routes accept bodies up to 16 MiB. The other routes keep 10 MiB.
+Bodies must be one JSON object, otherwise the response is 400 with a JSON
+error. A `null` body is a 400, and so is a `model` that is not a string,
+including `null`. More than 1000 questions is a 400.
+When `X-Input-Tokens` is too large to add the output token to, the sample
+uses its own estimate. Add `?mock_error=429` for a 429 with `Retry-After: 7`, or
+`?mock_error=400` for a 400. The 400 body is FastAPI style
+(`{"detail":[...]}`) on System One and OpenAI style on Decisions.
+
 ## NVCF LLM functions
 
 Expose port 8000 and configure the function inference URL as `/`. Declare the
@@ -354,7 +384,9 @@ routes required by the workload, such as:
 /v1/responses
 /v1/embeddings
 /v1/messages
+/v1/decisions
+/v1/systemone
 ```
 
-See the [LLM Gateway guide](../../../docs/user/llm-gateway.md) for function
+See the [LLM Gateway guide](../../../docs/overview/llm-gateway.md) for function
 model configuration and invocation flow.
