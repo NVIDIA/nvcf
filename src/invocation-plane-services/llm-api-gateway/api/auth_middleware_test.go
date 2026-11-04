@@ -613,8 +613,8 @@ func TestNVCFAuthMiddlewareFunctionNotReadyIsRetryable(t *testing.T) {
 			if rec.Code != http.StatusServiceUnavailable {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 			}
-			if got := rec.Header().Get("Retry-After"); got != "5" {
-				t.Fatalf("Retry-After = %q, want 5", got)
+			if got := rec.Header().Get("Retry-After"); got != "30" {
+				t.Fatalf("Retry-After = %q, want 30", got)
 			}
 			var body struct {
 				Error struct {

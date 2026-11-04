@@ -34,8 +34,8 @@ import (
 	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-// NVCF auth returns FailedPrecondition while the function has no ready instance.
-const modelNotReadyRetryAfterSeconds = 5
+// NVCF auth returns FailedPrecondition when a version is DEGRADED and none is ACTIVE.
+const modelNotReadyRetryAfterSeconds = 30
 
 type InvocationAuthClient interface {
 	AuthorizeInvocation(

@@ -128,7 +128,7 @@ public class FunctionInvocationValidationService {
         if (CollectionUtils.isEmpty(contexts)) {
             if (hasDegraded.get()) {
                 var mesg = MESG_DEGRADED_NOT_ALLOWED.formatted(functionId);
-                log.error(mesg);
+                log.warn(mesg);
                 throw new FunctionDegradedException(mesg);
             }
             var mesg = MESG_FUNCTION_NOT_FOUND.formatted(functionId, versionId, ncaId);
