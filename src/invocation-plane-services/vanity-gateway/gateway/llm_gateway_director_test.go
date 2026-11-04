@@ -636,7 +636,7 @@ func TestOpenAIDirector_LLMModelIsNotReachableOnUnmappedEndpoints(t *testing.T) 
 
 	mux := openAIMux(t, llmMappings(llmModelEntry()), "http://nvcf.invalid", llmBackend.URL)
 
-	for _, path := range []string{"/v1/responses", "/v1/embeddings", "/v1/completions", "/v1/messages"} {
+	for _, path := range []string{"/v1/responses", "/v1/embeddings", "/v1/completions", "/v1/messages", "/v1/decisions", "/v1/systemone"} {
 		t.Run(path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, openAIRequest(t, path, `{"model":"`+publicModel+`","input":"hi"}`))

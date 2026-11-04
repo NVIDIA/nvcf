@@ -22,7 +22,7 @@ logo:
 
 navbar-links:
 - type: github
-  value: https://github.com/NVIDIA/nvcf
+  value: https://github.com/dsx-ai-factory/nvcf
 
 # Docs editions share one selector. Released branches are pinned in editions.yml.
 versions:

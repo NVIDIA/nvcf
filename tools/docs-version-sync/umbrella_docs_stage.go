@@ -168,7 +168,7 @@ func stageCanonicalDocs(root, out string, remote bool) error {
 		if release.Mode == "umbrella" {
 			mixed = true
 			if remote {
-				p := umbrellaPublisher{client: &http.Client{Timeout: 2 * time.Minute}, api: "https://api.github.com", repository: "NVIDIA/nvcf"}
+				p := umbrellaPublisher{client: &http.Client{Timeout: 2 * time.Minute}, api: "https://api.github.com", repository: "dsx-ai-factory/nvcf"}
 				if err := verifyPublishedDocsProduct(root, release, p); err != nil {
 					return err
 				}

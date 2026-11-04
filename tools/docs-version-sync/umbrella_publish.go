@@ -419,6 +419,6 @@ func runUmbrellaPublish(args []string) error {
 	if token == "" {
 		return fmt.Errorf("publication requires GITHUB_TOKEN")
 	}
-	p := umbrellaPublisher{client: &http.Client{Timeout: 2 * time.Minute}, api: "https://api.github.com", uploads: "https://uploads.github.com", repository: "NVIDIA/nvcf", token: token}
+	p := umbrellaPublisher{client: &http.Client{Timeout: 2 * time.Minute}, api: "https://api.github.com", uploads: "https://uploads.github.com", repository: "dsx-ai-factory/nvcf", token: token}
 	return p.publish(manifest, *target, string(notes), assets, *promote)
 }

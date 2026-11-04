@@ -356,8 +356,10 @@ Service credentials need the `fnds:createEvent` scope to write. A read key with
 has a read scope. An authorized NVCA projected token can write after Event
 Ledger verifies its cluster identity through SIS.
 
-The CLI does not wrap the producer endpoints. SIS, the NVCA collector, and the
-gRPC proxy configure publishing as part of the self-managed deployment.
+The CLI does not wrap the producer endpoints. SIS and the NVCA collector
+configure publishing as part of the self-managed deployment. gRPC proxy
+publishing is opt-in; see
+[Enable and Operate Event Ledger](../self-managed/event-ledger.md).
 
 The API returns errors as `application/problem+json`. Common status codes are:
 
