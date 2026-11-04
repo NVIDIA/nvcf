@@ -33,6 +33,7 @@
 # Root files
 .gitignore
 AGENTS.md
+ARCHITECTURE.md
 CLAUDE.md
 NOTICE
 THIRD-PARTY.txt

@@ -21,6 +21,9 @@ import { AlertTriangleIcon } from "lucide-react";
 
 export function RouteErrorFallback({ error }: ErrorComponentProps) {
 	const router = useRouter();
+	// `error` is typed `unknown` because anything can be thrown, not just an
+	// Error. Narrow before reading `message` and fall back to the generic copy.
+	const message = error instanceof Error ? error.message : "";
 	return (
 		<div className="grid h-full place-items-center p-8">
 			<StatusMessage
@@ -33,7 +36,7 @@ export function RouteErrorFallback({ error }: ErrorComponentProps) {
 						Try again
 					</Button>
 				}
-				slotHeading={error.message || "Something went wrong"}
+				slotHeading={message || "Something went wrong"}
 				slotMedia={<AlertTriangleIcon />}
 			/>
 		</div>

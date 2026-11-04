@@ -15,14 +15,19 @@
  * limitations under the License.
  */
 
-import { createRoute } from "@tanstack/react-router";
+import type { QueryClient } from "@tanstack/react-query";
+import {
+	createRootRouteWithContext,
+	createRoute,
+	Outlet,
+} from "@tanstack/react-router";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
+import { AccountSwitcher } from "~/features/accounts/components/AccountSwitcher";
 import { getGetCloudAccountsMockHandler } from "~/generated/api/account/account.msw";
 import type { AccountDto } from "~/generated/model/accountDto";
 import { server } from "~/mocks/server";
-import { rootRoute } from "~/rootRoute";
 import { renderWithRouter } from "~/testing/render";
 
 const STORAGE_KEY = "nvcf-active-nca-id";
@@ -38,7 +43,17 @@ function account(ncaId: string, name: string): AccountDto {
 	};
 }
 
-// AccountSwitcher lives in the root AppShell, so any child route renders it.
+// AccountSwitcher uses the router to redirect or reload on a switch, so it
+// renders inside a test-local router rather than the app's pages.
+const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+	component: () => (
+		<>
+			<AccountSwitcher />
+			<Outlet />
+		</>
+	),
+});
+
 const indexRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: "/",
@@ -53,6 +68,8 @@ const detailRoute = createRoute({
 	component: () => null,
 });
 
+const routeTree = rootRoute.addChildren([indexRoute, detailRoute]);
+
 beforeEach(() => {
 	localStorage.clear();
 	server.use(
@@ -64,7 +81,7 @@ beforeEach(() => {
 
 describe("AccountSwitcher", () => {
 	it("defaults to the first account when nothing is stored", async () => {
-		renderWithRouter({ routes: [indexRoute], initialLocation: "/" });
+		renderWithRouter({ routeTree, initialLocation: "/" });
 		expect(
 			await screen.findByRole("menuitemradio", { name: "NVIDIA" }),
 		).toBeChecked();
@@ -72,7 +89,7 @@ describe("AccountSwitcher", () => {
 
 	it("reflects the stored account", async () => {
 		localStorage.setItem(STORAGE_KEY, JSON.stringify("nca-2"));
-		renderWithRouter({ routes: [indexRoute], initialLocation: "/" });
+		renderWithRouter({ routeTree, initialLocation: "/" });
 		expect(
 			await screen.findByRole("menuitemradio", { name: "Gaia" }),
 		).toBeChecked();
@@ -80,7 +97,7 @@ describe("AccountSwitcher", () => {
 
 	it("persists the selection when switched", async () => {
 		const user = userEvent.setup();
-		renderWithRouter({ routes: [indexRoute], initialLocation: "/" });
+		renderWithRouter({ routeTree, initialLocation: "/" });
 
 		await user.click(
 			await screen.findByRole("menuitemradio", { name: "Gaia" }),
@@ -94,7 +111,7 @@ describe("AccountSwitcher", () => {
 
 	it("falls back to the first account when the stored id is stale", async () => {
 		localStorage.setItem(STORAGE_KEY, JSON.stringify("Valisthea"));
-		renderWithRouter({ routes: [indexRoute], initialLocation: "/" });
+		renderWithRouter({ routeTree, initialLocation: "/" });
 		expect(
 			await screen.findByRole("menuitemradio", { name: "NVIDIA" }),
 		).toBeChecked();
@@ -103,7 +120,7 @@ describe("AccountSwitcher", () => {
 	it("redirects when switching accounts on pages with accounts.redirectOnChange", async () => {
 		const user = userEvent.setup();
 		const { router } = renderWithRouter({
-			routes: [indexRoute, detailRoute],
+			routeTree,
 			initialLocation: "/detail",
 		});
 

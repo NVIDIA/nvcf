@@ -2,27 +2,23 @@
   "name": "ui",
   "private": true,
   "type": "module",
-  "imports": {
-    "#/*": "./src/*"
-  },
   "scripts": {
-    "prepare": "kui-sync-skills --dir ../.claude",
+    "prepare": "kui-sync-skills --dir ../.agents",
     "generate": "orval",
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "format": "biome format",
-    "lint": "biome lint",
-    "check": "biome check",
-    "check:fix": "biome check --write",
+    "format": "biome format --write",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
     "vendor-css": "node scripts/vendor-kui-css.js"
   },
   "dependencies": {
     "@nvidia/foundations-react-core": "^1.7.0",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-query": "^5.100.1",
-    "@tanstack/react-router": "^1.170.18",
+    "@tanstack/react-router": "^1.170.46",
     "@tanstack/react-table": "^8.21.3",
     "clsx": "^2.1.1",
     "dayjs": "^1.11.21",
@@ -40,9 +36,11 @@
     "@nvidia/foundations-tailwind-plugin": "^1.7.0",
     "@tailwindcss/typography": "^0.5.16",
     "@tanstack/devtools-vite": "^0.8.1",
+    "@tanstack/intent": "^0.5.6",
     "@tanstack/react-devtools": "^0.10.8",
     "@tanstack/react-query-devtools": "^5.100.0",
     "@tanstack/react-router-devtools": "^1.167.0",
+    "@tanstack/router-plugin": "^1.168.48",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
@@ -70,7 +68,12 @@
     ]
   },
   "engines": {
-    "node": ">=20.11.0"
+    "node": "^20.19.0 || >=22.12.0"
   },
-  "packageManager": "pnpm@11.3.0+sha512.2c403d6594527287672b1f7056343a1f7c3634036a67ffabfcc2b3d7595d843768f8787148d1b57cf7956c90606bbd192857c363af19e96d2d0ec9ec5741d215"
+  "packageManager": "pnpm@11.3.0+sha512.2c403d6594527287672b1f7056343a1f7c3634036a67ffabfcc2b3d7595d843768f8787148d1b57cf7956c90606bbd192857c363af19e96d2d0ec9ec5741d215",
+  "intent": {
+    "skills": [
+      "@tanstack/*"
+    ]
+  }
 }

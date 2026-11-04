@@ -4,10 +4,10 @@ A web interface for managing NVIDIA Cloud Functions (NVCF), built as a single-pa
 
 ## Prerequisites
 
-- **Go** 1.24+
-- **Node** 22+
-- **pnpm** 10+
-- **[Task]** 3+
+- Go 1.26+ (see `backend/go.mod`)
+- Node 20.19+ or 22.12+ (see `engines` in `ui/package.json`)
+- pnpm 11 (pinned by `packageManager` in `ui/package.json`)
+- [Task] 3+
 
 [Task]: https://taskfile.dev
 
@@ -24,47 +24,54 @@ Bazel is the canonical build path. The `task` commands below stay available for
 local iteration outside CI.
 
 Requires [bazelisk](https://github.com/bazelbuild/bazelisk) (`bazel` on PATH
-delegating to the version pinned in `.bazelversion`).
+delegating to the version pinned in the repository root `.bazelversion`). Run
+these from the repository root.
 
 ```bash
-# Build every Bazel target.
-bazel build //...
+# Build every nvcf-ui target.
+bazel build //src/uis/nvcf-ui/...
 
-# Run all tests.
-bazel test //... --flaky_test_attempts=3
+# Run all nvcf-ui tests.
+bazel test //src/uis/nvcf-ui/... --flaky_test_attempts=3
 
 # Build the multi-arch OCI image index (linux/amd64 + linux/arm64).
-bazel build //:image_index
+bazel build //src/uis/nvcf-ui:image_index
 
 # Load the host-arch image into the local docker daemon.
-bazel run //:image_load
+bazel run //src/uis/nvcf-ui:image_load
 
 # Refresh backend/BUILD.bazel files after Go source changes.
-bazel run //:gazelle
+bazel run //src/uis/nvcf-ui:gazelle
 ```
 
 Image publishing to the staging registry is performed by the CI pipeline, not
 a local Bazel push target.
 
-> The `//ui` target carries `tags = ["no-sandbox"]` — required for Vite 8's Rolldown
+> The `//ui` target carries `tags = ["no-sandbox"]`, required for Vite 8's Rolldown
 > bundler under Bazel ([rules_js#2888](https://github.com/aspect-build/rules_js/issues/2888)).
 > Do not remove it.
 
 ## Project Structure
 
 ```text
-├── backend/       # Go BFF — proxy, control-plane, static SPA serving
-├── ui/            # React SPA — Vite, TanStack Router/Query, Tailwind, KUI
-├── spec/          # OpenAPI specification (source of truth for codegen)
+├── AGENTS.md       # guidance for AI coding agents
+├── ARCHITECTURE.md # layers, placement, routing, data loading
+├── .agents/skills/ # agent skills (symlinked into .claude/ and .cursor/)
+├── backend/       # Go BFF: proxy, control-plane, static SPA serving
+├── ui/            # React SPA: Vite, TanStack Router/Query, Tailwind, KUI
+├── spec/          # OpenAPI specifications (source of truth for codegen)
 ├── helm/          # Helm chart for Kubernetes deployment
-├── rules/         # Bazel macros (OCI image packaging)
-├── platforms/     # Bazel platform definitions (linux amd64/arm64)
-├── MODULE.bazel   # Bazel (bzlmod) module — Go, UI, and image build
-├── Taskfile.yml   # Root task runner (orchestrates ui/ and backend/ tasks)
-└── .gitlab-ci.yml # CI pipeline — lint, typecheck, test, deploy
+├── BUILD.bazel    # Bazel targets: build, lint, typecheck, test, OCI image
+├── biome.json     # Biome config (extends ui/biome.json)
+└── Taskfile.yml   # Root task runner (orchestrates ui/ and backend/ tasks)
 ```
 
 ## Development
+
+Start your coding agent in this directory. Claude Code reads
+`.claude/settings.json` only from the directory a session starts in, so a
+session started at the monorepo root works but loses the permission allowlist
+and the format-on-edit hook. See `AGENTS.md`.
 
 ### Commands
 
@@ -83,13 +90,13 @@ a local Bazel push target.
 
 ### Dev Modes
 
-**Mock mode** — Run the UI standalone with mocked API responses. No live API or cluster required.
+Mock mode runs the UI standalone with mocked API responses. No live API or cluster required.
 
 ```sh
 task ui:dev MOCK=true
 ```
 
-By default, mock responses come from a seeded in-memory store built on the OpenAPI schemas (via Orval), so data is stable and referentially consistent — list rows match their detail pages and everything is keyed by the active account. To test specific UI states (empty lists, error conditions, etc.), use **scenarios** — named overrides layered on top of the default handlers:
+By default, mock responses come from a seeded in-memory store built on the OpenAPI schemas (via Orval), so data is stable and referentially consistent. List rows match their detail pages and everything is keyed by the active account. To test specific UI states (empty lists, error conditions, etc.), use scenarios, which are named overrides layered on top of the default handlers:
 
 ```sh
 task ui:dev MOCK=true SCENARIO=functions:empty-list
@@ -97,7 +104,7 @@ task ui:dev MOCK=true SCENARIO=functions:empty-list
 
 Multiple scenarios can be combined with commas: `SCENARIO=functions:empty-list,tasks:launching-task`. Scenarios live in `ui/src/mocks/scenarios/<feature>/<name>.ts`.
 
-**Live API mode** — The backend-for-frontend server lives in `backend/` and is compiled by `task build`. Running it against live upstreams requires in-cluster access and mounted secrets, so for day-to-day UI work use mock mode.
+Live API mode uses the backend-for-frontend server, which lives in `backend/` and is compiled by `task build`. Running it against live upstreams requires in-cluster access and mounted secrets, so for day-to-day UI work use mock mode.
 
 ### Code Generation
 
@@ -109,9 +116,13 @@ task generate
 
 Generated code lives in `ui/src/generated/` and should not be edited by hand.
 
+The route tree, `ui/src/routeTree.gen.ts`, is generated by the TanStack Router
+Vite plugin whenever the dev server, a build, or the tests start. It is
+committed and should not be edited by hand either.
+
 ### Testing
 
-Tests use [Vitest](https://vitest.dev/) with [Testing Library](https://testing-library.com/). Test files live alongside the code they test (e.g. `FunctionsList.test.tsx` next to `FunctionsList.tsx`).
+Tests use [Vitest](https://vitest.dev/) with [Testing Library](https://testing-library.com/). Test files live alongside the code they test (for example `FunctionCard.test.tsx` next to `FunctionCard.tsx`). Page tests sit beside their route file in `ui/src/routes/` and are named after the page component (`FunctionDetail.test.tsx`).
 
 ```sh
 task test
@@ -119,8 +130,10 @@ task test
 
 ## Architecture
 
-The application follows a **backend-for-frontend (BFF)** pattern: the React SPA never talks to upstream services directly. A BFF handles authentication, proxies API requests to upstream NVCF services, and serves the built SPA as static files. That server lives in `backend/`.
+The application follows a backend-for-frontend (BFF) pattern: the React SPA never talks to upstream services directly. A BFF handles authentication, proxies API requests to upstream NVCF services, and serves the built SPA as static files. That server lives in `backend/`.
+
+See `ARCHITECTURE.md` for how the UI is structured.
 
 ## License
 
-[Apache 2.0](LICENSE)
+[Apache 2.0](../../../LICENSE)

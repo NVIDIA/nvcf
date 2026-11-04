@@ -16,7 +16,7 @@
  */
 
 import { Avatar, Dropdown, Text } from "@nvidia/foundations-react-core";
-import { useActiveAccount } from "../hooks/useActiveAccount";
+import { useActiveAccount } from "~/features/accounts/hooks/useActiveAccount";
 
 export function AccountSwitcher() {
 	const { accounts, activeAccount, switchAccount } = useActiveAccount();

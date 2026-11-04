@@ -32,7 +32,7 @@ tasks:
       - task: backend:install
 
   generate:
-    desc: Generate typed API hooks, TypeScript models, and MSW mock handlers from OpenAPI spec
+    desc: Generate typed API hooks, TypeScript models, and MSW mock handlers from the OpenAPI specs
     cmds:
       - task: ui:generate
       - task: license:add
@@ -69,6 +69,13 @@ tasks:
       - task: ui:lint:fix
       - task: backend:lint:fix
       - task: license:add
+
+  verify:
+    desc: Run lint, license, typecheck, and tests for the UI and backend (CI runs the equivalent Bazel targets)
+    cmds:
+      - task: lint
+      - task: typecheck
+      - task: test
 
   license:check:
     desc: Check for missing license headers
