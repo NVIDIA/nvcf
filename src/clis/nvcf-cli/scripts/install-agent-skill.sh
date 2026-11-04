@@ -22,7 +22,7 @@
 # 'nvcf-cli agent-skill install' instead.
 #
 # AUTHENTICATION:
-#   This script fetches public files from github.com/NVIDIA/nvcf. Authentication
+#   This script fetches public files from github.com/dsx-ai-factory/nvcf. Authentication
 #   is optional; set GITHUB_TOKEN if your environment needs a higher GitHub API
 #   rate limit.
 #
@@ -49,7 +49,7 @@ set -euo pipefail
 
 DEFAULT_BRANCH="main"
 GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"
-GITHUB_REPO="${GITHUB_REPO:-NVIDIA/nvcf}"
+GITHUB_REPO="${GITHUB_REPO:-dsx-ai-factory/nvcf}"
 SOURCE_PATH="ai-tooling/user/skills"
 SKILL_NAMES=("nvcf-self-managed-cli" "nvcf-self-managed-installation")
 MANIFEST_MARKER=".nvcf-cli-public-skills.manifest.json"
@@ -81,10 +81,10 @@ Examples:
 
 Environment:
   GITHUB_TOKEN      Optional GitHub token for higher API rate limits.
-  GITHUB_REPO       Source repository in owner/name form (default: NVIDIA/nvcf).
+  GITHUB_REPO       Source repository in owner/name form (default: dsx-ai-factory/nvcf).
   GITHUB_API_URL    GitHub API endpoint (default: https://api.github.com).
 
-Source: github.com/NVIDIA/nvcf/ai-tooling/user/skills/
+Source: github.com/dsx-ai-factory/nvcf/ai-tooling/user/skills/
 EOF
 }
 
