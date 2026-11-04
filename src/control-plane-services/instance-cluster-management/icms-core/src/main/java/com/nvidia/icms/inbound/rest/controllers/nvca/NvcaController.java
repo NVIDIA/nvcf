@@ -141,6 +141,44 @@ public class NvcaController {
                                                    auditProps);
     }
 
+    // A separate route rather than a parameter on registerCluster: an ICMS without this
+    // endpoint answers 404 instead of ignoring an unknown parameter and registering.
+    @PostMapping("clusters/{clusterId}/register/validate")
+    @PreAuthorize("hasAuthority('nvca-cluster') or hasAuthority('apikey:nvca-cluster')")
+    @Operation(summary = "Validate Cluster Registration",
+            description = "API to run the checks of cluster registration without applying it. "
+                    + "It answers 204 when the same registration request would be accepted, "
+                    + "and the error a registration would return otherwise.",
+            responses = {
+                    @ApiResponse(
+                            responseCode = "204",
+                            description = "No Content - the registration would be accepted"
+                    ),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "400", description = "Bad request"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "401", description = "Unauthorized"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "403", description = "Forbidden - invalid token provided"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "404", description = "Not Found - unknown cluster"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "409", description = "Conflict - mismatch with already present data"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "429", description = "Too many requests"),
+                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "500", description = "Internal server error")
+            },
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                    content = @Content(
+                            mediaType = APPLICATION_JSON_VALUE,
+                            schema = @Schema(implementation = NvcaRegistrationRequest.class)
+                    )
+            ))
+    public ResponseEntity<Void> validateClusterRegistration(
+            @Schema(description = "Id of the cluster")
+            @PathVariable("clusterId")
+            String clusterId,
+            @Valid @RequestBody NvcaRegistrationRequest nvcaRegistrationRequest) {
+
+        nvcaService.validateNvcaClusterRegistration(nvcaRegistrationRequest,
+                                                    validateClusterIdWithAuthToken(clusterId));
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("clusters/{clusterId}/credentials")
     @PreAuthorize("hasAuthority('nvca-cluster') or hasAuthority('apikey:nvca-cluster')")
     @Operation(summary = "Renew credentials for creation and termination queues",

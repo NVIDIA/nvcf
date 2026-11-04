@@ -86,6 +86,20 @@ public class GlobalErrorHandler {
         return new ResponseEntity<>(error, HttpStatus.CONFLICT);
     }
 
+    @ExceptionHandler(IcmsActiveInstancesConflictException.class)
+    public ResponseEntity<Object> activeInstancesConflictException(
+            IcmsActiveInstancesConflictException exception) {
+
+        sendTelemetryEvent(exception, Events.ERROR_EVENT.toString());
+        ActiveInstancesConflictErrorResponse error = new ActiveInstancesConflictErrorResponse();
+        error.setError(exception.getBody().getDetail());
+        error.setReason(IcmsActiveInstancesConflictException.REASON);
+        error.setInstanceTypes(exception.getInstanceTypes());
+        error.setActiveInstanceIds(exception.getActiveInstanceIds());
+
+        return new ResponseEntity<>(error, HttpStatus.CONFLICT);
+    }
+
     @ExceptionHandler(QueueDeletedRecentlyException.class)
     public ResponseEntity<Object> handleQueueDeletedRecentlyException(
             QueueDeletedRecentlyException exception) {

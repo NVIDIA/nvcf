@@ -41,6 +41,12 @@ public class NvcaService {
                                                                       clusterId, auditProperties);
     }
 
+    public void validateNvcaClusterRegistration(
+            @NotNull NvcaRegistrationRequest nvcaRegistrationRequest,
+            @NotNull String clusterId) {
+        nvcaClusterRegistrationService.validateNvcaClusterRegistration(nvcaRegistrationRequest, clusterId);
+    }
+
     public NvcaAccessCreds renewAccessCredentials(@NotNull String clusterId) {
         return nvcaClusterRegistrationService.renewAccessCredentials(clusterId);
     }
