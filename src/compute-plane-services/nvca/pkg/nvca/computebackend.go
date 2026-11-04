@@ -50,6 +50,11 @@ type ICMSRequestHelper interface {
 	// ComputeCleanupCacheReferences cleanUp underlying cache references
 	ComputeCleanupCacheReferences(ctx context.Context, references []string) error
 
+	// RetryFailedModelCacheCleanup repeats the cleanup of a failed model cache setup for a creation
+	// request whose workers all exist. It does nothing unless the request recorded a caching fallback.
+	// Errors prevent status synchronization from removing the request before cleanup can finish.
+	RetryFailedModelCacheCleanup(ctx context.Context, req *nvcav2beta1.ICMSRequest) error
+
 	// AllInstancesTerminatedAndReported returns if all NVCF worker instances for backend are terminated and reported to ICMS
 	AllInstancesTerminatedAndReported(ctx context.Context, req *nvcav2beta1.ICMSRequest) bool
 
