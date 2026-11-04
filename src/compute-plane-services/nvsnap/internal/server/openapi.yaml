@@ -41,7 +41,7 @@ info:
   version: "0.1.0"
   contact:
     name: NvSnap maintainers
-    url: https://github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap
+    url: https://github.com/dsx-ai-factory/nvcf/tree/main/src/compute-plane-services/nvsnap
   license:
     name: Apache-2.0
     identifier: Apache-2.0

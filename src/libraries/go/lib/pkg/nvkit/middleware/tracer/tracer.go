@@ -27,7 +27,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/status"
 
-	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1"
+	nverrors "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1"
 )
 
 // ErrorTracer middle sets error details in the span so it can be used to differentiate different errors from span

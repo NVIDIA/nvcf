@@ -1,0 +1,248 @@
+{
+  "title": "nvstor NFS",
+  "description": "Operational dashboard for nvstor-nfs-export. Imports cleanly into Grafana 10+ with a Prometheus datasource that scrapes :9101/metrics on each NFS server.",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["nvstor", "nfs", "storage"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" }
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(nvstor_nfs_compound_total, instance)",
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Active connections",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum(nvstor_nfs_active_connections{instance=~\"$instance\"})",
+          "legendFormat": "connections"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 800 },
+              { "color": "red", "value": 950 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Active sessions",
+      "type": "stat",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum(nvstor_nfs_active_sessions{instance=~\"$instance\"})",
+          "legendFormat": "sessions"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "COMPOUND rate",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum(rate(nvstor_nfs_compound_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "ops/s"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 4,
+      "title": "Error rate",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum(rate(nvstor_nfs_compound_errors_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "errors/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.1 },
+              { "color": "red", "value": 1.0 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Read throughput",
+      "type": "stat",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum(rate(nvstor_nfs_read_bytes_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "B/s"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    },
+    {
+      "id": 6,
+      "title": "Write throughput",
+      "type": "stat",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum(rate(nvstor_nfs_write_bytes_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "B/s"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    },
+    {
+      "id": 10,
+      "title": "Op latency p50/p95/p99 by category",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (category, le) (rate(nvstor_nfs_op_duration_seconds_bucket{instance=~\"$instance\"}[1m])))",
+          "legendFormat": "p50 {{category}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (category, le) (rate(nvstor_nfs_op_duration_seconds_bucket{instance=~\"$instance\"}[1m])))",
+          "legendFormat": "p95 {{category}}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (category, le) (rate(nvstor_nfs_op_duration_seconds_bucket{instance=~\"$instance\"}[1m])))",
+          "legendFormat": "p99 {{category}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0
+          }
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Op rate by type",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(rate(nvstor_nfs_read_ops_total{instance=~\"$instance\"}[1m]))",   "legendFormat": "READ" },
+        { "expr": "sum(rate(nvstor_nfs_write_ops_total{instance=~\"$instance\"}[1m]))",  "legendFormat": "WRITE" },
+        { "expr": "sum(rate(nvstor_nfs_open_ops_total{instance=~\"$instance\"}[1m]))",   "legendFormat": "OPEN" },
+        { "expr": "sum(rate(nvstor_nfs_lookup_ops_total{instance=~\"$instance\"}[1m]))", "legendFormat": "LOOKUP" },
+        { "expr": "sum(rate(nvstor_nfs_getattr_ops_total{instance=~\"$instance\"}[1m]))","legendFormat": "GETATTR" },
+        { "expr": "sum(rate(nvstor_nfs_create_ops_total{instance=~\"$instance\"}[1m]))", "legendFormat": "CREATE" },
+        { "expr": "sum(rate(nvstor_nfs_copy_ops_total{instance=~\"$instance\"}[1m]))",   "legendFormat": "COPY" },
+        { "expr": "sum(rate(nvstor_nfs_lock_ops_total{instance=~\"$instance\"}[1m]))",   "legendFormat": "LOCK" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 20,
+      "title": "Latency heatmap (read)",
+      "type": "heatmap",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum by (le) (rate(nvstor_nfs_op_duration_seconds_bucket{category=\"read\",instance=~\"$instance\"}[1m]))",
+          "format": "heatmap",
+          "legendFormat": "{{le}}"
+        }
+      ],
+      "yAxis": { "format": "s", "logBase": 2 }
+    },
+    {
+      "id": 21,
+      "title": "Latency heatmap (metadata)",
+      "type": "heatmap",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum by (le) (rate(nvstor_nfs_op_duration_seconds_bucket{category=\"metadata\",instance=~\"$instance\"}[1m]))",
+          "format": "heatmap",
+          "legendFormat": "{{le}}"
+        }
+      ],
+      "yAxis": { "format": "s", "logBase": 2 }
+    },
+    {
+      "id": 30,
+      "title": "Lock conflicts / lease expirations",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum(rate(nvstor_nfs_lock_conflicts_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "lock conflicts/s"
+        },
+        {
+          "expr": "sum(rate(nvstor_nfs_lease_expirations_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "lease expirations/s"
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "title": "Bytes copied (server-side COPY)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum(rate(nvstor_nfs_copy_bytes_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "B/s"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    }
+  ]
+}

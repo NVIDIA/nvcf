@@ -28,7 +28,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/encrypt"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/encrypt"
 )
 
 const (

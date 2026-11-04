@@ -9,7 +9,7 @@ go_library(
         "factory.go",
         "generic.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions",
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/nvca/pkg/apis/nvca/v1:nvca",

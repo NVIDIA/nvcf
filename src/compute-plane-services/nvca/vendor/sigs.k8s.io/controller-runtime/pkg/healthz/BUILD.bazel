@@ -6,7 +6,7 @@ go_library(
         "doc.go",
         "healthz.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/healthz",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/healthz",
     importpath = "sigs.k8s.io/controller-runtime/pkg/healthz",
     visibility = ["//visibility:public"],
     deps = [

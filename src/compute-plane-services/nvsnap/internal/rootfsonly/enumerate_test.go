@@ -24,7 +24,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // captureFS materializes a synthetic captured rootfs tree at root.

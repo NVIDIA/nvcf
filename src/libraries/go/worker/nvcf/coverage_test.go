@@ -39,10 +39,10 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/consumer"
-	pb "github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/token"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/consumer"
+	pb "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/token"
 )
 
 // ---------------------------------------------------------------------------

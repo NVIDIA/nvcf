@@ -15,7 +15,7 @@ go_library(
         "openai_tts.go",
         "unmodeled.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models",
     visibility = ["//visibility:public"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/internal/must",

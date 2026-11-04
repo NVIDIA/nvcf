@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "resolver",
     srcs = ["config_selector.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/resolver",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/resolver",
     importpath = "google.golang.org/grpc/internal/resolver",
     visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
     deps = [

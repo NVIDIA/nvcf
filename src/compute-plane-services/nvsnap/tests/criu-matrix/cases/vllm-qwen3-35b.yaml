@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# vLLM, Qwen3.6 35B A3B, TP=4, expert parallel (as bench-qwen3-35b).
+kind: Deployment
+launch: exec
+gpusPerPod: 4
+model: Qwen/Qwen3.6-35B-A3B
+servedModelName: Qwen/Qwen3.6-35B-A3B
+maxModelLen: 8192
+gpuMemoryUtilization: 0.90
+extraArgs: --trust-remote-code --enable-expert-parallel
+function:
+  inferenceUrl: /v1/chat/completions
+  secrets: [HF_TOKEN]

@@ -17,7 +17,7 @@ go_library(
         "timer.go",
         "ws.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats.go",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats.go",
     importpath = "github.com/nats-io/nats.go",
     visibility = ["//visibility:public"],
     deps = [

@@ -6,8 +6,6 @@ github.com/MicahParks/jwkset v0.9.6 h1:Tf8l2/MOby5Kh3IkrqzThPQKfLytMERoAsGZKlyYZ
 github.com/MicahParks/jwkset v0.9.6/go.mod h1:U2oRhRaLgDCLjtpGL2GseNKGmZtLs/3O7p+OZaL5vo0=
 github.com/MicahParks/keyfunc/v3 v3.4.0 h1:g03TXq6NjhZyO/UkODl//abm4KiLLNRi0VhW7vGOHyg=
 github.com/MicahParks/keyfunc/v3 v3.4.0/go.mod h1:y6Ed3dMgNKTcpxbaQHD8mmrYDUZWJAxteddA6OQj+ag=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26 h1:P9OSmvy6MQPqfzRgaLl0XpvK5UYHAFtNnQQb+yk+6b0=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26/go.mod h1:nj3yBW2weO0qzi1ML45tBqviLa2Y/KG9qCalxQuJVB8=
 github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op h1:Z/MZK75wC/NSrkgqeNIa7jexam9uWzhLmFTSCPI/kn0=
 github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op/go.mod h1:FQyySiasQQM8735Ddel3MRojmy4dA1IqCeyJ5jmPMbI=
 github.com/aricart/nst.go v0.1.0 h1:GqLjCGFd02hJCdL96rVwtkRTXAajokV5sgikB5BQ7NQ=

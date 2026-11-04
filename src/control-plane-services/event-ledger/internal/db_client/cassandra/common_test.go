@@ -22,7 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/config"
 )
 
 func TestValidateCassandraTLSConfig(t *testing.T) {

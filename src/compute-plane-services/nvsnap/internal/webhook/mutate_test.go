@@ -29,8 +29,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 )
 
 // putHash is a helper: makes a small tree, Puts it under hash, returns
@@ -161,6 +161,41 @@ func TestMutate_InjectsVolumesAndMounts(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("patches: path %q count = %d, want %d (all=%+v)", k, got[k], v, patches)
 		}
+	}
+}
+
+// TestMutate_OptOutLabel: nvsnap.io/inject=false on the pod admits it
+// unchanged even when a restore would otherwise apply. This is the
+// in-agent half of the opt-out; the registration's selectors are the
+// other half and are checked by the chart render test.
+func TestMutate_OptOutLabel(t *testing.T) {
+	b := newBackend(t)
+	hash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	vols := []checkpointstore.VolumeMeta{
+		{Name: "nim-cache", MountPath: "/opt/nim/.cache", Type: "emptyDir", SizeBytes: 1, FileCount: 1},
+	}
+	putHash(t, b, hash, vols)
+	mut := &Mutator{Backend: b, MainContainer: 0, CacheDir: "/opt/nvsnap"}
+
+	pod := podWithAnnotation(hash)
+	pod.Labels = map[string]string{InjectLabel: InjectDisabled}
+	patches, err := mut.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(patches) != 0 {
+		t.Fatalf("opted-out pod got %d patches: %+v", len(patches), patches)
+	}
+
+	// Any other value keeps the pod eligible.
+	pod = podWithAnnotation(hash)
+	pod.Labels = map[string]string{InjectLabel: "true"}
+	patches, err = mut.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(patches) == 0 {
+		t.Fatalf("nvsnap.io/inject=true must not opt out")
 	}
 }
 

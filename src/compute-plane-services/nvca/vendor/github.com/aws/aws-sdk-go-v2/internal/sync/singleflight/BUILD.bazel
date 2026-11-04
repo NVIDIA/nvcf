@@ -6,7 +6,7 @@ go_library(
         "docs.go",
         "singleflight.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/sync/singleflight",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/sync/singleflight",
     importpath = "github.com/aws/aws-sdk-go-v2/internal/sync/singleflight",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
 )

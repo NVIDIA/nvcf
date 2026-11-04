@@ -25,8 +25,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
-	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
-	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvidiaiov1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvcaoptypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
 const (

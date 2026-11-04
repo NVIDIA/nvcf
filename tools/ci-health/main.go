@@ -35,7 +35,7 @@
 //	ci-health --merge-times          # PR open to merge latency
 //	ci-health --all
 //	ci-health --workflow release-tags.yml   # default: bazel.yml
-//	ci-health --repo OWNER/NAME             # default: NVIDIA/nvcf
+//	ci-health --repo OWNER/NAME             # default: dsx-ai-factory/nvcf
 //
 // Trends read every retained run of the workflow, which is cheap because the
 // runs endpoint paginates 100 at a time. Per-job analysis costs one API call per
@@ -79,7 +79,7 @@ type options struct {
 
 func parseFlags() *options {
 	o := &options{}
-	flag.StringVar(&o.repo, "repo", "NVIDIA/nvcf", "repository as OWNER/NAME")
+	flag.StringVar(&o.repo, "repo", "dsx-ai-factory/nvcf", "repository as OWNER/NAME")
 	flag.StringVar(&o.workflow, "workflow", "bazel.yml", "workflow file name")
 	flag.StringVar(&o.dashboard, "dashboard", "", "write a self-contained HTML dashboard to this path (default build-health.html when the flag is given without a value)")
 	flag.BoolVar(&o.why, "why", false, "rank the causes of slowness as text")

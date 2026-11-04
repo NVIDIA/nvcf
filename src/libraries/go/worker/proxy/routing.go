@@ -22,7 +22,7 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils/middleware"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils/middleware"
 )
 
 type ProtoRoutingTransport struct {

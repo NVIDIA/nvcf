@@ -22,7 +22,7 @@ import (
 
 	echo "github.com/labstack/echo/v4"
 
-	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	golibversion "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 )
 
 func RegisterRoutes(e *echo.Echo, handlers *Handlers) {

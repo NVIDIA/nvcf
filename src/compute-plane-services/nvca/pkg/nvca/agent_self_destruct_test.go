@@ -23,16 +23,16 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"k8s.io/apimachinery/pkg/labels"
 
-	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	nvcav2beta1listers "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/listers/nvca/v2beta1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcametrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	nvcav2beta1listers "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/listers/nvca/v2beta1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 // MockICMSClient is a mock implementation of ICMSClientInterface for testing
@@ -482,6 +482,21 @@ func (m *MockICMSRequestHelper) GetICMSRequestUpdatesForCreateRequest(ctx contex
 func (m *MockICMSRequestHelper) ComputeCleanupCacheReferences(ctx context.Context, references []string) error {
 	args := m.Called(ctx, references)
 	return args.Error(0)
+}
+
+// RetryFailedModelCacheCleanup is recorded only when a test expects it, so tests that do not care
+// about model cache cleanup need no expectation for it.
+func (m *MockICMSRequestHelper) RetryFailedModelCacheCleanup(ctx context.Context, req *nvcav2beta1.ICMSRequest) error {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "RetryFailedModelCacheCleanup" {
+			args := m.Called(ctx, req)
+			if run, ok := args.Get(0).(func(context.Context, *nvcav2beta1.ICMSRequest) error); ok {
+				return run(ctx, req)
+			}
+			return args.Error(0)
+		}
+	}
+	return nil
 }
 
 func (m *MockICMSRequestHelper) AllInstancesTerminatedAndReported(ctx context.Context, req *nvcav2beta1.ICMSRequest) bool {

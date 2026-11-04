@@ -10,7 +10,7 @@ go_library(
     name = "spot_lib",
     srcs = ["spot.go"],
     embedsrcs = ["clusterGroups.json"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/spot",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/spot",
     visibility = ["//visibility:private"],
     deps = [
         "@com_github_goccy_go_json//:go-json",

@@ -12,7 +12,7 @@ go_library(
         "v3.go",
         "v3_account_reads.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/api/service",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/cmd/api/service",
     visibility = ["//visibility:public"],
     deps = [
         "//src/control-plane-services/event-ledger/cmd/api/error",

@@ -23,7 +23,7 @@ go_library(
         "push_listener.go",
         "routing.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/worker/ca",

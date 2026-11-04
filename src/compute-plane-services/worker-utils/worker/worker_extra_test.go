@@ -34,8 +34,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	pb "github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy"
+	pb "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy"
 )
 
 // TestSetupAndShutdown exercises Setup (which prepares the work dirs and the

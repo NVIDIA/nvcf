@@ -22,7 +22,7 @@ go_library(
         "tracing.go",
         "transport.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/tracing",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/tracing",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_nats_io_nats_go//:nats_go",

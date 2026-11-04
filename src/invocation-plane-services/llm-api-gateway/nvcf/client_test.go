@@ -36,7 +36,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 
-	llmgatewaypb "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf/pb"
+	llmgatewaypb "github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/nvcf/pb"
 )
 
 func TestGRPCClientAuthorizeInvocation(t *testing.T) {

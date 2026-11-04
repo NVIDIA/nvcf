@@ -20,7 +20,7 @@ package main
 import (
 	"log"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/utils/jwe-utils/cli"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/utils/jwe-utils/cli"
 )
 
 func main() {

@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )

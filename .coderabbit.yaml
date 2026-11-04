@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
-# CodeRabbit configuration for NVIDIA/nvcf.
+# CodeRabbit configuration for dsx-ai-factory/nvcf.
 # Docs: https://docs.coderabbit.ai/reference/configuration
 language: en-US
 early_access: false

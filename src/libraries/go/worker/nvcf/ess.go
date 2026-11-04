@@ -26,10 +26,10 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/token"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/token"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 )
 
 // ------------------------------------------------------------------------

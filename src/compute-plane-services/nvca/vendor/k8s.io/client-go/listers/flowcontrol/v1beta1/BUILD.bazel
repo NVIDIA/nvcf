@@ -7,7 +7,7 @@ go_library(
         "flowschema.go",
         "prioritylevelconfiguration.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers/flowcontrol/v1beta1",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers/flowcontrol/v1beta1",
     importpath = "k8s.io/client-go/listers/flowcontrol/v1beta1",
     visibility = ["//visibility:public"],
     deps = [

@@ -14,6 +14,27 @@
 # limitations under the License.
 
 {{- $cfg := .Values.llmApiGateway.config }}
+{{- if lt ($cfg.decisionImageTokens | int64) 0 }}
+{{- fail "llmApiGateway.config.decisionImageTokens must be 0 or more" }}
+{{- end }}
+{{- $maxBody := $cfg.maxRequestBodyBytes }}
+{{- $maxBodyEnv := "" }}
+{{- if kindIs "invalid" $maxBody }}
+{{- /* --reuse-values from an older chart; older images have no default limit */}}
+{{- $maxBodyEnv = "52428800" }}
+{{- else if kindIs "float64" $maxBody }}
+{{- if and (eq $maxBody (floor $maxBody)) (ge $maxBody 0.0) (lt $maxBody 9223372036854775807.0) }}
+{{- $maxBodyEnv = $maxBody | int64 | toString }}
+{{- else if eq $maxBody 9223372036854775807.0 }}
+{{- /* values files parse 9223372036854775807 as float64 2^63 */}}
+{{- $maxBodyEnv = "9223372036854775807" }}
+{{- end }}
+{{- else if and (or (kindIs "int" $maxBody) (kindIs "int64" $maxBody)) (ge ($maxBody | int64) 0) }}
+{{- $maxBodyEnv = $maxBody | int64 | toString }}
+{{- end }}
+{{- if eq $maxBodyEnv "" }}
+{{- fail "llmApiGateway.config.maxRequestBodyBytes must be a whole number from 0 to 9223372036854775807" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -32,6 +53,8 @@ data:
   STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT: {{ $cfg.lastCluster.lookupTimeout | quote }}
   STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES: {{ $cfg.lastCluster.localMaxEntries | int64 | toString | quote }}
   NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT: {{ $cfg.inferenceWriteTimeout | quote }}
+  NVCF_DECISION_IMAGE_TOKENS: {{ $cfg.decisionImageTokens | int64 | toString | quote }}
+  NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES: {{ $maxBodyEnv | quote }}
   NVCF_GRPC_ADDR: {{ $cfg.nvcfGrpcAddr | quote }}
   NVCF_GRPC_INSECURE: {{ $cfg.nvcfGrpcInsecure | toString | quote }}
   NVCF_GRPC_TIMEOUT: {{ $cfg.nvcfGrpcTimeout | quote }}

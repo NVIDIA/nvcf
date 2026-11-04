@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/router"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/router"
 
 	"github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"

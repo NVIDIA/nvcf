@@ -1,13 +1,13 @@
-module github.com/NVIDIA/nvcf/src/libraries/go/worker
+module github.com/dsx-ai-factory/nvcf/src/libraries/go/worker
 
 go 1.26.0
 
 require (
 	github.com/MadAppGang/httplog v1.3.0
 	github.com/MadAppGang/httplog/zap v1.2.1
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260512163547-58c4eaa29232
 	github.com/carlmjohnson/versioninfo v0.22.5
 	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260512163547-58c4eaa29232
 	github.com/dustin/go-humanize v1.0.1
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/goccy/go-json v0.10.5
@@ -118,3 +118,5 @@ require (
 )
 
 // Run `go mod tidy` to populate indirect dependencies and go.sum.
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../lib

@@ -24,14 +24,21 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 const (
 	// ComponentName for health checks.
 	ComponentName = "kata"
+
+	// RuntimeClassEnv overrides RuntimeClassNameGPU.
+	RuntimeClassEnv = "NVCA_KATA_RUNTIME_CLASS"
+	// RuntimeClassGPUEnv overrides RuntimeClassNameGPU when RuntimeClassEnv is unset.
+	RuntimeClassGPUEnv = "NVCA_KATA_RUNTIME_CLASS_GPU"
+	// RuntimeClassNonGPUEnv overrides RuntimeClassNameNonGPU.
+	RuntimeClassNonGPUEnv = "NVCA_KATA_RUNTIME_CLASS_NON_GPU"
 )
 
 var (
@@ -42,12 +49,12 @@ var (
 )
 
 func init() {
-	if rtcNameOverride := os.Getenv("NVCA_KATA_RUNTIME_CLASS"); rtcNameOverride != "" {
+	if rtcNameOverride := os.Getenv(RuntimeClassEnv); rtcNameOverride != "" {
 		RuntimeClassNameGPU = rtcNameOverride
-	} else if rtcNameOverride := os.Getenv("NVCA_KATA_RUNTIME_CLASS_GPU"); rtcNameOverride != "" {
+	} else if rtcNameOverride := os.Getenv(RuntimeClassGPUEnv); rtcNameOverride != "" {
 		RuntimeClassNameGPU = rtcNameOverride
 	}
-	if rtcNameOverride := os.Getenv("NVCA_KATA_RUNTIME_CLASS_NON_GPU"); rtcNameOverride != "" {
+	if rtcNameOverride := os.Getenv(RuntimeClassNonGPUEnv); rtcNameOverride != "" {
 		RuntimeClassNameNonGPU = rtcNameOverride
 	}
 }

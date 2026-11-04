@@ -16,7 +16,7 @@ go_library(
         "syscall.go",
         "zsyscall_windows.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio",
     importpath = "github.com/Microsoft/go-winio",
     visibility = ["//visibility:public"],
     deps = select({

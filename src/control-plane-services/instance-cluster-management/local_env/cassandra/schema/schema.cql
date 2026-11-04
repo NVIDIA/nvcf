@@ -331,6 +331,7 @@ CREATE TYPE IF NOT EXISTS test.creation_queue
     queue_type text
 );
 
+-- Deprecated: cluster_by_group_id_and_cluster_id is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT exists test.cluster_by_group_id_and_cluster_id (
 cluster_name text,
 cluster_id text,
@@ -423,6 +424,7 @@ cluster_configuration_files map<text, text>,
 PRIMARY KEY (cluster_id)
 );
 
+-- Deprecated: cluster_group_by_cluster_group_id is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT exists test.cluster_group_by_cluster_group_id (
 cluster_group_name text,
 cluster_group_id text,
@@ -440,6 +442,7 @@ cluster_id text,
 PRIMARY KEY (cluster_id)
 );
 
+-- Deprecated: clusters_by_account is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT exists test.clusters_by_account (
 cluster_name text,
 registration_time timestamp,
@@ -491,6 +494,7 @@ authorized_nca_ids set<text>,
 PRIMARY KEY ((nca_id_key), cluster_group_name, cluster_group_id)
 );
 
+-- Deprecated: clusters_by_authorized_accounts is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT exists test.clusters_by_authorized_accounts (
 nca_id_key text,
 cluster_name text,
@@ -511,6 +515,7 @@ cluster_key_id text,
 PRIMARY KEY ((nca_id_key), cluster_id)
 );
 
+-- Deprecated: cluster_groups_by_account is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT exists test.cluster_groups_by_account (
 cluster_group_name text,
 cluster_group_id text,

@@ -6,7 +6,7 @@ go_library(
         "memory.go",
         "proxy.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/cas",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/cas",
     importpath = "oras.land/oras-go/v2/internal/cas",
     visibility = ["//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2:__subpackages__"],
     deps = [

@@ -19,7 +19,7 @@ load("//rules/oci:defs.bzl", "go_oci_image")
 go_library(
     name = "cmd_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/cmd",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/cmd",
     visibility = ["//visibility:private"],
     deps = ["//src/compute-plane-services/worker-task/service"],
 )

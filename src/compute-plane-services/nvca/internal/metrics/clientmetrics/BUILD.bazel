@@ -8,7 +8,7 @@ go_library(
         "roundtripper.go",
         "urltemplate.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics",
     visibility = ["//:__subpackages__"],
     deps = [
         "//src/compute-plane-services/nvca/internal/metrics/semconv",
@@ -36,7 +36,7 @@ go_test(
     embed = [":clientmetrics"],
     deps = [
         "//src/compute-plane-services/nvca/pkg/queue",
-        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http",
+        "//src/compute-plane-services/nvca/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/http",
         "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
         "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promhttp",
         "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel",

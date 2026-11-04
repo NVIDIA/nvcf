@@ -31,10 +31,10 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
-	internalutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/internal"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	internalutil "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/cmd/internal"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 type options struct {

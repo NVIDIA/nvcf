@@ -14,7 +14,7 @@ go_library(
         "syscall_nonlinux.go",
         "trace.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/channelz",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/channelz",
     importpath = "google.golang.org/grpc/internal/channelz",
     visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
     deps = [

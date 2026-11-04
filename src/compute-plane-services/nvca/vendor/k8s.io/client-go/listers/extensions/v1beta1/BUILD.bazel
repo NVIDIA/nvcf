@@ -12,7 +12,7 @@ go_library(
         "replicaset.go",
         "replicaset_expansion.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers/extensions/v1beta1",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers/extensions/v1beta1",
     importpath = "k8s.io/client-go/listers/extensions/v1beta1",
     visibility = ["//visibility:public"],
     deps = [

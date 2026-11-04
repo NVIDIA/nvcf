@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "semaphore",
     srcs = ["semaphore.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/sync/semaphore",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/sync/semaphore",
     importpath = "golang.org/x/sync/semaphore",
     visibility = ["//visibility:public"],
 )

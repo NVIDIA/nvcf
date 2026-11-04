@@ -6,7 +6,7 @@ go_library(
         "config.go",
         "gracefulswitch.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/balancer/gracefulswitch",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/balancer/gracefulswitch",
     importpath = "google.golang.org/grpc/internal/balancer/gracefulswitch",
     visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
     deps = [

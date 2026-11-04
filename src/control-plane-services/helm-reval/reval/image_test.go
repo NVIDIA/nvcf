@@ -31,9 +31,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/reval/cache"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
-	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/reval/cache"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	credhelper "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"github.com/google/go-containerregistry/pkg/name"
 	goctrregistry "github.com/google/go-containerregistry/pkg/registry"
 	"github.com/google/go-containerregistry/pkg/v1/random"

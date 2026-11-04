@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	cmnhttp "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http"
+	cmnhttp "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/http"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
@@ -34,7 +34,7 @@ import (
 	promexporter "go.opentelemetry.io/otel/exporters/prometheus"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 )
 
 // TestEndToEnd_RealFactoryScrape exercises the full production path: the shared
@@ -168,7 +168,7 @@ func TestEndToEnd_RealFactoryScrape(t *testing.T) {
 		t.Fatalf("otelhttp emitted client metrics: suppression regressed, series are double-counted\n%s", text)
 	}
 
-	const ourScope = `otel_scope_name="github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"`
+	const ourScope = `otel_scope_name="github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"`
 	total, ours := 0, 0
 	for _, line := range strings.Split(text, "\n") {
 		if !strings.HasPrefix(line, "http_client_request_duration_seconds_count{") {

@@ -20,7 +20,7 @@ limitations under the License.
 package v1
 
 import (
-	nvcav1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	nvcav1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
 	listers "k8s.io/client-go/listers"
 	cache "k8s.io/client-go/tools/cache"

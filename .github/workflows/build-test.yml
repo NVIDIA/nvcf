@@ -190,8 +190,11 @@ jobs:
       - name: Test OpenBao auto-unseal retry behavior
         run: bash deploy/helm/openbao/tests/auto-unseal-sidecar.sh
 
-      - name: Test OpenBao plugin catalog refresh hook
-        run: bash deploy/helm/openbao/tests/plugin-catalog-refresh-hook.sh
+      - name: Test OpenBao declarative JWT lifecycle
+        run: |
+          bash deploy/helm/openbao/tests/jwt-plugin-lifecycle.sh
+          python3 -B -m unittest discover -s infra/openbao/tests
+          bash migrations/openbao/tests/jwt-plugin-version-test.sh
 
       - name: Test OpenBao initialization tool requirements
         run: bash deploy/helm/openbao/tests/init-tool-requirements.sh
@@ -201,6 +204,9 @@ jobs:
 
       - name: Test NVCT API sidecar release artifacts
         run: bash deploy/helm/cloud-tasks/tests/sidecar_release_artifacts_test.sh
+
+      - name: Test vanity-gateway chart probes
+        run: bash deploy/helm/vanity-gateway/tests/chart-render/verify-probes.sh
 
       - name: Check for uncommitted helm dependency artifacts
         run: |
@@ -237,6 +243,7 @@ jobs:
         run: |
           make -C tools/ncp-local-cluster test-cluster-lifecycle-make
           make -C tools/ncp-local-cluster test-multicluster-make
+          make -C tools/ncp-local-cluster test-destroy-all-ncp-local
           make -C tools/ncp-local-cluster test-gateway-timeout-compatibility
 
       # The repo tooling modules carry tests that no workflow ran, so a pull
@@ -290,11 +297,18 @@ jobs:
       - name: Check migrations against the proposed version bump
         env:
           BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           STACK: ${{ matrix.stack }}
         run: |
-          bump="$(tools/ci/release-bump-type for-branch "origin/${BASE_REF}")"
+          bump="$(tools/ci/release-bump-type for-branch "${BASE_SHA}")"
           echo "proposed bump: ${bump}"
-          tools/ci/check-stack-upgrade-policy --stack "${STACK}" --bump "${bump}"
+          args=()
+          # Maintenance PRs change an existing train, which may have synthetic
+          # history. Compare their target branch, not a newer sibling release.
+          if [[ "${BASE_REF}" == release-* ]]; then
+            args+=(--base-ref "${BASE_SHA}")
+          fi
+          tools/ci/check-stack-upgrade-policy --stack "${STACK}" --bump "${bump}" "${args[@]}"
 
   github-release-helper:
     name: GitHub release helper

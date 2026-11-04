@@ -26,7 +26,7 @@ go_library(
         "zknownfolderids_windows.go",
         "zsyscall_windows.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/sys/windows",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/sys/windows",
     importpath = "golang.org/x/sys/windows",
     visibility = ["//visibility:public"],
 )

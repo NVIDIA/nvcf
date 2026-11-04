@@ -21,15 +21,15 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientv1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/util/retry"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 // NodeUpdater can update nodes to a state expected by NVCA.

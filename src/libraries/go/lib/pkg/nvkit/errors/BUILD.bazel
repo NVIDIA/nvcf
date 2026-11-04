@@ -21,7 +21,7 @@ go_library(
         "encryption_errors.go",
         "errors.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/lib/pkg/nvkit/api/errors/v1:errors",

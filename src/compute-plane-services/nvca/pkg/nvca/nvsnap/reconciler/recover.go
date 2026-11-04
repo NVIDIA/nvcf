@@ -43,7 +43,7 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap"
 )
 
 // recoverExistingCapture returns the content hash of a usable existing

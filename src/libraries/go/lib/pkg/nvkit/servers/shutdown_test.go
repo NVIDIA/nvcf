@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/shutdown"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/shutdown"
 )
 
 func TestAwaitShutdownSignal_ReportsSignalAsShutdown(t *testing.T) {

@@ -7,7 +7,7 @@ go_library(
         "doc.go",
         "version.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/pkg/version",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/pkg/version",
     importpath = "k8s.io/client-go/pkg/version",
     visibility = ["//visibility:public"],
     deps = ["//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/version"],

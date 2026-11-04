@@ -30,6 +30,13 @@ write_values() {
 printf '{}\n' > "$environment_file"
 write_values "$work_dir/default.yaml"
 assert_equal "$(yq '.nats.natsBox.podTemplate' "$work_dir/default.yaml")" null 'no unconditional box policy'
+# The NVCF image registry must not redirect this upstream diagnostic image.
+assert_equal "$(yq '.nats.natsBox.container.image.registry' "$work_dir/default.yaml")" docker.io 'default box registry'
+assert_equal "$(yq '.nats.natsBox.container.image.repository' "$work_dir/default.yaml")" natsio/nats-box 'default box repository'
+printf 'global:\n  image:\n    registry: mirror.example.com\n    repository: team/nvcf\n' > "$environment_file"
+write_values "$work_dir/global-mirror.yaml"
+assert_equal "$(yq -o=json -I=0 '.nats.natsBox.container.image | sort_keys(.)' "$work_dir/global-mirror.yaml")" \
+  "$(yq -o=json -I=0 '.nats.natsBox.container.image | sort_keys(.)' "$work_dir/default.yaml")" 'box independent of NVCF registry'
 # Exercise the documented environment block, not a second copy of its pins.
 awk '/^### Use upstream NATS images/{section=1; next} section && /^```yaml$/{block=1; next} block && /^```$/{exit} block' "$manifest" > "$environment_file"
 test -s "$environment_file" || fail 'missing documented environment example'
@@ -47,6 +54,10 @@ done
 
 # Optional integration with the immutable published chart selected by this lane.
 if test -n "${NATS_STACK_CHART_DIR:-}"; then
+  helm template nats "$NATS_STACK_CHART_DIR" -n nats-system -f "$work_dir/default.yaml" > "$work_dir/default-rendered.yaml"
+  expected="$(yq -r '.nats.natsBox.container.image | .registry + "/" + .repository + ":" + .tag' "$work_dir/default.yaml")"
+  actual="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "nats-box") | .image' "$work_dir/default-rendered.yaml")"
+  assert_equal "$actual" "$expected" 'default rendered box image'
   # Distinct identities catch accidental forwarding of the server policy to the box.
   yq -i '(.nats.natsBox.podTemplate.merge.spec.securityContext.runAsUser, .nats.natsBox.podTemplate.merge.spec.securityContext.runAsGroup) = 2000' "$environment_file"
   write_values "$work_dir/upstream.yaml"

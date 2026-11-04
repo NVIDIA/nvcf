@@ -22,7 +22,7 @@ on:
 
 permissions:
   contents: read
-  # Required to pull the private ghcr.io/nvidia/nvcf/bazel-ci job container.
+  # Required to pull the private ghcr.io/dsx-ai-factory/nvcf/bazel-ci job container.
   packages: read
 
 concurrency:
@@ -34,7 +34,10 @@ jobs:
     name: package + push chart to ncp-dev
     runs-on: ubuntu-latest
     container:
-      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.14.0' }}
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/dsx-ai-factory/nvcf/bazel-ci:0.14.0' }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         # In container jobs Actions falls back to plain `sh` (dash), which

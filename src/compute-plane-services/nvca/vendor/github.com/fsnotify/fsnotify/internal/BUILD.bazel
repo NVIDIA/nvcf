@@ -19,7 +19,7 @@ go_library(
         "unix2.go",
         "windows.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/fsnotify/fsnotify/internal",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/fsnotify/fsnotify/internal",
     importpath = "github.com/fsnotify/fsnotify/internal",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/fsnotify/fsnotify:__subpackages__"],
     deps = select({

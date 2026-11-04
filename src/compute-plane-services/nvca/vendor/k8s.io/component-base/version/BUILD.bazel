@@ -7,7 +7,7 @@ go_library(
         "dynamic.go",
         "version.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/component-base/version",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/component-base/version",
     importpath = "k8s.io/component-base/version",
     visibility = ["//visibility:public"],
     deps = [

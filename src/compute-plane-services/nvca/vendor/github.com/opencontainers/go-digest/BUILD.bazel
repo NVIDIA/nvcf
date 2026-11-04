@@ -9,7 +9,7 @@ go_library(
         "doc.go",
         "verifiers.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/opencontainers/go-digest",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/opencontainers/go-digest",
     importpath = "github.com/opencontainers/go-digest",
     visibility = ["//visibility:public"],
 )

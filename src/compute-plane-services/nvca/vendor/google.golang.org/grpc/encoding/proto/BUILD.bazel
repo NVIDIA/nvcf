@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "proto",
     srcs = ["proto.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/encoding/proto",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/encoding/proto",
     importpath = "google.golang.org/grpc/encoding/proto",
     visibility = ["//visibility:public"],
     deps = [

@@ -22,7 +22,7 @@ import (
 
 	"fmt"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
 )

@@ -6,7 +6,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "gctypes",
     srcs = ["types.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/gctypes",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/gctypes",
     visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )
 

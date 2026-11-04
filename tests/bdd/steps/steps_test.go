@@ -173,6 +173,9 @@ func TestIPrepareHelmfileEnvironmentRestoresExistingDestination(t *testing.T) {
 	if err := os.WriteFile(dest, original, 0o640); err != nil {
 		t.Fatalf("seed destination: %v", err)
 	}
+	if err := os.Chmod(dest, 0o640); err != nil {
+		t.Fatalf("set destination mode: %v", err)
+	}
 	table := docTable(t, [][]string{{"observability.mode", "install"}})
 
 	if err := sc.iPrepareHelmfileEnvironment("existing", "observability", fixture, table); err != nil {
@@ -271,6 +274,9 @@ func TestIPrepareSelfManagedSecretsFileRestoresExistingDestination(t *testing.T)
 	original := []byte("operator-authored: original\n")
 	if err := os.WriteFile(destAbs, original, 0o640); err != nil {
 		t.Fatalf("seed destination: %v", err)
+	}
+	if err := os.Chmod(destAbs, 0o640); err != nil {
+		t.Fatalf("set destination mode: %v", err)
 	}
 
 	if err := sc.iPrepareSelfManagedSecretsFile(destRel, templateRel); err != nil {

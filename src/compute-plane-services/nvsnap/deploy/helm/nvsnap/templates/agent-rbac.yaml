@@ -32,6 +32,8 @@ metadata:
 # configmaps: ConfigMap-backed manifest registry — globally readable
 #   manifests are what makes admission requests resolvable from any agent.
 # nodes/get: cross-node peer-fetch resolves the captured-on node's IP.
+# nodes/list: the admission election establishes the GPU architecture of
+#   the nodes a model pod may run on.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -41,19 +43,28 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
+    # patch: the model volume controller un-pends readers once their
+    # volume is bound (internal/agent/modelvolume_controller.go).
     # v0.0.51: create+delete needed for the mount-holder pod in the
     # source workload's namespace (see
     # internal/checkpointstore/mount_holder.go +
-    # docs/design/ROOTFS-EVERYWHERE.md). The holder is a Kyverno-
+    # docs/ARCHITECTURE.md §2). The holder is a Kyverno-
     # compliant pause pod owned by the rwx PVC; the agent creates it
     # to trigger kubelet to mount the PVC, then deletes it after the
     # in-process file-tree copy finishes.
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["nodes"]
+    verbs: ["get", "list"]
+  # namespaces (get): the model volume reaper checks whether the namespace
+  # a read-only model PV is bound in still exists before removing the PV,
+  # and the agent reads a namespace's tenant label (--tenant-label,
+  # internal/tenant); without it every namespace is its own tenant.
+  - apiGroups: [""]
+    resources: ["namespaces"]
     verbs: ["get"]
   # nvsnap#63: L2 per-capture PVC backend. The agent provisions a
   # rwx-<hash> RWX PVC + writer Job + VolumeSnapshot + rox-<hash>
@@ -63,8 +74,10 @@ rules:
   # nvsnap-system); we keep them ClusterRole for now so the agent can
   # operate in any namespace via flag.
   - apiGroups: [""]
+    # update/patch: the model volume controller labels the writer claim
+    # complete (internal/agent/modelvolume_controller.go).
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
   # persistentvolumes (cluster-scoped): the shared-volume promoter
   # (NVMesh/EFS cachedir + ember path) Gets the writer's bound primary PV,
   # Updates its reclaim policy to Retain, and Creates a secondary
@@ -77,6 +90,19 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # StatefulSet replicas give the webhook a group's size, so a cache set
+  # is only collected once every rank is ready.
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get"]
+  # An instance's companions (instance companion capture): the pods its
+  # GPU ranks hold connections to, directly or through a Service.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "delete"]
@@ -85,6 +111,13 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshots"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # volumesnapshotcontents: a namespace-local restore claim on
+  # snapshot-clone storage is a clone of a pre-provisioned snapshot whose
+  # content points at the promote's CSI snapshot handle
+  # (SnapshotClonePromoter.EnsureClaim).
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
     verbs: ["get", "list", "watch", "create", "delete"]
   # storageclasses.get: the L2 backend probes the configured SC at
   # startup (internal/agent/l2_integration.go validateL2StorageClass)

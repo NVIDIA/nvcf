@@ -6,7 +6,7 @@ go_library(
         "conversion.go",
         "decoder.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/conversion",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/conversion",
     importpath = "sigs.k8s.io/controller-runtime/pkg/webhook/conversion",
     visibility = ["//visibility:public"],
     deps = [

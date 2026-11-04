@@ -20,7 +20,7 @@ package httpstream
 import (
 	"bufio"
 	"context"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
 	"io"
 	"net/http"
 	"net/http/httptest"

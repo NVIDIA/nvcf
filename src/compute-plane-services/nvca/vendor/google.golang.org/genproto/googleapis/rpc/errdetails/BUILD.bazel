@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "errdetails",
     srcs = ["error_details.pb.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/rpc/errdetails",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/rpc/errdetails",
     importpath = "google.golang.org/genproto/googleapis/rpc/errdetails",
     visibility = ["//visibility:public"],
     deps = [

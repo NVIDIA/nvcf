@@ -40,7 +40,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"gopkg.in/yaml.v3"
 
-	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	nverrors "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 )
 
 var (

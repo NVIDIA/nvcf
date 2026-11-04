@@ -51,6 +51,24 @@ Resolve the fullname used by the embedded OpenBao chart.
 {{- end -}}
 {{- end -}}
 
+{{- define "nvcf-openbao.jwtLifecycleMode" -}}
+{{- $lifecycle := .Values.openbao.jwtPluginLifecycle | default dict -}}
+{{- $mode := get $lifecycle "mode" | default "legacy" -}}
+{{- if not (has $mode (list "legacy" "bridge" "versioned")) -}}
+{{- fail "openbao.jwtPluginLifecycle.mode must be legacy, bridge, or versioned" -}}
+{{- end -}}
+{{- $mode -}}
+{{- end -}}
+
+{{- define "nvcf-openbao.adminEnvironment" -}}
+export BAO_ADDR="http://{{ include "nvcf-openbao.serverFullname" . }}-active:8200"
+export BAO_TOKEN="$(cat /secrets/root_token/root_token)"
+{{- end -}}
+
+{{- define "nvcf-openbao.copyJWTManifest" -}}
+cp /openbao/jwt-plugin-versions.env /versions/manifest.env
+{{- end -}}
+
 {{/*
 Allow the release namespace to be overridden.
 */}}
@@ -82,4 +100,21 @@ Usage: {{ include "openbao.image" (dict "image" .Values.openbao.migrations.image
 {{- $repository := required (printf "A valid image repository is required for %s.repository" $name) $image.repository -}}
 {{- $tag := required (printf "A valid image tag is required for %s.tag" $name) $image.tag -}}
 {{- printf "%s/%s:%s" $registry $repository $tag -}}
+{{- end -}}
+
+{{/* Select a bundled kubectl without overriding the image default when unset. */}}
+{{- define "nvcf-openbao.kubectlEnv" -}}
+{{- $minor := get .Values.openbao.migrations "kubectlMinor" | toString -}}
+{{- if not (has $minor (list "" "1.36" "1.37")) -}}
+{{- fail "openbao.migrations.kubectlMinor must be empty, 1.36, or 1.37" -}}
+{{- end -}}
+{{- if $minor -}}
+{{- range .Values.openbao.migrations.env -}}
+{{- if eq .name "NVCF_KUBECTL_MINOR" -}}
+{{- fail "set openbao.migrations.kubectlMinor or NVCF_KUBECTL_MINOR in openbao.migrations.env, not both" -}}
+{{- end -}}
+{{- end -}}
+- name: NVCF_KUBECTL_MINOR
+  value: {{ $minor | quote }}
+{{- end -}}
 {{- end -}}

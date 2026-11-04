@@ -14,7 +14,7 @@
 # NGC_API_KEY is read from the `ngc-api-key` secret in nvsnap-system.
 #
 # Capture path = ROOTFS (Riva/Triton NIM, CLAUDE.md rule 20). The
-# nvsnap quiesce intercept (LD_PRELOAD libnvsnap_intercept.so) is
+# the retired nvsnap quiesce intercept (LD_PRELOAD) was
 # deliberately NOT injected: it hijacks SIGUSR1/SIGUSR2 for the CRIU
 # quiesce protocol, which blocks Riva/Triton from installing their own
 # handlers and kills Triton at startup. The rootfs path snapshots the

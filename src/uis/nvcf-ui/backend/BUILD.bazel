@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# gazelle:prefix github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend
+# gazelle:prefix github.com/dsx-ai-factory/nvcf/src/control-plane-services/nvcf-ui/backend
 # gazelle:exclude static
 # gazelle:exclude bin
 

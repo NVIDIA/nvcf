@@ -14,7 +14,7 @@ go_library(
         "type_specific_codegen.go",
         "value.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/stretchr/objx",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/stretchr/objx",
     importpath = "github.com/stretchr/objx",
     visibility = ["//visibility:public"],
 )

@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Dynamo with one single-GPU worker: the cheapest Dynamo shape, without a
+# multi-node engine.
+kind: DynamoGraphDeployment
+podsPerInstance: 1
+gpusPerPod: 1
+dynamo:
+  etcdNats: true
+function:
+  inferenceUrl: /v1/chat/completions
+  healthUri: /health
+  requires: [DynamoGraphDeployment]

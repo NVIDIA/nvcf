@@ -31,7 +31,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 func Test_validateNoMixedTenants(t *testing.T) {

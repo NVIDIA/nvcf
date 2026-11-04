@@ -33,13 +33,13 @@ import (
 	fakek8sclient "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/ptr"
 
-	fakebartclient "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
+	fakebartclient "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
-	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
-	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	nvcametrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	featureflagmock "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	nvcastorage "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/storage"
 )
 
 const (
@@ -274,9 +274,10 @@ func TestRWXReadOnly_FailedWriterRemovesUnpopulatedClaim(t *testing.T) {
 	var zero int32
 	failed.Spec.BackoffLimit = &zero
 	failed.Status.Failed = 1
-	c, k8s := rwxTestBackend(nil, boundSharedClaim(false), failed)
+	req := rwxRequest(t, rwxSelection(t))
+	c, k8s := rwxTestBackend(req, boundSharedClaim(false), failed)
 
-	state, _ := c.setupRWXReadOnlyModelCachingForRequest(ctx, rwxRequest(t, rwxSelection(t)), pvc, job, rwxSelection(t))
+	state, _ := c.setupRWXReadOnlyModelCachingForRequest(ctx, req, pvc, job, rwxSelection(t))
 	assert.Equal(t, ModelCachingFailed, state)
 
 	_, err := k8s.CoreV1().PersistentVolumeClaims(rwxTestNamespace).Get(ctx, pvc.Name, metav1.GetOptions{})

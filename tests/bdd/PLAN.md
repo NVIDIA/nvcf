@@ -201,11 +201,13 @@ These steps use the in-process HTTP client (`harness.HTTPClient`), not the comma
 | `When I poll {string} {string} for up to {int} seconds until the HTTP response body contains {string}` | Repeats the request every 5 seconds until the body contains the text or the deadline passes. Used for eventually consistent reads. |
 | `Then the HTTP status should be {int}` | Last response status. The failure message includes a truncated body with API keys (`nvapi-...`) and JWTs masked. HTTP failure messages mask them everywhere they print a body or an expected value. |
 | `Then the HTTP status should be {int} or {int}` | Last response status equals either value. |
+| `Then the HTTP response header {string} should equal {string}` | Compares the first value of a response header, matched case-insensitively by name, with the interpolated text. Fails when the header is absent. Used to check a passthrough keeps a backend header such as `Retry-After`. |
 | `Then the HTTP response body should contain {string}` | Substring match. The interpolated value must be non-empty. |
 | `Then the HTTP response body should not contain {string}` | Negative substring match. The interpolated value must be non-empty. |
 | `Then the HTTP response JSON field {string} should equal {string}` | Dotted path (object keys, array indexes) compared as text. A path continues into a string that holds a JSON object or array, such as a request an echo sample returns as its reply. |
 | `Then the HTTP response JSON field {string} should be absent` | Passes only when the last key is missing from an object that exists at the parent path, so a misspelled parent fails. |
 | `Then the HTTP response JSON field {string} should be at least {int}` | Dotted path parsed as a number and compared to a minimum. |
+| `Then the HTTP response JSON field {string} should be less than {int}` | Dotted path parsed as a number that must be below the bound. Used to show a text-only request meters fewer tokens than one image. |
 | `When I export the HTTP response JSON field {string} to environment variable {string}` | Exports the field under the named env var. Fails when the field is missing or empty. Snapshotted by the env Ledger; restored at suite teardown. The value is never echoed. |
 
 ### Scenario teardown (Given / When)

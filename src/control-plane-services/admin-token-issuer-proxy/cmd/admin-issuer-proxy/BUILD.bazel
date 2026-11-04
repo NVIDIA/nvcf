@@ -8,7 +8,7 @@ load("//rules/oci:defs.bzl", "go_oci_image")
 go_library(
     name = "admin-issuer-proxy_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/cmd/admin-issuer-proxy",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy/cmd/admin-issuer-proxy",
     visibility = ["//visibility:private"],
     deps = [
         "//src/control-plane-services/admin-token-issuer-proxy/internal/config",

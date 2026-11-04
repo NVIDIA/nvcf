@@ -20,7 +20,7 @@ package utils
 import (
 	"encoding/json"
 	"errors"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/types"
 	"os"
 	"path/filepath"
 	"testing"

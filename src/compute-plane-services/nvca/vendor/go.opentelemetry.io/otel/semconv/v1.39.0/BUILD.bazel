@@ -9,7 +9,7 @@ go_library(
         "exception.go",
         "schema.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/semconv/v1.39.0",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/semconv/v1.39.0",
     importpath = "go.opentelemetry.io/otel/semconv/v1.39.0",
     visibility = ["//visibility:public"],
     deps = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute"],

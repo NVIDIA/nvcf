@@ -9,7 +9,7 @@ go_library(
         "tcp_keepalive_unix.go",
         "tcp_keepalive_windows.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal",
     importpath = "google.golang.org/grpc/internal",
     visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
     deps = [

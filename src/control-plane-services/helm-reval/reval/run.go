@@ -40,9 +40,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
-	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/zapotelspan"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	credhelper "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/imagecredential"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/zapotelspan"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -67,8 +67,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	orasauth "oras.land/oras-go/v2/registry/remote/auth"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/metrics"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/reval/cache"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/reval/cache"
 )
 
 type Handler struct {

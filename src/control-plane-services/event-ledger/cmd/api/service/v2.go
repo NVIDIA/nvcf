@@ -24,19 +24,19 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
-	api_error "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/api/error"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/utils"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/codex"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/constants"
+	api_error "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/cmd/api/error"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common/core/types"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common/core/utils"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/middleware"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/pkg/codex"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/pkg/constants"
 )
 
 // --- V2 Methods ---

@@ -22,7 +22,7 @@ import (
 	_ "embed"
 	"fmt"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

@@ -51,11 +51,13 @@ func registerHTTPSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the HTTP response body should end with "([^"]*)"$`, sc.theHTTPBodyShouldEndWith)
 	ctx.Step(`^the HTTP status should be (\d+)$`, sc.theHTTPStatusShouldBe)
 	ctx.Step(`^the HTTP status should be (\d+) or (\d+)$`, sc.theHTTPStatusShouldBeOneOf)
+	ctx.Step(`^the HTTP response header "([^"]*)" should equal "([^"]*)"$`, sc.theHTTPHeaderShouldEqual)
 	ctx.Step(`^the HTTP response body should contain "([^"]*)"$`, sc.theHTTPBodyShouldContain)
 	ctx.Step(`^the HTTP response body should not contain "([^"]*)"$`, sc.theHTTPBodyShouldNotContain)
 	ctx.Step(`^the HTTP response JSON field "([^"]*)" should equal "([^"]*)"$`, sc.theHTTPJSONFieldShouldEqual)
 	ctx.Step(`^the HTTP response JSON field "([^"]*)" should be at least (\d+)$`, sc.theHTTPJSONFieldShouldBeAtLeast)
 	ctx.Step(`^the HTTP response JSON field "([^"]*)" should be absent$`, sc.theHTTPJSONFieldShouldBeAbsent)
+	ctx.Step(`^the HTTP response JSON field "([^"]*)" should be less than (\d+)$`, sc.theHTTPJSONFieldShouldBeLessThan)
 	ctx.Step(`^I export the HTTP response JSON field "([^"]*)" to environment variable "([^"]*)"$`, sc.iExportHTTPJSONField)
 }
 
@@ -181,6 +183,25 @@ func (sc *ScenarioContext) theHTTPStatusShouldBeOneOf(first, second int) error {
 	return nil
 }
 
+func (sc *ScenarioContext) theHTTPHeaderShouldEqual(name, value string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("http response header name must be non-empty")
+	}
+	resp, err := sc.requireHTTP()
+	if err != nil {
+		return err
+	}
+	want := dsl.Interpolate(value)
+	got := resp.Header.Values(name)
+	if len(got) == 0 {
+		return fmt.Errorf("http response header %q is absent", name)
+	}
+	if got[0] != want {
+		return fmt.Errorf("http response header %q = %q, want %q", name, dsl.RedactSecrets(got[0]), dsl.RedactSecrets(want))
+	}
+	return nil
+}
+
 func (sc *ScenarioContext) theHTTPBodyShouldContain(text string) error {
 	resp, err := sc.requireHTTP()
 	if err != nil {
@@ -240,6 +261,14 @@ func (sc *ScenarioContext) theHTTPJSONFieldShouldBeAtLeast(path string, min int)
 		return err
 	}
 	return dsl.JSONFieldAtLeast(resp.Body, path, float64(min))
+}
+
+func (sc *ScenarioContext) theHTTPJSONFieldShouldBeLessThan(path string, max int) error {
+	resp, err := sc.requireHTTP()
+	if err != nil {
+		return err
+	}
+	return dsl.JSONFieldLessThan(resp.Body, path, float64(max))
 }
 
 // iExportHTTPJSONField stores a response field in an env var through the

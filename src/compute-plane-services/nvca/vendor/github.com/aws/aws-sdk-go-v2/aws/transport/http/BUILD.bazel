@@ -9,7 +9,7 @@ go_library(
         "response_error_middleware.go",
         "timeout_read_closer.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/transport/http",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/transport/http",
     importpath = "github.com/aws/aws-sdk-go-v2/aws/transport/http",
     visibility = ["//visibility:public"],
     deps = [

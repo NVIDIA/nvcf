@@ -122,21 +122,21 @@ while IFS= read -r path; do
   while IFS=$'\t' read -r stack tag commit asset digest; do
     encoded_tag=$(jq -rn --arg tag "$tag" '$tag | @uri')
     release="$inputs/releases/$stack.json"
-    public_get "https://api.github.com/repos/NVIDIA/nvcf/releases/tags/$encoded_tag" "$release" \
+    public_get "https://api.github.com/repos/dsx-ai-factory/nvcf/releases/tags/$encoded_tag" "$release" \
       || fail "public source release unavailable: $tag"
     jq -e --arg tag "$tag" --arg asset "$asset" '
       .tag_name == $tag and .draft == false and .prerelease == false and
       (.published_at | type == "string" and length > 0) and
       ([.assets[] | select(.name == $asset and .state == "uploaded")] | length == 1)
     ' "$release" > /dev/null || fail "source must be a published stable release with inventory $asset: $tag"
-    public_get "https://github.com/NVIDIA/nvcf/releases/download/$tag/$asset" "$inputs/inventories/$asset" \
+    public_get "https://github.com/dsx-ai-factory/nvcf/releases/download/$tag/$asset" "$inputs/inventories/$asset" \
       || fail "public inventory unavailable: $tag/$asset"
     actual=$(sha256sum "$inputs/inventories/$asset")
     [[ "sha256:${actual%% *}" == "$digest" ]] || fail "inventory checksum mismatch: $asset"
     # Fetch only the selected public tag, including its history. Do not force or
     # replace a conflicting local tag, or use the candidate branch's stack trees.
     git -C "$repo" -c credential.helper= -c http.extraheader= fetch --no-tags --no-write-fetch-head \
-      https://github.com/NVIDIA/nvcf.git "refs/tags/$tag:refs/tags/$tag"
+      https://github.com/dsx-ai-factory/nvcf.git "refs/tags/$tag:refs/tags/$tag"
     [[ $(git -C "$repo" rev-parse --verify "refs/tags/$tag^{commit}") == "$commit" ]] \
       || fail "public source tag does not match selected commit: $tag"
   done < "$inputs/stacks"

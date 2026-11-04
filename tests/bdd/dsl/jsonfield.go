@@ -20,6 +20,7 @@ package dsl
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -104,14 +105,41 @@ func JSONFieldAtLeast(raw, path string, min float64) error {
 	if err != nil {
 		return err
 	}
-	value, err := strconv.ParseFloat(text, 64)
+	value, err := jsonNumber(path, text)
 	if err != nil {
-		return fmt.Errorf("json path %q is not a number: %q", path, text)
+		return err
 	}
 	if value < min {
 		return fmt.Errorf("json path %q = %v, want at least %v", path, value, min)
 	}
 	return nil
+}
+
+// JSONFieldLessThan reports whether the numeric value at the dotted path is
+// below max.
+func JSONFieldLessThan(raw, path string, max float64) error {
+	text, err := JSONField(raw, path)
+	if err != nil {
+		return err
+	}
+	value, err := jsonNumber(path, text)
+	if err != nil {
+		return err
+	}
+	if value >= max {
+		return fmt.Errorf("json path %q = %v, want less than %v", path, value, max)
+	}
+	return nil
+}
+
+// jsonNumber parses a numeric field. ParseFloat accepts "NaN", which compares
+// false against every bound, so reject it.
+func jsonNumber(path, text string) (float64, error) {
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(value) {
+		return 0, fmt.Errorf("json path %q is not a number: %q", path, text)
+	}
+	return value, nil
 }
 
 func childNode(node any, part string) (any, error) {

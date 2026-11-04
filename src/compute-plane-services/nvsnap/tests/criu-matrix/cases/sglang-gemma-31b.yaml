@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# SGLang, Gemma 4 31B, one GPU (as the container function bench-gemma-4-31b-it).
+kind: Deployment
+launch: exec
+engine: sglang
+image: docker.io/lmsysorg/sglang:v0.5.12.post1
+model: google/gemma-4-31B-it
+maxModelLen: 8192
+gpuMemoryUtilization: 0.85
+function:
+  inferenceUrl: /v1/chat/completions
+  secrets: [HF_TOKEN]

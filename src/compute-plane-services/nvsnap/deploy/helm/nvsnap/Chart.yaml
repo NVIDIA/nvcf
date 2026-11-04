@@ -28,9 +28,9 @@ keywords:
   - machine-learning
   - ai
 
-home: https://github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap
+home: https://github.com/dsx-ai-factory/nvcf/tree/main/src/compute-plane-services/nvsnap
 sources:
-  - https://github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap
+  - https://github.com/dsx-ai-factory/nvcf/tree/main/src/compute-plane-services/nvsnap
 
 maintainers:
   - name: Balaji Ganesan
