@@ -193,11 +193,9 @@ func TestResourceLimitFromOrgLimitCarriesInputOutputFields(t *testing.T) {
 	}
 }
 
-// TestDoResourceLimitMonthlyLimitResetsAfterPeriodElapses answers "how do we test a
-// month-long window without waiting a month": the limiter's clock is injectable, so
-// simulating expiry is a single fake-clock advance, exactly like second/week already
-// are in ratelimit_test.go's TestBucketsRefillOverTime.
-func TestDoResourceLimitMonthlyLimitResetsAfterPeriodElapses(t *testing.T) {
+// The limiter's clock is injectable, so a month-long window is tested with fake-clock
+// advances, like TestBucketsRefillOverTime does for shorter units.
+func TestDoResourceLimitMonthlyLimitRefillsOverPeriod(t *testing.T) {
 	t.Parallel()
 
 	store := newFakeStore()
@@ -235,5 +233,39 @@ func TestDoResourceLimitMonthlyLimitResetsAfterPeriodElapses(t *testing.T) {
 	}
 	if !results[InputTokensPerMonth].Allowed() {
 		t.Fatal("request after the monthly period elapsed was still disallowed")
+	}
+}
+
+func TestDoResourceLimitMonthlyLimitRefillsGradually(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	now := int64(1_700_000_000_000)
+	limiter, err := NewRateLimiter(store, withClock(func() int64 { return now }))
+	if err != nil {
+		t.Fatalf("new rate limiter: %v", err)
+	}
+
+	limit := ResourceLimit{SubjectKey: "monthly-gradual", InputTokensPerMonth: 300}
+	if _, err := ConsumeResourceLimit(context.Background(), limiter, limit, ResourceRequest{InputTokens: 300}, "req-1"); err != nil {
+		t.Fatalf("consume resource limit: %v", err)
+	}
+
+	// 10 of 30 days refills a third of the limit, not all of it.
+	now += int64((10 * 24 * time.Hour) / time.Millisecond)
+
+	results, err := TestResourceLimit(context.Background(), limiter, limit, ResourceRequest{InputTokens: 101}, "req-2")
+	if err != nil {
+		t.Fatalf("test resource limit: %v", err)
+	}
+	if results[InputTokensPerMonth].Allowed() {
+		t.Fatal("101 tokens allowed after 10 days, want only 100 refilled")
+	}
+	results, err = TestResourceLimit(context.Background(), limiter, limit, ResourceRequest{InputTokens: 100}, "req-3")
+	if err != nil {
+		t.Fatalf("test resource limit: %v", err)
+	}
+	if !results[InputTokensPerMonth].Allowed() {
+		t.Fatal("100 tokens disallowed after 10 days, want them refilled")
 	}
 }

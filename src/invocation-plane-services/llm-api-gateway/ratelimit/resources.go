@@ -31,8 +31,8 @@ import (
 const (
 	day  = 24 * time.Hour
 	week = 7 * day
-	// month approximates a calendar month as a fixed 30 days. This is a duration-based
-	// rate limit, not a calendar-aligned billing quota, so it does not reset on the 1st.
+	// month is a fixed 30 days. Like every unit, the bucket refills continuously
+	// (limit/30 per day); it is not a quota that resets on a calendar date.
 	month = 30 * day
 )
 
