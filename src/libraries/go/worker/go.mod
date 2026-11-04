@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/MadAppGang/httplog v1.3.0
 	github.com/MadAppGang/httplog/zap v1.2.1
-	github.com/carlmjohnson/versioninfo v0.22.5
+	github.com/carlmjohnson/versioninfo/v2 v2.24.1
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260512163547-58c4eaa29232
 	github.com/dustin/go-humanize v1.0.1
