@@ -126,6 +126,35 @@ func TestDeploymentStatusTransportRecovery(t *testing.T) {
 	}
 }
 
+func TestDeploymentStatusBodyReadRecovery(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if call == 1 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijack response: %v", err)
+				return
+			}
+			defer conn.Close()
+			if _, err := fmt.Fprint(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{\"function\":"); err != nil {
+				t.Errorf("write partial response: %v", err)
+			}
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"function":{"status":"ACTIVE"}}`)
+	}))
+	defer server.Close()
+
+	c := &Client{config: &Config{}, baseURL: server.URL, httpClient: server.Client()}
+	if err := c.waitForFunctionDeployment(context.Background(), "function", "version", time.Second, time.Millisecond, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("got %d requests, want 2", calls.Load())
+	}
+}
+
 func TestDeploymentStatusResetsRetryBudget(t *testing.T) {
 	responses := []string{"503", "503", "503", "DEPLOYING", "503", "503", "503", "ACTIVE"}
 	calls := 0

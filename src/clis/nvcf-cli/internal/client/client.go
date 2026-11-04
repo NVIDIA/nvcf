@@ -38,7 +38,6 @@ import (
 	"nvcf-cli/internal/state"
 
 	"github.com/spf13/viper"
-	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -633,14 +632,19 @@ func NewClient(config *Config) (*Client, error) {
 			},
 		}
 
-		// Create HTTP client with OAuth2 transport. The context client is used
-		// by oauth2 for both token acquisition and the returned transport base.
-		ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{
+		// Token requests use the context of the API request that needs them.
+		tokenClient := &http.Client{
 			Transport: baseTransport,
 			Timeout:   config.DefaultTimeout,
-		})
-		httpClient = oauth2Config.Client(ctx)
-		httpClient.Timeout = config.DefaultTimeout
+		}
+		httpClient = &http.Client{
+			Transport: &oauth2RequestTransport{
+				config:      oauth2Config,
+				tokenClient: tokenClient,
+				base:        baseTransport,
+			},
+			Timeout: config.DefaultTimeout,
+		}
 
 		// Wrap with debug transport if debug is enabled
 		if config.Debug {
