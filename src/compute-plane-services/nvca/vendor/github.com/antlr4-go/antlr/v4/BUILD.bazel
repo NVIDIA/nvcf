@@ -56,7 +56,7 @@ go_library(
         "trees.go",
         "utils.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/antlr4-go/antlr/v4",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/antlr4-go/antlr/v4",
     importpath = "github.com/antlr4-go/antlr/v4",
     visibility = ["//visibility:public"],
     deps = ["//src/compute-plane-services/nvca/vendor/golang.org/x/exp/slices"],

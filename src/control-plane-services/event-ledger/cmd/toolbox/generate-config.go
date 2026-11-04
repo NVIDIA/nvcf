@@ -30,8 +30,8 @@ import (
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"gopkg.in/yaml.v2"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/configutil"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/configutil"
 )
 
 func NewGenerateConfigCmd(sugarLog *otelzap.SugaredLogger, svcName string) *cobra.Command {

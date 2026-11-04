@@ -23,10 +23,10 @@ import (
 	"context"
 	"time"
 
-	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
-	mockqueueservice "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/queueservice"
-	mocktokencache "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/tokencache"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	nvcaauth "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/auth"
+	mockqueueservice "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/mock/queueservice"
+	mocktokencache "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/mock/tokencache"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue"
 )
 
 var (

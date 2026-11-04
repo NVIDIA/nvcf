@@ -6,7 +6,7 @@ go_library(
         "logger.go",
         "waiter.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/waiter",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/waiter",
     importpath = "github.com/aws/smithy-go/waiter",
     visibility = ["//visibility:public"],
     deps = [

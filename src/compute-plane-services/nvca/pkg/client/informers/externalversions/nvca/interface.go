@@ -20,10 +20,10 @@ limitations under the License.
 package nvca
 
 import (
-	internalinterfaces "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/internalinterfaces"
-	v1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v1"
-	v1alpha1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v1alpha1"
-	v2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v2beta1"
+	internalinterfaces "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/internalinterfaces"
+	v1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v1"
+	v1alpha1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v1alpha1"
+	v2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v2beta1"
 )
 
 // Interface provides access to each of this group's versions.

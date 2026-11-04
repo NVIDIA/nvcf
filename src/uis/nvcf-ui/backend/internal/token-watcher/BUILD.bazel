@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "token-watcher",
     srcs = ["watcher.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/internal/token-watcher",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/nvcf-ui/backend/internal/token-watcher",
     visibility = ["//src/uis/nvcf-ui/backend:__subpackages__"],
     deps = [
         "//src/uis/nvcf-ui/backend/internal/utils",

@@ -27,7 +27,7 @@ go_library(
         "queue.go",
         "ticker.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/lib/pkg/version",

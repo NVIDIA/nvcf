@@ -23,7 +23,7 @@ import (
 
 	"go.jetify.com/typeid"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/must"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/must"
 )
 
 const (

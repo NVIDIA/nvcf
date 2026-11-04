@@ -20,7 +20,7 @@ package storageclass
 import (
 	"context"
 
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 )
 
 // ICMSRequestGetter defines the interface for getting ICMSRequest CRs

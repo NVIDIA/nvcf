@@ -13,7 +13,7 @@ go_library(
         "tables.go",
         "tags.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/json/internal/golang/encoding/json",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/json/internal/golang/encoding/json",
     importpath = "sigs.k8s.io/json/internal/golang/encoding/json",
     visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/json:__subpackages__"],
 )

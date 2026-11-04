@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# As deploy-pid1, run as uid 1000: the chunk store and the model must be reachable by a non-root engine.
+kind: Deployment
+launch: exec
+runAsUser: 1000

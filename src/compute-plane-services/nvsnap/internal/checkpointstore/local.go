@@ -31,7 +31,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/treecopy"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/treecopy"
 )
 
 // Compile-time assertion that *Local satisfies Backend (Store + Mounter).

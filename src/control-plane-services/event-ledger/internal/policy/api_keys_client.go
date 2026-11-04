@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"net/http"
 
-	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
+	pdpv1 "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
 )
 
 // ApiKeysClient implements Authorizer for self-managed deployments where the

@@ -8,7 +8,7 @@ go_library(
         "unmarshal.go",
         "xml_to_struct.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/private/protocol/xml/xmlutil",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/private/protocol/xml/xmlutil",
     importpath = "github.com/aws/aws-sdk-go/private/protocol/xml/xmlutil",
     visibility = ["//visibility:public"],
     deps = [

@@ -47,9 +47,14 @@ ${extra}
 EOF
 }
 
-# anthropicMessages sits beside openai, so its entries are two spaces shallower.
+# anthropicMessages and typesafeSystemOne sit beside openai, so their entries
+# are two spaces shallower.
 write_anthropic_values() {
-  local extra="$1"
+  write_toplevel_values anthropicMessages "$1"
+}
+
+write_toplevel_values() {
+  local section="$1" extra="$2"
   cat > "${VALUES}" <<EOF
 vanityGateway:
   image:
@@ -59,7 +64,7 @@ vanityGateway:
     llmGatewayEndpoint: "${ENDPOINT}"
   mappingConfig:
     v2config:
-      anthropicMessages:
+      ${section}:
         a_model:
           modelName: acme/a-model
           functionID: 00000000-0000-0000-0000-000000000001
@@ -247,7 +252,7 @@ write_values chatCompletions "            shadowModelName: acme/a-model-next
               - perBearerKey"
 assert_rejected "shadowSamplingMethod" "a legacy method after random is rejected"
 
-for section in completions embeddings imageGenerations; do
+for section in completions embeddings imageGenerations decisions; do
   write_values "${section}" "            shadows:
               - modelName: acme/a-model-next
                 samplingMethod: promptCacheKey"
@@ -261,6 +266,47 @@ for section in completions embeddings imageGenerations; do
               - x-session-id"
   assert_rejected "promptCacheKeyHeaders" "promptCacheKeyHeaders is rejected in ${section}"
 done
+
+write_toplevel_values typesafeSystemOne "            shadows:
+              - modelName: acme/a-model-next
+                samplingMethod: promptCacheKey"
+assert_rejected "samplingMethod" "promptCacheKey is rejected in typesafeSystemOne"
+
+write_toplevel_values typesafeSystemOne "            shadowModelName: acme/a-model-next
+            shadowSamplingMethod: firstMessageHash"
+assert_rejected "shadowSamplingMethod" "legacy firstMessageHash is rejected in typesafeSystemOne"
+
+write_toplevel_values typesafeSystemOne "            promptCacheKeyHeaders:
+              - x-session-id"
+assert_rejected "promptCacheKeyHeaders" "promptCacheKeyHeaders is rejected in typesafeSystemOne"
+
+write_toplevel_values typesafeSystemOne "            shadows:
+              - modelName: acme/a-model-next
+                samplingMethod:
+                  - perBearerKey
+                  - random"
+assert_renders "ordered bearer sampling renders in typesafeSystemOne"
+
+# Decision routes return backend 429 bodies unchanged, so the gateway rejects
+# tooManyRequestsMessage there; other sections keep it.
+write_values decisions '            tooManyRequestsMessage: "Try again later."'
+assert_rejected "tooManyRequestsMessage" "tooManyRequestsMessage is rejected in decisions"
+
+write_toplevel_values typesafeSystemOne '            tooManyRequestsMessage: "Try again later."'
+assert_rejected "tooManyRequestsMessage" "tooManyRequestsMessage is rejected in typesafeSystemOne"
+
+# The gateway reads keys in any letter case.
+write_values decisions '            TooManyRequestsMessage: "Try again later."'
+assert_rejected "TooManyRequestsMessage" "tooManyRequestsMessage is rejected in decisions in any letter case"
+
+write_toplevel_values typesafeSystemOne '            toomanyrequestsmessage: "Try again later."'
+assert_rejected "toomanyrequestsmessage" "tooManyRequestsMessage is rejected in typesafeSystemOne in any letter case"
+
+write_values decisions '            tooManyRequestsMessage: ""'
+assert_renders "an empty tooManyRequestsMessage renders in decisions"
+
+write_values embeddings '            tooManyRequestsMessage: "Try again later."'
+assert_renders "tooManyRequestsMessage renders in embeddings"
 
 write_anthropic_values "            promptCacheKeyHeaders:
               - x-session-id

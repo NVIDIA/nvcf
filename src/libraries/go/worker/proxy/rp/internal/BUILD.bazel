@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 go_library(
     name = "internal_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/rp/internal",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/rp/internal",
     visibility = ["//visibility:private"],
     deps = [
         "//src/libraries/go/worker/proxy/rp",

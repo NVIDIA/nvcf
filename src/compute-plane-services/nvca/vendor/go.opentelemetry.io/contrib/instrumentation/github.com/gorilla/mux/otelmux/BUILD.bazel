@@ -8,7 +8,7 @@ go_library(
         "mux.go",
         "version.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux",
     importpath = "go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux",
     visibility = ["//visibility:public"],
     deps = [

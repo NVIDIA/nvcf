@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 go_library(
     name = "control-plane_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/cmd/control-plane",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/nvcf-ui/backend/cmd/control-plane",
     visibility = ["//visibility:private"],
     deps = [
         "//src/uis/nvcf-ui/backend/internal/control-plane",

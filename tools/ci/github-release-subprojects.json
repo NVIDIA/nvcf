@@ -308,6 +308,7 @@
       "deploys": [
         {
           "service": "openbao-image",
+          "manual_bump_reason": "Server and agent pins must match the selected JWT plugin lifecycle mode; review the staged upgrade before changing them.",
           "values_paths": [
             "openbao.server.image.tag",
             "openbao.injector.agentImage.tag"
@@ -325,6 +326,7 @@
         },
         {
           "service": "openbao-migrations",
+          "manual_bump_reason": "Select migrations together with the OpenBao server and JWT plugin lifecycle mode in a reviewed upgrade.",
           "values_paths": [
             "openbao.migrations.image.tag"
           ]

@@ -21,7 +21,7 @@ go_library(
         "render.go",
         "telemetries.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/config",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otelconfig/config",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/lib/pkg/otelconfig/backendconfig",

@@ -14,5 +14,5 @@
 # limitations under the License.
 
 # Nested `common` module, first-party via //:go.work.bazel.
-# gazelle:prefix github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common
+# gazelle:prefix github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common
 # gazelle:exclude vendor

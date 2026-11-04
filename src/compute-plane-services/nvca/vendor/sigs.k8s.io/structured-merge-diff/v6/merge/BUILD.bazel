@@ -6,7 +6,7 @@ go_library(
         "conflict.go",
         "update.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/merge",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/merge",
     importpath = "sigs.k8s.io/structured-merge-diff/v6/merge",
     visibility = ["//visibility:public"],
     deps = [

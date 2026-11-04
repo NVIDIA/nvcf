@@ -34,15 +34,15 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
 
 	restclient "k8s.io/client-go/rest"
 
-	internalutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/internal"
+	internalutil "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/cmd/internal"
 )
 
 type options struct {

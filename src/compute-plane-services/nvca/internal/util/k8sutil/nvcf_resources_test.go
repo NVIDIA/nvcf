@@ -25,9 +25,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
-	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	nvcaconfig "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,8 +38,8 @@ import (
 	"k8s.io/utils/ptr"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	featureflagmock "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
 )
 
 func TestSetConfigDefaultResources(t *testing.T) {
@@ -298,6 +298,58 @@ func TestSetConfigDefaultResources(t *testing.T) {
 			},
 		}, cfg)
 	})
+}
+
+func TestSetConfigDefaultResourcesConfigOnly(t *testing.T) {
+	// The deprecated variables belong to the agent's process, so they must not leak in.
+	t.Setenv(utilsCPULimitEnv, "1")
+	t.Setenv(additionalOverheadResourcesEnv, base64.StdEncoding.EncodeToString([]byte(`{"cpu":"3"}`)))
+
+	cfg := nvcaconfig.Config{
+		Agent: nvcaconfig.AgentConfig{
+			AdditionalResourceOverhead: nvcaconfig.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+			BYOOResources: nvcaconfig.ResourceRequirements{
+				Requests: nvcaconfig.ResourceList{corev1.ResourceCPU: resource.MustParse("300m")},
+			},
+		},
+	}
+	SetConfigDefaultResourcesConfigOnly(&cfg)
+
+	quantities := func(rl nvcaconfig.ResourceList) map[corev1.ResourceName]string {
+		out := map[corev1.ResourceName]string{}
+		for rn, rq := range rl {
+			out[rn] = rq.String()
+		}
+		return out
+	}
+	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "4", corev1.ResourceMemory: "4Gi"},
+		quantities(cfg.Agent.UtilsResources))
+	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "2"},
+		quantities(cfg.Agent.AdditionalResourceOverhead))
+	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "500m", corev1.ResourceMemory: "2Gi"},
+		quantities(cfg.Agent.SharedStorage.Server.ContainerResources.Limits))
+	assert.Equal(t, quantities(nvcaconfig.ResourceList(common.GetDefaultContainerResourcesBYOO().Limits)),
+		quantities(cfg.Agent.BYOOResources.Limits))
+	assert.Equal(t, quantities(nvcaconfig.ResourceList(common.GetDefaultContainerResourcesFluentbit().Limits)),
+		quantities(cfg.Agent.BYOOFluentBitResources.Limits))
+}
+
+func TestDeprecatedResourceEnvs(t *testing.T) {
+	assert.ElementsMatch(t, []string{
+		"NVCF_UTILS_CPU_LIMIT",
+		"NVCF_UTILS_MEM_LIMIT",
+		"NVCF_UTILS_EPHEMERAL_STORAGE_LIMIT",
+		"NVCF_ADDITIONAL_OVERHEAD_RESOURCES_B64",
+		"NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64",
+	}, DeprecatedResourceEnvs())
+}
+
+func TestFormatResourceList(t *testing.T) {
+	assert.Equal(t, "", FormatResourceList(nil))
+	assert.Equal(t, "cpu 1500m, memory 2Gi", FormatResourceList(corev1.ResourceList{
+		corev1.ResourceMemory: resource.MustParse("2Gi"),
+		corev1.ResourceCPU:    resource.MustParse("1500m"),
+	}))
 }
 
 func TestGetAdditionalOverheadResources(t *testing.T) {

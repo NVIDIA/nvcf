@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/cmd/reval/cli"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/cmd/reval/cli"
 )
 
 func TestNewRootCommand_Structure(t *testing.T) {

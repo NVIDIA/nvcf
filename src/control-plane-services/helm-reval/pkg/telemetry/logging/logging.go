@@ -20,13 +20,13 @@ package logging
 import (
 	"os"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/zapotelspan"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/zapotelspan"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
 )
 
 func InitializeLogger(cfg *config.RevalConfig) (*zap.Logger, *zap.AtomicLevel, func()) {

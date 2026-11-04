@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/reval"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/reval"
 )
 
 // ── ValidationPolicy.validate ─────────────────────────────────────────────────

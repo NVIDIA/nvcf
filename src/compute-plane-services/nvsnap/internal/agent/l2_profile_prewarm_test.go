@@ -34,8 +34,8 @@ func TestResolveL2Promoter_ReturnsProfileWithPrewarmPolicy(t *testing.T) {
 	if promoter == nil || profile == nil {
 		t.Fatalf("built-in NVMesh profile: promoter=%v profile=%v, want both", promoter, profile)
 	}
-	if !profile.PrewarmEnabled() || profile.PrewarmWorkers() != 6 {
-		t.Errorf("built-in profile ships prewarm on with 6 readers, got enabled=%v workers=%d", profile.PrewarmEnabled(), profile.PrewarmWorkers())
+	if !profile.PrewarmEnabled() || profile.PrewarmWorkers() != 8 {
+		t.Errorf("built-in NVMesh profile ships prewarm on with 8 readers, got enabled=%v workers=%d", profile.PrewarmEnabled(), profile.PrewarmWorkers())
 	}
 
 	cm := &corev1.ConfigMap{
@@ -58,7 +58,7 @@ nvmesh-csi.excelero.com:
 		t.Fatalf("ConfigMap overlay: promoter=%v profile=%v, want both", promoter, profile)
 	}
 	if profile.PrewarmEnabled() || profile.PrewarmWorkers() != 2 {
-		t.Errorf("ConfigMap prewarm policy lost on the way to the webhook: enabled=%v workers=%d", profile.PrewarmEnabled(), profile.PrewarmWorkers())
+		t.Errorf("ConfigMap prewarm policy lost on the way to the webhook: enabled=%v workers=%d, want off/2 (overlay flips the NVMesh default)", profile.PrewarmEnabled(), profile.PrewarmWorkers())
 	}
 
 	// No match: L2 is disabled and there is nothing to hand the webhook,

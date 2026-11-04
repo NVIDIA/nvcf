@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "token",
     srcs = ["token.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/token",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/token",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/worker/metrics",

@@ -9,7 +9,7 @@ go_library(
         "go_runtime_metrics.go",
         "metric.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/internal",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/internal",
     importpath = "github.com/prometheus/client_golang/prometheus/internal",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus:__subpackages__"],
     deps = [

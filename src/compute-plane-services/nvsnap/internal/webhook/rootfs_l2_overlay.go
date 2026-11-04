@@ -68,8 +68,8 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
 
 // Captured-tree layout inside the rox PVC. The agent's rootfsonly
@@ -276,7 +276,7 @@ func (m *Mutator) tryL2RootfsOverlay(ctx context.Context, pod *corev1.Pod, hash 
 	//     staged on every node by the agent DaemonSet.
 	scratch := corev1.Volume{Name: scratchVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}
 	toolsVol := corev1.Volume{Name: nvsnapToolsVolumeName, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
-		Path: root + "/nvsnap",
+		Path: m.bundleDir(m.BundleID),
 		Type: &hostPathDir,
 	}}}
 	vols := []corev1.Volume{roxVol, scratch, toolsVol}

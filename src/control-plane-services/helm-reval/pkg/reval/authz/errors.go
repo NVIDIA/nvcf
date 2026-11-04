@@ -21,7 +21,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/httpapi"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/httpapi"
 )
 
 // ErrAuthorizationFailed is returned when an authorizer step rejects the request.

@@ -7,7 +7,7 @@ go_library(
         "promlint.go",
         "validation.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/testutil/promlint",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/testutil/promlint",
     importpath = "github.com/prometheus/client_golang/prometheus/testutil/promlint",
     visibility = ["//visibility:public"],
     deps = [

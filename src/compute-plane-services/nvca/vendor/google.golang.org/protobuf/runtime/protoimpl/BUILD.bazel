@@ -6,7 +6,7 @@ go_library(
         "impl.go",
         "version.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoimpl",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoimpl",
     importpath = "google.golang.org/protobuf/runtime/protoimpl",
     visibility = ["//visibility:public"],
     deps = [

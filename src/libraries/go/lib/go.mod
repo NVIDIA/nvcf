@@ -1,4 +1,4 @@
-module github.com/NVIDIA/nvcf/src/libraries/go/lib
+module github.com/dsx-ai-factory/nvcf/src/libraries/go/lib
 
 go 1.25.0
 

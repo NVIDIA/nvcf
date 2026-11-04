@@ -6,11 +6,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "httpapi",
     srcs = ["errors.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/httpapi",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/httpapi",
     visibility = ["//visibility:public"],
     deps = [
         "//src/control-plane-services/helm-reval/pkg/telemetry/tracing",
-        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/zapotelspan",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_lib//pkg/zapotelspan",
         "@org_uber_go_zap//:zap",
     ],
 )

@@ -1,0 +1,86 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1220" height="696" viewBox="0 0 1220 696" role="img" aria-labelledby="title desc">
+<title id="title">Loading a Model over the GPU Rails with NFS over RDMA</title>
+<desc id="desc">A source pod holding the four rail VFs serves a local model directory read-only with nvstor-nfs-export, RDMA only. On a new replica node a privileged rails-mount sidecar pins one route per source rail address, mounts the export once with session trunking so each rail carries one transport, and shares the mount with the unprivileged vLLM container. Model bytes flow from the source NVMe through the export, across all four rails, into the kernel NFS client and the workload.</desc>
+<defs>
+<symbol id="icon-compute" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="12" y="14" width="24" height="20" rx="2"/><path d="M12 19h24M17 24h6v6h-6zM27 24h4M27 28h4"/></g></symbol>
+<symbol id="icon-folder" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v16h24V20H24l-3-3z"/></g></symbol>
+<symbol id="icon-guard" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M24 12l10 4v7c0 7-4.5 11-10 13-5.5-2-10-6-10-13v-7z"/><path d="M19.5 24l3 3 6-6"/></g></symbol>
+<symbol id="icon-hardware" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#7d55c0"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="16" height="16" rx="1.5"/><path d="M20 12v4M24 12v4M28 12v4M20 32v4M24 32v4M28 32v4M12 20h4M12 24h4M12 28h4M32 20h4M32 24h4M32 28h4"/></g></symbol>
+<symbol id="icon-service" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#76b900"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M24 12l11 6v12l-11 6-11-6V18z"/><path d="M13 18l11 6 11-6M24 24v12"/></g></symbol>
+<symbol id="icon-third" viewBox="0 0 48 48"><circle cx="24" cy="24" r="23" fill="#d0453f"/><g fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12v7M29 12v7"/><path d="M15 19h18v4a9 9 0 0 1-18 0z"/><path d="M24 32v5"/></g></symbol>
+<marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#000000"/></marker>
+<marker id="arrow-opt" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0 0L6 2.5L0 5Z" fill="#999999"/></marker>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#000000}.title{font-size:20px;font-weight:600}.sub{font-size:12px;fill:#333333}.group{fill:#ffffff;stroke:#cccccc;stroke-width:1}.group-nv{fill:#ffffff;stroke:#76b900;stroke-width:1.5}.group-partner{fill:#f4f7f7;stroke:#cccccc;stroke-width:1}.group-label{font-size:12px;font-weight:600}.card{fill:#ffffff;stroke:#cccccc;stroke-width:1}.label{font-size:12px}.small{font-size:10px;fill:#333333}.plabel{font-size:10px;font-weight:500}.path{fill:none;stroke:#000000;stroke-width:1;stroke-linejoin:round}.opt{fill:none;stroke:#999999;stroke-width:1;stroke-dasharray:5 3;stroke-linejoin:round}.callout{fill:#000000}.callout-text{font-size:11px;font-weight:600;fill:#ffffff}.note{font-size:11px;fill:#333333}.note-b{font-size:11px;font-weight:600}</style></defs>
+<rect x="0" y="0" width="1220" height="696" fill="#ffffff"/>
+<text x="40" y="44" class="title">Loading a Model over the GPU Rails with NFS over RDMA</text>
+<text x="40" y="64" class="sub">GPU nodes whose RDMA NICs are SR-IOV VFs, four rails per node in this example. Numbers 1-4 follow the model bytes.</text>
+<rect x="40" y="110" width="420" height="420" rx="10" class="group-nv"/>
+<text x="54" y="132" class="group-label" text-anchor="start">Source node</text>
+<text x="54" y="147" class="small" text-anchor="start">nvstor-source pod (source-pod.yaml)</text>
+<rect id="s-dir" x="70" y="170" width="160" height="112" rx="8" class="card"/>
+<use href="#icon-folder" x="126" y="178" width="48" height="48"/>
+<text x="150" y="242" class="label" text-anchor="middle" data-fit="s-dir" data-fit-padding="4">Model directory</text>
+<text x="150" y="257" class="small" text-anchor="middle" data-fit="s-dir" data-fit-padding="4">local NVMe, read-only</text>
+<rect id="s-export" x="270" y="170" width="170" height="112" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-service" x="331" y="178" width="48" height="48"/>
+<text x="355" y="242" class="label" text-anchor="middle" data-fit="s-export" data-fit-padding="4">nvstor-nfs-export</text>
+<text x="355" y="257" class="small" text-anchor="middle" data-fit="s-export" data-fit-padding="4">[::]:20049, --no-tcp</text>
+<text x="355" y="270" class="small" text-anchor="middle" data-fit="s-export" data-fit-padding="4">--allow-client, --fh-key</text>
+<rect id="s-vf" x="270" y="380" width="170" height="112" rx="8" class="card"/>
+<use href="#icon-hardware" x="331" y="388" width="48" height="48"/>
+<text x="355" y="452" class="label" text-anchor="middle" data-fit="s-vf" data-fit-padding="4">Rail VFs net1..net4</text>
+<text x="355" y="467" class="small" text-anchor="middle" data-fit="s-vf" data-fit-padding="4">IPv6 routable GIDs</text>
+<text x="355" y="480" class="small" text-anchor="middle" data-fit="s-vf" data-fit-padding="4">--trunk-addr per rail</text>
+<rect x="700" y="110" width="480" height="420" rx="10" class="group-nv"/>
+<text x="714" y="132" class="group-label" text-anchor="start">Replica node</text>
+<text x="714" y="147" class="small" text-anchor="start">vllm-replica pod (replica-pod.yaml)</text>
+<rect id="r-side" x="720" y="170" width="190" height="112" rx="8" class="card" style="stroke:#76b900;stroke-width:1.5"/>
+<use href="#icon-guard" x="791" y="178" width="48" height="48"/>
+<text x="815" y="242" class="label" text-anchor="middle" data-fit="r-side" data-fit-padding="4">rails-mount sidecar</text>
+<text x="815" y="257" class="small" text-anchor="middle" data-fit="r-side" data-fit-padding="4">privileged; /128 route per rail</text>
+<text x="815" y="270" class="small" text-anchor="middle" data-fit="r-side" data-fit-padding="4">trunkdiscovery, max_connect=4</text>
+<rect id="r-vllm" x="970" y="170" width="190" height="112" rx="8" class="card"/>
+<use href="#icon-compute" x="1041" y="178" width="48" height="48"/>
+<text x="1065" y="242" class="label" text-anchor="middle" data-fit="r-vllm" data-fit-padding="4">vLLM</text>
+<text x="1065" y="257" class="small" text-anchor="middle" data-fit="r-vllm" data-fit-padding="4">unprivileged, no capabilities</text>
+<text x="1065" y="270" class="small" text-anchor="middle" data-fit="r-vllm" data-fit-padding="4">reads /nvstor/&lt;uid&gt;/data</text>
+<rect id="r-vf" x="720" y="380" width="190" height="112" rx="8" class="card"/>
+<use href="#icon-hardware" x="791" y="388" width="48" height="48"/>
+<text x="815" y="452" class="label" text-anchor="middle" data-fit="r-vf" data-fit-padding="4">Rail VFs net1..net4</text>
+<text x="815" y="467" class="small" text-anchor="middle" data-fit="r-vf" data-fit-padding="4">one per plane</text>
+<rect id="r-nfs" x="970" y="380" width="190" height="112" rx="8" class="card"/>
+<use href="#icon-third" x="1041" y="388" width="48" height="48"/>
+<text x="1065" y="452" class="label" text-anchor="middle" data-fit="r-nfs" data-fit-padding="4">Kernel NFS client</text>
+<text x="1065" y="467" class="small" text-anchor="middle" data-fit="r-nfs" data-fit-padding="4">proto=rdma6, ro, soft</text>
+<text x="1065" y="480" class="small" text-anchor="middle" data-fit="r-nfs" data-fit-padding="4">one transport per rail</text>
+<path class="path" d="M230 226 L270 226" marker-end="url(#arrow)"/>
+<path class="path" d="M355 282 L355 380" marker-end="url(#arrow)"/>
+<circle cx="355" cy="331" r="9" class="callout"/><text x="355" y="335" class="callout-text" text-anchor="middle">1</text>
+<path class="path" d="M440 400 L720 400"/>
+<path class="path" d="M440 422 L720 422"/>
+<path class="path" d="M440 444 L720 444"/>
+<path class="path" d="M440 466 L720 466"/>
+<text x="580" y="384" class="note-b" text-anchor="middle">four rails, RoCE v2</text>
+<circle cx="520" cy="400" r="9" class="callout"/><text x="520" y="404" class="callout-text" text-anchor="middle">2</text>
+<text x="580" y="486" class="note" text-anchor="middle">one RC transport per rail</text>
+<path class="path" d="M910 436 L970 436" marker-end="url(#arrow)"/>
+<circle cx="935" cy="436" r="9" class="callout"/><text x="935" y="440" class="callout-text" text-anchor="middle">3</text>
+<path class="path" d="M1065 380 L1065 282" marker-end="url(#arrow)"/>
+<circle cx="1065" cy="331" r="9" class="callout"/><text x="1065" y="335" class="callout-text" text-anchor="middle">4</text>
+<path class="opt" d="M910 226 L970 226" marker-end="url(#arrow-opt)"/>
+<path class="opt" d="M815 282 L815 380" marker-end="url(#arrow-opt)"/>
+<circle cx="49" cy="568" r="9" class="callout"/><text x="49" y="572" class="callout-text" text-anchor="middle">1</text>
+<text x="66" y="572" class="note" text-anchor="start">nvstor-nfs-export serves the directory over NFS/RDMA only, to the replicas' rail addresses (--allow-client), with sealed filehandles that survive a restart (--fh-key).</text>
+<circle cx="49" cy="589" r="9" class="callout"/><text x="49" y="593" class="callout-text" text-anchor="middle">2</text>
+<text x="66" y="593" class="note" text-anchor="start">Session trunking: the source advertises its four rail addresses as fs_locations (--trunk-addr) and the client mounts once with trunkdiscovery (Linux 5.18+), one transport per rail. The</text>
+<text x="66" y="608" class="note" text-anchor="start">sidecar pins a /128 route per source address to the client VF on the same plane; without that, every transport leaves through one VF.</text>
+<circle cx="49" cy="625" r="9" class="callout"/><text x="49" y="629" class="callout-text" text-anchor="middle">3</text>
+<text x="66" y="629" class="note" text-anchor="start">The rails are reachable only from pods holding the rail VFs, so the kernel client mounts from the sidecar's network namespace, not the node's.</text>
+<circle cx="49" cy="646" r="9" class="callout"/><text x="49" y="650" class="callout-text" text-anchor="middle">4</text>
+<text x="66" y="650" class="note" text-anchor="start">vLLM starts only after the sidecar's startup probe sees every rail carrying a transport, and reads the mount read-only through a hostPath (HostToContainer). Dashed: the sidecar's mount and</text>
+<text x="66" y="665" class="note" text-anchor="start">routes.</text>
+</svg>

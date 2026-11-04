@@ -34,7 +34,7 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 )
 
 type TokenStore interface {

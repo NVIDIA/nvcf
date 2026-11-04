@@ -24,7 +24,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/utils"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common/core/utils"
 )
 
 type DeploymentStats struct {

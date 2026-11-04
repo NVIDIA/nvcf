@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "server",
     srcs = ["server.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/server",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/server",
     visibility = ["//visibility:public"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/api",

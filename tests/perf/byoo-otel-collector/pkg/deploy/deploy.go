@@ -38,11 +38,11 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/labels"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/render"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/report"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/sink"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/labels"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/render"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/report"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/sink"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
 )
 
 // Label keys/values are shared with the sink and loadgen packages via

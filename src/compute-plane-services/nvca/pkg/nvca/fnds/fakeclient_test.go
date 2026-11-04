@@ -26,7 +26,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 
-	nvcffndstypes "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types"
+	nvcffndstypes "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types"
 )
 
 func TestNewFakeFndsClient(t *testing.T) {

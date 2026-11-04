@@ -30,7 +30,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/internal/utils"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nvcf-ui/backend/internal/utils"
 )
 
 const (

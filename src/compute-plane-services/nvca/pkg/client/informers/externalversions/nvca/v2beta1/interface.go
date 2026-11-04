@@ -20,7 +20,7 @@ limitations under the License.
 package v2beta1
 
 import (
-	internalinterfaces "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/internalinterfaces"
+	internalinterfaces "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/internalinterfaces"
 )
 
 // Interface provides access to all the informers in this group version.

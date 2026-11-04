@@ -33,6 +33,8 @@ pub(crate) enum TestEndpoint {
     ChatCompletions,
     Responses,
     Embeddings,
+    Decisions,
+    Systemone,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]

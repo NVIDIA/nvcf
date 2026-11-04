@@ -20,6 +20,7 @@ package steps
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,6 +95,28 @@ func TestHTTPStatusAssertion(t *testing.T) {
 	}
 	if err := sc.theHTTPStatusShouldBe(200); err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("expected status mismatch with body, got %v", err)
+	}
+}
+
+func TestHTTPHeaderAssertion(t *testing.T) {
+	sc, _ := newHTTPScenario(t, harness.HTTPResponse{Status: 429, Header: http.Header{"Retry-After": {"7"}}})
+	if err := sc.theHTTPHeaderShouldEqual("Retry-After", "7"); err == nil {
+		t.Fatal("assertion must fail before any request")
+	}
+	if err := sc.iSendHTTPRequest(context.Background(), "POST", "http://x/"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sc.theHTTPHeaderShouldEqual("retry-after", "7"); err != nil {
+		t.Fatalf("matching header: %v", err)
+	}
+	if err := sc.theHTTPHeaderShouldEqual("Retry-After", "8"); err == nil || !strings.Contains(err.Error(), `"7"`) {
+		t.Fatalf("expected mismatch naming the actual value, got %v", err)
+	}
+	if err := sc.theHTTPHeaderShouldEqual("X-Missing", "7"); err == nil || !strings.Contains(err.Error(), "absent") {
+		t.Fatalf("expected absent header failure, got %v", err)
+	}
+	if err := sc.theHTTPHeaderShouldEqual(" ", "7"); err == nil {
+		t.Fatal("blank header name accepted")
 	}
 }
 

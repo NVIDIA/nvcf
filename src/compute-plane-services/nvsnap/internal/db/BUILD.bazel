@@ -14,7 +14,7 @@ go_library(
         "restore.go",
         "retention.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/db",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = ["@org_modernc_sqlite//:sqlite"],
 )
@@ -22,6 +22,7 @@ go_library(
 go_test(
     name = "db_test",
     srcs = [
+        "concurrency_test.go",
         "db_test.go",
         "dedup_hash_test.go",
         "dedupe_test.go",

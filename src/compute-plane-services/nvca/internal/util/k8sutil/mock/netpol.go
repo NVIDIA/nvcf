@@ -20,7 +20,7 @@ package k8smock
 import (
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 )
 
 func NewNetworkPolicyConfigMap(namespace string) *corev1.ConfigMap {

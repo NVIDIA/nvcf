@@ -31,6 +31,7 @@ if [ ! -f "${DEPLOY_SCRIPT_DIR}/utils/utils.sh" ]; then
 fi
 
 source "$DEPLOY_SCRIPT_DIR/utils/utils.sh"
+source "$DEPLOY_SCRIPT_DIR/utils/jwt-plugin.sh"
 
 if ! check_kubernetes; then
     log_error "kubernetes check failed"
@@ -460,54 +461,6 @@ get_and_save_jwt_signing_key() {
         log_success "JWT signing key updated at '${jwt_pem_secret_name}'"
         return 0
     fi
-}
-
-register_and_enable_jwt_plugin() {
-    local namespace=$1
-    local statefulset=$2
-    local root_token=$(get_root_token "$namespace" "$statefulset")
-    local plugin_dir="/openbao/plugins"
-    local plugin_name="vault-plugin-secrets-jwt"
-    local pod_name="${statefulset}-0"
-
-    log_section "Enabling JWT Secret Engine"
-
-    if kubectl exec -n $namespace $pod_name -c openbao -- \
-        env BAO_TOKEN="$root_token" \
-        bao plugin list | grep "$plugin_name"; then
-        log_success "Plugin '$plugin_name' already registered"
-        return 0
-    fi
-
-    # Step 1: Verify Plugin Binary Exists
-    log_step "Verifying if plugin binary exists at $plugin_dir/$plugin_name..."
-    if ! kubectl exec -n $namespace $pod_name -c openbao -- test -f "$plugin_dir/$plugin_name"; then
-        log_error "Plugin binary not found at $plugin_dir/$plugin_name. Check your container image tag."
-        return 1
-    fi
-
-    # Step 2: Calculate SHA256 Checksum of the Plugin Binary
-    log_step "Calculating SHA256 checksum for $plugin_name..."
-    local plugin_sha256=$(kubectl exec -n $namespace $pod_name -c openbao -- sha256sum "$plugin_dir/$plugin_name" | awk '{print $1}')
-    if [[ -z "$plugin_sha256" ]]; then
-        log_error "Failed to calculate SHA256 checksum for $plugin_name."
-        return 1
-    fi
-    log_success "JWT Plugin SHA256 checksum: $plugin_sha256"
-
-    # Step 3: Register the Plugin
-    log_step "Registering plugin '$plugin_name'..."
-    kubectl exec -n $namespace $pod_name -c openbao -- \
-        env BAO_TOKEN="$root_token" \
-        bao plugin register \
-        -sha256="$plugin_sha256" \
-        -command="$plugin_name" \
-        secret "$plugin_name"
-    if [[ $? -ne 0 ]]; then
-        log_error "Failed to register plugin '$plugin_name'."
-        return 1
-    fi
-    log_success "Plugin '$plugin_name' registered successfully."
 }
 
 log_section "Deploying OpenBao cluster in namespace '${namespace}' and statefulset '${statefulset}' using ${install_method} method"

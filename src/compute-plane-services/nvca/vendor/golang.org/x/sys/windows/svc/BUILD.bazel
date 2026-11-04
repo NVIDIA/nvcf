@@ -6,7 +6,7 @@ go_library(
         "security.go",
         "service.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/sys/windows/svc",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/sys/windows/svc",
     importpath = "golang.org/x/sys/windows/svc",
     visibility = ["//visibility:public"],
     deps = select({

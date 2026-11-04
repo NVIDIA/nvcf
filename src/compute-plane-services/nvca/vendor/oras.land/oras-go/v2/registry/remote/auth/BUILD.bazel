@@ -9,7 +9,7 @@ go_library(
         "credential.go",
         "scope.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote/auth",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote/auth",
     importpath = "oras.land/oras-go/v2/registry/remote/auth",
     visibility = ["//visibility:public"],
     deps = [

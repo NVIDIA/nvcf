@@ -16,7 +16,7 @@ go_library(
         "prune.go",
         "runtimecost.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/interpreter",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/interpreter",
     importpath = "github.com/google/cel-go/interpreter",
     visibility = ["//visibility:public"],
     deps = [

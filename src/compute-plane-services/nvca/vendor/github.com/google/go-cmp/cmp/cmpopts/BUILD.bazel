@@ -9,7 +9,7 @@ go_library(
         "struct_filter.go",
         "xform.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-cmp/cmp/cmpopts",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-cmp/cmp/cmpopts",
     importpath = "github.com/google/go-cmp/cmp/cmpopts",
     visibility = ["//visibility:public"],
     deps = [

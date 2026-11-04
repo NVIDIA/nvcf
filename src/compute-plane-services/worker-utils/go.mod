@@ -1,13 +1,13 @@
-module github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils
+module github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils
 
 go 1.26.10
 
 require (
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3
-	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20261026161257-54e768f42b59
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
 	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/worker v0.0.0-20261026161257-54e768f42b59
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/goccy/go-json v0.10.5
@@ -134,3 +134,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/worker => ../../libraries/go/worker

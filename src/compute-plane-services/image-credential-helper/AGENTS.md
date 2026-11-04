@@ -6,7 +6,7 @@ bring-your-own-compute clusters.
 ## Layout
 
 - `cmd/image-credential-helper/`: main binary entrypoint
-- `vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential/`:
+- `vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/imagecredential/`:
   vendored shared registry credential logic
 - `examples/`: sample Kubernetes manifests
 - `docker/`: local Dockerfile
