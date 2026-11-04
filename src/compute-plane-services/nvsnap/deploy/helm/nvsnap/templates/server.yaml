@@ -88,6 +88,11 @@ rules:
   - apiGroups: ["nvsnap.io"]
     resources: ["gpurestores", "gpurestores/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # NvsnapFunction: one per function version the capture records name,
+  # kept from the records (internal/server/function_status.go).
+  - apiGroups: ["nvsnap.io"]
+    resources: ["nvsnapfunctions"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

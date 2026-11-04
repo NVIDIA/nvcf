@@ -116,6 +116,7 @@ func (a *Agent) criuFallbackFor(ctx context.Context, ns, uri string, ordinal int
 		}
 		return webhook.CRIUFallback{}, false
 	}
+	a.nameRecordLater(key, ns)
 	reason := criuFallbackReason(data, time.Now(), a.currentBundle())
 	if reason == "" {
 		return webhook.CRIUFallback{}, false
@@ -281,6 +282,7 @@ func (c *criuAutoRestorer) considerGPUShareFailure(ctx context.Context, pod *cor
 		log.WithError(err).Warn("gpushare: cannot mark the configuration; the pod is left as it is")
 		return
 	}
+	c.a.nameRecordLater(key, pod.Namespace)
 	if !marked {
 		return
 	}

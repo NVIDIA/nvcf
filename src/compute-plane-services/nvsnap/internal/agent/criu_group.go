@@ -753,6 +753,7 @@ func (c *criuAutoRestorer) claimGroupRecord(ctx context.Context, key string, lea
 	}
 	created, err := cms.Create(ctx, record, metav1.CreateOptions{})
 	if err == nil {
+		c.a.nameRecordLater(key, leader.Namespace)
 		return created, nil
 	}
 	if !apierrors.IsAlreadyExists(err) {
@@ -776,6 +777,9 @@ func (c *criuAutoRestorer) claimGroupRecord(ctx context.Context, key string, lea
 	updated, err := cms.Update(ctx, prev, metav1.UpdateOptions{})
 	if apierrors.IsConflict(err) {
 		return nil, nil
+	}
+	if err == nil {
+		c.a.nameRecordLater(key, leader.Namespace)
 	}
 	return updated, err
 }

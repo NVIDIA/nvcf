@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- if .Values.server.enabled }}
+# NvsnapFunction: which functions nvsnap has cached, one object per function
+# version, kept by nvsnap-server from the capture records
+# (docs/design/FUNCTION-CACHE-STATUS.md). A template, not crds/: Helm
+# installs crds/ only on install, and a cluster upgraded to this chart
+# needs it too. Kept on uninstall like the records it reflects.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: nvsnapfunctions.nvsnap.io
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "nvsnap.server.labels" . | nindent 4 }}
+spec:
+  group: nvsnap.io
+  names:
+    kind: NvsnapFunction
+    listKind: NvsnapFunctionList
+    plural: nvsnapfunctions
+    singular: nvsnapfunction
+    shortNames:
+      - nvsfn
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Function
+          type: string
+          jsonPath: .status.functionID
+        - name: Tenant
+          type: string
+          jsonPath: .status.tenant
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: Method
+          type: string
+          jsonPath: .status.method
+        - name: Ranks
+          type: integer
+          jsonPath: .status.ranks
+        - name: Verified
+          type: date
+          jsonPath: .status.verifiedAt
+        - name: Last-Restore-S
+          type: number
+          jsonPath: .status.lastRestoreSeconds
+        - name: Reason
+          type: string
+          jsonPath: .status.reason
+          priority: 1
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            status:
+              description: What nvsnap holds for the function version, and what admission does with its next pod.
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+# Everyone who can view the cluster can read it: ids, node names, times
+# and reasons, nothing secret.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvsnap-function-view
+  labels:
+    {{- include "nvsnap.server.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+  - apiGroups: ["nvsnap.io"]
+    resources: ["nvsnapfunctions"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
