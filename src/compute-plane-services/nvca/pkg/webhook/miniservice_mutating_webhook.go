@@ -28,8 +28,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	translatecommon "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	translatecommon "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/sirupsen/logrus"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -46,11 +46,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
-	nvcfdra "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/dra"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
-	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	nvcfdra "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/dra"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	nvcatypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 // miniserviceMutatingWebhook mutates objects admitted into operator-mode MiniService namespaces.
@@ -337,20 +337,27 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 		// Pod spec mutations must only be applied on creation events.
 		if isCreate {
 			// NVLink DRA mutations for claims/scheduling. Skipped when the function has opted
-			// out via DisableNVLinkComputeDomain, since it does not need cross-node NVLink.
+			// out via DisableNVLinkComputeDomain, or the Pod via DisableComputeDomainAnnotation,
+			// since it does not need cross-node NVLink.
 			if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
-				disableComputeDomain := meta.IsWorkloadFeatureFlagEnabled(featureflag.DisableNVLinkComputeDomain)
-				if _, hasIdx := t.GetAnnotations()[nvcfdra.RequiredNVLinkDomainIndexAnnotation]; hasIdx && disableComputeDomain {
+				var optOut string
+				switch {
+				case meta.IsWorkloadFeatureFlagEnabled(featureflag.DisableNVLinkComputeDomain):
+					optOut = featureflag.DisableNVLinkComputeDomain
+				case t.GetAnnotations()[nvcfdra.DisableComputeDomainAnnotation] == "true":
+					optOut = nvcfdra.DisableComputeDomainAnnotation
+				}
+				if _, hasIdx := t.GetAnnotations()[nvcfdra.RequiredNVLinkDomainIndexAnnotation]; hasIdx && optOut != "" {
 					core.GetLogger(ctx).WithFields(logrus.Fields{
 						"pod":                          t.Name,
 						"namespace":                    obj.GetNamespace(),
 						nvcatypes.FunctionIDKey:        meta.Labels[nvcatypes.FunctionIDKey],
 						nvcatypes.FunctionVersionIDKey: meta.Labels[nvcatypes.FunctionVersionIDKey],
 						nvcatypes.NCAIDKey:             meta.Annotations[nvcatypes.NCAIDKey],
-					}).Warnf("pod sets %s but %s is also enabled; skipping ComputeDomain allocation despite the annotation",
-						nvcfdra.RequiredNVLinkDomainIndexAnnotation, featureflag.DisableNVLinkComputeDomain)
+					}).Warnf("pod sets %s but %s is also set; skipping ComputeDomain allocation despite the annotation",
+						nvcfdra.RequiredNVLinkDomainIndexAnnotation, optOut)
 				}
-				if !disableComputeDomain {
+				if optOut == "" {
 					w.mutateNVLinkDRA(obj.GetNamespace(), t)
 				}
 			}

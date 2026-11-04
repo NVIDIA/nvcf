@@ -29,7 +29,7 @@ import (
 	"go.opentelemetry.io/otel"
 )
 
-var tracerScope = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/jwtparse"
+var tracerScope = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/jwtparse"
 
 var (
 	ErrMissingJWKSURL   = errors.New("jwks url is missing")

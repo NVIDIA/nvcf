@@ -9,7 +9,7 @@ go_library(
         "procattr_unix.go",
         "process.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/process",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/process",
     importpath = "sigs.k8s.io/controller-runtime/pkg/internal/testing/process",
     visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
     deps = select({

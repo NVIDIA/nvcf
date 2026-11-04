@@ -24,7 +24,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/trustbundle"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/trustbundle"
 )
 
 const (

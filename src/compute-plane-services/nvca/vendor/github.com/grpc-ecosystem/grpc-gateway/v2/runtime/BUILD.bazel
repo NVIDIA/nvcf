@@ -20,7 +20,7 @@ go_library(
         "proto2_convert.go",
         "query.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/runtime",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/runtime",
     importpath = "github.com/grpc-ecosystem/grpc-gateway/v2/runtime",
     visibility = ["//visibility:public"],
     deps = [

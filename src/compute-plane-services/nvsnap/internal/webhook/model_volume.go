@@ -13,9 +13,9 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 )
 
 // Model volume decoration (docs/design/helm-shared-model-volume.md).

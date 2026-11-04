@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# gazelle:prefix github.com/NVIDIA/nvcf/src/libraries/go/worker
+# gazelle:prefix github.com/dsx-ai-factory/nvcf/src/libraries/go/worker
 # Phase 1 keeps protobuf out of the toolchain; pre-generated .pb.go files are
 # treated as plain Go sources. Re-enable when protobuf/rules_proto land in
 # MODULE.bazel.

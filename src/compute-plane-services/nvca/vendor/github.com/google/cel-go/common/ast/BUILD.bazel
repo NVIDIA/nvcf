@@ -9,7 +9,7 @@ go_library(
         "factory.go",
         "navigable.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/ast",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/ast",
     importpath = "github.com/google/cel-go/common/ast",
     visibility = ["//visibility:public"],
     deps = [

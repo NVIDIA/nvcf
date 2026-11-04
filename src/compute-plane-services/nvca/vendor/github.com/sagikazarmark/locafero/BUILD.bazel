@@ -9,7 +9,7 @@ go_library(
         "glob_windows.go",
         "helpers.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/sagikazarmark/locafero",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/sagikazarmark/locafero",
     importpath = "github.com/sagikazarmark/locafero",
     visibility = ["//visibility:public"],
     deps = [

@@ -8,7 +8,7 @@ go_library(
         "simple_span_processor.go",
         "tracer.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/trace/internal/observ",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/trace/internal/observ",
     importpath = "go.opentelemetry.io/otel/sdk/trace/internal/observ",
     visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/trace:__subpackages__"],
     deps = [

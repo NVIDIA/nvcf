@@ -12,7 +12,7 @@ go_library(
         "strkey.go",
         "xkeys.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nkeys",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nkeys",
     importpath = "github.com/nats-io/nkeys",
     visibility = ["//visibility:public"],
     deps = [

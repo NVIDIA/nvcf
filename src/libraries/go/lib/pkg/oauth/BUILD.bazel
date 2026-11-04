@@ -22,7 +22,7 @@ go_library(
         "jwtcache.go",
         "types.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/oauth",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/lib/pkg/core",

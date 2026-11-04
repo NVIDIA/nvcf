@@ -23,9 +23,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/progress"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker/progress"
 )
 
 const (

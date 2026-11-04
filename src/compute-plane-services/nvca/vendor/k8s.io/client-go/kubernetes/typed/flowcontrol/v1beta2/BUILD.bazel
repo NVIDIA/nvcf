@@ -9,7 +9,7 @@ go_library(
         "generated_expansion.go",
         "prioritylevelconfiguration.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/flowcontrol/v1beta2",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/flowcontrol/v1beta2",
     importpath = "k8s.io/client-go/kubernetes/typed/flowcontrol/v1beta2",
     visibility = ["//visibility:public"],
     deps = [

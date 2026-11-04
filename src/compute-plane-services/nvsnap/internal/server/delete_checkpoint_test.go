@@ -36,7 +36,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/db"
 )
 
 // fakeAgent is a per-test stand-in for the nvsnap-agent endpoint —

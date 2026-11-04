@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/nkey"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/nkey"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
 )

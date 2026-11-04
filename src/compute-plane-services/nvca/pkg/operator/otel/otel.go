@@ -22,7 +22,7 @@ import (
 	otelattr "go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	nvcfv1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvcfv1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
 
 // OTel attributes follow the naming standards for Open Telemetry attributes
@@ -48,7 +48,7 @@ func NewTracer(otelAttrGetters ...AttributesGetter) oteltrace.Tracer {
 	for _, v := range otelAttrGetters {
 		defaultOTelAttributes = append(defaultOTelAttributes, v.GetOTelAttributes()...)
 	}
-	return otel.Tracer("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile",
+	return otel.Tracer("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile",
 		oteltrace.WithInstrumentationAttributes(defaultOTelAttributes...))
 }
 

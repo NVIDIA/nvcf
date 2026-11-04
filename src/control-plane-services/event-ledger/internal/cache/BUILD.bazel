@@ -7,7 +7,7 @@ go_library(
         "metrics.go",
         "timing_wheel.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/cache",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/cache",
     visibility = ["//:__subpackages__"],
     deps = [
         "//src/control-plane-services/event-ledger/internal/data_access",

@@ -1,0 +1,332 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# A function pod as a kube-apiserver returned it after a create by the agent,
+# a scheduler status update, a binding and a kubelet status update.
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    cluster-group: example-cluster-group
+    function-name: example-text-generation
+    instance-type: gpu.a100.1x
+    request-received-at: "2026-10-30T01:02:03Z"
+  creationTimestamp: "2026-10-30T01:02:04Z"
+  generation: 1
+  labels:
+    app.kubernetes.io/managed-by: nvca
+    app.kubernetes.io/name: function-instance
+    function-id: 3b5c1f0e-8d2a-4e6b-9f71-2c4d8a6e0b13
+    function-version-id: 9e2d7a41-5c3b-4f8e-a6d0-1b7c9e2f4a58
+    instance-id: c41a9e7b-2f6d-4b38-8e15-7a0d3c9b6f21
+    org-id: example-org
+  managedFields:
+  - apiVersion: v1
+    fieldsType: FieldsV1
+    fieldsV1: {"f:status":{"f:conditions":{".":{},"k:{\"type\":\"PodScheduled\"}":{".":{},"f:lastProbeTime":{},"f:message":{},"f:reason":{},"f:status":{},"f:type":{}}}}}
+    manager: kube-scheduler
+    operation: Update
+    subresource: status
+    time: "2026-10-30T01:02:05Z"
+  - apiVersion: v1
+    fieldsType: FieldsV1
+    fieldsV1: {"f:status":{"f:conditions":{"k:{\"type\":\"ContainersReady\"}":{".":{},"f:lastProbeTime":{},"f:lastTransitionTime":{},"f:status":{},"f:type":{}},"k:{\"type\":\"Initialized\"}":{".":{},"f:lastProbeTime":{},"f:lastTransitionTime":{},"f:status":{},"f:type":{}},"k:{\"type\":\"PodReadyToStartContainers\"}":{".":{},"f:lastProbeTime":{},"f:lastTransitionTime":{},"f:status":{},"f:type":{}},"k:{\"type\":\"PodScheduled\"}":{"f:lastTransitionTime":{}},"k:{\"type\":\"Ready\"}":{".":{},"f:lastProbeTime":{},"f:lastTransitionTime":{},"f:status":{},"f:type":{}}},"f:containerStatuses":{},"f:hostIP":{},"f:hostIPs":{},"f:initContainerStatuses":{},"f:phase":{},"f:podIP":{},"f:podIPs":{".":{},"k:{\"ip\":\"10.244.3.17\"}":{".":{},"f:ip":{}}},"f:startTime":{}}}
+    manager: kubelet
+    operation: Update
+    subresource: status
+    time: "2026-10-30T01:09:20Z"
+  - apiVersion: v1
+    fieldsType: FieldsV1
+    fieldsV1: {"f:metadata":{"f:annotations":{".":{},"f:cluster-group":{},"f:function-name":{},"f:instance-type":{},"f:request-received-at":{}},"f:labels":{".":{},"f:app.kubernetes.io/managed-by":{},"f:app.kubernetes.io/name":{},"f:function-id":{},"f:function-version-id":{},"f:instance-id":{},"f:org-id":{}}},"f:spec":{"f:containers":{"k:{\"name\":\"inference\"}":{".":{},"f:env":{".":{},"k:{\"name\":\"FUNCTION_ID\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"FUNCTION_VERSION_ID\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"INSTANCE_ID\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"LOG_LEVEL\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"MAX_BATCH_SIZE\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"MAX_INPUT_LENGTH\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"MODEL_PATH\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"NVIDIA_VISIBLE_DEVICES\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"OTEL_EXPORTER_OTLP_ENDPOINT\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"OTEL_SERVICE_NAME\"}":{".":{},"f:name":{},"f:value":{}}},"f:image":{},"f:imagePullPolicy":{},"f:name":{},"f:ports":{".":{},"k:{\"containerPort\":8000,\"protocol\":\"TCP\"}":{".":{},"f:containerPort":{},"f:name":{},"f:protocol":{}},"k:{\"containerPort\":8002,\"protocol\":\"TCP\"}":{".":{},"f:containerPort":{},"f:name":{},"f:protocol":{}}},"f:readinessProbe":{".":{},"f:failureThreshold":{},"f:httpGet":{".":{},"f:path":{},"f:port":{},"f:scheme":{}},"f:periodSeconds":{},"f:successThreshold":{},"f:timeoutSeconds":{}},"f:resources":{".":{},"f:limits":{".":{},"f:cpu":{},"f:memory":{},"f:nvidia.com/gpu":{}},"f:requests":{".":{},"f:cpu":{},"f:memory":{},"f:nvidia.com/gpu":{}}},"f:startupProbe":{".":{},"f:failureThreshold":{},"f:httpGet":{".":{},"f:path":{},"f:port":{},"f:scheme":{}},"f:periodSeconds":{},"f:successThreshold":{},"f:timeoutSeconds":{}},"f:terminationMessagePath":{},"f:terminationMessagePolicy":{},"f:volumeMounts":{".":{},"k:{\"mountPath\":\"/config/models\"}":{".":{},"f:mountPath":{},"f:name":{}},"k:{\"mountPath\":\"/dev/shm\"}":{".":{},"f:mountPath":{},"f:name":{}},"k:{\"mountPath\":\"/var/inf\"}":{".":{},"f:mountPath":{},"f:name":{}}}},"k:{\"name\":\"utils\"}":{".":{},"f:env":{".":{},"k:{\"name\":\"FUNCTION_ID\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"FUNCTION_VERSION_ID\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"INFERENCE_PORT\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"INFERENCE_URL\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"INSTANCE_ID\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"MESSAGE_QUEUE_URL\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"ORG_ID\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"OTEL_EXPORTER_OTLP_ENDPOINT\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"STATUS_URL\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"WORKER_CONFIG\"}":{".":{},"f:name":{},"f:value":{}}},"f:image":{},"f:imagePullPolicy":{},"f:name":{},"f:ports":{".":{},"k:{\"containerPort\":8001,\"protocol\":\"TCP\"}":{".":{},"f:containerPort":{},"f:name":{},"f:protocol":{}}},"f:readinessProbe":{".":{},"f:failureThreshold":{},"f:grpc":{".":{},"f:port":{},"f:service":{}},"f:periodSeconds":{},"f:successThreshold":{},"f:timeoutSeconds":{}},"f:resources":{".":{},"f:limits":{".":{},"f:cpu":{},"f:memory":{}},"f:requests":{".":{},"f:cpu":{},"f:memory":{}}},"f:terminationMessagePath":{},"f:terminationMessagePolicy":{},"f:volumeMounts":{".":{},"k:{\"mountPath\":\"/etc/worker\"}":{".":{},"f:mountPath":{},"f:name":{},"f:readOnly":{}},"k:{\"mountPath\":\"/var/inf\"}":{".":{},"f:mountPath":{},"f:name":{}}}}},"f:dnsPolicy":{},"f:enableServiceLinks":{},"f:imagePullSecrets":{".":{},"k:{\"name\":\"function-registry-credentials\"}":{},"k:{\"name\":\"worker-registry-credentials\"}":{}},"f:initContainers":{".":{},"k:{\"name\":\"init\"}":{".":{},"f:args":{},"f:command":{},"f:env":{".":{},"k:{\"name\":\"FUNCTION_ID\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"FUNCTION_VERSION_ID\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"INSTANCE_ID\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"MODELS\"}":{".":{},"f:name":{},"f:value":{}},"k:{\"name\":\"MODEL_CACHE_DIR\"}":{".":{},"f:name":{},"f:value":{}}},"f:image":{},"f:imagePullPolicy":{},"f:name":{},"f:resources":{".":{},"f:limits":{".":{},"f:cpu":{},"f:memory":{}},"f:requests":{".":{},"f:cpu":{},"f:memory":{}}},"f:terminationMessagePath":{},"f:terminationMessagePolicy":{},"f:volumeMounts":{".":{},"k:{\"mountPath\":\"/config/models\"}":{".":{},"f:mountPath":{},"f:name":{}},"k:{\"mountPath\":\"/etc/worker\"}":{".":{},"f:mountPath":{},"f:name":{},"f:readOnly":{}}}}},"f:nodeSelector":{},"f:restartPolicy":{},"f:schedulerName":{},"f:securityContext":{},"f:terminationGracePeriodSeconds":{},"f:tolerations":{},"f:volumes":{".":{},"k:{\"name\":\"dshm\"}":{".":{},"f:emptyDir":{".":{},"f:medium":{},"f:sizeLimit":{}},"f:name":{}},"k:{\"name\":\"inference-data\"}":{".":{},"f:emptyDir":{},"f:name":{}},"k:{\"name\":\"model-data\"}":{".":{},"f:emptyDir":{},"f:name":{}},"k:{\"name\":\"worker-config\"}":{".":{},"f:name":{},"f:secret":{".":{},"f:defaultMode":{},"f:secretName":{}}}}}}
+    manager: nvca
+    operation: Update
+    time: "2026-10-30T01:02:04Z"
+  name: 0d7f3a92-6b1e-4c58-b2a4-9e5f1c8d3a76
+  namespace: nvcf-backend
+  resourceVersion: "201"
+  uid: fb76f06c-b72c-4e33-aa1e-acb0bbdf83c4
+spec:
+  containers:
+  - env:
+    - name: MODEL_PATH
+      value: /config/models/example-model
+    - name: NVIDIA_VISIBLE_DEVICES
+      value: all
+    - name: MAX_BATCH_SIZE
+      value: "8"
+    - name: MAX_INPUT_LENGTH
+      value: "4096"
+    - name: LOG_LEVEL
+      value: info
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://localhost:4317
+    - name: OTEL_SERVICE_NAME
+      value: inference
+    - name: FUNCTION_ID
+      value: 3b5c1f0e-8d2a-4e6b-9f71-2c4d8a6e0b13
+    - name: FUNCTION_VERSION_ID
+      value: 9e2d7a41-5c3b-4f8e-a6d0-1b7c9e2f4a58
+    - name: INSTANCE_ID
+      value: c41a9e7b-2f6d-4b38-8e15-7a0d3c9b6f21
+    image: registry.example/example-org/text-generation:2.3.1
+    imagePullPolicy: IfNotPresent
+    name: inference
+    ports:
+    - containerPort: 8000
+      name: http
+      protocol: TCP
+    - containerPort: 8002
+      name: metrics
+      protocol: TCP
+    readinessProbe:
+      failureThreshold: 3
+      httpGet:
+        path: /v1/health/ready
+        port: http
+        scheme: HTTP
+      periodSeconds: 10
+      successThreshold: 1
+      timeoutSeconds: 1
+    resources:
+      limits:
+        cpu: "16"
+        memory: 96Gi
+        nvidia.com/gpu: "1"
+      requests:
+        cpu: "8"
+        memory: 64Gi
+        nvidia.com/gpu: "1"
+    startupProbe:
+      failureThreshold: 180
+      httpGet:
+        path: /v1/health/live
+        port: http
+        scheme: HTTP
+      periodSeconds: 10
+      successThreshold: 1
+      timeoutSeconds: 1
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /config/models
+      name: model-data
+    - mountPath: /var/inf
+      name: inference-data
+    - mountPath: /dev/shm
+      name: dshm
+  - env:
+    - name: INSTANCE_ID
+      value: c41a9e7b-2f6d-4b38-8e15-7a0d3c9b6f21
+    - name: FUNCTION_ID
+      value: 3b5c1f0e-8d2a-4e6b-9f71-2c4d8a6e0b13
+    - name: FUNCTION_VERSION_ID
+      value: 9e2d7a41-5c3b-4f8e-a6d0-1b7c9e2f4a58
+    - name: ORG_ID
+      value: example-org
+    - name: INFERENCE_URL
+      value: http://localhost:8000
+    - name: INFERENCE_PORT
+      value: "8000"
+    - name: MESSAGE_QUEUE_URL
+      value: nats://queue.example.svc:4222
+    - name: STATUS_URL
+      value: https://status.example.com/v1/instances
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://localhost:4317
+    - name: WORKER_CONFIG
+      value: /etc/worker/config.yaml
+    image: registry.example/nvcf/worker-utils:1.4.2
+    imagePullPolicy: IfNotPresent
+    name: utils
+    ports:
+    - containerPort: 8001
+      name: grpc
+      protocol: TCP
+    readinessProbe:
+      failureThreshold: 3
+      grpc:
+        port: 8001
+        service: ""
+      periodSeconds: 10
+      successThreshold: 1
+      timeoutSeconds: 1
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /var/inf
+      name: inference-data
+    - mountPath: /etc/worker
+      name: worker-config
+      readOnly: true
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: true
+  imagePullSecrets:
+  - name: function-registry-credentials
+  - name: worker-registry-credentials
+  initContainers:
+  - args:
+    - --models-dir=/config/models
+    - --timeout=30m
+    command:
+    - /usr/local/bin/worker-init
+    env:
+    - name: MODELS
+      value: eyJtb2RlbHMiOlt7Im5hbWUiOiJleGFtcGxlLW1vZGVsIiwidmVyc2lvbiI6IjEuMCJ9XX0=
+    - name: FUNCTION_ID
+      value: 3b5c1f0e-8d2a-4e6b-9f71-2c4d8a6e0b13
+    - name: FUNCTION_VERSION_ID
+      value: 9e2d7a41-5c3b-4f8e-a6d0-1b7c9e2f4a58
+    - name: INSTANCE_ID
+      value: c41a9e7b-2f6d-4b38-8e15-7a0d3c9b6f21
+    - name: MODEL_CACHE_DIR
+      value: /config/models/cache
+    image: registry.example/nvcf/worker-init:1.4.2
+    imagePullPolicy: IfNotPresent
+    name: init
+    resources:
+      limits:
+        cpu: "2"
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 512Mi
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /config/models
+      name: model-data
+    - mountPath: /etc/worker
+      name: worker-config
+      readOnly: true
+  nodeName: gpu-node-1
+  nodeSelector:
+    nvidia.com/gpu.present: "true"
+  preemptionPolicy: PreemptLowerPriority
+  priority: 0
+  restartPolicy: Always
+  schedulerName: default-scheduler
+  securityContext: {}
+  terminationGracePeriodSeconds: 60
+  tolerations:
+  - effect: NoSchedule
+    key: nvidia.com/gpu
+    operator: Exists
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+    tolerationSeconds: 300
+  volumes:
+  - emptyDir: {}
+    name: model-data
+  - emptyDir: {}
+    name: inference-data
+  - emptyDir:
+      medium: Memory
+      sizeLimit: 16Gi
+    name: dshm
+  - name: worker-config
+    secret:
+      defaultMode: 420
+      secretName: worker-config
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2026-10-30T01:02:32Z"
+    status: "True"
+    type: PodReadyToStartContainers
+  - lastProbeTime: null
+    lastTransitionTime: "2026-10-30T01:04:05Z"
+    status: "True"
+    type: Initialized
+  - lastProbeTime: null
+    lastTransitionTime: "2026-10-30T01:09:20Z"
+    status: "True"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: "2026-10-30T01:09:20Z"
+    status: "True"
+    type: ContainersReady
+  - lastProbeTime: null
+    lastTransitionTime: "2026-10-30T01:02:28Z"
+    status: "True"
+    type: PodScheduled
+  containerStatuses:
+  - containerID: containerd://e5756183655d35b24b1d6883d6dd502d2b4a38c434ccc1eae1e8cd772bb9eb91
+    image: registry.example/example-org/text-generation:2.3.1
+    imageID: registry.example/example-org/text-generation@sha256:cc7a9ff47a24ac5a4501e8418a99aa35124b3b00777b8c5fff695f1fc8035bf1
+    lastState: {}
+    name: inference
+    ready: true
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-10-30T01:04:06Z"
+    volumeMounts:
+    - mountPath: /config/models
+      name: model-data
+    - mountPath: /var/inf
+      name: inference-data
+    - mountPath: /dev/shm
+      name: dshm
+  - containerID: containerd://577c30791b13eba8c34a4ec9459a4f2ffee089d6c3dda80d3f72c4dee206534a
+    image: registry.example/nvcf/worker-utils:1.4.2
+    imageID: registry.example/nvcf/worker-utils@sha256:67e767e9d4fdac1cc262e8519e2414d12485c0d568d2826c35810a972ca8de09
+    lastState: {}
+    name: utils
+    ready: true
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-10-30T01:04:06Z"
+    volumeMounts:
+    - mountPath: /var/inf
+      name: inference-data
+    - mountPath: /etc/worker
+      name: worker-config
+      readOnly: true
+      recursiveReadOnly: Disabled
+  hostIP: 192.0.2.10
+  hostIPs:
+  - ip: 192.0.2.10
+  initContainerStatuses:
+  - containerID: containerd://c57a43aa579c1b8148e77208e59785c133f4cf42bd8d8f7a1eb511751b39db5f
+    image: registry.example/nvcf/worker-init:1.4.2
+    imageID: registry.example/nvcf/worker-init@sha256:88d740dd39e4df02e3053063cd22341a70e36d0ffdaa1f9d663fc5db2db4c57e
+    lastState: {}
+    name: init
+    ready: true
+    restartCount: 0
+    started: false
+    state:
+      terminated:
+        containerID: containerd://c57a43aa579c1b8148e77208e59785c133f4cf42bd8d8f7a1eb511751b39db5f
+        exitCode: 0
+        finishedAt: "2026-10-30T01:04:04Z"
+        reason: Completed
+        startedAt: "2026-10-30T01:02:35Z"
+    volumeMounts:
+    - mountPath: /config/models
+      name: model-data
+    - mountPath: /etc/worker
+      name: worker-config
+      readOnly: true
+      recursiveReadOnly: Disabled
+  phase: Running
+  podIP: 10.244.3.17
+  podIPs:
+  - ip: 10.244.3.17
+  qosClass: Burstable
+  startTime: "2026-10-30T01:02:30Z"

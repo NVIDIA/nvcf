@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "handlerisolationconn",
     srcs = ["handler_isolation_conn.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/handlerisolationconn",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/handlerisolationconn",
     visibility = ["//visibility:public"],
 )
 

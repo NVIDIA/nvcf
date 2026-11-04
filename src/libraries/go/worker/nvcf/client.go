@@ -35,8 +35,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/nats-io/nkeys"
@@ -48,16 +48,16 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
 
-	nvauth "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	nvauth "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/consumer"
-	nvcfMetrics "github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/token"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/tracing"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/consumer"
+	nvcfMetrics "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/token"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/types"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 )
 
 const cachedNvcfTokenFilename = "nvcf-worker-token.json"

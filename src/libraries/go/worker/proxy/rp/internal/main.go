@@ -26,7 +26,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/rp"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/rp"
 )
 
 // echo ” | nghttp -v -H'content-type: application/grpc' -H'accept: application/grpc' -d- http://localhost:50052/com.nvidia.omniverse.core.platform.validation.v1alpha1.ValidationService/ForceInvalidArgument

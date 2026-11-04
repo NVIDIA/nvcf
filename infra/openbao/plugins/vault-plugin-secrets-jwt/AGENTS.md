@@ -13,7 +13,7 @@ carry the upstream Outfox header must keep it. Add an NVIDIA header only to a
 file NVIDIA authored, and record the change in `NOTICE` in the same commit.
 
 The Go module path is
-`github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt`, which
+`github.com/dsx-ai-factory/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt`, which
 deliberately differs from the upstream path. We do not track upstream, so the
 path was changed to resolve inside this repository rather than to keep diffs
 against Outfox readable.

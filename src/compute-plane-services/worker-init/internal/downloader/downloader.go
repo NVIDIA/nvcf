@@ -41,10 +41,10 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
-	initMetrics "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/tracing"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	initMetrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/types"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 )
 
 const DefaultChunkSize = 16 * utils.OneMB

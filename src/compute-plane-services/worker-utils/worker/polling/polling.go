@@ -20,8 +20,8 @@ package polling
 import (
 	"context"
 	"errors"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
 	"github.com/nats-io/nats.go"
 	"github.com/samber/lo"
 	"go.uber.org/zap"

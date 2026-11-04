@@ -32,10 +32,10 @@ go_library(
         "@com_github_google_uuid//:uuid",
         "@com_github_grpc_ecosystem_go_grpc_middleware_v2//interceptors/logging",
         "@com_github_lestrrat_go_jwx//jwk",
-        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/config",
-        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
-        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
-        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_lib//pkg/nvkit/config",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_olric_data_olric//config",
         "@com_github_prometheus_client_golang//prometheus/promhttp",
         "@com_github_spf13_cobra//:cobra",
@@ -50,9 +50,9 @@ go_binary(
     embed = [":cmd_lib"],
     visibility = ["//visibility:public"],
     x_defs = {
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-ratelimiter",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
+        "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-ratelimiter",
+        "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
     },
 )
 
@@ -96,13 +96,14 @@ go_test(
     srcs = [
         "info_test.go",
         "main_test.go",
+        "metrics_test.go",
     ],
     embed = [":cmd_lib"],
     deps = [
         "//src/invocation-plane-services/ratelimiter:ratelimiter",
         "//src/invocation-plane-services/ratelimiter/pb",
         "@com_github_olric_data_olric//config",
-        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
@@ -111,5 +112,6 @@ go_test(
         "@org_golang_google_grpc//status",
         "@org_golang_x_exp//rand",
         "@org_uber_go_zap//:zap",
+        "@org_uber_go_zap//zaptest/observer",
     ],
 )

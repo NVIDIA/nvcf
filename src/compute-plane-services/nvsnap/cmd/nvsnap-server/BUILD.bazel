@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 go_library(
     name = "nvsnap-server_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-server",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-server",
     visibility = ["//visibility:private"],
     deps = [
         "//src/compute-plane-services/nvsnap/internal/db",

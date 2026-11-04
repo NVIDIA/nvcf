@@ -111,7 +111,7 @@ func newProcessor(set processor.Settings, cfg *Config) (*logChunkProcessor, erro
 	if meterProvider == nil {
 		meterProvider = noop.NewMeterProvider()
 	}
-	metrics, err := newProcessorMetrics(meterProvider.Meter("github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor"))
+	metrics, err := newProcessorMetrics(meterProvider.Meter("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor"))
 	if err != nil {
 		return nil, err
 	}

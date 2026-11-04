@@ -26,14 +26,14 @@ import (
 	"strings"
 	"testing"
 
-	cmnauth "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth"
+	cmnauth "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/auth"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	promexporter "go.opentelemetry.io/otel/exporters/prometheus"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 )
 
 // TestAuthTokenFetcher_NoDoubleCount pins the suppression contract on the shared

@@ -23,7 +23,7 @@ go_library(
         "types.go",
         "version.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws",
     importpath = "github.com/aws/aws-sdk-go-v2/aws",
     visibility = ["//visibility:public"],
     deps = [

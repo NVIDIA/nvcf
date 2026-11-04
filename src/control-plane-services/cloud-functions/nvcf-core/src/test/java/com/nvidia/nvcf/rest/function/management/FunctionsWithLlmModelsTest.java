@@ -62,12 +62,16 @@ import java.net.URI;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.resttestclient.TestRestTemplate;
@@ -774,6 +778,63 @@ class FunctionsWithLlmModelsTest {
         assertThat(response.getBody()).contains("llmConfig.tokenRateLimit");
     }
 
+    static Stream<Arguments> invalidModelUpdates() {
+        var immutableFields =
+                "'llmConfig.uris' and 'llmConfig.tokenizer' cannot be changed after creation";
+        var routingOnly = UpdateFunctionRequest.LlmConfigUpdateDto.builder()
+                .routingMethod("round-robin")
+                .build();
+        return Stream.of(
+                Arguments.of("llmConfig.uris set",
+                             List.of(modelUpdate(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
+                                                         .uris(List.of("/v1/responses"))
+                                                         .build())),
+                             immutableFields),
+                Arguments.of("llmConfig.tokenizer set",
+                             List.of(modelUpdate(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
+                                                         .tokenizer("meta-llama-tokenizer")
+                                                         .build())),
+                             immutableFields),
+                Arguments.of("empty llmConfig",
+                             List.of(modelUpdate(
+                                     UpdateFunctionRequest.LlmConfigUpdateDto.builder().build())),
+                             "at least one of 'tokenRateLimit' or 'routingMethod' must be specified"),
+                Arguments.of("duplicate modelName",
+                             List.of(modelUpdate(routingOnly), modelUpdate(routingOnly)),
+                             "duplicate model names are not allowed in 'modelUpdates'"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("invalidModelUpdates")
+    void shouldRejectInvalidModelUpdatesWithValidatorMessage(
+            String name, List<UpdateFunctionRequest.ModelUpdateDto> modelUpdates,
+            String expectedMessage) {
+        var functionName = TEST_FUNCTION_NAME + "-" + Instant.now().toEpochMilli();
+        var function = createInitialLlmFunction(functionName, "1-M", "round-robin");
+
+        var updateToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_UPDATE_FUNCTION), 100);
+        var updateEntity = RequestEntity.put(URI.create("/v2/nvcf/functions/" + function.id()
+                                                        + "/versions/" + function.versionId()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + updateToken)
+                .body(UpdateFunctionRequest.builder().modelUpdates(modelUpdates).build());
+
+        var response = testRestTemplate.exchange(updateEntity, String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        var detail = JsonMapper.builder().build().readTree(response.getBody()).get("detail");
+        assertThat(detail.asString()).contains(expectedMessage);
+    }
+
+    private static UpdateFunctionRequest.ModelUpdateDto modelUpdate(
+            UpdateFunctionRequest.LlmConfigUpdateDto llmConfig) {
+        return UpdateFunctionRequest.ModelUpdateDto.builder()
+                .modelName(TEST_LLM_MODEL_NAME)
+                .llmConfig(llmConfig)
+                .build();
+    }
+
     private void assertLlmConfigPersisted(UUID versionId, String tokenRateLimit,
                                           String routingMethod) {
         var stored = functionLookupService.lookupUsingVersionIdOrThrow(versionId);
@@ -804,4 +865,5 @@ class FunctionsWithLlmModelsTest {
                         .build())
                 .build();
     }
+
 }

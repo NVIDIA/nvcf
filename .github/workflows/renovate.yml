@@ -41,5 +41,5 @@ jobs:
           renovate-version: "44.108.2"
         env:
           RENOVATE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RENOVATE_REPOSITORIES: '["NVIDIA/nvcf"]'
+          RENOVATE_REPOSITORIES: '["dsx-ai-factory/nvcf"]'
           RENOVATE_ONBOARDING: false

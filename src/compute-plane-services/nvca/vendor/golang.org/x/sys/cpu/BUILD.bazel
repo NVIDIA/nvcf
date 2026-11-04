@@ -62,7 +62,7 @@ go_library(
         "syscall_darwin_x86_gc.go",
         "zcpu_windows.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/sys/cpu",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/sys/cpu",
     importpath = "golang.org/x/sys/cpu",
     visibility = ["//visibility:public"],
 )

@@ -20,7 +20,7 @@ package nvcf
 import (
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )

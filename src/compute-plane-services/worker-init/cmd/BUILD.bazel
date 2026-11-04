@@ -20,7 +20,7 @@ load("//rules/oci:defs.bzl", "go_oci_multi_binary_image")
 go_library(
     name = "cmd_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/cmd",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/cmd",
     visibility = ["//visibility:private"],
     # Build-time stamping into the shared worker utils version variable,
     # resolved by tools/workspace_status.sh when bazel is invoked with
@@ -32,7 +32,7 @@ go_library(
     # the linker-set value when VCS build info is present, so stamping is
     # safe under Bazel.
     x_defs = {
-        "github.com/NVIDIA/nvcf/src/libraries/go/worker/utils.Version": "{STABLE_VERSION}",
+        "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils.Version": "{STABLE_VERSION}",
     },
     deps = ["//src/compute-plane-services/worker-init/service"],
 )

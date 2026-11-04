@@ -16,7 +16,7 @@ go_library(
         "ws.go",
     ],
     embedsrcs = ["openapi.yaml"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/server",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/server",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",

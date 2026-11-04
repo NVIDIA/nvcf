@@ -42,7 +42,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // pvcStateHTTPWriter implements checkpointstore.CatalogStateWriter by

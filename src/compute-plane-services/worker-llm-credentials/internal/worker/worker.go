@@ -25,11 +25,11 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/token"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/token"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-llm-credentials/configs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-llm-credentials/configs"
 )
 
 type Worker struct {

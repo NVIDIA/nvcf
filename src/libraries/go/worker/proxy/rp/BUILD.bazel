@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "rp",
     srcs = ["grpc_streaming_reverse_proxy.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/rp",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/rp",
     visibility = ["//visibility:public"],
 )
 

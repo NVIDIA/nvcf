@@ -1,4 +1,4 @@
-module github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap
+module github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap
 
 go 1.26.10
 

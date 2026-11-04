@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/backend"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/config"
 )
 
 func writeSecrets(t *testing.T, body string) string {

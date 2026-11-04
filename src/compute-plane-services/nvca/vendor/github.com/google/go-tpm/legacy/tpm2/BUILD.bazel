@@ -11,7 +11,7 @@ go_library(
         "structures.go",
         "tpm2.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-tpm/legacy/tpm2",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-tpm/legacy/tpm2",
     importpath = "github.com/google/go-tpm/legacy/tpm2",
     visibility = ["//visibility:public"],
     deps = [

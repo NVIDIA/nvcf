@@ -8,7 +8,7 @@ package backend
 import (
 	"context"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/segment"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/segment"
 )
 
 // Client submits one prepared segment and reads its terminal status. Submit

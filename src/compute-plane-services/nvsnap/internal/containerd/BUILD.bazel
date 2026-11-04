@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "containerd",
     srcs = ["client.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/containerd",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
         "//src/compute-plane-services/nvsnap/internal/runtime",

@@ -13,10 +13,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 )
 
 func gpuRank(name string, owner metav1.OwnerReference) *corev1.Pod {

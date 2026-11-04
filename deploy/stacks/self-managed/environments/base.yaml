@@ -184,6 +184,7 @@ functionAutoscaler:
 # the LLM addon is enabled, the stack defaults the Pylon image from
 # global.sidecars (or global.image) at version 0.25.0.
 api:
+  podAnnotations: {}
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
   # global.workerEndpoints.essServiceURL. In split-plane deployments that value
@@ -200,6 +201,7 @@ api:
 # Remote config is passed to the NVCT API chart and overrides its packaged
 # application profile, mirroring api.remoteConfig.
 nvctApi:
+  podAnnotations: {}
   essBaseURL: ""
   remoteConfig:
     configData: {}
@@ -234,6 +236,7 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  podAnnotations: {}
   # How workers authenticate to NATS.
   #   nkey: the NVCF API gives every worker the control plane's shared NATS
   #     NKey as NKEY_SEED. The default.
@@ -305,6 +308,13 @@ nats:
   #     registry: <your-registry>
   #     repository: <your-repository>/nats-server-config-reloader
   #     tag: "0.24.0"
+  # NATS box also defaults to its public upstream image, independently of
+  # global.image. Set registry and repository together for a private mirror.
+  # natsBox:
+  #   container:
+  #     image:
+  #       registry: <your-registry>
+  #       repository: <your-repository>/nats-box
   # PDB: the upstream NATS chart enables a disruption budget by default.
   # Override here to disable it or adjust the minAvailable threshold.
   podDisruptionBudget:
@@ -400,6 +410,7 @@ openbao:
     podDisruptionBudget:
       minAvailable: 1
   server:
+    annotations: {}
     ha:
       # PDB for the HA Raft StatefulSet. The upstream chart enables this by
       # default with maxUnavailable derived from replica count.
@@ -534,6 +545,10 @@ addons:
   # When enabled, deploys the event-ledger service backed by Cassandra.
   eventLedger:
     enabled: true
+    # gRPC proxy session events: one record per worker attachment, never
+    # expired. Off until Event Ledger can expire them.
+    grpcProxyEvents:
+      enabled: false
 
   # Vanity Gateway addon for optional vanity and OpenAI-compatible invocation routes.
   # Disabled by default; enabling this deploys the vanity-gateway service and its
@@ -606,6 +621,7 @@ icms:
 # Set enabled: true for any service running more than one replica.
 
 apikeys:
+  podAnnotations: {}
   # Operator-set api-keys service env, deep-merged over the chart defaults
   # (AWS_REGION / SPRING_PROFILES_ACTIVE). Set NVCF_NCA_ID to the NCA the
   # api-keys service authorizes keys against. Leave unset to keep the chart
@@ -618,11 +634,13 @@ apikeys:
     maxUnavailable: 1
 
 ess:
+  podAnnotations: {}
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
 
 invocation:
+  podAnnotations: {}
   env:
     # Keep request subjects aligned with the API and worker consumers.
     NATS_PROPERTIES__REGION: ncp
@@ -771,6 +789,7 @@ ingress:
         # listenerName defaults to llm-quic in the gateway-routes chart.
 
 grpcproxy:
+  podAnnotations: {}
   # PDB: disabled by default. highAvailability.mode replaces it with the HA PDB
   # when it scales grpc-proxy.
   podDisruptionBudget:

@@ -11,7 +11,7 @@ go_library(
         "tables.go",
         "tags.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/text/language",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/text/language",
     importpath = "golang.org/x/text/language",
     visibility = ["//visibility:public"],
     deps = [

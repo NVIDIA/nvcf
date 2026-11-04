@@ -6,7 +6,7 @@ Scope: everything under `src/libraries/go/lib/`.
 
 This subtree is `go-lib`, the shared Go library module for NVCF. It is maintained
 inside the monorepo and uses the module path
-`github.com/NVIDIA/nvcf/src/libraries/go/lib`.
+`github.com/dsx-ai-factory/nvcf/src/libraries/go/lib`.
 
 The package roots under `pkg/` are:
 

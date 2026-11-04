@@ -26,8 +26,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/configs"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/configs"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/test/testutils"
 )
 
 // Ports are intentionally distinct from the service package E2E (8003/9093)

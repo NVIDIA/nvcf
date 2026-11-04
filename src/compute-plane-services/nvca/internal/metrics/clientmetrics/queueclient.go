@@ -21,9 +21,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv/msgsemconv"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv/msgsemconv"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue"
 )
 
 // Messaging operation names, bounded by construction.

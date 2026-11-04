@@ -36,17 +36,17 @@ import (
 
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 
-	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	golibversion "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/httpapi"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/authz"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/service"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/logging"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/metrics"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/tracing"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/reval"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/httpapi"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/authz"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/service"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/logging"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/reval"
 )
 
 const (

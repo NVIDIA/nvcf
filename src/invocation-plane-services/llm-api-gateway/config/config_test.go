@@ -329,7 +329,21 @@ func TestLoadFromEnvReadsMaxRequestBodyBytes(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvDefaultsMaxRequestBodyBytesToUnlimited(t *testing.T) {
+func TestLoadFromEnvDefaultsMaxRequestBodyBytesTo50MiB(t *testing.T) {
+	t.Setenv("NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.Server.MaxRequestBodyBytes != 50<<20 {
+		t.Fatalf("max request body bytes = %d, want %d", cfg.Server.MaxRequestBodyBytes, 50<<20)
+	}
+}
+
+func TestLoadFromEnvZeroMaxRequestBodyBytesDisablesLimit(t *testing.T) {
+	t.Setenv("NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", "0")
+
 	cfg, err := LoadFromEnv()
 	if err != nil {
 		t.Fatalf("LoadFromEnv() error = %v", err)

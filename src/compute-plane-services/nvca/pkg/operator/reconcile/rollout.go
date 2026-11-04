@@ -23,8 +23,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	cmnsecret "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	cmnsecret "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/secret"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	appsv1 "k8s.io/api/apps/v1"
@@ -32,9 +32,9 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
-	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
-	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+	nvidiaiov1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvcaoptypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
 const (

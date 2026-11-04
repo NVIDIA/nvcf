@@ -24,7 +24,7 @@ import (
 	"github.com/google/uuid"
 	echo "github.com/labstack/echo/v4"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 const canonicalUUIDLength = 36

@@ -6,7 +6,7 @@ go_library(
         "checkpoint.go",
         "discover.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/cuda",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/cuda",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
         "//src/compute-plane-services/nvsnap/internal/hostlibs",

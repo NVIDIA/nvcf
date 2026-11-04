@@ -20,8 +20,8 @@ package api
 import (
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 func TestSplitOpenAIModelIDCanonicalizesUUIDRoutingKeys(t *testing.T) {

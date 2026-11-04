@@ -29,9 +29,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/test/testutils"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/configs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/configs"
 )
 
 // TestNewRootCommandStructure exercises the construction body of NewRootCommand,

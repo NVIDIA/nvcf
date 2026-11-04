@@ -35,7 +35,7 @@ import (
 
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/constants"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/pkg/constants"
 )
 
 // CloudEventsMetrics holds metrics for CloudEvents resilience

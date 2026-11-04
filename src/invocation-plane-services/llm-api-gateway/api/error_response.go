@@ -25,7 +25,7 @@ import (
 
 	echo "github.com/labstack/echo/v4"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
 const (

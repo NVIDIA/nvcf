@@ -7,7 +7,7 @@ go_library(
         "doc.go",
         "server.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook",
     importpath = "sigs.k8s.io/controller-runtime/pkg/webhook",
     visibility = ["//visibility:public"],
     deps = [

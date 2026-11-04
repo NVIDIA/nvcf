@@ -22,7 +22,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/configs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/configs"
 )
 
 func TestNewRootCommandShape(t *testing.T) {

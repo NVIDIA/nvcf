@@ -31,7 +31,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/consumer"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/consumer"
 )
 
 func TestNewNatsConsumerWithRetry(t *testing.T) {

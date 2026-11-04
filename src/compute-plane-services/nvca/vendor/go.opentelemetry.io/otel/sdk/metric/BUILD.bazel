@@ -22,7 +22,7 @@ go_library(
         "version.go",
         "view.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric",
     importpath = "go.opentelemetry.io/otel/sdk/metric",
     visibility = ["//visibility:public"],
     deps = [

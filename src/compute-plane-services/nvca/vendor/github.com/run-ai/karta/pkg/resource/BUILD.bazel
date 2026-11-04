@@ -9,7 +9,7 @@ go_library(
         "component_factory.go",
         "pod_querier.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/run-ai/karta/pkg/resource",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/run-ai/karta/pkg/resource",
     importpath = "github.com/run-ai/karta/pkg/resource",
     visibility = ["//visibility:public"],
     deps = [

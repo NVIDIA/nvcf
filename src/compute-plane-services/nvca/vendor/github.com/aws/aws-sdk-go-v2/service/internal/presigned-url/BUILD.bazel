@@ -8,7 +8,7 @@ go_library(
         "go_module_metadata.go",
         "middleware.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/internal/presigned-url",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/internal/presigned-url",
     importpath = "github.com/aws/aws-sdk-go-v2/service/internal/presigned-url",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service:__subpackages__"],
     deps = [

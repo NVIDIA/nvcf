@@ -1,4 +1,4 @@
-module github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy
+module github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy
 
 go 1.26.10
 

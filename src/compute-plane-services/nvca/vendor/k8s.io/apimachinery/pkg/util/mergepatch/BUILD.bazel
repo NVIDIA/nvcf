@@ -6,7 +6,7 @@ go_library(
         "errors.go",
         "util.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/mergepatch",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/mergepatch",
     importpath = "k8s.io/apimachinery/pkg/util/mergepatch",
     visibility = ["//visibility:public"],
     deps = [
