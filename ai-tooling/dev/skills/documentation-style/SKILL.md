@@ -99,11 +99,11 @@ Bold section header, replaced with a real heading:
 ```text
 Before: **Prerequisites**
 
-        - Repository access to github.com/NVIDIA/nvcf.
+        - Repository access to github.com/dsx-ai-factory/nvcf.
 
 After:  ## Prerequisites
 
-        - Repository access to github.com/NVIDIA/nvcf.
+        - Repository access to github.com/dsx-ai-factory/nvcf.
 ```
 
 Double hyphen used as a dash, replaced with a period:

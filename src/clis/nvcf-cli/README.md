@@ -77,7 +77,7 @@ install -m 0755 \
 
 ### Option 2: Download Pre-built Binary
 
-Pre-built binaries for multiple platforms are available in the [releases section](https://github.com/NVIDIA/nvcf/releases).
+Pre-built binaries for multiple platforms are available in the [releases section](https://github.com/dsx-ai-factory/nvcf/releases).
 
 ## Release Process
 
