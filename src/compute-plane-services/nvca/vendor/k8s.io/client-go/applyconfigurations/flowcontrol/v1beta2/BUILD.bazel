@@ -25,7 +25,7 @@ go_library(
         "subject.go",
         "usersubject.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/flowcontrol/v1beta2",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/flowcontrol/v1beta2",
     importpath = "k8s.io/client-go/applyconfigurations/flowcontrol/v1beta2",
     visibility = ["//visibility:public"],
     deps = [

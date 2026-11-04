@@ -26,8 +26,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"

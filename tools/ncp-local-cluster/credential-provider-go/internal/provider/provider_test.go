@@ -24,7 +24,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/tools/ncp-local-cluster/credential-provider-go/internal/types"
+	"github.com/dsx-ai-factory/nvcf/tools/ncp-local-cluster/credential-provider-go/internal/types"
 )
 
 // Tests will be added in Phase 2

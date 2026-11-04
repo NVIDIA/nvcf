@@ -13,7 +13,7 @@ go_library(
         "util.go",
         "viper.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/viper",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/viper",
     importpath = "github.com/spf13/viper",
     visibility = ["//visibility:public"],
     deps = [

@@ -29,7 +29,7 @@ func editionGitFixture(t *testing.T) (string, *Catalog, string) {
 	editionGit(t, root, "remote", "add", "origin", root)
 	catalog := editionTestCatalog()
 	catalog.DocsEdition.Status = ReleaseSetQualified
-	catalog.DocsEdition.Qualification = "https://github.com/NVIDIA/nvcf/pull/123"
+	catalog.DocsEdition.Qualification = "https://github.com/dsx-ai-factory/nvcf/pull/123"
 	for _, name := range releaseSetStackNames {
 		stack, _ := catalog.ReleaseSet.Stacks.byName(name)
 		stack.SourceCommit = source

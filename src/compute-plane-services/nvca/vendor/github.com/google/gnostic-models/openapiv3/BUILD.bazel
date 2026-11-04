@@ -8,7 +8,7 @@ go_library(
         "annotations.pb.go",
         "document.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/gnostic-models/openapiv3",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/gnostic-models/openapiv3",
     importpath = "github.com/google/gnostic-models/openapiv3",
     visibility = ["//visibility:public"],
     deps = [

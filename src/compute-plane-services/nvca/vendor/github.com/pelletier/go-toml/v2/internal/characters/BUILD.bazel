@@ -6,7 +6,7 @@ go_library(
         "ascii.go",
         "utf8.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/pelletier/go-toml/v2/internal/characters",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/pelletier/go-toml/v2/internal/characters",
     importpath = "github.com/pelletier/go-toml/v2/internal/characters",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/pelletier/go-toml/v2:__subpackages__"],
 )

@@ -5,7 +5,7 @@ go_library(
     srcs = [
         "counter.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/prometheus/internal/counter",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/prometheus/internal/counter",
     importpath = "go.opentelemetry.io/otel/exporters/prometheus/internal/counter",
     visibility = ["//visibility:public"],
 )

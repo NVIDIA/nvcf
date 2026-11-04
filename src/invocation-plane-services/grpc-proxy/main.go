@@ -23,9 +23,9 @@ import (
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/config"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/config"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 
 	"nvcf-grpc-proxy/proxy"
 )

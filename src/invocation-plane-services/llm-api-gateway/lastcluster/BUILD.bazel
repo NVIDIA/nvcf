@@ -24,7 +24,7 @@ go_library(
         "store.go",
         "tracker.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/lastcluster",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/lastcluster",
     visibility = ["//visibility:public"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/requestctx",

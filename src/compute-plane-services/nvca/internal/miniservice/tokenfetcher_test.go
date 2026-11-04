@@ -24,7 +24,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
+	nvcaauth "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/auth"
 )
 
 const (

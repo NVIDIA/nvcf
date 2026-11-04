@@ -29,16 +29,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/hostlibs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/hostlibs"
 
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu/mountinfo"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/criu/mountinfo"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
 
 // countDistinctGPUDevices returns the number of distinct physical GPUs used by

@@ -12,7 +12,7 @@ go_library(
         "zz_generated.model_name.go",
         "zz_generated.prerelease-lifecycle.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/api/flowcontrol/v1beta3",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/api/flowcontrol/v1beta3",
     importpath = "k8s.io/api/flowcontrol/v1beta3",
     visibility = ["//visibility:public"],
     deps = [

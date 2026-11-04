@@ -7,7 +7,7 @@ go_library(
         "objectstore.go",
         "provider.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/objectstore",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/objectstore",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
         "@com_google_cloud_go_storage//:storage",

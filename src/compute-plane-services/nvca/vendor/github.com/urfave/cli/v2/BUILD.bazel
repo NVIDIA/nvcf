@@ -40,7 +40,7 @@ go_library(
         "template.go",
         "zz_generated.flags.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/urfave/cli/v2",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/urfave/cli/v2",
     importpath = "github.com/urfave/cli/v2",
     visibility = ["//visibility:public"],
     deps = [

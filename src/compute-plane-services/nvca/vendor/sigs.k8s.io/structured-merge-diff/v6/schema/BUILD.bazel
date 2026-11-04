@@ -8,7 +8,7 @@ go_library(
         "equals.go",
         "schemaschema.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/schema",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/schema",
     importpath = "sigs.k8s.io/structured-merge-diff/v6/schema",
     visibility = ["//visibility:public"],
 )

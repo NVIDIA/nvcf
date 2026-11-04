@@ -21,9 +21,9 @@ import (
 	"bytes"
 	"encoding/json"
 
-	openairesponses "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api/adapters/openairesponses"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/lastcluster"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	openairesponses "github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/api/adapters/openairesponses"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/lastcluster"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 func (h *Handlers) lastClusterEnabled() bool {

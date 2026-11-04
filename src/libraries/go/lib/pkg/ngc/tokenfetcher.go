@@ -25,7 +25,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 )
 
 type TokenFetcher struct {

@@ -21,11 +21,11 @@ import (
 	"context"
 	"fmt"
 
-	nvkittracing "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	nvkittracing "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/common"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/common"
 )
 
 func ApplyTracing(ctx context.Context, tracingConfig *TracingConfig, telemetryConfig *common.TelemetryConfig, logger *otelzap.Logger) func() {

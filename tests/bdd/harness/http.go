@@ -28,9 +28,11 @@ import (
 
 const httpTimeout = 30 * time.Second
 
-// HTTPResponse records status, body, and duration through the last body byte.
+// HTTPResponse records status, headers, body, and duration through the last
+// body byte.
 type HTTPResponse struct {
 	Status  int
+	Header  http.Header
 	Body    string
 	Elapsed time.Duration
 }
@@ -84,5 +86,5 @@ func (c *netHTTPClient) Do(ctx context.Context, method, url string, headers map[
 	if err != nil {
 		return HTTPResponse{}, fmt.Errorf("read %s %s response: %w", method, url, err)
 	}
-	return HTTPResponse{Status: resp.StatusCode, Body: string(data), Elapsed: time.Since(started)}, nil
+	return HTTPResponse{Status: resp.StatusCode, Header: resp.Header, Body: string(data), Elapsed: time.Since(started)}, nil
 }

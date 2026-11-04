@@ -10,7 +10,7 @@ go_library(
         "main.go",
         "reader.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/gnostic-models/compiler",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/gnostic-models/compiler",
     importpath = "github.com/google/gnostic-models/compiler",
     visibility = ["//visibility:public"],
     deps = [

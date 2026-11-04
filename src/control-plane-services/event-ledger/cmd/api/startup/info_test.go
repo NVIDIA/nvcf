@@ -23,13 +23,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	golibversion "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/api/service"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/cmd/api/service"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/middleware"
 )
 
 // TestRegisterUnauthenticatedRoutes_Info verifies GET /info returns the stamped

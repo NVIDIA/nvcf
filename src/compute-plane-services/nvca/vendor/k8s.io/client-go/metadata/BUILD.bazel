@@ -6,7 +6,7 @@ go_library(
         "interface.go",
         "metadata.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/metadata",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/metadata",
     importpath = "k8s.io/client-go/metadata",
     visibility = ["//visibility:public"],
     deps = [

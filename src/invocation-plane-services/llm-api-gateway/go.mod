@@ -1,10 +1,10 @@
-module github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway
+module github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway
 
 go 1.26.10
 
 require (
 	cloud.google.com/go/pubsub/v2 v2.4.0
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/google/uuid v1.6.0
 	github.com/kaptinlin/jsonrepair v0.2.6
@@ -161,3 +161,5 @@ require (
 replace github.com/olric-data/olric => github.com/max007-008/olric v0.0.0-20260904024039-0e35b781a2f3
 
 replace k8s.io/client-go v11.0.0+incompatible => k8s.io/client-go v0.34.2
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib

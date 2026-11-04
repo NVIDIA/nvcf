@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "validation",
     srcs = ["validation.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/validation",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/validation",
     importpath = "k8s.io/apimachinery/pkg/apis/meta/v1/validation",
     visibility = ["//visibility:public"],
     deps = [

@@ -20,8 +20,8 @@ limitations under the License.
 package fake
 
 import (
-	v1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
-	nvcav1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/typed/nvca/v1"
+	v1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	nvcav1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/typed/nvca/v1"
 	gentype "k8s.io/client-go/gentype"
 )
 

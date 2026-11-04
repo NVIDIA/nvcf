@@ -24,8 +24,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	ecrloginapi "github.com/awslabs/amazon-ecr-credential-helper/ecr-login/api"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/stretchr/testify/assert"
 )
 

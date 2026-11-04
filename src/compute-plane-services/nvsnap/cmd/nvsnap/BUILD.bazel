@@ -6,7 +6,7 @@ go_library(
         "main.go",
         "pods.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap",
     visibility = ["//visibility:private"],
     deps = [
         "//src/compute-plane-services/nvsnap/internal/podtimings",

@@ -14,7 +14,7 @@ go_library(
         "restore.go",
         "retention.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/db",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = ["@org_modernc_sqlite//:sqlite"],
 )

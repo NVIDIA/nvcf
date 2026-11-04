@@ -15,7 +15,7 @@ go_library(
         "signing.go",
         "symmetric.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4",
     importpath = "github.com/go-jose/go-jose/v4",
     visibility = ["//visibility:public"],
     deps = [

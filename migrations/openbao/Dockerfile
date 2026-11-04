@@ -143,7 +143,7 @@ FROM openbao/openbao:${BAO_VERSION}@${BAO_RUNTIME_SHA256}
 ARG TARGETARCH
 ARG GIT_SHA
 RUN test -n "${GIT_SHA}"
-LABEL org.opencontainers.image.source="https://github.com/NVIDIA/nvcf" \
+LABEL org.opencontainers.image.source="https://github.com/dsx-ai-factory/nvcf" \
       org.opencontainers.image.revision="${GIT_SHA}"
 
 # Upgrade inherited packages before installing runtime dependencies so the

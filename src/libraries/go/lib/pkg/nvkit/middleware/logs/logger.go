@@ -25,7 +25,7 @@ import (
 	"github.com/go-kit/kit/log" //nolint:staticcheck
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
 )
 
 // BaseEndpointLogger returns an endpoint middleware that logs the

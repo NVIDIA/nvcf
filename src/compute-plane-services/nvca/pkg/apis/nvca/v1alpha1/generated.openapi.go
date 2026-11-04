@@ -30,10 +30,10 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniService":       schema_pkg_apis_nvca_v1alpha1_MiniService(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceList":   schema_pkg_apis_nvca_v1alpha1_MiniServiceList(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceSpec":   schema_pkg_apis_nvca_v1alpha1_MiniServiceSpec(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceStatus": schema_pkg_apis_nvca_v1alpha1_MiniServiceStatus(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniService":       schema_pkg_apis_nvca_v1alpha1_MiniService(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceList":   schema_pkg_apis_nvca_v1alpha1_MiniServiceList(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceSpec":   schema_pkg_apis_nvca_v1alpha1_MiniServiceSpec(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceStatus": schema_pkg_apis_nvca_v1alpha1_MiniServiceStatus(ref),
 		v1.APIGroup{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_APIGroup(ref),
 		v1.APIGroupList{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_APIGroupList(ref),
 		v1.APIResource{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_APIResource(ref),
@@ -115,20 +115,20 @@ func schema_pkg_apis_nvca_v1alpha1_MiniService(ref common.ReferenceCallback) com
 					},
 					"spec": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceSpec"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceSpec"),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceStatus"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceStatus"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceSpec", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceStatus", v1.ObjectMeta{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceSpec", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniServiceStatus", v1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -165,7 +165,7 @@ func schema_pkg_apis_nvca_v1alpha1_MiniServiceList(ref common.ReferenceCallback)
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniService"),
+										Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniService"),
 									},
 								},
 							},
@@ -176,7 +176,7 @@ func schema_pkg_apis_nvca_v1alpha1_MiniServiceList(ref common.ReferenceCallback)
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniService", v1.ListMeta{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.MiniService", v1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -205,13 +205,13 @@ func schema_pkg_apis_nvca_v1alpha1_MiniServiceSpec(ref common.ReferenceCallback)
 					"helmChartConfig": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common.HelmConfig"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common.HelmConfig"),
 						},
 					},
 					"workloadConfig": {
 						SchemaProps: spec.SchemaProps{
 							Description: "WorkloadConfig holds workload-specific configuration decoded from the user-provided workload config ConfigMap in the rendered Helm chart. It is populated by the controller during installation and read on subsequent reconciles.",
-							Ref:         ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.WorkloadConfig"),
+							Ref:         ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.WorkloadConfig"),
 						},
 					},
 				},
@@ -219,7 +219,7 @@ func schema_pkg_apis_nvca_v1alpha1_MiniServiceSpec(ref common.ReferenceCallback)
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.WorkloadConfig", "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common.HelmConfig"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.WorkloadConfig", "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common.HelmConfig"},
 	}
 }
 
@@ -243,7 +243,7 @@ func schema_pkg_apis_nvca_v1alpha1_MiniServiceStatus(ref common.ReferenceCallbac
 					},
 					"renderedDetails": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.RenderDetailsStatus"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.RenderDetailsStatus"),
 						},
 					},
 					"conditions": {
@@ -278,7 +278,7 @@ func schema_pkg_apis_nvca_v1alpha1_MiniServiceStatus(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.RenderDetailsStatus", v1.Condition{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.RenderDetailsStatus", v1.Condition{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
 	}
 }
 

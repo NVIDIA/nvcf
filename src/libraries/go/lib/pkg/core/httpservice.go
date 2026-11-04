@@ -35,7 +35,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux"
 	"go.opentelemetry.io/otel/attribute"

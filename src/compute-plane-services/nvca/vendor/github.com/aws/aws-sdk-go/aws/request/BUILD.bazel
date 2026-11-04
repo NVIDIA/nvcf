@@ -18,7 +18,7 @@ go_library(
         "validation.go",
         "waiter.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/request",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/request",
     importpath = "github.com/aws/aws-sdk-go/aws/request",
     visibility = ["//visibility:public"],
     deps = [

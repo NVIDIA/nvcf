@@ -18,7 +18,7 @@ go_library(
         "shell_completions.go",
         "zsh_completions.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/cobra",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/cobra",
     importpath = "github.com/spf13/cobra",
     visibility = ["//visibility:public"],
     deps = [

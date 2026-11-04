@@ -20,11 +20,11 @@ package nvca
 import (
 	"context"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 	v1 "k8s.io/api/core/v1"
 
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 // ICMSRequestHelper is an interface for managing ICMS requests in compute backends.
@@ -49,6 +49,11 @@ type ICMSRequestHelper interface {
 
 	// ComputeCleanupCacheReferences cleanUp underlying cache references
 	ComputeCleanupCacheReferences(ctx context.Context, references []string) error
+
+	// RetryFailedModelCacheCleanup repeats the cleanup of a failed model cache setup for a creation
+	// request whose workers all exist. It does nothing unless the request recorded a caching fallback.
+	// Errors prevent status synchronization from removing the request before cleanup can finish.
+	RetryFailedModelCacheCleanup(ctx context.Context, req *nvcav2beta1.ICMSRequest) error
 
 	// AllInstancesTerminatedAndReported returns if all NVCF worker instances for backend are terminated and reported to ICMS
 	AllInstancesTerminatedAndReported(ctx context.Context, req *nvcav2beta1.ICMSRequest) bool

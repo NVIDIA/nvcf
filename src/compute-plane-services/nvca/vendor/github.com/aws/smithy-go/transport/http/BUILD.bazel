@@ -28,7 +28,7 @@ go_library(
         "url.go",
         "user_agent.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/transport/http",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/transport/http",
     importpath = "github.com/aws/smithy-go/transport/http",
     visibility = ["//visibility:public"],
     deps = [

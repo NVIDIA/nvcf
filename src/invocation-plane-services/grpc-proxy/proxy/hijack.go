@@ -163,7 +163,7 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 		span.SetAttributes(semconv.NetworkPeerAddress(peer))
 	}
 
-	err = s.RegisterWorker(parsedRequestId, auth, authInfo.functionId, authInfo.functionVersionId, conn)
+	err = s.RegisterWorker(ctx, auth, authInfo, conn)
 	if err != nil {
 		result = metrics.ConnectRegisterFailed
 		zap.L().Error("failed to register worker", zap.Error(err))

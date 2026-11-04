@@ -25,8 +25,8 @@ import (
 
 	echo "github.com/labstack/echo/v4"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 )
 
 // newPriorityGuardTestServer wires the production route registration so these

@@ -21,13 +21,13 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/zapotelspan"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/zapotelspan"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/common"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/common"
 )
 
 const traceIDField = "otlp.trace_id"

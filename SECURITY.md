@@ -49,7 +49,7 @@ registries, object storage, secret stores, telemetry backends, and platform data
 stores are external security dependencies.
 
 Repository Exposure Classification: Public.
-Basis: `NVIDIA/nvcf` is a public repository on GitHub. This document uses
+Basis: `dsx-ai-factory/nvcf` is a public repository on GitHub. This document uses
 public-safe detail.
 
 Service Exposure Classification: External / Regulated (high confidence).

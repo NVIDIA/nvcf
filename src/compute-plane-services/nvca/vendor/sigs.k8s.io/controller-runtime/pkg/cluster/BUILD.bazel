@@ -6,7 +6,7 @@ go_library(
         "cluster.go",
         "internal.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/cluster",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/cluster",
     importpath = "sigs.k8s.io/controller-runtime/pkg/cluster",
     visibility = ["//visibility:public"],
     deps = [

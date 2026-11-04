@@ -6,7 +6,7 @@ go_library(
         "legacy.go",
         "methods.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoiface",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoiface",
     importpath = "google.golang.org/protobuf/runtime/protoiface",
     visibility = ["//visibility:public"],
     deps = [

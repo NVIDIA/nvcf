@@ -9,7 +9,7 @@ go_library(
         "log.go",
         "unbounded_executor.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/modern-go/concurrent",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/modern-go/concurrent",
     importpath = "github.com/modern-go/concurrent",
     visibility = ["//visibility:public"],
 )

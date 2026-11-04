@@ -21,11 +21,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue"
 )
 
 func TestGetAWSRegion(t *testing.T) {
@@ -46,16 +46,16 @@ func TestGetSessionAndHelpers(t *testing.T) {
 	cmqi := queue.MessageQueueInfo{
 		QueueURL:     "https://foo.bar",
 		QueueType:    queue.CreationQueue,
-		AccessKey:    "ASIAQAAAAAAAKQ563GZD",
-		SessionToken: "FQoGZXIvYXdzEBYaDWBDIgdpw+WFwbMJjzWlBUY8Tz8VkPa4m7GD6pF006Pu5J2q82CeF08FYzgBFK1KsfZbenSykRH01TifaKDnghJMtHIQMXo1cerGTbXeqyCpvsl42gRiFqmiR1Hwy5sVUhlqQ05ZnVYUGPoWGu6OpA/9jWQbKK3ITVTXMhrbTXl0AN/e05Gxk16zCnPwsO1FFFDbOkd6Y5g1raAgtGZmst/6NkBpxAjehzUFfZvhQOg1FGJUsYkg3Y11QQ39DB4Ytl1AZTqmB//jCJiTPfJXGF+7MuX3Ufb/yC66Q89ENx9jpL8/lC66hliPrQKC1BOOYLBYgopaFMHTuVcL/wA=",
-		SecretKey:    "VuwiYiuZ54FpjJNoKi4+xLmItKsuSkL4JM7Gibg/",
+		AccessKey:    "AKIAIOSFODNN7EXAMPLE",
+		SessionToken: "EXAMPLE-SESSION-TOKEN",
+		SecretKey:    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	}
 	tmqi := queue.MessageQueueInfo{
 		QueueURL:     "https://foo.bar",
 		QueueType:    queue.TerminationQueue,
-		AccessKey:    "ASIAQAAAAAAAKQ563GZD",
-		SessionToken: "FQoGZXIvYXdzEBYaDWBDIgdpw+WFwbMJjzWlBUY8Tz8VkPa4m7GD6pF006Pu5J2q82CeF08FYzgBFK1KsfZbenSykRH01TifaKDnghJMtHIQMXo1cerGTbXeqyCpvsl42gRiFqmiR1Hwy5sVUhlqQ05ZnVYUGPoWGu6OpA/9jWQbKK3ITVTXMhrbTXl0AN/e05Gxk16zCnPwsO1FFFDbOkd6Y5g1raAgtGZmst/6NkBpxAjehzUFfZvhQOg1FGJUsYkg3Y11QQ39DB4Ytl1AZTqmB//jCJiTPfJXGF+7MuX3Ufb/yC66Q89ENx9jpL8/lC66hliPrQKC1BOOYLBYgopaFMHTuVcL/wA=",
-		SecretKey:    "VuwiYiuZ54FpjJNoKi4+xLmItKsuSkL4JM7Gibg/",
+		AccessKey:    "AKIAIOSFODNN7EXAMPLE",
+		SessionToken: "EXAMPLE-SESSION-TOKEN",
+		SecretKey:    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	}
 
 	var v any

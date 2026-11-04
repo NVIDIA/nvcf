@@ -6,7 +6,7 @@ go_library(
         "doc.go",
         "encoding.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/encoding",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/encoding",
     importpath = "github.com/aws/smithy-go/encoding",
     visibility = ["//visibility:public"],
 )

@@ -9,7 +9,7 @@ go_library(
         "scalehandler.go",
         "typeconverter.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/managedfields",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/managedfields",
     importpath = "k8s.io/apimachinery/pkg/util/managedfields",
     visibility = ["//visibility:public"],
     deps = [

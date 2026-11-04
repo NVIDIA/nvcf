@@ -4,8 +4,8 @@ go 1.26.10
 
 require (
 	github.com/NVIDIA/nvcf-go v1.0.1
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
 	github.com/carlmjohnson/versioninfo v0.22.5
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
 	github.com/felixge/httpsnoop v1.0.4
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-chi/chi/v5 v5.2.2
@@ -128,3 +128,5 @@ require (
 )
 
 replace k8s.io/client-go v11.0.0+incompatible => k8s.io/client-go v0.34.2
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib

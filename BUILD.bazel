@@ -137,5 +137,5 @@ filegroup(
 #   bazel run //:gazelle -- update-repos     - sync go.mod deps into MODULE.bazel
 gazelle(
     name = "gazelle",
-    prefix = "github.com/NVIDIA/nvcf",
+    prefix = "github.com/dsx-ai-factory/nvcf",
 )

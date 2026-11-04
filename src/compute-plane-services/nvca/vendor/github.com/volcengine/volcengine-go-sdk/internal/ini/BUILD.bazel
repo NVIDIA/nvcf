@@ -25,7 +25,7 @@ go_library(
         "walker.go",
         "ws_token.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/internal/ini",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/internal/ini",
     importpath = "github.com/volcengine/volcengine-go-sdk/internal/ini",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk:__subpackages__"],
     deps = ["//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr"],

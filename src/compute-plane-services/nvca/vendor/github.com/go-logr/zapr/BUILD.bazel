@@ -8,7 +8,7 @@ go_library(
         "zapr_noslog.go",
         "zapr_slog.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-logr/zapr",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-logr/zapr",
     importpath = "github.com/go-logr/zapr",
     visibility = ["//visibility:public"],
     deps = [

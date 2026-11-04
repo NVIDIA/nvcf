@@ -2,7 +2,7 @@
 
 Helm ReVal HTTP service — render/validate API, `pkg/authorizers`, and related libraries.
 
-**Module:** `github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval`
+**Module:** `github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval`
 
 ## Local Setup
 

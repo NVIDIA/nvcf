@@ -20,6 +20,12 @@ openbao:
   # secrets, volumes, and bootstrap scripts.
   fullnameOverride: openbao-server
 
+  # legacy keeps published image compatibility. Deploy bridge images in bridge
+  # mode with hooks enabled, rotate every member, then enable versioned mount
+  # creation. Versioned images fail preflight in legacy mode.
+  jwtPluginLifecycle:
+    mode: legacy
+
   hooks:
     initializeCluster:
       podAnnotations: {}
@@ -32,16 +38,6 @@ openbao:
           cpu: 250m
           memory: 256Mi
     migrations:
-      podAnnotations: {}
-      schedulingGates: []
-      resources:
-        requests:
-          cpu: 50m
-          memory: 64Mi
-        limits:
-          cpu: 250m
-          memory: 256Mi
-    refreshJWTPluginCatalog:
       podAnnotations: {}
       schedulingGates: []
       resources:

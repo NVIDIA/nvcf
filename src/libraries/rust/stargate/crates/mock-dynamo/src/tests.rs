@@ -725,6 +725,427 @@ async fn embeddings_endpoint_returns_json_without_stream() {
     server.abort();
 }
 
+const DECISION_ECHO_HEADERS: &str = "connection: close\r\nx-input-tokens: 11\r\nx-request-id: req-decision\r\nx-model: decision-model\r\ntypesafe-danger-zone-images: true\r\nx-vendor-test: v";
+
+async fn spawn_decision_app(
+    state: AppState,
+) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    spawn_test_app(decision_routes().with_state(state)).await
+}
+
+fn response_body_json(response: &str) -> serde_json::Value {
+    let (_, body) = response
+        .split_once("\r\n\r\n")
+        .expect("response should have a body");
+    serde_json::from_str(body).expect("response body should be json")
+}
+
+#[tokio::test]
+async fn decisions_endpoint_returns_answers_and_echoes_request_details() {
+    let state = test_state();
+    let observed_control = state.test_control.clone();
+    let (addr, server) = spawn_decision_app(state).await;
+    let request_body = serde_json::json!({
+        "model": "decision-model",
+        "input": "is it a cat?",
+        "questions": [{"type": "predicate", "name": "cat", "text": "cat?"}],
+    })
+    .to_string();
+    let response = json_response(
+        addr,
+        "POST",
+        "/v1/decisions",
+        DECISION_ECHO_HEADERS,
+        &request_body,
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.contains("x-mock-echo-typesafe-danger-zone-images: true"));
+    let body = response_body_json(&response);
+    assert_eq!(body["model"], "decision-model");
+    assert_eq!(body["answers"][0]["type"], "predicate");
+    assert_eq!(body["answers"][0]["name"], "cat");
+    assert_eq!(body["answers"][0]["probability"], 0.99);
+    assert_eq!(body["usage"]["input_tokens"], 11);
+    assert_eq!(body["usage"]["total_tokens"], 12);
+    assert_eq!(body["usage"]["input_tokens_details"]["cached_tokens"], 0);
+    assert_eq!(
+        body["usage"]["output_tokens_details"]["reasoning_tokens"],
+        0
+    );
+    assert_eq!(body["echo"]["typesafe-danger-zone-images"], "true");
+    assert_eq!(body["echo"]["x-vendor-test"], "v");
+    assert_eq!(body["echo"]["x-model"], "decision-model");
+    assert_eq!(body["echo"]["x-input-tokens"], "11");
+    assert_eq!(body["echo"]["x-request-id"], "req-decision");
+    assert_eq!(body["echo"]["body_length"], request_body.len());
+    assert_eq!(body["echo"]["credentials_received"], false);
+    let snapshot = observed_control.snapshot().await;
+    assert_eq!(
+        snapshot.counter(
+            TestEndpoint::Decisions,
+            "decision-model",
+            TestRequestClass::ApiGateway
+        ),
+        1
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn systemone_endpoint_returns_answers_and_echoes_request_details() {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let request_body = serde_json::json!({
+        "model": "decision-model",
+        "state": "frame",
+        "questions": {"cat": {"type": "noul", "text": "cat?"}},
+    })
+    .to_string();
+    let response = json_response(
+        addr,
+        "POST",
+        "/v1/systemone",
+        DECISION_ECHO_HEADERS,
+        &request_body,
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.contains("x-mock-echo-typesafe-danger-zone-images: true"));
+    let body = response_body_json(&response);
+    assert_eq!(body["model"], "decision-model");
+    assert_eq!(body["answers"]["cat"]["type"], "noul");
+    assert_eq!(body["answers"]["cat"]["noul"], 0.99);
+    assert_eq!(body["usage"]["input_tokens"], 11);
+    assert_eq!(body["echo"]["typesafe-danger-zone-images"], "true");
+    assert_eq!(body["echo"]["x-vendor-test"], "v");
+    assert_eq!(body["echo"]["body_length"], request_body.len());
+    server.abort();
+}
+
+async fn decision_answers(path: &str, questions: serde_json::Value) -> serde_json::Value {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let request_body = serde_json::json!({"model": "m", "input": "x", "questions": questions});
+    let response = json_response(
+        addr,
+        "POST",
+        path,
+        "connection: close",
+        &request_body.to_string(),
+    )
+    .await;
+    server.abort();
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    response_body_json(&response)["answers"].clone()
+}
+
+#[tokio::test]
+async fn decisions_answers_follow_each_question_type() {
+    let answers = decision_answers(
+        "/v1/decisions",
+        serde_json::json!([
+            {"type": "predicate", "name": "p", "text": "t"},
+            {"type": "choice", "name": "c", "choices": [true, false]},
+            {"type": "choice", "name": "o", "choices": [{"value": "red", "description": "d"}, "blue"]},
+            {"type": "score", "name": "s", "levels": [{"label": "low", "description": "d"}, "high"]},
+            {"type": "box", "name": "b", "text": "find it"},
+            {"type": "future", "name": "u"}
+        ]),
+    )
+    .await;
+
+    assert_eq!(
+        answers,
+        serde_json::json!([
+            {"type": "predicate", "name": "p", "probability": 0.99},
+            {"type": "choice", "name": "c", "choice": true,
+             "probabilities": [{"value": true, "probability": 0.99}, {"value": false, "probability": 0.01}],
+             "confidence": 0.99},
+            {"type": "choice", "name": "o", "choice": "red",
+             "probabilities": [{"value": "red", "probability": 0.99}, {"value": "blue", "probability": 0.01}],
+             "confidence": 0.99},
+            {"type": "score", "name": "s", "score": 0.01,
+             "probabilities": [
+                {"value": 0, "label": "low", "probability": 0.99},
+                {"value": 1, "label": "high", "probability": 0.01}],
+             "confidence": 0.99},
+            {"type": "box", "name": "b",
+             "box": {"top": 0.1, "bottom": 0.9, "left": 0.1, "right": 0.9}, "confidence": 0.99},
+            {"type": "future", "name": "u", "probability": 0.99}
+        ])
+    );
+}
+
+#[tokio::test]
+async fn systemone_answers_follow_each_question_type() {
+    let answers = decision_answers(
+        "/v1/systemone",
+        serde_json::json!({
+            "n": {"type": "noul", "text": "t"},
+            "c": {"type": "choice", "criteria": {"alpha": "first", "beta": "second"}},
+            "s": {"type": "score", "criteria": ["bad", "good"]},
+            "b": {"type": "box", "text": "find it"},
+            "u": {"type": "future"}
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        answers,
+        serde_json::json!({
+            "n": {"type": "noul", "noul": 0.99},
+            "c": {"type": "choice", "choice": "alpha", "confidence": 0.99,
+                  "probabilities": {"alpha": 0.99, "beta": 0.01}},
+            "s": {"type": "score", "score": 0.01, "confidence": 0.99,
+                  "legend": {"0": "bad", "1": "good"},
+                  "probabilities": {"0": 0.99, "1": 0.01}},
+            "b": {"type": "box", "box": {"top": 0.1, "bottom": 0.9, "left": 0.1, "right": 0.9},
+                  "confidence": 0.99},
+            "u": {"type": "noul", "noul": 0.99}
+        })
+    );
+}
+
+#[tokio::test]
+async fn decision_echo_reports_the_sha256_of_the_received_body() {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let mut digests = Vec::new();
+    for body in [r#"{"questions":[]}"#, "{}"] {
+        let response =
+            json_response(addr, "POST", "/v1/decisions", "connection: close", body).await;
+        digests.push(response_body_json(&response)["echo"]["body_sha256"].clone());
+    }
+    server.abort();
+    assert_eq!(
+        digests,
+        [
+            "5c9253d29ca1fc9c4f7683bfe5dadd87e2dbce3e46af6ee80404bc7259b41e1e",
+            "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn decision_endpoints_serve_rate_limit_and_validation_errors_on_request() {
+    let state = test_state();
+    let mut stats_events = state.stats_events.subscribe();
+    let (addr, server) = spawn_decision_app(state).await;
+    let request_body = r#"{"model":"decision-model","input":"x","questions":[]}"#;
+    for path in ["/v1/decisions", "/v1/systemone"] {
+        let limited = json_response(
+            addr,
+            "POST",
+            &format!("{path}?mock_error=429"),
+            "connection: close",
+            request_body,
+        )
+        .await;
+        assert!(limited.starts_with("HTTP/1.1 429"), "{path}: {limited}");
+        assert!(limited.contains("retry-after: 7"), "{path}: {limited}");
+        let body = response_body_json(&limited);
+        if path == "/v1/decisions" {
+            assert_eq!(body["error"]["type"], "rate_limit_error");
+        } else {
+            assert_eq!(body["detail"][0]["msg"], "Rate limit exceeded", "{body}");
+        }
+
+        let invalid = json_response(
+            addr,
+            "POST",
+            &format!("{path}?mock_error=400"),
+            "connection: close",
+            request_body,
+        )
+        .await;
+        assert!(invalid.starts_with("HTTP/1.1 400"), "{path}: {invalid}");
+        let body = response_body_json(&invalid);
+        if path == "/v1/decisions" {
+            assert_eq!(body["error"]["type"], "invalid_request_error");
+        } else {
+            assert!(body["detail"].is_array(), "{body}");
+        }
+    }
+    server.abort();
+    assert!(
+        matches!(
+            stats_events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ),
+        "canned errors must not report processed tokens"
+    );
+}
+
+#[tokio::test]
+async fn decision_echo_omits_absent_headers_and_reports_credentials_without_values() {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let body = r#"{"model":"m","questions":[]}"#;
+    for (headers, credentials) in [
+        ("connection: close", false),
+        ("connection: close\r\nauthorization: Bearer secret", true),
+        ("connection: close\r\nx-api-key: secret", true),
+        ("connection: close\r\ncookie: session=secret", true),
+    ] {
+        for path in ["/v1/decisions", "/v1/systemone"] {
+            let response = json_response(addr, "POST", path, headers, body).await;
+            assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+            assert!(!response.contains("secret"), "{path}: {response}");
+            let echo = response_body_json(&response)["echo"].clone();
+            assert_eq!(
+                echo["credentials_received"], credentials,
+                "{path} {headers}"
+            );
+            for absent in ["typesafe-danger-zone-images", "x-model", "x-request-id"] {
+                assert!(echo.get(absent).is_none(), "{path}: {echo}");
+            }
+        }
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn decision_endpoints_reject_malformed_bodies_in_the_native_shape() {
+    let state = test_state();
+    let mut stats_events = state.stats_events.subscribe();
+    let (addr, server) = spawn_decision_app(state).await;
+    for body in ["not json", "", "[1]", "null", r#"{"questions":[]} {}"#] {
+        for path in ["/v1/decisions", "/v1/systemone"] {
+            let response = json_response(addr, "POST", path, "connection: close", body).await;
+            assert!(
+                response.starts_with("HTTP/1.1 400"),
+                "{path} {body:?}: {response}"
+            );
+            let error = response_body_json(&response);
+            if path == "/v1/decisions" {
+                assert_eq!(error["error"]["type"], "invalid_request_error", "{error}");
+            } else {
+                assert_eq!(error["detail"][0]["type"], "value_error", "{error}");
+            }
+        }
+    }
+    server.abort();
+    assert!(matches!(
+        stats_events.try_recv(),
+        Err(broadcast::error::TryRecvError::Empty)
+    ));
+}
+
+#[tokio::test]
+async fn decision_endpoints_answer_empty_questions_with_a_default() {
+    for questions in [serde_json::json!([]), serde_json::Value::Null] {
+        assert_eq!(
+            decision_answers("/v1/decisions", questions).await,
+            serde_json::json!([{"type": "predicate", "probability": 0.99}])
+        );
+    }
+    for questions in [serde_json::json!({}), serde_json::Value::Null] {
+        assert_eq!(
+            decision_answers("/v1/systemone", questions).await,
+            serde_json::json!({"question": {"type": "noul", "noul": 0.99}})
+        );
+    }
+}
+
+#[tokio::test]
+async fn decision_endpoints_reject_bodies_over_the_route_limit() {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let body = "x".repeat((16 << 20) + 1);
+    for path in ["/v1/decisions", "/v1/systemone"] {
+        let response = json_response(addr, "POST", path, "connection: close", &body).await;
+        assert!(response.starts_with("HTTP/1.1 413"), "{path}: {response}");
+    }
+    server.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn decision_endpoints_apply_the_configured_pacing() {
+    for route in ["/v1/decisions", "/v1/systemone"] {
+        let state = AppState {
+            prefill_tokens_per_s: 100.0,
+            ttft: Duration::from_secs(10),
+            ..test_state()
+        };
+        let mut stats_events = state.stats_events.subscribe();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-request-id",
+            HeaderValue::from_static("req-decision-pace"),
+        );
+        headers.insert("x-input-tokens", HeaderValue::from_static("100"));
+        let body = axum::body::Bytes::from_static(br#"{"model":"m","questions":[]}"#);
+        let request = if route == "/v1/decisions" {
+            tokio::spawn(decisions(
+                State(state),
+                headers,
+                axum::extract::RawQuery(None),
+                body,
+            ))
+        } else {
+            tokio::spawn(systemone(
+                State(state),
+                headers,
+                axum::extract::RawQuery(None),
+                body,
+            ))
+        };
+        let mut processed = Vec::new();
+        for _ in 0..2 {
+            let StatsStreamEvent::Stats {
+                tokens_processed,
+                finished,
+                ..
+            } = stats_events
+                .recv()
+                .await
+                .expect("stats event should arrive")
+            else {
+                panic!("expected a stats event");
+            };
+            assert!(!finished, "{route}");
+            processed.push(tokens_processed);
+        }
+        assert_eq!(
+            processed,
+            [Some(0), Some(100)],
+            "{route}: prefill takes 1 s"
+        );
+        assert!(
+            !request.is_finished(),
+            "{route}: TTFT should delay the answer"
+        );
+        tokio::time::advance(Duration::from_secs(10)).await;
+        let response = request.await.expect("request task should finish");
+        assert_eq!(response.status(), axum::http::StatusCode::OK, "{route}");
+        let StatsStreamEvent::Stats { finished, .. } =
+            stats_events.recv().await.expect("final stats event")
+        else {
+            panic!("expected a stats event");
+        };
+        assert!(finished, "{route}");
+    }
+}
+
+#[tokio::test]
+async fn decision_endpoints_accept_base64_image_bodies_above_the_default_limit() {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let image = "QUJD".repeat(13 * 1024 * 1024 / 4);
+    let request_body = serde_json::json!({
+        "model": "decision-model",
+        "input": [{"type": "input_image", "image_url": format!("data:image/png;base64,{image}")}],
+        "questions": [{"type": "predicate", "name": "cat"}],
+    })
+    .to_string();
+    for path in ["/v1/decisions", "/v1/systemone"] {
+        let response = json_response(addr, "POST", path, "connection: close", &request_body).await;
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{path}");
+        assert!(
+            response.contains(&format!(r#""body_length":{}"#, request_body.len())),
+            "{path}"
+        );
+    }
+    server.abort();
+}
+
 #[test]
 fn output_token_selection_supports_overrides_and_bounded_distributions() {
     let mut headers = HeaderMap::new();

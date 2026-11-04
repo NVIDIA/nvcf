@@ -20,7 +20,7 @@ package operator
 import (
 	"testing"
 
-	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvidiaiov1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
 
 func TestGetOAuthConfig(t *testing.T) {

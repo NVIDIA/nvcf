@@ -18,7 +18,7 @@ limitations under the License.
 package metrics
 
 import (
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"

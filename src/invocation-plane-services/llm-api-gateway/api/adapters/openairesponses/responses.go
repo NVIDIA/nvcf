@@ -27,7 +27,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
 
 // UnmarshalError represents JSON unmarshaling errors with field context

@@ -10,7 +10,7 @@ go_library(
         "constants.go",
         "files.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/config",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_spf13_viper//:viper",

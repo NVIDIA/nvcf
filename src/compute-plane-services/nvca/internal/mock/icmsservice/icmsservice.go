@@ -29,7 +29,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
@@ -37,10 +37,10 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 
-	mocktokencache "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/tokencache"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/utils"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	mocktokencache "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/mock/tokencache"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/mock/utils"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 const (

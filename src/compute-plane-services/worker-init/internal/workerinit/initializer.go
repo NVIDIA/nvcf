@@ -25,16 +25,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/configs"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/internal/downloader"
-	initMetrics "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/pkg/ess"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/configs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/internal/downloader"
+	initMetrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/pkg/ess"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metering"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/types"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 )
 
 type baseInitializer struct {

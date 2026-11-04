@@ -8,7 +8,7 @@ go_library(
         "guid_windows.go",
         "variant_string.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio/pkg/guid",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio/pkg/guid",
     importpath = "github.com/Microsoft/go-winio/pkg/guid",
     visibility = ["//visibility:public"],
     deps = select({

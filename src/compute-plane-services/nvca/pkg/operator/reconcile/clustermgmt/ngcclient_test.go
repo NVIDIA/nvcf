@@ -37,8 +37,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvidiaiov1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
 type mockTokenFetcher struct {

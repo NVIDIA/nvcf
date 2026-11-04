@@ -1,9 +1,9 @@
-module github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector
+module github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector
 
 go 1.25.0
 
 require (
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0
 	github.com/spf13/cobra v1.10.2
 	k8s.io/api v0.34.2
 	k8s.io/apimachinery v0.34.2
@@ -60,7 +60,7 @@ require (
 
 // The perf suite consumes the shared SIS translation library directly so that
 // it renders exactly the workload shape NVCA produces in production.
-replace github.com/NVIDIA/nvcf/src/libraries/go/lib => ../../../src/libraries/go/lib
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../../src/libraries/go/lib
 
 // Mirror the k8s pins used by the shared library. replace directives in
 // dependencies are not inherited, so we repeat them here for the main module.

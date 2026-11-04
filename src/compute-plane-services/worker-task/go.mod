@@ -1,11 +1,11 @@
-module github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task
+module github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task
 
 go 1.26.10
 
 require (
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3
-	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20261015164739-acd237d2f0af
 	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/worker v0.0.0-20261015164739-acd237d2f0af
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/goccy/go-json v0.10.5
@@ -48,7 +48,7 @@ require (
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/minio/highwayhash v1.0.3 // indirect
@@ -56,8 +56,8 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/jwt/v2 v2.7.4 // indirect
 	github.com/nats-io/nats-server/v2 v2.11.6 // indirect
-	github.com/nats-io/nats.go v1.43.0 // indirect
-	github.com/nats-io/nkeys v0.4.11 // indirect
+	github.com/nats-io/nats.go v1.51.0 // indirect
+	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/oklog/oklog v0.3.2 // indirect
 	github.com/oklog/run v1.1.0 // indirect
@@ -110,3 +110,7 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/worker => ../../libraries/go/worker

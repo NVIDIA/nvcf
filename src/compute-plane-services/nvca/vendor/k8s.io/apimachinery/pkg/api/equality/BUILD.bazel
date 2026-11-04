@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "equality",
     srcs = ["semantic.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/equality",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/equality",
     importpath = "k8s.io/apimachinery/pkg/api/equality",
     visibility = ["//visibility:public"],
     deps = [

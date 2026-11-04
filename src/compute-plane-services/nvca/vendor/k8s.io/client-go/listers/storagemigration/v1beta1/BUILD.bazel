@@ -6,7 +6,7 @@ go_library(
         "expansion_generated.go",
         "storageversionmigration.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers/storagemigration/v1beta1",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers/storagemigration/v1beta1",
     importpath = "k8s.io/client-go/listers/storagemigration/v1beta1",
     visibility = ["//visibility:public"],
     deps = [

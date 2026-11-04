@@ -10,7 +10,7 @@ go_library(
         "properties.go",
         "validation.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go",
     importpath = "github.com/aws/smithy-go",
     visibility = ["//visibility:public"],
 )

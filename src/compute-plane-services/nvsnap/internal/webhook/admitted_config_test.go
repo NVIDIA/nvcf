@@ -10,7 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 )
 
 // Whatever the webhook's pod-wide patches add to a pod, the identity the

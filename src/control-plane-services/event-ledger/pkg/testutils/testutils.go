@@ -30,7 +30,7 @@ import (
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.uber.org/zap/zaptest"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common/core/types"
 )
 
 func InitTestLogger(t *testing.T) *otelzap.Logger {

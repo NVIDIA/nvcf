@@ -23,11 +23,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 	cli "github.com/urfave/cli/v2"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/mirror"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/mirror"
 )
 
 func main() {

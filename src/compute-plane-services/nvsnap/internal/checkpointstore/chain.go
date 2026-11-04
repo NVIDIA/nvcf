@@ -36,7 +36,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
 
 // Chain is a composite Backend that fans Put out across multiple

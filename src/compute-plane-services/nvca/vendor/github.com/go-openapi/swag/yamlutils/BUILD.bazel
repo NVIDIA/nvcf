@@ -8,7 +8,7 @@ go_library(
         "ordered_map.go",
         "yaml.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/yamlutils",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/yamlutils",
     importpath = "github.com/go-openapi/swag/yamlutils",
     visibility = ["//visibility:public"],
     deps = [

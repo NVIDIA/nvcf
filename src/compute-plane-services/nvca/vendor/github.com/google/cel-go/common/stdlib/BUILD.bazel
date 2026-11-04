@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "stdlib",
     srcs = ["standard.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/stdlib",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/stdlib",
     importpath = "github.com/google/cel-go/common/stdlib",
     visibility = ["//visibility:public"],
     deps = [

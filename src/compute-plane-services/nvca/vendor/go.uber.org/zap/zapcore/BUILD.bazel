@@ -25,7 +25,7 @@ go_library(
         "tee.go",
         "write_syncer.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/zap/zapcore",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/zap/zapcore",
     importpath = "go.uber.org/zap/zapcore",
     visibility = ["//visibility:public"],
     deps = [

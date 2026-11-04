@@ -38,17 +38,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/deploy"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/k3d"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/loadgen"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/profile"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/render"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/report"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/sink"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/validate"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/deploy"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/k3d"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/loadgen"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/profile"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/render"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/report"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/sink"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/validate"
 )
 
 // newDeployClient constructs the cluster client. It is a package variable so

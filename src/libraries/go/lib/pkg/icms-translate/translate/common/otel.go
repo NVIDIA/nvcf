@@ -28,8 +28,8 @@ import (
 	"text/template"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
-	otelconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/config"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
+	otelconfig "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otelconfig/config"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"

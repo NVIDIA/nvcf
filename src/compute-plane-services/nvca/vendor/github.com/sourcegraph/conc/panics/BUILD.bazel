@@ -6,7 +6,7 @@ go_library(
         "panics.go",
         "try.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/sourcegraph/conc/panics",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/sourcegraph/conc/panics",
     importpath = "github.com/sourcegraph/conc/panics",
     visibility = ["//visibility:public"],
 )

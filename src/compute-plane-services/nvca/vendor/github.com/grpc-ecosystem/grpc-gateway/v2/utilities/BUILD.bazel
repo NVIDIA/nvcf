@@ -9,7 +9,7 @@ go_library(
         "string_array_flag.go",
         "trie.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/utilities",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/utilities",
     importpath = "github.com/grpc-ecosystem/grpc-gateway/v2/utilities",
     visibility = ["//visibility:public"],
 )

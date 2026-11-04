@@ -32,4 +32,8 @@ public class ApiKeyInput {
     @JsonProperty("apiKey")
     private String apiKey;
 
+    // ncaId for the account-scoped rate-limit lookup; mutually exclusive with apiKey.
+    @JsonProperty("tiered_rate_key")
+    private String tieredRateKey;
+
 }

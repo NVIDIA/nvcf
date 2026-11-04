@@ -30,10 +30,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/configs"
-	nvcfclient "github.com/NVIDIA/nvcf/src/libraries/go/worker/nvcf"
-	pb "github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-init/configs"
+	nvcfclient "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/nvcf"
+	pb "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/test/testutils"
 )
 
 // Ports distinct from the NVCT integration test and the service E2E.
