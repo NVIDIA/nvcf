@@ -65,8 +65,8 @@ import tools.jackson.databind.util.StdConverter;
 public class CreateFunctionRequest {
 
     private static final String FUNCTION_NAME_REGEX = "^[a-z0-9A-Z][a-z0-9A-Z\\-_]*$";
-    // Empty stays valid: container functions may send it, and the class validator pairs it
-    // with helmChart.
+    // The pattern accepts empty on purpose. A non-Helm function sends a blank service name,
+    // and the class validator requires a non-blank value only when helmChart is set.
     private static final String HELM_CHART_SERVICE_NAME_REGEX =
             "^([a-z0-9A-Z]([a-z0-9A-Z\\-]*[a-z0-9A-Z])?)?$";
     public static final String GO = "GO";
