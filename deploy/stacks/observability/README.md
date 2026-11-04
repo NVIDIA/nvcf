@@ -158,5 +158,11 @@ make generate-test-golden
 git diff -- tests/golden/profile-matrix.txt
 ```
 
+A stack release publishes each chart under `charts/` at its `Chart.yaml`
+version. When a chart changes after a stack release, bump its `version` and
+`appVersion`. `tests/chart-versions.sh` compares each chart with the latest
+stack release tag and fails when the content changed but the version did not.
+It skips the check when no release tag is available locally.
+
 Confirm that every changed row matches the intended profile contract before
 committing the fixture.
