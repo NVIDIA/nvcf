@@ -473,6 +473,24 @@ func (s *nativeResponsesStream) observe(block []byte) {
 	}
 }
 
+// captureUpstreamError records block as upstreamError when it is an error event
+// before any terminal event. eventType is empty when the block is not JSON.
+func (s *nativeResponsesStream) captureUpstreamError(eventType string, block []byte) bool {
+	if eventType == "" {
+		// An error event can carry plain text, which only the event field names.
+		eventType, _, _ = splitNativeResponsesSSEBlock(block)
+	}
+	if eventType != openairesponses.EventTypeError || s.terminal != nil {
+		return false
+	}
+	_, data, _ := splitNativeResponsesSSEBlock(block)
+	s.upstreamError = &provider.UpstreamStreamError{
+		Message: provider.UpstreamErrorMessage([]byte(data)),
+		Raw:     json.RawMessage(data),
+	}
+	return true
+}
+
 func (s *nativeResponsesStream) observeEvent(eventType string, event nativeResponsesEvent) {
 	if sequenceNumber, err := strconv.Atoi(string(event.SequenceNumber)); err == nil {
 		s.sequenceNumber = &sequenceNumber
@@ -504,18 +522,9 @@ func consumeNativeResponsesSSE(
 		eventBlock.Write(line)
 		if len(line) > 0 && isSSEBlankLine(line) {
 			eventType, event, ok := decodeNativeResponsesSSEBlock(eventBlock.Bytes())
-			if !ok {
-				// An error event can carry plain text, which only the event field names.
-				eventType, _, _ = splitNativeResponsesSSEBlock(eventBlock.Bytes())
-			}
 			// An upstream error event ends the stream unrelayed: the caller reports
 			// its message in the gateway's response.failed.
-			if eventType == openairesponses.EventTypeError && stream.terminal == nil {
-				_, data, _ := splitNativeResponsesSSEBlock(eventBlock.Bytes())
-				stream.upstreamError = &provider.UpstreamStreamError{
-					Message: provider.UpstreamErrorMessage([]byte(data)),
-					Raw:     json.RawMessage(data),
-				}
+			if stream.captureUpstreamError(eventType, eventBlock.Bytes()) {
 				return stream, nil
 			}
 			if writeErr := stream.relay(writer, eventBlock.Bytes()); writeErr != nil {
@@ -536,8 +545,13 @@ func consumeNativeResponsesSSE(
 	}
 
 	// A client drops an event that the stream ends before its blank line, so
-	// a terminal event cut off at EOF is completed and anything else is dropped.
+	// a terminal event cut off at EOF is completed, an error event is captured,
+	// and anything else is dropped.
 	if eventBlock.Len() > 0 && stream.terminal == nil {
+		eventType, _, _ := decodeNativeResponsesSSEBlock(eventBlock.Bytes())
+		if stream.captureUpstreamError(eventType, eventBlock.Bytes()) {
+			return stream, nil
+		}
 		stream.observe(eventBlock.Bytes())
 		if stream.terminal != nil {
 			if !bytes.HasSuffix(eventBlock.Bytes(), []byte("\n")) {

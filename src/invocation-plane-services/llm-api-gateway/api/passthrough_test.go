@@ -395,6 +395,10 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 			wantResponseID: "resp_1", wantSequence: 5, wantMessage: "engine failed",
 		},
 		{
+			name: "upstream error event cut off at EOF", upstreamBody: created + strings.TrimSuffix(upstreamError, "\n\n"),
+			wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5, wantMessage: "engine failed",
+		},
+		{
 			name: "upstream error event without message", upstreamBody: created + upstreamErrorNoMessage,
 			wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5,
 		},
