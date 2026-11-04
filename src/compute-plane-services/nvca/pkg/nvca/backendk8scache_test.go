@@ -5108,6 +5108,9 @@ func (noopICMSRequestHelper) GetICMSRequestUpdatesForCreateRequest(context.Conte
 func (noopICMSRequestHelper) ComputeCleanupCacheReferences(context.Context, []string) error {
 	return nil
 }
+func (noopICMSRequestHelper) RetryFailedModelCacheCleanup(context.Context, *nvcav2beta1.ICMSRequest) error {
+	return nil
+}
 func (noopICMSRequestHelper) AllInstancesTerminatedAndReported(context.Context, *nvcav2beta1.ICMSRequest) bool {
 	return false
 }
