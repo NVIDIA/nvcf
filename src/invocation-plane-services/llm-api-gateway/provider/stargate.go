@@ -1014,7 +1014,7 @@ func (a *chatCompletionChoiceAccumulator) buildToolCalls() []models.ChatCompleti
 
 // upstreamStreamError returns the error event that engines such as vLLM send in
 // place of a chunk when they fail after the 200, or nil for any other payload.
-// The message comes from an error object's "message" or from an error string.
+// The message follows the rules and size cap for upstream error bodies.
 func upstreamStreamError(payload string) *UpstreamStreamError {
 	var event struct {
 		Error json.RawMessage `json:"error"`
@@ -1025,17 +1025,8 @@ func upstreamStreamError(payload string) *UpstreamStreamError {
 	if len(event.Error) == 0 || bytes.Equal(event.Error, []byte("null")) {
 		return nil
 	}
-
-	var message string
-	if json.Unmarshal(event.Error, &message) != nil {
-		var object struct {
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(event.Error, &object) == nil {
-			message = object.Message
-		}
-	}
-	return &UpstreamStreamError{Message: strings.TrimSpace(message), Raw: event.Error}
+	message := truncateMessage(strings.TrimSpace(upstreamErrorMessage([]byte(payload))))
+	return &UpstreamStreamError{Message: message, Raw: event.Error}
 }
 
 func (p *StargateProvider) readStream(

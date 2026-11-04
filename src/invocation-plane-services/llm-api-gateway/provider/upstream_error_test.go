@@ -53,3 +53,16 @@ func TestUpstreamErrorMessageIsBounded(t *testing.T) {
 		t.Fatalf("short message = %q", short)
 	}
 }
+
+func TestUpstreamStreamErrorMessageIsBounded(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("a", maxUpstreamErrorMessageBytes) + "b"
+	upstreamErr := upstreamStreamError(`{"error":{"message":"` + long + `"}}`)
+	if upstreamErr == nil {
+		t.Fatal("error event not detected")
+	}
+	if upstreamErr.Message != long[:maxUpstreamErrorMessageBytes] {
+		t.Fatalf("message length = %d, want the first %d bytes", len(upstreamErr.Message), maxUpstreamErrorMessageBytes)
+	}
+}
