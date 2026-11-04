@@ -27,16 +27,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	cli "github.com/urfave/cli/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/mirror"
-	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/mirror"
+	nvcaoptypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
 func TestNewOperatorCommand(t *testing.T) {

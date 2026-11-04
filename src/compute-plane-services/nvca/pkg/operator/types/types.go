@@ -22,7 +22,7 @@ import (
 	"slices"
 	"strings"
 
-	nvcfv1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvcfv1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
 
 type EventCategory string

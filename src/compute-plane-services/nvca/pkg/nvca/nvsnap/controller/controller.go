@@ -40,7 +40,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	nvsnapreconciler "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap/reconciler"
+	nvsnapreconciler "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap/reconciler"
 )
 
 // Controller wraps the reconciler with a Pod informer + workqueue.
@@ -63,6 +63,10 @@ type Controller struct {
 	// In production NVCA tenant pods live in nvcf-backend; empty
 	// works too if the agent has cluster-scoped pod-read RBAC.
 	Namespace string
+
+	// Transform, if set, is applied to each pod before the Pod informer
+	// caches it. The agent uses it to drop managedFields.
+	Transform cache.TransformFunc
 
 	// Workers is the number of goroutines popping from the
 	// workqueue. Each runs one reconcile at a time. Default 2 —
@@ -116,7 +120,8 @@ func (c *Controller) Run(ctx context.Context) error {
 	defer c.queue.ShutDown()
 
 	factory := informers.NewSharedInformerFactoryWithOptions(c.KubeClient, 0,
-		informers.WithNamespace(c.Namespace))
+		informers.WithNamespace(c.Namespace),
+		informers.WithTransform(c.Transform))
 	podInf := factory.Core().V1().Pods()
 	informer := podInf.Informer()
 	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{

@@ -32,30 +32,6 @@ github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/i
 github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/resource
 github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/resource/v1beta1
 github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/listers/resource/v1beta1
-# github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260722095202-f5e2792f5630 => ../../libraries/go/lib
-## explicit; go 1.25.0
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/client
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/common/core/utils
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/cache
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otel
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/config
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/trustbundle
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version
 # github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op
 ## explicit; go 1.24.0
 github.com/antithesishq/antithesis-sdk-go/assert
@@ -249,6 +225,30 @@ github.com/cpuguy83/go-md2man/v2/md2man
 # github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 ## explicit
 github.com/davecgh/go-spew/spew
+# github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260722095202-f5e2792f5630 => ../../libraries/go/lib
+## explicit; go 1.25.0
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/auth
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/fnds/client
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/fnds/common/core/utils
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/http
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/cache
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/imagecredential
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/oauth
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otel
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otelconfig/config
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/secret
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/trustbundle
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/types/nvca/config
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version
 # github.com/emicklei/go-restful/v3 v3.13.0
 ## explicit; go 1.13
 github.com/emicklei/go-restful/v3
@@ -794,7 +794,7 @@ go.yaml.in/yaml/v2
 # go.yaml.in/yaml/v3 v3.0.4
 ## explicit; go 1.16
 go.yaml.in/yaml/v3
-# golang.org/x/crypto v0.53.0 => golang.org/x/crypto v0.54.0
+# golang.org/x/crypto v0.57.0 => golang.org/x/crypto v0.54.0
 ## explicit; go 1.25.0
 golang.org/x/crypto/bcrypt
 golang.org/x/crypto/blake2b
@@ -813,8 +813,8 @@ golang.org/x/crypto/salsa20/salsa
 # golang.org/x/exp v0.0.0-20250305212735-054e65f0b394
 ## explicit; go 1.23.0
 golang.org/x/exp/slices
-# golang.org/x/net v0.56.0
-## explicit; go 1.25.0
+# golang.org/x/net v0.60.0
+## explicit; go 1.26.0
 golang.org/x/net/http/httpguts
 golang.org/x/net/http2
 golang.org/x/net/http2/hpack
@@ -827,12 +827,12 @@ golang.org/x/net/trace
 ## explicit; go 1.25.0
 golang.org/x/oauth2
 golang.org/x/oauth2/internal
-# golang.org/x/sync v0.22.0
-## explicit; go 1.25.0
+# golang.org/x/sync v0.23.0
+## explicit; go 1.26.0
 golang.org/x/sync/errgroup
 golang.org/x/sync/semaphore
-# golang.org/x/sys v0.47.0
-## explicit; go 1.25.0
+# golang.org/x/sys v0.48.0
+## explicit; go 1.26.0
 golang.org/x/sys/cpu
 golang.org/x/sys/plan9
 golang.org/x/sys/unix
@@ -841,11 +841,11 @@ golang.org/x/sys/windows/registry
 golang.org/x/sys/windows/svc
 golang.org/x/sys/windows/svc/eventlog
 golang.org/x/sys/windows/svc/mgr
-# golang.org/x/term v0.45.0
-## explicit; go 1.25.0
+# golang.org/x/term v0.46.0
+## explicit; go 1.26.0
 golang.org/x/term
-# golang.org/x/text v0.40.0
-## explicit; go 1.25.0
+# golang.org/x/text v0.42.0
+## explicit; go 1.26.0
 golang.org/x/text/cases
 golang.org/x/text/encoding
 golang.org/x/text/encoding/internal
@@ -1622,7 +1622,7 @@ sigs.k8s.io/structured-merge-diff/v6/value
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
-# github.com/NVIDIA/nvcf/src/libraries/go/lib => ../../libraries/go/lib
+# github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib
 # k8s.io/api => k8s.io/api v0.35.4
 # k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.35.4
 # k8s.io/apimachinery => k8s.io/apimachinery v0.35.4

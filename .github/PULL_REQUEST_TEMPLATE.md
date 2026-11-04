@@ -18,8 +18,8 @@
 
 ## Issues
 <!--
-Required: add a valid NVIDIA/nvcf issue reference below.
-Accepted: "Closes #123", "Fixes #123", "Resolves NVIDIA/nvcf#123",
+Required: add a valid dsx-ai-factory/nvcf issue reference below.
+Accepted: "Closes #123", "Fixes #123", "Resolves dsx-ai-factory/nvcf#123",
 "Relates to #123", or last-resort "NO-REF".
 Do not use Jira/private tracker keys, private bug IDs, private URLs, title-only
 refs, other-repo refs, or commented-out template examples. If context is

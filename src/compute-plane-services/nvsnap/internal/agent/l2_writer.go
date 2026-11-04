@@ -42,8 +42,8 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/treecopy"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/treecopy"
 )
 
 // AgentCopier implements checkpointstore.Copier for the in-process
@@ -109,6 +109,7 @@ func (c *AgentCopier) Copy(ctx context.Context, destRoot string, sources []check
 				"kind":   string(kind),
 				"source": src.DstSubpath,
 			}))
+			tc.SetFaithful(src.Faithful)
 			bytes, files, err := tc.Copy(ctx, fullSrc, fullDst)
 			if err != nil {
 				return totalBytes, totalFiles, fmt.Errorf("%s copy %s → %s: %w", kind, fullSrc, fullDst, err)

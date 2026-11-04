@@ -10,7 +10,7 @@ go_library(
         "middleware.go",
         "setup.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/tracing",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/tracing",
     visibility = ["//visibility:public"],
     deps = [
         "//src/control-plane-services/helm-reval/pkg/reval/config",

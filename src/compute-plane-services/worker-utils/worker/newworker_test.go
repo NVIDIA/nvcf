@@ -31,8 +31,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metering"
 )
 
 const (

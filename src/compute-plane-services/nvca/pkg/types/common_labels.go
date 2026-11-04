@@ -22,11 +22,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 )
 
 const (
@@ -169,3 +169,8 @@ func IsInfraOwnedObject(obj client.Object) bool {
 	}
 	return annotations[InfraObjectAnnotationKey] != ""
 }
+
+// ModelCachingFailedAnnotationKey is set to "true" on an ICMSRequest whose model caching failed. It
+// records a per-request fallback so later passes create non-cached workers instead of restarting the
+// cache writer.
+const ModelCachingFailedAnnotationKey = labelFQDNPrefix + "/model-caching-failed"

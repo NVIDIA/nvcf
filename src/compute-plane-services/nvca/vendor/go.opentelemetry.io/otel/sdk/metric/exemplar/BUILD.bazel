@@ -12,7 +12,7 @@ go_library(
         "storage.go",
         "value.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/exemplar",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/exemplar",
     importpath = "go.opentelemetry.io/otel/sdk/metric/exemplar",
     visibility = ["//visibility:public"],
     deps = [

@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 
-	pb "github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
+	pb "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
 )
 
 func TestCreateErrorResponse(t *testing.T) {

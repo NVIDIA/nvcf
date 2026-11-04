@@ -24,12 +24,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
-	internalutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/internal"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+	internalutil "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/cmd/internal"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 )
 
 const (

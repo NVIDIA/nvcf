@@ -6,9 +6,9 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "translate",
     srcs = ["duration.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/translate",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/translate",
     visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
-    deps = ["//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"],
 )
 
 alias(

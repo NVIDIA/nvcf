@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+load("@aspect_bazel_lib//lib:expand_template.bzl", "expand_template")
+load("@nvstor_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script", "cargo_toml_env_vars")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//src/compute-plane-services/nvstor:__subpackages__"])
+
+_NVSTOR = "//src/compute-plane-services/nvstor"
+
+# CARGO_PKG_* from Cargo.toml (version.workspace = true resolves against the
+# workspace manifest), so `nvstor-peer --version` reports the crate version.
+cargo_toml_env_vars(
+    name = "cargo_env",
+    src = "Cargo.toml",
+    workspace = _NVSTOR + ":Cargo.toml",
+)
+
+# The commit `nvstor-peer --version` and `fetch --json` report. build.rs takes
+# NVSTOR_PEER_COMMIT when it is set (the sandbox has no .git to ask); stamped
+# from the workspace status even under --nostamp, as the stargate binary is.
+expand_template(
+    name = "commit_env",
+    out = "commit.env",
+    stamp = 1,
+    stamp_substitutions = {"{COMMIT}": "{{STABLE_GIT_COMMIT_FULL}}"},
+    template = ["NVSTOR_PEER_COMMIT={COMMIT}"],
+)
+
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    build_script_env_files = [
+        ":cargo_env",
+        ":commit_env",
+    ],
+    edition = "2021",
+    deps = all_crate_deps(build = True),
+)
+
+rust_library(
+    name = "nvstor-peer_lib",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    aliases = aliases(),
+    crate_name = "nvstor_peer",
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env_files = [":cargo_env"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":build_script",
+        _NVSTOR + "/crates/nvstor-rdma",
+    ] + all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "nvstor-peer",
+    srcs = ["src/bin/nvstor-peer.rs"],
+    aliases = aliases(),
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env_files = [":cargo_env"],
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":nvstor-peer_lib",
+        _NVSTOR + "/crates/nvstor-rdma",
+    ] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "nvstor-peer_test",
+    size = "medium",
+    aliases = aliases(normal_dev = True),
+    crate = ":nvstor-peer_lib",
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = [_NVSTOR + "/crates/nvstor-core"] + all_crate_deps(normal_dev = True),
+)
+
+# Needs an ACTIVE RDMA device (#[ignore]d): run by hand on RDMA hardware.
+rust_test(
+    name = "fanout_rdma_test",
+    size = "small",
+    srcs = ["tests/fanout_rdma.rs"],
+    aliases = aliases(normal_dev = True),
+    crate_name = "fanout_rdma",
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":nvstor-peer_lib",
+        _NVSTOR + "/crates/nvstor-core",
+        _NVSTOR + "/crates/nvstor-rdma",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
+)

@@ -25,7 +25,7 @@ go_library(
         "types.go",
         "validator.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/golang-jwt/jwt/v5",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/golang-jwt/jwt/v5",
     importpath = "github.com/golang-jwt/jwt/v5",
     visibility = ["//visibility:public"],
 )

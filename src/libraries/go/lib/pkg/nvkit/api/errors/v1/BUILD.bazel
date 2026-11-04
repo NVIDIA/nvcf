@@ -24,7 +24,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "errors",
     srcs = ["nverrors.pb.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_grpc_ecosystem_grpc_gateway_v2//protoc-gen-openapiv2/options",

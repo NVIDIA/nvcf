@@ -21,7 +21,7 @@ go_library(
         "type_manipulation.go",
         "types.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/samber/lo",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/samber/lo",
     importpath = "github.com/samber/lo",
     visibility = ["//visibility:public"],
     deps = [

@@ -20,7 +20,7 @@ package interfaces
 import (
 	"context"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common/core/types"
 )
 
 // EventPublisher defines the interface for publishing single events.

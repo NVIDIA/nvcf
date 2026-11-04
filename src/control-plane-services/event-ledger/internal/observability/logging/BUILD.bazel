@@ -8,11 +8,11 @@ go_library(
         "logger.go",
         "setup.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/logging",
     visibility = ["//:__subpackages__"],
     deps = [
         "//src/control-plane-services/event-ledger/internal/observability/common",
-        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/zapotelspan",
+        "@com_github_dsx_ai_factory_nvcf_src_libraries_go_lib//pkg/zapotelspan",
         "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
         "@io_opentelemetry_go_otel//semconv/v1.37.0:v1_37_0",
         "@io_opentelemetry_go_otel_trace//:trace",

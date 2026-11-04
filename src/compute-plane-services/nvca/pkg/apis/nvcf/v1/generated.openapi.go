@@ -30,29 +30,29 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.AccountConfig":                              schema_pkg_apis_nvcf_v1_AccountConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ClusterConfig":                              schema_pkg_apis_nvcf_v1_ClusterConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.DeploymentConfig":                           schema_pkg_apis_nvcf_v1_DeploymentConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FNDServiceConfig":                           schema_pkg_apis_nvcf_v1_FNDServiceConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FeatureGate":                                schema_pkg_apis_nvcf_v1_FeatureGate(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.GPUDiscoveryConfig":                         schema_pkg_apis_nvcf_v1_GPUDiscoveryConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ICMSConfig":                                 schema_pkg_apis_nvcf_v1_ICMSConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig":                                schema_pkg_apis_nvcf_v1_ImageConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageCredHelperConfig":                      schema_pkg_apis_nvcf_v1_ImageCredHelperConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageResourceQuotaSpec": schema_pkg_apis_nvcf_v1_InternalPersistentStorageResourceQuotaSpec(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageSpec":              schema_pkg_apis_nvcf_v1_InternalPersistentStorageSpec(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.MiniServiceConfig":                          schema_pkg_apis_nvcf_v1_MiniServiceConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackend":                                schema_pkg_apis_nvcf_v1_NVCFBackend(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendList":                            schema_pkg_apis_nvcf_v1_NVCFBackendList(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpec":                            schema_pkg_apis_nvcf_v1_NVCFBackendSpec(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NvSnapConfig":                               schema_pkg_apis_nvcf_v1_NvSnapConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OAuthConfig":                                schema_pkg_apis_nvcf_v1_OAuthConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OTELConfig":                                 schema_pkg_apis_nvcf_v1_OTELConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OTelCollectorConfig":                        schema_pkg_apis_nvcf_v1_OTelCollectorConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageServerSpec":                    schema_pkg_apis_nvcf_v1_SharedStorageServerSpec(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageSpec":                          schema_pkg_apis_nvcf_v1_SharedStorageSpec(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.VaultConfig":                                schema_pkg_apis_nvcf_v1_VaultConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.WebhookConfig":                              schema_pkg_apis_nvcf_v1_WebhookConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.AccountConfig":                              schema_pkg_apis_nvcf_v1_AccountConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ClusterConfig":                              schema_pkg_apis_nvcf_v1_ClusterConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.DeploymentConfig":                           schema_pkg_apis_nvcf_v1_DeploymentConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FNDServiceConfig":                           schema_pkg_apis_nvcf_v1_FNDServiceConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FeatureGate":                                schema_pkg_apis_nvcf_v1_FeatureGate(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.GPUDiscoveryConfig":                         schema_pkg_apis_nvcf_v1_GPUDiscoveryConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ICMSConfig":                                 schema_pkg_apis_nvcf_v1_ICMSConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig":                                schema_pkg_apis_nvcf_v1_ImageConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageCredHelperConfig":                      schema_pkg_apis_nvcf_v1_ImageCredHelperConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageResourceQuotaSpec": schema_pkg_apis_nvcf_v1_InternalPersistentStorageResourceQuotaSpec(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageSpec":              schema_pkg_apis_nvcf_v1_InternalPersistentStorageSpec(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.MiniServiceConfig":                          schema_pkg_apis_nvcf_v1_MiniServiceConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackend":                                schema_pkg_apis_nvcf_v1_NVCFBackend(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendList":                            schema_pkg_apis_nvcf_v1_NVCFBackendList(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpec":                            schema_pkg_apis_nvcf_v1_NVCFBackendSpec(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NvSnapConfig":                               schema_pkg_apis_nvcf_v1_NvSnapConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OAuthConfig":                                schema_pkg_apis_nvcf_v1_OAuthConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OTELConfig":                                 schema_pkg_apis_nvcf_v1_OTELConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OTelCollectorConfig":                        schema_pkg_apis_nvcf_v1_OTelCollectorConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageServerSpec":                    schema_pkg_apis_nvcf_v1_SharedStorageServerSpec(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageSpec":                          schema_pkg_apis_nvcf_v1_SharedStorageSpec(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.VaultConfig":                                schema_pkg_apis_nvcf_v1_VaultConfig(ref),
+		"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.WebhookConfig":                              schema_pkg_apis_nvcf_v1_WebhookConfig(ref),
 		metav1.APIGroup{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_APIGroup(ref),
 		metav1.APIGroupList{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_APIGroupList(ref),
 		metav1.APIResource{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_APIResource(ref),
@@ -168,17 +168,17 @@ func schema_pkg_apis_nvcf_v1_ClusterConfig(ref common.ReferenceCallback) common.
 					"gpuDiscovery": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.GPUDiscoveryConfig"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.GPUDiscoveryConfig"),
 						},
 					},
 					"miniService": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.MiniServiceConfig"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.MiniServiceConfig"),
 						},
 					},
 					"fndService": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FNDServiceConfig"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FNDServiceConfig"),
 						},
 					},
 					"region": {
@@ -268,7 +268,7 @@ func schema_pkg_apis_nvcf_v1_ClusterConfig(ref common.ReferenceCallback) common.
 					"nvsnap": {
 						SchemaProps: spec.SchemaProps{
 							Description: "NvSnap configures the per-cluster behavior of the NvSnap checkpoint/restore integration. Empty (or unset Enabled flag) → integration disabled on this cluster; pod creation behaves identically to today. The global featureflag.NvSnapCheckpointRestore short-circuits this field — both must be true for either hook to fire. See docs/users/nvsnap/NVSNAP-INTEGRATION-DESIGN.md.",
-							Ref:         ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NvSnapConfig"),
+							Ref:         ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NvSnapConfig"),
 						},
 					},
 				},
@@ -276,7 +276,7 @@ func schema_pkg_apis_nvcf_v1_ClusterConfig(ref common.ReferenceCallback) common.
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FNDServiceConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.GPUDiscoveryConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.MiniServiceConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NvSnapConfig"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FNDServiceConfig", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.GPUDiscoveryConfig", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.MiniServiceConfig", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NvSnapConfig"},
 	}
 }
 
@@ -414,17 +414,17 @@ func schema_pkg_apis_nvcf_v1_FeatureGate(ref common.ReferenceCallback) common.Op
 				Properties: map[string]spec.Schema{
 					"sharedStorage": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageSpec"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageSpec"),
 						},
 					},
 					"internalPersistentStorage": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageSpec"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageSpec"),
 						},
 					},
 					"otelConfig": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OTELConfig"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OTELConfig"),
 						},
 					},
 					"values": {
@@ -445,7 +445,7 @@ func schema_pkg_apis_nvcf_v1_FeatureGate(ref common.ReferenceCallback) common.Op
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageSpec", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OTELConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageSpec"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageSpec", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OTELConfig", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageSpec"},
 	}
 }
 
@@ -458,19 +458,19 @@ func schema_pkg_apis_nvcf_v1_GPUDiscoveryConfig(ref common.ReferenceCallback) co
 					"dynamic": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Dynamic GPU discovery is enabled by default.",
-							Ref:         ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.DynamicGPUDiscoveryConfig"),
+							Ref:         ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.DynamicGPUDiscoveryConfig"),
 						},
 					},
 					"static": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.StaticGPUDiscoveryConfig"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.StaticGPUDiscoveryConfig"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.DynamicGPUDiscoveryConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.StaticGPUDiscoveryConfig"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.DynamicGPUDiscoveryConfig", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.StaticGPUDiscoveryConfig"},
 	}
 }
 
@@ -569,14 +569,14 @@ func schema_pkg_apis_nvcf_v1_ImageCredHelperConfig(ref common.ReferenceCallback)
 					"imageConfig": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"},
 	}
 }
 
@@ -631,7 +631,7 @@ func schema_pkg_apis_nvcf_v1_InternalPersistentStorageSpec(ref common.ReferenceC
 					"resourceQuota": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageResourceQuotaSpec"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageResourceQuotaSpec"),
 						},
 					},
 				},
@@ -639,7 +639,7 @@ func schema_pkg_apis_nvcf_v1_InternalPersistentStorageSpec(ref common.ReferenceC
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageResourceQuotaSpec"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.InternalPersistentStorageResourceQuotaSpec"},
 	}
 }
 
@@ -705,19 +705,19 @@ func schema_pkg_apis_nvcf_v1_NVCFBackend(ref common.ReferenceCallback) common.Op
 					},
 					"spec": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpec"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpec"),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendStatus"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendStatus"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpec", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpec", "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -755,7 +755,7 @@ func schema_pkg_apis_nvcf_v1_NVCFBackendList(ref common.ReferenceCallback) commo
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackend"),
+										Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackend"),
 									},
 								},
 							},
@@ -766,7 +766,7 @@ func schema_pkg_apis_nvcf_v1_NVCFBackendList(ref common.ReferenceCallback) commo
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackend", metav1.ListMeta{}.OpenAPIModelName()},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackend", metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -779,12 +779,12 @@ func schema_pkg_apis_nvcf_v1_NVCFBackendSpec(ref common.ReferenceCallback) commo
 				Properties: map[string]spec.Schema{
 					"NVCFBackendSpecT": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpecT"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpecT"),
 						},
 					},
 					"overrides": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpecT"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpecT"),
 						},
 					},
 				},
@@ -792,7 +792,7 @@ func schema_pkg_apis_nvcf_v1_NVCFBackendSpec(ref common.ReferenceCallback) commo
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpecT"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpecT"},
 	}
 }
 
@@ -954,14 +954,14 @@ func schema_pkg_apis_nvcf_v1_OTelCollectorConfig(ref common.ReferenceCallback) c
 					"imageConfig": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"},
 	}
 }
 
@@ -992,14 +992,14 @@ func schema_pkg_apis_nvcf_v1_SharedStorageSpec(ref common.ReferenceCallback) com
 				Properties: map[string]spec.Schema{
 					"server": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageServerSpec"),
+							Ref: ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageServerSpec"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageServerSpec"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageServerSpec"},
 	}
 }
 
@@ -1091,14 +1091,14 @@ func schema_pkg_apis_nvcf_v1_WebhookConfig(ref common.ReferenceCallback) common.
 					"imageConfig": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"),
+							Ref:     ref("github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"},
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ImageConfig"},
 	}
 }
 

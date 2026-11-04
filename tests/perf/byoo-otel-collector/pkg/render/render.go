@@ -27,10 +27,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
 )
 
 // CollectorContainerName is the container name the translator assigns the BYOO

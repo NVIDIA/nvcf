@@ -22,7 +22,7 @@ go_library(
         "swagger.go",
         "tag.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/validation/spec",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/validation/spec",
     importpath = "k8s.io/kube-openapi/pkg/validation/spec",
     visibility = ["//visibility:public"],
     deps = [

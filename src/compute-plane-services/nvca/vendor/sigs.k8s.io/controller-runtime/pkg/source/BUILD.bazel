@@ -6,7 +6,7 @@ go_library(
         "doc.go",
         "source.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/source",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/source",
     importpath = "sigs.k8s.io/controller-runtime/pkg/source",
     visibility = ["//visibility:public"],
     deps = [

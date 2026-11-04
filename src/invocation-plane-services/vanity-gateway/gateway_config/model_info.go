@@ -34,6 +34,7 @@ import (
 var modelInfoSectionOrder = []string{
 	"openai.chatCompletions", "openai.completions", "openai.embeddings", "openai.responses",
 	"openai.imageGenerations", "openai.imageEdits", "openai.imageVariations", anthropicMessagesSection,
+	decisionsSection, typeSafeSystemOneSection,
 }
 
 func validateModelInfoFields(model string, fields map[string]json.RawMessage) error {

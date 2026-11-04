@@ -29,7 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metering"
 )
 
 func TestFinishedLargeResponse(t *testing.T) {

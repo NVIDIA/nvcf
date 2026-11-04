@@ -7,7 +7,7 @@ go_library(
         "namespaces.go",
         "rootfs.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/pkg/introspection",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/pkg/introspection",
     visibility = ["//visibility:public"],
     deps = ["@org_golang_x_sys//unix"],
 )

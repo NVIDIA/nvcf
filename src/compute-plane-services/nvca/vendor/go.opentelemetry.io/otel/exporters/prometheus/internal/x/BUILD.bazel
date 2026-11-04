@@ -6,7 +6,7 @@ go_library(
         "features.go",
         "x.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/prometheus/internal/x",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/prometheus/internal/x",
     importpath = "go.opentelemetry.io/otel/exporters/prometheus/internal/x",
     visibility = ["//visibility:public"],
 )

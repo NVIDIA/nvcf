@@ -89,9 +89,10 @@ struct Args {
     /// Upstream health path probed ahead of the built-in defaults; repeat to try several in order
     #[arg(long = "upstream-health-path", value_name = "PATH")]
     upstream_health_paths: Vec<String>,
-    /// How long startup retries the upstream health probe before exiting. `0` probes once
-    #[arg(long, default_value_t = 60000, value_name = "MS")]
-    upstream_health_wait_ms: u64,
+    /// How long startup retries the upstream health probe before exiting. `0` probes once.
+    /// Defaults to INFERENCE_READY_TIMEOUT when set, otherwise 60000
+    #[arg(long, value_name = "MS")]
+    upstream_health_wait_ms: Option<u64>,
     /// Run local input-TPS calibration before contacting Stargate. Use only when this is the cluster's sole Pylon
     #[arg(long, default_value_t = false)]
     do_calibration: bool,

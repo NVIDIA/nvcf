@@ -31,7 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/labels"
+	"github.com/dsx-ai-factory/nvcf/tests/perf/byoo-otel-collector/pkg/labels"
 )
 
 // DefaultImage is the upstream telemetrygen image. The tag can be overridden

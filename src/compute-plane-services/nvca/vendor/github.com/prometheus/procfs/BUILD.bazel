@@ -72,7 +72,7 @@ go_library(
         "vm.go",
         "zoneinfo.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/procfs",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/procfs",
     importpath = "github.com/prometheus/procfs",
     visibility = ["//visibility:public"],
     deps = [

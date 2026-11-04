@@ -24,16 +24,16 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/nvca"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/nvca"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/policy"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.uber.org/zap"
 
-	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
+	pdpv1 "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
 )
 
 // Policy context keys - using the contextKey type already defined in jwt.go

@@ -8,7 +8,7 @@ blank_issues_enabled: false
 
 contact_links:
   - name: Ask in Discussions
-    url: https://github.com/NVIDIA/nvcf/discussions
+    url: https://github.com/dsx-ai-factory/nvcf/discussions
     about: Use GitHub Discussions for support and usage help.
   - name: Report a Security Vulnerability
     url: https://www.nvidia.com/object/submit-security-vulnerability.html

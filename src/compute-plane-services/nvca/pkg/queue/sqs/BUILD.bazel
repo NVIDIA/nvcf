@@ -6,11 +6,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "sqs",
     srcs = ["sqs.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/sqs",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue/sqs",
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/nvca/pkg/queue",
-        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core",
         "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws",
         "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/credentials",
         "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/endpoints",
@@ -31,7 +31,7 @@ go_test(
     embed = [":sqs"],
     deps = [
         "//src/compute-plane-services/nvca/pkg/queue",
-        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core",
         "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
         "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
     ],

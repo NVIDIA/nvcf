@@ -17,7 +17,7 @@ limitations under the License.
 
 // restore_prep.go implements the async overlay-prep
 // job manager that backs the nvsnap-mount-prep init container
-// (docs/proposals/init-container-mount-prep.md, nvsnap#202).
+// (docs/ARCHITECTURE.md §2, nvsnap#202).
 //
 // Architectural note: the webhook used to call OverlayPreparer.PrepareOverlay
 // SYNCHRONOUSLY during K8s admission, which forced hundreds of
@@ -42,7 +42,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // PrepState is the lifecycle of one per-pod overlay-prep job.

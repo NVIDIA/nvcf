@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "rand",
     srcs = ["rand.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/rand",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/rand",
     importpath = "github.com/aws/aws-sdk-go-v2/internal/rand",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
 )

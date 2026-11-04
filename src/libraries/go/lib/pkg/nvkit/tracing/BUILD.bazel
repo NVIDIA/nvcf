@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "tracing",
     srcs = ["trace.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing",
     visibility = ["//visibility:public"],
     deps = [
         "@io_opentelemetry_go_otel//:otel",

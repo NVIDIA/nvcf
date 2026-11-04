@@ -4,13 +4,6 @@ dario.cat/mergo
 # github.com/Masterminds/semver/v3 v3.4.0
 ## explicit; go 1.21
 github.com/Masterminds/semver/v3
-# github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00
-## explicit; go 1.25.0
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/config
 # github.com/aws/aws-sdk-go-v2 v1.41.2
 ## explicit; go 1.23
 github.com/aws/aws-sdk-go-v2/aws
@@ -134,6 +127,13 @@ github.com/awslabs/amazon-ecr-credential-helper/ecr-login/version
 # github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 ## explicit
 github.com/davecgh/go-spew/spew
+# github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00 => ../../libraries/go/lib
+## explicit; go 1.25.0
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/imagecredential
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig
+github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otelconfig/config
 # github.com/emicklei/go-restful/v3 v3.12.2
 ## explicit; go 1.13
 github.com/emicklei/go-restful/v3
@@ -254,13 +254,13 @@ github.com/volcengine/volcengine-go-sdk/volcengine/volcengineutil
 # github.com/x448/float16 v0.8.4
 ## explicit; go 1.11
 github.com/x448/float16
-# go.yaml.in/yaml/v2 v2.4.3
+# go.yaml.in/yaml/v2 v2.4.4
 ## explicit; go 1.15
 go.yaml.in/yaml/v2
 # go.yaml.in/yaml/v3 v3.0.4
 ## explicit; go 1.16
 go.yaml.in/yaml/v3
-# golang.org/x/net v0.51.0
+# golang.org/x/net v0.55.0
 ## explicit; go 1.25.0
 golang.org/x/net/http/httpguts
 golang.org/x/net/http2
@@ -276,16 +276,16 @@ golang.org/x/oauth2/internal
 ## explicit; go 1.25.0
 golang.org/x/sync/errgroup
 golang.org/x/sync/semaphore
-# golang.org/x/sys v0.43.0
+# golang.org/x/sys v0.45.0
 ## explicit; go 1.25.0
 golang.org/x/sys/plan9
 golang.org/x/sys/unix
 golang.org/x/sys/windows
-# golang.org/x/term v0.40.0
-## explicit; go 1.24.0
+# golang.org/x/term v0.43.0
+## explicit; go 1.25.0
 golang.org/x/term
-# golang.org/x/text v0.34.0
-## explicit; go 1.24.0
+# golang.org/x/text v0.37.0
+## explicit; go 1.25.0
 golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
@@ -726,3 +726,4 @@ sigs.k8s.io/yaml
 # k8s.io/api => k8s.io/api v0.35.3
 # k8s.io/apimachinery => k8s.io/apimachinery v0.35.3
 # k8s.io/client-go => k8s.io/client-go v0.35.3
+# github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib

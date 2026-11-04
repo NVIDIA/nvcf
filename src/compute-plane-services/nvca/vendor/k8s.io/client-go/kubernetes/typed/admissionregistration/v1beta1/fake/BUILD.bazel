@@ -12,7 +12,7 @@ go_library(
         "fake_validatingadmissionpolicybinding.go",
         "fake_validatingwebhookconfiguration.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/admissionregistration/v1beta1/fake",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/admissionregistration/v1beta1/fake",
     importpath = "k8s.io/client-go/kubernetes/typed/admissionregistration/v1beta1/fake",
     visibility = ["//visibility:public"],
     deps = [

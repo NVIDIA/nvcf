@@ -210,7 +210,7 @@ go_library(
         "windowssecuritycontextoptions.go",
         "workloadreference.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/core/v1",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/core/v1",
     importpath = "k8s.io/client-go/applyconfigurations/core/v1",
     visibility = ["//visibility:public"],
     deps = [

@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "ssoiface",
     srcs = ["interface.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/service/sso/ssoiface",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/service/sso/ssoiface",
     importpath = "github.com/aws/aws-sdk-go/service/sso/ssoiface",
     visibility = ["//visibility:public"],
     deps = [

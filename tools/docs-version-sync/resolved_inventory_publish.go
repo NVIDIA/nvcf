@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	resolvedInventoryRepository = "https://github.com/NVIDIA/nvcf/tree"
+	resolvedInventoryRepository = "https://github.com/dsx-ai-factory/nvcf/tree"
 	resolvedInventoryTimeout    = 30 * time.Minute
 	resolvedInventoryConfigPath = "deploy/stacks/self-managed/release-inventory.yaml"
 )

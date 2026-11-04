@@ -6,6 +6,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 chart_dir="${script_dir}/../llm-request-router"
+backend_image_tag="$(yq -r '.llmRequestRouter.backendRouter.image.tag' "$chart_dir/values.yaml")"
 rendered="$(mktemp)"
 disabled="$(mktemp)"
 external_service_account="$(mktemp)"
@@ -331,9 +332,9 @@ if ! grep -Fq -- "serviceAccountName: external-backend-router" "$external_servic
 fi
 assert_backend_router_role_binding_subject "$external_service_account" "external-backend-router"
 
-assert_zero_config_contains "image: registry.example.invalid/nvcf/stargate:0.25.0" \
+assert_zero_config_contains "image: registry.example.invalid/nvcf/stargate:${backend_image_tag}" \
   "backend router must use the chart's pinned Stargate image with no router image configuration"
-assert_zero_config_contains 'app.kubernetes.io/version: "0.25.0"' \
+assert_zero_config_contains "app.kubernetes.io/version: \"${backend_image_tag}\"" \
   "backend router labels must identify the pinned Stargate image version"
 
 helm template llm-request-router "$chart_dir" \

@@ -20,7 +20,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
 	"github.com/spf13/cobra"
 )
 

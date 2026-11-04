@@ -53,7 +53,7 @@ echo "=== [2b/8] Applying NVCF storage classes (nvcf-sc, nvcf-function-storage-s
 # Idempotent — re-applying just sync-updates parameters. hyperdisk-ml is
 # the per-capture L2 PVC tier (nvsnap#63). Skipping this leaves the
 # cluster without an RWX-class StorageClass, which NvSnap treats as a
-# fatal-startup prerequisite (see docs/L2-PVC-CRIU-DESIGN.md).
+# fatal-startup prerequisite (see docs/ARCHITECTURE.md §6).
 kubectl apply -f deploy/k8s/nvcf-cluster-prep/storage-classes.yaml
 
 echo "=== [3/8] Seeding nvsnap-pull-secret from ~/.docker/config.json ==="

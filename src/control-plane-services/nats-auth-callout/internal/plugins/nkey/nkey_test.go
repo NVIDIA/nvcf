@@ -22,7 +22,7 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nkeys"
 	"github.com/stretchr/testify/assert"

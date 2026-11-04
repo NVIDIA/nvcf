@@ -25,7 +25,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	ictx "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/context"
+	ictx "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/context"
 )
 
 const (

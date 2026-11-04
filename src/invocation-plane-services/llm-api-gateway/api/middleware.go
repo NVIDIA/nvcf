@@ -35,10 +35,10 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const (
@@ -109,12 +109,22 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			gc.SetRequest(gc.Request().WithContext(ctx))
 			logRequestBodyReadFailure(ctx, bodyErr)
 			gc.Response().Header().Set(HeaderRequestID, requestID)
-			if isMessagesRequest(gc.Request()) {
+			switch errorShapeFor(gc.Request()) {
+			case shapeAnthropic:
 				// Runs as headers are written, after backend headers are
 				// copied, so the NVCF ID replaces any backend request ID.
 				gc.Response().Before(func() {
 					gc.Response().Header().Set(HeaderRequestID, requestID)
 					gc.Response().Header().Set(headerMessagesRequestID, requestID)
+				})
+			case shapeSystemOne:
+				// System One errors carry the NVCF ID in the body, so the
+				// header must match after backend headers are copied.
+				gc.Response().Before(func() {
+					if relayed, _ := gc.Get(contextKeyBackendErrorRelayed).(bool); relayed {
+						return
+					}
+					gc.Response().Header().Set(HeaderRequestID, requestID)
 				})
 			}
 

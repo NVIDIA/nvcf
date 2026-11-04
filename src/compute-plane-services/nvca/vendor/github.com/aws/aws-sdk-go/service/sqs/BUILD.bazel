@@ -10,7 +10,7 @@ go_library(
         "errors.go",
         "service.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/service/sqs",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/service/sqs",
     importpath = "github.com/aws/aws-sdk-go/service/sqs",
     visibility = ["//visibility:public"],
     deps = [

@@ -19,7 +19,7 @@ go_library(
         "server.go",
         "spec.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/spec3",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/spec3",
     importpath = "k8s.io/kube-openapi/pkg/spec3",
     visibility = ["//visibility:public"],
     deps = [

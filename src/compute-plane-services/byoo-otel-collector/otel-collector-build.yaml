@@ -9,7 +9,7 @@ dist:
   # scripts/regenerate-otelcol.sh and tools/ci/check-otelcol-generated).
   # Pinning the module name keeps the generated go.mod stable across
   # regenerations so version bumps produce reviewable diffs.
-  module: github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol
+  module: github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol
   # Authoritative upstream Collector release. The image tag derives its
   # upstream segment from this field, not from individual component modules.
   otelcol_version: 0.160.0

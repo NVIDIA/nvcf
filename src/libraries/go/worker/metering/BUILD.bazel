@@ -21,7 +21,7 @@ go_library(
         "infra.go",
         "metering.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/metering",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metering",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/worker/proto/nvcf:pb",

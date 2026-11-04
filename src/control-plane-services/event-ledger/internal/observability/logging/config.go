@@ -22,13 +22,13 @@ import (
 	"fmt"
 	"syscall"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/zapotelspan"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/zapotelspan"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/common"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/common"
 )
 
 type LoggingConfig struct {

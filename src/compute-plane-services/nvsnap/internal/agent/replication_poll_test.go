@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/objectstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/objectstore"
 )
 
 const testHashA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

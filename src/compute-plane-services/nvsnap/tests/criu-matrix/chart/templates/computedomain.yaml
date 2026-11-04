@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- if .Values.computeDomain }}
+{{- /* One IMEX domain per instance; its pods join it through the channel
+       claim template it creates. numNodes 0: the domain follows the pods. */}}
+apiVersion: resource.nvidia.com/v1beta1
+kind: ComputeDomain
+metadata:
+  name: {{ include "matrix.name" . }}-imex
+spec:
+  numNodes: 0
+  channel:
+    resourceClaimTemplate:
+      name: {{ include "matrix.name" . }}-imex-channel
+{{- end }}

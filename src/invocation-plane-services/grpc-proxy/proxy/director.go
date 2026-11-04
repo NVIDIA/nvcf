@@ -30,7 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	nverrors "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
 	"github.com/jellydator/ttlcache/v3"
@@ -43,6 +43,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"nvcf-grpc-proxy/proxy/consts"
+	"nvcf-grpc-proxy/proxy/eventledger"
 	"nvcf-grpc-proxy/proxy/invocation"
 	"nvcf-grpc-proxy/proxy/metrics"
 	"nvcf-grpc-proxy/proxy/middleware"
@@ -50,13 +51,19 @@ import (
 )
 
 type FunctionInvoker interface {
-	InvokeStatefulFunction(ctx context.Context, conn net.Conn, clientAuth, functionId, functionVersionId string, existingRequestId *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error)
+	InvokeStatefulFunction(ctx context.Context, conn net.Conn, clientAuth, functionId, functionVersionId string, existingRequestId *uuid.UUID, onWorkerAuthSet func(invocation.WorkerAuth)) (invocation.Result, context.CancelFunc, error)
 }
 
 type workerAuthInfo struct {
 	requestId         uuid.UUID
 	functionId        string
 	functionVersionId string
+	// callerNcaId is the caller authenticated when the session was set up or rejoined.
+	callerNcaId string
+	isRejoin    bool
+	// setupStartedAt is when the client's request began setting up the
+	// session, before authentication and dispatch.
+	setupStartedAt time.Time
 	// mintedAt lets a CONNECT report how old the token was when it arrived,
 	// which is the headroom against consts.Timeout.
 	mintedAt time.Time
@@ -107,9 +114,12 @@ type StreamDirector struct {
 	workerAuth      *ttlcache.Cache[string, workerAuthInfo]  // auth -> request + function info
 	issuedTokens    *ttlcache.Cache[string, issuedTokenInfo] // diagnostic only, see issuedTokenInfo
 	pendingWork     *ttlcache.Cache[uuid.UUID, pendingWorkInfo]
+	// Tokens whose client slot closed before a worker used them. See RegisterWorker.
+	departedTokens  *ttlcache.Cache[string, struct{}]
 	workers         *ttlcache.Cache[workerConnectionKey, *worker.WorkerConnection]
 	functionInvoker FunctionInvoker
 	cors            *cors.Cors
+	eventLedger     *eventledger.Publisher
 }
 
 var errShuttingDown = errors.New("proxy is shutting down")
@@ -158,6 +168,14 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 	)
 	go pendingWorkCache.Start()
 
+	// Lives as long as the token it shadows, so a worker presenting that token
+	// can always be recognised as arriving after its client left.
+	departedTokenCache := ttlcache.New(
+		ttlcache.WithTTL[string, struct{}](consts.Timeout),
+		ttlcache.WithDisableTouchOnHit[string, struct{}](),
+	)
+	go departedTokenCache.Start()
+
 	// Set immediately before DeleteAll in Close so the eviction handler can
 	// report shutdown rather than attributing a drain to a client or worker.
 	shuttingDown := &atomic.Bool{}
@@ -195,6 +213,10 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 						zap.Stringer("request_id", k.requestId))
 					ttlUpdateLock.Lock()
 					defer ttlUpdateLock.Unlock()
+					// Marked before the delete so a worker can never see the slot gone
+					// without the mark. Harmless once a worker has attached: the
+					// CONNECT consumed the token.
+					departedTokenCache.Set(k.workerAuthToken, struct{}{}, ttlcache.DefaultTTL)
 					c.Delete(k)
 				}
 				newWorkerConnection := worker.NewWorkerConnection(k.requestId, k.functionId, k.functionVersionId, onActive, onInactive)
@@ -318,6 +340,7 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		departurePurges: make(chan struct{}, departurePurgeConcurrency),
 		issuedTokens:    issuedTokenCache,
 		pendingWork:     pendingWorkCache,
+		departedTokens:  departedTokenCache,
 		workerAuth:      workerAuthCache,
 		functionInvoker: functionInvoker,
 		cors:            cors.New(middleware.DefaultCorsOptions),
@@ -557,6 +580,7 @@ func (s *StreamDirector) Close() error {
 	s.workerAuth.Stop()
 	s.issuedTokens.Stop()
 	s.pendingWork.Stop()
+	s.departedTokens.Stop()
 	if s.functionInvoker != nil {
 		if closer, ok := s.functionInvoker.(io.Closer); ok {
 			_ = closer.Close()
@@ -565,20 +589,21 @@ func (s *StreamDirector) Close() error {
 	return nil
 }
 
-func (s *StreamDirector) RegisterWorker(requestId uuid.UUID, workerAuthToken string, functionId string, functionVersionId string, workerLink net.Conn) error {
-	zap.L().Info("registering new worker connection", zap.Stringer("request id", requestId))
+func (s *StreamDirector) RegisterWorker(ctx context.Context, workerAuthToken string, info workerAuthInfo, workerLink net.Conn) error {
+	zap.L().Info("registering new worker connection", zap.Stringer("request id", info.requestId))
 
 	key := workerConnectionKey{
-		requestId:         requestId,
+		requestId:         info.requestId,
 		workerAuthToken:   workerAuthToken,
-		functionId:        functionId,
-		functionVersionId: functionVersionId,
+		functionId:        info.functionId,
+		functionVersionId: info.functionVersionId,
 	}
 
 	w := s.workers.Get(key)
 	if w == nil {
-		return fmt.Errorf("worker connection not found for request id %s", requestId)
+		return fmt.Errorf("worker connection not found for request id %s", info.requestId)
 	}
+	connectedAt := time.Now()
 	if err := w.Value().SetConnection(workerLink); err != nil {
 		return err
 	}
@@ -589,6 +614,13 @@ func (s *StreamDirector) RegisterWorker(requestId uuid.UUID, workerAuthToken str
 		s.workers.Delete(key)
 		return errShuttingDown
 	}
+	// The loader recreated this slot for a client that already left, so the
+	// tunnel serves nobody and is not an attachment worth reporting.
+	if s.departedTokens.Has(workerAuthToken) {
+		zap.L().Info("worker connected after its client left", zap.Stringer("request id", info.requestId))
+		return nil
+	}
+	s.eventLedger.Publish(ctx, newAttachmentEstablished(w.Value(), info, connectedAt))
 	return nil
 }
 
@@ -753,29 +785,34 @@ func spanError(span trace.Span, err error) error {
 
 func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *worker.ConnectionTrackingConn, auth, functionId, functionVersionId string, requestId *uuid.UUID) (*worker.WorkerConnection, error) {
 	return conn.InitWorkerConn(functionId, functionVersionId, func() (*worker.WorkerConnection, error) {
+		setupStartedAt := time.Now()
+		isRejoin := requestId != nil
 		// one connection + function routing gets one work request so we don't request more than
 		// one worker if multiple RPCs are sent on the connection before the first worker appears.
 
 		// Capture API-provided function info in closure
 		var apiFunctionId, apiFunctionVersionId string
 
-		invokeResponse, cancelInvokingWorker, err := s.functionInvoker.InvokeStatefulFunction(ctx, conn, auth, functionId, functionVersionId, requestId, func(workerAuthToken string, requestId uuid.UUID, apiFunc string, apiFuncVersion string) {
+		invokeResponse, cancelInvokingWorker, err := s.functionInvoker.InvokeStatefulFunction(ctx, conn, auth, functionId, functionVersionId, requestId, func(workerAuth invocation.WorkerAuth) {
 			// Populate workerAuth cache BEFORE worker is notified (atomicity guarantee)
 			now := time.Now()
-			s.workerAuth.Set(workerAuthToken, workerAuthInfo{
-				requestId:         requestId,
-				functionId:        apiFunc,
-				functionVersionId: apiFuncVersion,
+			s.workerAuth.Set(workerAuth.Token, workerAuthInfo{
+				requestId:         workerAuth.RequestId,
+				functionId:        workerAuth.FunctionId,
+				functionVersionId: workerAuth.FunctionVersionId,
+				callerNcaId:       workerAuth.CallerNcaId,
+				isRejoin:          isRejoin,
+				setupStartedAt:    setupStartedAt,
 				mintedAt:          now,
 			}, ttlcache.DefaultTTL)
 			// Diagnostic shadow record, longer lived than the auth entry, so a
 			// later rejection can say "expired N seconds ago" instead of just
 			// "not found". Never consulted when granting access.
-			s.issuedTokens.Set(workerAuthToken, issuedTokenInfo{mintedAt: now}, ttlcache.DefaultTTL)
+			s.issuedTokens.Set(workerAuth.Token, issuedTokenInfo{mintedAt: now}, ttlcache.DefaultTTL)
 			metrics.WorkerTokenIssuedTotal.Inc()
 			// Capture the API response values
-			apiFunctionId = apiFunc
-			apiFunctionVersionId = apiFuncVersion
+			apiFunctionId = workerAuth.FunctionId
+			apiFunctionVersionId = workerAuth.FunctionVersionId
 		})
 		if err != nil {
 			zap.L().Warn("failed to open stateful work request", zap.Error(err), zap.String("function id", functionId), zap.Stringer("request id", requestId))

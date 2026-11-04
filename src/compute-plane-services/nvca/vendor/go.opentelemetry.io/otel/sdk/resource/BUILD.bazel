@@ -26,7 +26,7 @@ go_library(
         "process.go",
         "resource.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/resource",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/resource",
     importpath = "go.opentelemetry.io/otel/sdk/resource",
     visibility = ["//visibility:public"],
     deps = [

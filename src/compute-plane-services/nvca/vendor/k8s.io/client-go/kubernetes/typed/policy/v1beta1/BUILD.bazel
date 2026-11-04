@@ -10,7 +10,7 @@ go_library(
         "poddisruptionbudget.go",
         "policy_client.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/policy/v1beta1",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/policy/v1beta1",
     importpath = "k8s.io/client-go/kubernetes/typed/policy/v1beta1",
     visibility = ["//visibility:public"],
     deps = [

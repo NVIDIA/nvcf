@@ -28,13 +28,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 
-	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	modelcachetypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcametrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	modelcachetypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
+	nvcak8sutil "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	nvcastorage "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 // regularModelCacheSelection parses the storage selection persisted on a
@@ -73,6 +74,10 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 	initJob *batchv1.Job,
 	selection *nvcastorage.PersistedModelCacheStorageSelection,
 ) (ModelCachingState, string) {
+	// The legacy flow already holds this lock. Taking it here keeps the cleanup retry from
+	// deleting a writer or claim that this setup has just created for the same cache handle.
+	c.bk8s.modelCacheMtx.Lock()
+	defer c.bk8s.modelCacheMtx.Unlock()
 	log := core.GetLogger(ctx)
 	metrics := nvcametrics.FromContext(ctx)
 	record := func(result, reason string) {
@@ -81,6 +86,11 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 		}
 	}
 	fail := func(reason string, err error) (ModelCachingState, string) {
+		if nvcak8sutil.IsTransientK8sError(err) {
+			log.WithError(err).Debugf("transient shared model cache error for request %v/%v, retrying",
+				req.Namespace, req.Name)
+			return ModelCachingInProgress, ""
+		}
 		log.WithError(err).Errorf("regular model cache on a shared claim failed for request %v/%v, model caching will be disabled",
 			req.Namespace, req.Name)
 		record(modelcachetypes.ResultFailure, reason)
@@ -155,14 +165,13 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 	case InitCacheJobInProgress:
 		return ModelCachingInProgress, current.Name
 	case InitCacheJobFailed:
-		background := metav1.DeletePropagationBackground
-		if err := jobs.Delete(ctx, initJob.Name, metav1.DeleteOptions{PropagationPolicy: &background}); err != nil && !errors.IsNotFound(err) {
-			log.WithError(err).Warnf("failed to delete failed writer job %s", initJob.Name)
+		if err := c.bk8s.markModelCachingFailed(ctx, req); err != nil {
+			log.WithError(err).Warnf("failed to record model caching failure for request %v/%v", req.Namespace, req.Name)
+			return ModelCachingInProgress, current.Name
 		}
-		// Unpopulated and ours to retry: remove the claim so the next request
-		// starts clean. A populated claim never reaches this branch.
-		if err := pvcs.Delete(ctx, current.Name, metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
-			log.WithError(err).Warnf("failed to delete unpopulated shared cache claim %s", current.Name)
+		// No Job UID: this pass holds modelCacheMtx from the Job state check through the delete.
+		if err := c.removeFailedSharedWriter(ctx, initJob.Name, "", current.Name); err != nil {
+			log.WithError(err).Warn("failed to cleanup shared model cache, will retry")
 		}
 		return fail(modelcachetypes.ReasonInitJobFailed, fmt.Errorf("writer job %s failed", initJob.Name))
 	case InitCacheJobCompleted:
@@ -188,6 +197,39 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 		return ModelCachingCompleted, current.Name
 	}
 	return ModelCachingInProgress, current.Name
+}
+
+// removeFailedSharedWriter removes a failed shared writer: the claim first, unless it has been
+// populated, and the failed Job last. A populated claim is never deleted, because other requests may be
+// mounting it. The Job is the retry marker: if the claim cannot be removed the Job stays and a later pass
+// finishes the cleanup, and if only the Job delete fails a later pass removes it, since a shared writer
+// carries its claim UID and so proves it is ours without the claim. Failures are returned for retry.
+func (c K8sComputeBackend) removeFailedSharedWriter(ctx context.Context, jobName, jobUID, claimName string) error {
+	pvcs := c.clients.K8s.CoreV1().PersistentVolumeClaims(c.bk8s.podInstanceNamespace)
+	claim, err := pvcs.Get(ctx, claimName, metav1.GetOptions{})
+	switch {
+	case err == nil:
+		if claim.Labels[nvcastorage.ModelCachePopulatedLabelKey] != nvcastorage.ModelCachePopulatedLabelValue {
+			// The precondition keeps a claim recreated since the Get from being deleted.
+			opts := metav1.DeleteOptions{Preconditions: metav1.NewUIDPreconditions(string(claim.UID))}
+			if err := pvcs.Delete(ctx, claimName, opts); err != nil && !errors.IsNotFound(err) {
+				return fmt.Errorf("delete unpopulated shared cache claim %s, keeping writer job %s: %w", claimName, jobName, err)
+			}
+		}
+	case !errors.IsNotFound(err):
+		return fmt.Errorf("get shared cache claim %s, keeping writer job %s: %w", claimName, jobName, err)
+	}
+	background := metav1.DeletePropagationBackground
+	jobs := c.clients.K8s.BatchV1().Jobs(c.bk8s.podInstanceNamespace)
+	jobOpts := metav1.DeleteOptions{PropagationPolicy: &background}
+	if jobUID != "" {
+		// Delete only the Job that was inspected, not a writer recreated since.
+		jobOpts.Preconditions = metav1.NewUIDPreconditions(jobUID)
+	}
+	if err := jobs.Delete(ctx, jobName, jobOpts); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("delete failed writer job %s: %w", jobName, err)
+	}
+	return nil
 }
 
 // sharedClaimFromArtifact turns the artifact's ReadWriteOnce writer claim into

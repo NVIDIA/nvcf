@@ -1,6 +1,6 @@
 # ReVal Helm chart
 
-Canonical Kubernetes chart for the ReVal HTTP service. It renders `config.yaml` keys that match `github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config.RevalConfig` (Viper and mapstructure). Authorization supports the self-managed JWKS JWT authorizer and OIDC token introspection.
+Canonical Kubernetes chart for the ReVal HTTP service. It renders `config.yaml` keys that match `github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/config.RevalConfig` (Viper and mapstructure). Authorization supports the self-managed JWKS JWT authorizer and OIDC token introspection.
 
 ## Install (from this repo path)
 

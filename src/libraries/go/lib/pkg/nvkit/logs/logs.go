@@ -30,8 +30,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1"
-	serverutils "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/servers/utils"
+	nverrors "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1"
+	serverutils "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/servers/utils"
 )
 
 const (

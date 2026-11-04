@@ -20,7 +20,7 @@ package fnds
 import (
 	"context"
 
-	nvcffndstypes "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types"
+	nvcffndstypes "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types"
 	"github.com/google/uuid"
 )
 

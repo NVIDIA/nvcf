@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
 )
 
 func nopLogger() *zap.Logger {

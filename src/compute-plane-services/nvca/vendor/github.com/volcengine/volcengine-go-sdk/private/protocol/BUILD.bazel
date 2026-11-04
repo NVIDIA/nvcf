@@ -11,7 +11,7 @@ go_library(
         "timestamp.go",
         "unmarshal.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/private/protocol",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/private/protocol",
     importpath = "github.com/volcengine/volcengine-go-sdk/private/protocol",
     visibility = ["//visibility:public"],
     deps = [

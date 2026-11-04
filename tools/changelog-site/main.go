@@ -532,7 +532,7 @@ func main() {
 	repo := flag.String("repo", "../..", "umbrella git checkout")
 	out := flag.String("out", "public", "output directory")
 	commitBase := flag.String("commit-base", "", "umbrella commit URL base, e.g. https://host/group/proj/-/commit/")
-	githubRepo := flag.String("github-repo", envOr("NVCF_GITHUB_REMOTE", "https://github.com/NVIDIA/nvcf.git"),
+	githubRepo := flag.String("github-repo", envOr("NVCF_GITHUB_REMOTE", "https://github.com/dsx-ai-factory/nvcf.git"),
 		"GitHub mirror to also scan for release tags; empty disables the GitHub source")
 	allowMissingGitHub := flag.Bool("allow-missing-github-tags", false,
 		"publish even if the GitHub tag fetch fails, omitting every GitHub-only release")

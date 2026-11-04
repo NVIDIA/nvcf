@@ -24,14 +24,18 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	nvcav1new "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 )
 
 const nvcaSharedStorageonfigJSONBase64Key = "NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64"
+
+// SharedStorageSpecEnv is the deprecated environment variable that
+// ParseHelmSharedStorageSpecFromEnv reads.
+const SharedStorageSpecEnv = nvcaSharedStorageonfigJSONBase64Key
 
 type HelmSharedStorageFeatureFlag struct {
 	FeatureFlag

@@ -27,17 +27,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
 
-	nvauth "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	nvauth "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvct"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/token"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvct"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/token"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 )
 
 const cachedNvctTokenFilename = "nvct-worker-token.json"
