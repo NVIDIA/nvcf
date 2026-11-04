@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import textwrap
 import unittest
 
 
@@ -21,7 +22,7 @@ def block_containing(path, marker):
     matches = [block for block in blocks if marker in block]
     if len(matches) != 1:
         raise AssertionError(f"Expected one command block containing {marker}")
-    return matches[0]
+    return textwrap.dedent(matches[0])
 
 
 class UpgradeRecoveryChecks(unittest.TestCase):

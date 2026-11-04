@@ -43,29 +43,29 @@ wait. Keep deployments, scaling, invocations, and tasks paused at their callers.
    owning the stream (`default` unless customized). Use the chart's `nats-box`
    pod and a new private evidence directory. Run these steps in one shell.
 
-```bash
-set -euo pipefail
-CONTROL_KUBECONFIG="/absolute/path/to/control-plane-kubeconfig"
-CONTROL_CONTEXT="control-plane-context"
-NATS_CONTEXT="${NATS_CONTEXT:-default}"
-RECOVERY_RECORD="/absolute/path/to/new-recovery-record"
-umask 077
-mkdir "$RECOVERY_RECORD"
-kcp() {
-  kubectl --kubeconfig "$CONTROL_KUBECONFIG" \
-    --context "$CONTROL_CONTEXT" "$@"
-}
-NATS_BOX_POD=$(kcp -n nats-system get pod \
-  -l app.kubernetes.io/component=nats-box \
-  -o jsonpath='{.items[0].metadata.name}')
-test -n "$NATS_BOX_POD"
-nats_read() {
-  kcp -n nats-system exec "$NATS_BOX_POD" -- nats --context "$NATS_CONTEXT" "$@"
-}
-STREAM=CreateNvcaFunctionTaskStream
-nats_read stream info "$STREAM" --json > "$RECOVERY_RECORD/stream-before.json"
-nats_read consumer list "$STREAM"
-```
+   ```bash
+   set -euo pipefail
+   CONTROL_KUBECONFIG="/absolute/path/to/control-plane-kubeconfig"
+   CONTROL_CONTEXT="control-plane-context"
+   NATS_CONTEXT="${NATS_CONTEXT:-default}"
+   RECOVERY_RECORD="/absolute/path/to/new-recovery-record"
+   umask 077
+   mkdir "$RECOVERY_RECORD"
+   kcp() {
+     kubectl --kubeconfig "$CONTROL_KUBECONFIG" \
+       --context "$CONTROL_CONTEXT" "$@"
+   }
+   NATS_BOX_POD=$(kcp -n nats-system get pod \
+     -l app.kubernetes.io/component=nats-box \
+     -o jsonpath='{.items[0].metadata.name}')
+   test -n "$NATS_BOX_POD"
+   nats_read() {
+     kcp -n nats-system exec "$NATS_BOX_POD" -- nats --context "$NATS_CONTEXT" "$@"
+   }
+   STREAM=CreateNvcaFunctionTaskStream
+   nats_read stream info "$STREAM" --json > "$RECOVERY_RECORD/stream-before.json"
+   nats_read consumer list "$STREAM"
+   ```
 
 2. Check `state.messages` in `stream-before.json`. If zero, return to the
    complete drain gate; a stuck deployment needs another diagnosis. Otherwise,
@@ -74,46 +74,46 @@ nats_read consumer list "$STREAM"
 3. Inspect retained sequences, starting at `state.first_seq`. Gaps can represent
    deleted or acknowledged messages. Keep message contents private.
 
-```bash
-SEQ="<retained-message-sequence>"
-nats_read stream get "$STREAM" "$SEQ" --json \
-  > "$RECOVERY_RECORD/message-$SEQ.json"
-jq -er '.data | @base64d | fromjson |
-  {requestId, ncaId, action, deploymentId, functionDetails, taskDetails}' \
-  "$RECOVERY_RECORD/message-$SEQ.json"
-```
+   ```bash
+   SEQ="<retained-message-sequence>"
+   nats_read stream get "$STREAM" "$SEQ" --json \
+     > "$RECOVERY_RECORD/message-$SEQ.json"
+   jq -er '.data | @base64d | fromjson |
+     {requestId, ncaId, action, deploymentId, functionDetails, taskDetails}' \
+     "$RECOVERY_RECORD/message-$SEQ.json"
+   ```
 
 4. Capture requests from every affected compute cluster. Set a unique cluster
    label for the filename; each capture gets a new file, including repeat runs.
 
-```bash
-COMPUTE_CLUSTER="compute-cluster-name"
-COMPUTE_KUBECONFIG="/absolute/path/to/compute-kubeconfig"
-COMPUTE_CONTEXT="compute-context"
-COMPUTE_RECORD=$(mktemp "$RECOVERY_RECORD/compute-$COMPUTE_CLUSTER.XXXXXX")
-kubectl --kubeconfig "$COMPUTE_KUBECONFIG" --context "$COMPUTE_CONTEXT" \
-  get icmsrequests.nvca.nvcf.nvidia.io -A -o json \
-  > "$COMPUTE_RECORD"
-jq '.items[] | {name: .metadata.name, namespace: .metadata.namespace,
-  messageId: .metadata.labels.SQSMessageID, requestId: .spec.requestId,
-  ncaId: .spec.ncaId, function: .spec.functionDetails,
-  task: .spec.taskDetails, status: .status}' \
-  "$COMPUTE_RECORD"
-```
+   ```bash
+   COMPUTE_CLUSTER="compute-cluster-name"
+   COMPUTE_KUBECONFIG="/absolute/path/to/compute-kubeconfig"
+   COMPUTE_CONTEXT="compute-context"
+   COMPUTE_RECORD=$(mktemp "$RECOVERY_RECORD/compute-$COMPUTE_CLUSTER.XXXXXX")
+   kubectl --kubeconfig "$COMPUTE_KUBECONFIG" --context "$COMPUTE_CONTEXT" \
+     get icmsrequests.nvca.nvcf.nvidia.io -A -o json \
+     > "$COMPUTE_RECORD"
+   jq '.items[] | {name: .metadata.name, namespace: .metadata.namespace,
+     messageId: .metadata.labels.SQSMessageID, requestId: .spec.requestId,
+     ncaId: .spec.ncaId, function: .spec.functionDetails,
+     task: .spec.taskDetails, status: .status}' \
+     "$COMPUTE_RECORD"
+   ```
 
 5. Match `requestId`, `ncaId`, deployment and function/version or task IDs
    against `ICMSRequest.spec` and the owning account's API. Do not rely on
    `SQSMessageID`, which can collide. For a function:
 
-```bash
-"$NVCF_CLI" --config "$NVCF_CLI_CONFIG" function deploy get \
-  --function-id "<message-function-id>" \
-  --version-id "<message-function-version-id>" --json
-```
+   ```bash
+   "$NVCF_CLI" --config "$NVCF_CLI_CONFIG" function deploy get \
+     --function-id "<message-function-id>" \
+     --version-id "<message-function-version-id>" --json
+   ```
 
-For a task, use `task get <message-task-id> --json` with the same CLI and
-account configuration. A failed read or unverified 404 does not prove the
-request is obsolete.
+   For a task, use `task get <message-task-id> --json` with the same CLI and
+   account configuration. A failed read or unverified 404 does not prove the
+   request is obsolete.
 
 ### If messages remain
 
