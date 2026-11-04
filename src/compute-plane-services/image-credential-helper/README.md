@@ -4,13 +4,35 @@ NVCF Image Credential Helper is a Kubernetes utility that automates the manageme
 
 This tool monitors and refreshes image pull secrets across Kubernetes namespaces, ensuring that pods can consistently pull container images from private registries such as AWS ECR, Volcengine, and others. It eliminates the need for manual secret management and credential rotation.
 
+## Build with Bazel
+
+Bazel is the canonical build path. The legacy Dockerfile + `go build`
+flow stays available for dev iteration outside Bazel.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run all tests with auto-retry on timing-sensitive failures.
+bazel test //... --flaky_test_attempts=3
+
+# Build the multi-arch OCI image index (linux/amd64 + linux/arm64).
+bazel build //cmd/image-credential-helper:image_index
+
+# Regenerate per-package BUILD files after Go source changes.
+bazel run //:gazelle
+
+# Refresh module graph after go.mod changes.
+bazel mod tidy
+```
+
 ## Features
 
-- **Automatic Credential Refresh**: Periodically updates image pull secrets before they expire
-- **Multi-Cloud Support**: Supports AWS ECR, Volcengine, and other container registries
-- **Flexible Targeting**: Run for specific namespaces, all namespaces, or filtered by label selectors
-- **Kubernetes-Native**: Integrates seamlessly with Kubernetes RBAC and secret management
-- **CronJob or One-Shot**: Can be deployed as a recurring CronJob or executed as a one-time Job
+- Automatic Credential Refresh: Periodically updates image pull secrets before they expire
+- Multi-Cloud Support: Supports AWS ECR, Volcengine, and other container registries
+- Flexible Targeting: Run for specific namespaces, all namespaces, or filtered by label selectors
+- Kubernetes-Native: Integrates seamlessly with Kubernetes RBAC and secret management
+- CronJob or One-Shot: Can be deployed as a recurring CronJob or executed as a one-time Job
 
 ## How It Works
 
@@ -66,14 +88,14 @@ The helper is configured via command-line flags:
 
 ### Example Configurations
 
-**Refresh credentials in a single namespace:**
+Refresh credentials in a single namespace:
 
 ```yaml
 args:
   - -target-namespace=my-app
 ```
 
-**Refresh credentials in all namespaces with a specific label:**
+Refresh credentials in all namespaces with a specific label:
 
 ```yaml
 args:
@@ -81,7 +103,7 @@ args:
   - -namespace-label-selector=nvca.nvcf.nvidia.io/backend=true
 ```
 
-**Refresh only specific secrets:**
+Refresh only specific secrets:
 
 ```yaml
 args:
@@ -95,7 +117,7 @@ args:
 
 The helper uses AWS SDK credentials from the environment or IAM role to fetch ECR authorization tokens.
 
-**Required Environment Variables:**
+Required Environment Variables:
 
 - `AWS_REGION` (or use IAM instance profile)
 - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (if not using IAM)
@@ -104,7 +126,7 @@ The helper uses AWS SDK credentials from the environment or IAM role to fetch EC
 
 Support for Volcengine container registry using Volcengine API credentials.
 
-**Required Environment Variables:**
+Required Environment Variables:
 
 - `VOLCENGINE_ACCESS_KEY_ID`
 - `VOLCENGINE_SECRET_ACCESS_KEY`
@@ -163,15 +185,8 @@ kubectl apply -f examples/pod.yaml
 
 For detailed release instructions, see [RELEASING.md](RELEASING.md).
 
-To create a release:
-
-1. Ensure all changes are merged to the main branch
-2. Create and push a version tag:
-   ```bash
-   git tag -a v1.0.0 -m "Release v1.0.0"
-   git push origin v1.0.0
-   ```
-3. The CI pipeline will automatically build, test, and publish the release
+Use the path-scoped monorepo release and maintenance process in that guide.
+Verify actual image publication before updating a consuming stack.
 
 ## Troubleshooting
 
@@ -205,13 +220,13 @@ kubectl get serviceaccount default -n <namespace> -o yaml
 
 ### Cloud Provider Authentication Issues
 
-**For ECR:**
+For ECR:
 
 - Ensure AWS credentials are properly configured
 - Verify IAM permissions include `ecr:GetAuthorizationToken`
 - Check the AWS region is correctly set
 
-**For Volcengine:**
+For Volcengine:
 
 - Verify Volcengine API credentials are valid
 - Check the region configuration
@@ -231,7 +246,7 @@ Please also review our [Code of Conduct](CODE_OF_CONDUCT.md) before contributing
 
 For questions and support:
 
-- **GitHub Issues**: [Create an issue](https://github.com/NVIDIA/nvcf-image-credential-helper/issues)
+- GitHub Issues: [Create an issue](https://github.com/NVIDIA/nvcf/issues)
 
 ## Security
 

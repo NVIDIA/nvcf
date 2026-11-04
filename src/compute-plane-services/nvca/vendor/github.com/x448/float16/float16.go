@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2019 Montgomery Edwards⁴⁴⁸ and Faye Amacker
 //
 // Special thanks to Kathryn Long for her Rust implementation

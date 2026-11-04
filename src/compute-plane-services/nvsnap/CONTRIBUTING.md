@@ -1,0 +1,90 @@
+# Contributing to NvSnap
+
+NvSnap is a GPU checkpoint/restore system for Kubernetes.
+
+## Project location
+
+The canonical repo is `github.com/dsx-ai-factory/nvcf`, under
+`src/compute-plane-services/nvsnap`. The CRIU fork NvSnap builds from is public
+at `github.com/balajinvda/criu` (branch `criu-dev`; the build pins a commit,
+`NVSNAP_CRIU_REF` in `scripts/versions.sh`).
+
+## What you need to build
+
+The criu-v2 engine builds from public inputs only:
+
+- The CRIU fork (`github.com/balajinvda/criu`, `criu-dev`): one `make`
+  produces both the `criu` binary and `cuda_plugin.so`.
+- `cuda-checkpoint`: built from source (`docker/agent/nvsnap-cuda-checkpoint.c`)
+  in the base image's `cuda-cli-builder` stage, on the public CUDA driver
+  checkpoint API (`cuCheckpointProcess*`, driver 570+ at runtime). Works for
+  x86-64 and arm64 - no committed binaries.
+- The Go agent, the gpushare library and `nvsnap-gpu-suspend`
+  (`docker/agent/gpushare`): this repository.
+
+criu-v2 restores io_uring and epoll state inside CRIU, and the patched
+uvloop/libuv/libzmq forks were retired. The one library nvsnap injects into
+workloads is gpushare (`LD_PRELOAD`), which multi-GPU CRIU capture needs.
+
+## Build
+
+```bash
+# 1. Clone the CRIU fork as a sibling (scripts auto-discover ../criu).
+git clone -b criu-dev https://github.com/balajinvda/criu ../criu
+
+# 2. Build the base image: CRIU, cuda_plugin and gpushare.
+BASE_VERSION=dev ./scripts/build-agent.sh base
+
+# 3. Build the agent image on top of the base (docker/agent/Dockerfile.app).
+BASE_VERSION=dev APP_VERSION=dev ./scripts/build-agent.sh app
+```
+
+Glibc: the base is `ubuntu:22.04` (glibc 2.35) and criu carries its own
+`ld-linux` + `libc` in `/criu-bundle/lib`; the Go agent is built with
+`CGO_ENABLED=0` (fully static). Do not bump the base off 22.04 and do not enable
+CGO. A binary linked against a newer glibc aborts inside older workload
+containers, which is the classic failure this layout avoids.
+
+See [`scripts/versions.sh`](scripts/versions.sh) for version and registry config.
+
+## Try it
+
+```bash
+# Single-GPU checkpoint/restore against a real GPU node.
+./scripts/test-e2e.sh vllm-small
+```
+
+## Container registry
+
+Prebuilt images live in a private NGC org and are entitlement-gated. Build from
+source (above) for a fully public path.
+
+## Code style
+
+- Go: `gofmt`, idiomatic Go. Wrap errors with `fmt.Errorf("...: %w", err)`. Use
+  the structured logger.
+- Bash: `set -euo pipefail` at the top of new scripts.
+- YAML manifests: kubectl-applyable from `deploy/k8s/`. Run
+  `./scripts/sync-versions.sh` after a version bump.
+
+## Pull requests
+
+1. Branch from `main`.
+2. Bump per-component image tags; never reuse a tag on rebuild
+   (`:v0.0.1` to `:v0.0.2`).
+3. Run `./scripts/test-e2e.sh vllm-small` on a real GPU cluster before merging
+   anything that touches the agent, the CRIU bundle, or K8s manifests.
+4. Reference the issue number if one exists.
+
+## Reporting bugs
+
+File an issue with:
+
+- Agent image tag: `kubectl -n nvsnap-system get ds nvsnap-agent -o jsonpath='{.spec.template.spec.containers[0].image}'`
+- Workload (vLLM, SGLang, NIM, etc.), model, and GPU count
+- Agent log: `kubectl -n nvsnap-system logs ds/nvsnap-agent`
+- CRIU log if relevant: `dump.log` in the checkpoint's directory on the GPU node (`agent.hostPaths.checkpoints`, default `/var/lib/containerd/nvsnap-checkpoints/<checkpoint-id>/`)
+
+## License
+
+Apache 2.0 (see `LICENSE`).

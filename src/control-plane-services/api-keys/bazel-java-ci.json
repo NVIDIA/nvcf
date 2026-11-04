@@ -1,0 +1,6 @@
+{
+  "ci_lane": "docker-host",
+  "component_kind": "java-service",
+  "id": "api-keys",
+  "tests_skip": false
+}

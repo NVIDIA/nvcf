@@ -24,9 +24,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/reval"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/reval"
 )
 
 type RevalRequest struct {
@@ -49,6 +49,7 @@ type RevalRequest struct {
 	ImageRegistryAuthConfig     common.RegistryAuthConfig `json:"imageRegistryAuthConfig,omitempty"`
 	RenderPolicy                *ValidationPolicy         `json:"validationPolicy,omitempty"`
 	ValidatePolicies            []ValidationPolicy        `json:"validationPolicies,omitempty"`
+	ValidateImages              *bool                     `json:"validateImages,omitempty"`
 }
 
 type ValidationPolicy struct {

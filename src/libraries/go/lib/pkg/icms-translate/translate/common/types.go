@@ -44,6 +44,12 @@ const (
 // Returns the normalized action, or the original if no normalization needed.
 func (a MessageAction) Normalize() MessageAction {
 	s := string(a)
+	switch a {
+	case "RequestInstances":
+		return FunctionCreationAction
+	case "RequestInstancesForTask":
+		return TaskCreationAction
+	}
 	// Match legacy pattern: "Request" prefix + "Sp" at 7-8 + "Instances" at index 11
 	if len(s) >= 20 && strings.HasPrefix(s, "Request") && s[7] == 'S' && s[8] == 'p' && strings.Index(s, "Instances") == 11 {
 		if strings.HasSuffix(s, "ForTask") {

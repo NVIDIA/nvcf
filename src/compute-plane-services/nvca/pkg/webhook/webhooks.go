@@ -22,15 +22,17 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	whmetrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/webhook/metrics"
 )
 
 const (
@@ -73,13 +75,18 @@ func NewPodEnforcementMutatingWebhook(ctx context.Context, name string, opts Enf
 func newStandaloneWebhook(ctx context.Context, name string, wh admission.Handler) (http.Handler, error) {
 	log := core.GetLogger(ctx).WithField("webhook_name", name)
 	ctx = core.WithLogger(ctx, log)
+	genericMetrics := metrics.FromContext(ctx)
+	whMetrics := whmetrics.FromContext(ctx)
 
 	return admission.StandaloneWebhook(&admission.Webhook{
 		Handler: wh,
 		WithContextFunc: func(ctx context.Context, r *http.Request) context.Context {
 			// Since we don't have middleware, we need to log the request information here
 			log.WithField("content_length", r.ContentLength).Debug("webhook request information")
-			return core.WithLogger(ctx, log)
+			ctx = core.WithLogger(ctx, log)
+			ctx = metrics.WithMetrics(ctx, genericMetrics)
+			ctx = whmetrics.WithMetrics(ctx, whMetrics)
+			return ctx
 		},
 	}, admission.StandaloneOptions{
 		Logger: ctrllog.FromContext(ctx),

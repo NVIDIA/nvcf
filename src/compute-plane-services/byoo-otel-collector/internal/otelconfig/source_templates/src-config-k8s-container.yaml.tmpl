@@ -8,6 +8,7 @@ receivers:
   prometheus:
     config:
       scrape_configs:
+{{- if .PlatformMetricsFederationEnabled }}
         - job_name: "nvcf-worker"
           scrape_interval: 30s
           scrape_timeout: 25s
@@ -15,7 +16,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               - '{job=~"nvcf-worker", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"utils", __name__=~"([[container_nvcf_worker_metric_allow_list]])"}'
@@ -29,7 +30,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               - '{job=~"nvca", namespace="nvca-system", pod=~"nvca.*", container="agent", __name__=~"([[container_nvca_metric_allow_list]])"}'
@@ -44,11 +45,11 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               # kubelet (relabel rules aligned with byoo-prometheus servicemonitor_kubelet.yaml)
-              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"inference|task|", __name__=~"([[container_kubernetes_cadvisor_metric_allow_list]])"}'
+              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"inference|task|POD|", __name__=~"([[container_kubernetes_cadvisor_metric_allow_list]])"}'
           metric_relabel_configs:
             # for container_fs_.+ metrics
             - source_labels: [device]
@@ -68,7 +69,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               # kube-state-metrics (relabel rules aligned with byoo-prometheus servicemonitor_kube-state-metrics.yaml)
@@ -83,7 +84,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               # nvidia-dcgm-exporter (relabel rules aligned with byoo-prometheus servicemonitor_dcgm-exporter.yaml)
@@ -94,6 +95,7 @@ receivers:
               replacement: $1
             - action: labelkeep
               regex: "([[container_nvidia_dcgm_exporter_attr_allow_list]])"
+{{- end }}
         - job_name: opentelemetry-collector
           scrape_interval: 30s
           scrape_timeout: 25s
@@ -127,11 +129,18 @@ processors:
     attributes:
       - key: service.instance.id
         action: delete
+      # target_info is built from resource attributes only, so it never receives
+      # the datapoint labels metricstransform adds. Without a per-instance
+      # attribute every collector federating the same upstream on a node emits an
+      # identical target_info series and the writes conflict on ingest.
+      - key: instance_id
+        action: insert
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
   attributes/add-metadata:
     actions:
 [[non_gfn_attributes | indent(2, true)]]
 
-  metricstransform:
+  metrics_transform:
     transforms:
       - include: ^.*$
         match_type: regexp
@@ -140,7 +149,7 @@ processors:
 [[non_gfn_metricstransform | indent(2, true)]]
 
 extensions:
-  cgroupruntime:
+  cgroup_runtime:
     gomaxprocs:
       enabled: true
     gomemlimit:

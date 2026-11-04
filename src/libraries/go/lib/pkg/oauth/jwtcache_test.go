@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -211,7 +211,7 @@ func TestJWTCache(t *testing.T) {
 	assert.Contains(t, err.Error(), "rate limited")
 
 	mockTime = timeFromString("2020-12-09T22:00:03-07:00").Time
-	log.Infof("Test 3nd attempt at %v, server error", mockTime)
+	log.Infof("Test 3rd attempt at %v, server error", mockTime)
 	_, err = cache.FetchToken(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "server error")

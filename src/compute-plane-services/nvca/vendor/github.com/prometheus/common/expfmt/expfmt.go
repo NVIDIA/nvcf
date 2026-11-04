@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2015 The Prometheus Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -48,6 +45,7 @@ const (
 
 	// The Content-Type values for the different wire protocols. Do not do direct
 	// comparisons to these constants, instead use the comparison functions.
+	//
 	// Deprecated: Use expfmt.NewFormat(expfmt.TypeUnknown) instead.
 	FmtUnknown Format = `<unknown>`
 	// Deprecated: Use expfmt.NewFormat(expfmt.TypeTextPlain) instead.

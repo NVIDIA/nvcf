@@ -29,13 +29,13 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1"
+	nverrors "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1"
 )
 
 var (
 	ErrBadConfig                 = fmt.Errorf("bad config")
 	ErrInvalidConfig             = fmt.Errorf("invalid config")
-	ErrUninitializedConfig       = fmt.Errorf("unintialized config")
+	ErrUninitializedConfig       = fmt.Errorf("uninitialized config")
 	ErrBadCerts                  = fmt.Errorf("bad certs")
 	ErrCertAndKeyRequired        = fmt.Errorf("missing cert or key file when tls is enabled")
 	ErrCertOrKeyFileMissing      = fmt.Errorf("either both tls cert path and tls key path should be provided or none")

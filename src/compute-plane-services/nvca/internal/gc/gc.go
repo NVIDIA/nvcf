@@ -21,20 +21,20 @@ import (
 	"context"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/sourcegraph/conc/pool"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	cleanupns "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/namespace"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/persistentvolume"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/pod"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/storageclass"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	bartclient "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	cleanupns "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/gc/namespace"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/gc/persistentvolume"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/gc/pod"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/gc/storageclass"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	bartclient "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 const (
@@ -59,6 +59,16 @@ type Cleaner interface {
 type Runnable struct {
 	cleaners []Cleaner
 	interval time.Duration
+	// logCtx carries the agent's logger. controller-runtime starts runnables
+	// with its own context, on which core.GetLogger returns a discard logger,
+	// so without this every GC log line, including deletions, is lost.
+	logCtx context.Context
+}
+
+// SetLogContext records a context whose logger the GC uses for its own log
+// lines. Call it before the runnable is started.
+func (gc *Runnable) SetLogContext(ctx context.Context) {
+	gc.logCtx = ctx
 }
 
 // NewRunnable creates a new garbage collection controller with the specified interval
@@ -85,6 +95,9 @@ func NewRunnable(clients *kubeclients.KubeClients, m *metrics.Metrics, interval 
 // Start begins the GC controller, executing cleaners immediately and then at the configured interval
 // This implements the controller-runtime Runnable interface
 func (gc *Runnable) Start(ctx context.Context) error {
+	if gc.logCtx != nil {
+		ctx = core.WithLogger(ctx, core.GetLogger(gc.logCtx))
+	}
 	log := core.GetLogger(ctx)
 
 	// Run cleaners immediately on startup

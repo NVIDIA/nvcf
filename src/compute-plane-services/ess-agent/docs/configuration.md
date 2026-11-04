@@ -40,7 +40,7 @@ configuration.
 For the full list of options:
 
 ```shell
-$ consul-template -h
+consul-template -h
 ```
 
 Here are a few examples of common integrations on the command line.
@@ -89,7 +89,7 @@ By proxy, this means the configuration is also JSON compatible.
 Instruct Consul Template to use a configuration file with the `-config` flag:
 
 ```shell
-$ consul-template -config "/my/config.hcl"
+consul-template -config "/my/config.hcl"
 ```
 
 This argument may be specified multiple times to load multiple configuration
@@ -195,7 +195,7 @@ err_on_failed_lookup = true
 # This is the quiescence timers; it defines the minimum and maximum amount of
 # time to wait for the cluster to reach a consistent state before rendering a
 # template. This is useful to enable in systems that have a lot of flapping,
-# because it will reduce the the number of times a template is rendered.
+# because it will reduce the number of times a template is rendered.
 wait {
   min = "5s"
   max = "10s"

@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="780" viewBox="0 0 1400 780" role="img" aria-labelledby="title desc">
+  <title id="title">NVCF gRPC multi-cluster invocation path</title>
+  <desc id="desc">Global DNS selects a regional gRPC endpoint. Each region has a gRPC Proxy, NVCF API plus NATS stateful request path, worker CONNECT registration, and customer gRPC services in a GPU cluster group, with NATS cross-cluster chatter between regions.</desc>
+  <defs>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --svg-bg: #f7f9f7;
+        --svg-panel: #ffffff;
+        --svg-panel-muted: #eef3ef;
+        --svg-border: #c8d0d6;
+        --svg-text: #1f2520;
+        --svg-muted: #53605a;
+        --svg-line: #53605a;
+        --nvidia-green: #76b900;
+        --svg-blue: #1565c0;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --svg-bg: #101512;
+          --svg-panel: #18201b;
+          --svg-panel-muted: #202a24;
+          --svg-border: #50605a;
+          --svg-text: #f3f7f2;
+          --svg-muted: #b9c8b7;
+          --svg-line: #cbd8c9;
+          --nvidia-green: #8bd80f;
+          --svg-blue: #6eb6ff;
+        }
+      }
+
+      .bg { fill: var(--svg-bg); }
+      .region { fill: var(--svg-panel); stroke: var(--svg-border); stroke-width: 2; }
+      .cluster { fill: var(--svg-panel-muted); stroke: var(--svg-blue); stroke-width: 2; }
+      .service { fill: var(--svg-panel); stroke: var(--nvidia-green); stroke-width: 3; }
+      .panel { fill: var(--svg-panel); stroke: var(--svg-border); stroke-width: 2; }
+      .panel-muted { fill: var(--svg-panel-muted); stroke: var(--svg-border); stroke-width: 2; }
+      .title { fill: var(--svg-text); font: 700 26px Arial, sans-serif; }
+      .heading { fill: var(--svg-text); font: 700 20px Arial, sans-serif; }
+      .label { fill: var(--svg-text); font: 700 15px Arial, sans-serif; }
+      .small { fill: var(--svg-muted); font: 13px Arial, sans-serif; }
+      .callout { stroke: var(--svg-panel); stroke-width: 5; paint-order: stroke; stroke-linejoin: round; }
+      .line { stroke: var(--svg-line); stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .line-muted { stroke: var(--svg-muted); stroke-width: 2.2; fill: none; stroke-dasharray: 7 5; marker-end: url(#arrow-muted); }
+      .line-green { stroke: var(--nvidia-green); stroke-width: 2.4; fill: none; stroke-dasharray: 8 6; marker-start: url(#arrow-green); marker-end: url(#arrow-green); }
+      .arrowhead { fill: var(--svg-line); }
+      .arrowhead-muted { fill: var(--svg-muted); }
+      .arrowhead-green { fill: var(--nvidia-green); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead-muted" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead-green" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1400" height="780" />
+  <text class="title" x="48" y="48">gRPC Multi-Cluster Invocation</text>
+  <text class="small" x="48" y="78">gRPC traffic is pinned through a regional proxy after worker CONNECT registration establishes the backend path.</text>
+
+  <rect class="panel-muted" x="490" y="105" width="420" height="78" rx="10" />
+  <text class="heading" x="700" y="137" text-anchor="middle">Global DNS / gRPC Endpoint Selection</text>
+  <text class="small" x="700" y="162" text-anchor="middle">routes clients to the regional public gRPC endpoint</text>
+
+  <rect class="region" x="50" y="230" width="610" height="490" rx="12" />
+  <text class="heading" x="355" y="266" text-anchor="middle">Region A</text>
+  <text class="small" x="355" y="289" text-anchor="middle">gRPC invocation services</text>
+
+  <rect class="region" x="740" y="230" width="610" height="490" rx="12" />
+  <text class="heading" x="1045" y="266" text-anchor="middle">Region B</text>
+  <text class="small" x="1045" y="289" text-anchor="middle">gRPC invocation services</text>
+
+  <rect class="panel-muted" x="92" y="325" width="154" height="76" rx="8" />
+  <text class="label" x="169" y="354" text-anchor="middle">Public gRPC</text>
+  <text class="small" x="169" y="377" text-anchor="middle">port 10081/TLS</text>
+
+  <rect class="service" x="276" y="315" width="154" height="96" rx="8" />
+  <text class="label" x="353" y="351" text-anchor="middle">gRPC Proxy</text>
+  <text class="small" x="353" y="376" text-anchor="middle">session binding</text>
+
+  <rect class="service" x="460" y="325" width="154" height="76" rx="8" />
+  <text class="label" x="537" y="354" text-anchor="middle">NVCF API +</text>
+  <text class="label" x="537" y="374" text-anchor="middle">NATS</text>
+
+  <rect class="service" x="265" y="470" width="180" height="76" rx="8" />
+  <text class="label" x="355" y="500" text-anchor="middle">Worker CONNECT</text>
+  <text class="small" x="355" y="523" text-anchor="middle">backend registration</text>
+
+  <rect class="cluster" x="100" y="590" width="510" height="90" rx="10" />
+  <text class="heading" x="355" y="622" text-anchor="middle">GPU Cluster Group A</text>
+  <rect class="panel" x="170" y="640" width="160" height="24" rx="6" />
+  <text class="small" x="250" y="657" text-anchor="middle">gRPC Function A</text>
+  <rect class="panel" x="380" y="640" width="160" height="24" rx="6" />
+  <text class="small" x="460" y="657" text-anchor="middle">gRPC Function B</text>
+
+  <rect class="panel-muted" x="782" y="325" width="154" height="76" rx="8" />
+  <text class="label" x="859" y="354" text-anchor="middle">Public gRPC</text>
+  <text class="small" x="859" y="377" text-anchor="middle">port 10081/TLS</text>
+
+  <rect class="service" x="966" y="315" width="154" height="96" rx="8" />
+  <text class="label" x="1043" y="351" text-anchor="middle">gRPC Proxy</text>
+  <text class="small" x="1043" y="376" text-anchor="middle">session binding</text>
+
+  <rect class="service" x="1150" y="325" width="154" height="76" rx="8" />
+  <text class="label" x="1227" y="354" text-anchor="middle">NVCF API +</text>
+  <text class="label" x="1227" y="374" text-anchor="middle">NATS</text>
+
+  <rect class="service" x="955" y="470" width="180" height="76" rx="8" />
+  <text class="label" x="1045" y="500" text-anchor="middle">Worker CONNECT</text>
+  <text class="small" x="1045" y="523" text-anchor="middle">backend registration</text>
+
+  <rect class="cluster" x="790" y="590" width="510" height="90" rx="10" />
+  <text class="heading" x="1045" y="622" text-anchor="middle">GPU Cluster Group B</text>
+  <rect class="panel" x="860" y="640" width="160" height="24" rx="6" />
+  <text class="small" x="940" y="657" text-anchor="middle">gRPC Function C</text>
+  <rect class="panel" x="1070" y="640" width="160" height="24" rx="6" />
+  <text class="small" x="1150" y="657" text-anchor="middle">gRPC Function D</text>
+
+  <path class="line" d="M 700 183 L 700 205 L 169 205 L 169 325" />
+  <path class="line" d="M 700 183 L 700 205 L 859 205 L 859 325" />
+  <line class="line" x1="246" y1="363" x2="276" y2="363" />
+  <path class="line-muted" d="M 353 411 L 353 470" />
+  <path class="line-muted" d="M 430 363 L 460 363" />
+  <path class="line" d="M 355 546 L 355 590" />
+  <line class="line" x1="936" y1="363" x2="966" y2="363" />
+  <path class="line-muted" d="M 1043 411 L 1043 470" />
+  <path class="line-muted" d="M 1120 363 L 1150 363" />
+  <path class="line" d="M 1045 546 L 1045 590" />
+  <path class="line-green" d="M 614 363 C 735 435 1025 435 1150 363" />
+  <text class="small callout" x="882" y="448" text-anchor="middle">NATS cross-cluster chatter</text>
+</svg>

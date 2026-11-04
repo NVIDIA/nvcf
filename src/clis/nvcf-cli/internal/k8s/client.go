@@ -28,6 +28,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -35,19 +36,23 @@ import (
 
 // Client wraps the Kubernetes client with helper methods
 type Client struct {
-	clientset *kubernetes.Clientset
-	config    *rest.Config
+	clientset     *kubernetes.Clientset
+	dynamicClient dynamic.Interface
+	config        *rest.Config
 }
 
 // ClientConfig holds configuration for Kubernetes client creation
 type ClientConfig struct {
 	KubeconfigPath string
-	Debug          bool
+	// ContextOverride selects a named kubeconfig context. Empty preserves the
+	// existing behaviour of using the kubeconfig's current-context.
+	ContextOverride string
+	Debug           bool
 }
 
 // NewClient creates a new Kubernetes client with kubeconfig priority handling
 func NewClient(config *ClientConfig) (*Client, error) {
-	restConfig, err := buildRestConfig(config.KubeconfigPath, config.Debug)
+	restConfig, err := buildRestConfig(config.KubeconfigPath, config.ContextOverride, config.Debug)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build Kubernetes config: %w", err)
 	}
@@ -57,10 +62,28 @@ func NewClient(config *ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
+	dynamicClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kubernetes dynamic client: %w", err)
+	}
+
 	return &Client{
-		clientset: clientset,
-		config:    restConfig,
+		clientset:     clientset,
+		dynamicClient: dynamicClient,
+		config:        restConfig,
 	}, nil
+}
+
+// Dynamic returns the dynamic client for reading custom resources.
+func (c *Client) Dynamic() dynamic.Interface {
+	return c.dynamicClient
+}
+
+// Clientset returns the typed Kubernetes clientset for core and apps resources
+// (for example ConfigMaps and Deployments). It is returned as the interface type
+// so tests can inject a fake clientset.
+func (c *Client) Clientset() kubernetes.Interface {
+	return c.clientset
 }
 
 // buildRestConfig builds the Kubernetes REST config with the same priority as kubectl:
@@ -68,7 +91,7 @@ func NewClient(config *ClientConfig) (*Client, error) {
 // 2. KUBECONFIG environment variable
 // 3. Default location (~/.kube/config)
 // 4. In-cluster config (lowest priority)
-func buildRestConfig(kubeconfigPath string, debug bool) (*rest.Config, error) {
+func buildRestConfig(kubeconfigPath, contextOverride string, debug bool) (*rest.Config, error) {
 	var configPath string
 
 	// Priority 1: Explicit kubeconfig path
@@ -102,7 +125,18 @@ func buildRestConfig(kubeconfigPath string, debug bool) (*rest.Config, error) {
 	// Try loading from kubeconfig file first
 	if configPath != "" {
 		if _, err := os.Stat(configPath); err == nil {
-			config, err := clientcmd.BuildConfigFromFlags("", configPath)
+			// Use a deferred-loading config so a named context can be selected
+			// via override. With an empty override this resolves to the
+			// kubeconfig's current-context, matching the prior behaviour.
+			loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: configPath}
+			overrides := &clientcmd.ConfigOverrides{}
+			if contextOverride != "" {
+				overrides.CurrentContext = contextOverride
+				if debug {
+					logging.Debug("Using kubeconfig context override: %s", contextOverride)
+				}
+			}
+			config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
 			if err != nil {
 				return nil, fmt.Errorf("failed to load kubeconfig from %s: %w", configPath, err)
 			}

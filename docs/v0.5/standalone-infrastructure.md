@@ -23,7 +23,7 @@ components.
 
 ### Configuration
 
-Create `nats-values.yaml` with your registry settings ([download template](samples/configs/standalone/nats-values.yaml)):
+Create `nats-values.yaml` with your registry settings ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/nats-values.yaml)):
 
 <Accordion title="nats-values.yaml">
 </Accordion>
@@ -135,7 +135,7 @@ communicates with NATS during initialization.
 
 ### Configuration
 
-Create `openbao-values.yaml` with your registry and secret settings ([download template](samples/configs/standalone/openbao-values.yaml)):
+Create `openbao-values.yaml` with your registry and secret settings ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/openbao-values.yaml)):
 
 <Accordion title="openbao-values.yaml">
 </Accordion>
@@ -358,7 +358,7 @@ deployment state, and other operational data.
 
 ### Configuration
 
-Create `cassandra-values.yaml` with your registry and storage settings ([download template](samples/configs/standalone/cassandra-values.yaml)):
+Create `cassandra-values.yaml` with your registry and storage settings ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/cassandra-values.yaml)):
 
 <Accordion title="cassandra-values.yaml">
 </Accordion>

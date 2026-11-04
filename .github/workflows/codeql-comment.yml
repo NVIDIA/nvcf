@@ -1,0 +1,178 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Fork pull requests receive a read-only GITHUB_TOKEN, so the CodeQL scan can
+# upload results but cannot post its summary comment. This workflow runs after
+# a successful fork scan in the base repository context, where it can create or
+# update that comment from the uploaded SARIF artifacts. Same-repository pull
+# requests comment directly from codeql.yml and do not need this workflow.
+
+name: "CodeQL: Comment"
+
+on:
+  workflow_run:
+    workflows: ["codeql"]
+    types: [completed]
+
+permissions:
+  actions: read
+  pull-requests: write
+
+jobs:
+  resolve-pr:
+    # Same-repository PRs are commented on directly by the CodeQL workflow.
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      pr_number: ${{ steps.validate.outputs.pr_number }}
+    steps:
+      - name: Download fork PR metadata
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codeql-pr-metadata
+          path: codeql-pr-metadata
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate pull request metadata
+        id: validate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          PR_NUMBER=$(tr -d '[:space:]' < codeql-pr-metadata/pr-number)
+          if ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid pull request number in CodeQL metadata artifact"
+            exit 1
+          fi
+
+          PR_DATA=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          if ! jq -e \
+            --arg head_repository "$HEAD_REPOSITORY" \
+            --arg head_branch "$HEAD_BRANCH" \
+            --arg head_sha "$HEAD_SHA" \
+            '.state == "open" and
+             .head.repo.full_name == $head_repository and
+             .head.ref == $head_branch and
+             .head.sha == $head_sha' <<< "$PR_DATA" > /dev/null; then
+            echo "::error::Pull request ${PR_NUMBER} does not match the CodeQL workflow run"
+            exit 1
+          fi
+
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+  comment:
+    needs: resolve-pr
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: codeql-comment-pr-${{ needs.resolve-pr.outputs.pr_number }}
+      cancel-in-progress: true
+    steps:
+      - name: Download CodeQL results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: codeql-pr-results-*
+          path: codeql-results
+          merge-multiple: true
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post or update CodeQL results comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.pr_number }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+
+          mapfile -d '' SARIF_FILES < <(find codeql-results -type f -name '*.sarif' -print0)
+          if [ "${#SARIF_FILES[@]}" -eq 0 ]; then
+            echo "::error::No SARIF files were downloaded from ${RUN_URL}"
+            exit 1
+          fi
+
+          COMMENT_MARKER="<!-- dsx-codeql-scan -->"
+          TOTAL_ISSUES=$(jq -s '[.[].runs[]?.results[]?] | length' "${SARIF_FILES[@]}")
+          SHORT_SHA=${HEAD_SHA:0:7}
+          FOOTER="🔗 [View full details in Security tab](https://github.com/${GITHUB_REPOSITORY}/security/code-scanning)"
+
+          if [ "$TOTAL_ISSUES" -eq 0 ]; then
+            REPORT="${COMMENT_MARKER}
+          ## 🛡️ CodeQL Analysis
+          ✅ No security issues found!
+
+          $FOOTER
+
+          <sub>🕐 Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC') | Commit: ${SHORT_SHA}</sub>"
+          else
+            ERRORS=$(jq -s '[.[].runs[]?.results[]? | select(.level == "error")] | length' "${SARIF_FILES[@]}")
+            WARNINGS=$(jq -s '[.[].runs[]?.results[]? | select(.level == "warning")] | length' "${SARIF_FILES[@]}")
+            NOTES=$(jq -s '[.[].runs[]?.results[]? | select(.level == "note")] | length' "${SARIF_FILES[@]}")
+
+            # Match the shared action's same-repository comment format.
+            TOP_ISSUES=$(jq -rs '
+              [.[].runs[]?.results[]?
+                | select(.level == "error" or .level == "warning")][0:5][]
+              | "- **\(.ruleId // "unknown")**: "
+                + "\(.message.text // "No description") "
+                + "(\(.locations[0].physicalLocation.artifactLocation.uri // "unknown"):"
+                + "\(.locations[0].physicalLocation.region.startLine // "?"))"
+            ' "${SARIF_FILES[@]}")
+
+            REPORT="${COMMENT_MARKER}
+          ## 🛡️ CodeQL Analysis
+          🚨 Found **${TOTAL_ISSUES}** issue(s)
+
+          **Severity Breakdown:**
+          - 🔴 Errors: ${ERRORS}
+          - 🟡 Warnings: ${WARNINGS}
+          - 🔵 Notes: ${NOTES}
+
+          <details>
+          <summary>📋 Top Issues</summary>
+
+          ${TOP_ISSUES}
+
+          </details>
+
+          $FOOTER
+
+          <sub>🕐 Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC') | Commit: ${SHORT_SHA}</sub>"
+          fi
+
+          COMMENT_ID=$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("<!-- dsx-codeql-scan -->")) | .id' |
+            sed -n '1p')
+
+          if [ -n "$COMMENT_ID" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+              --method PATCH \
+              -f body="$REPORT"
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --method POST \
+              -f body="$REPORT"
+          fi

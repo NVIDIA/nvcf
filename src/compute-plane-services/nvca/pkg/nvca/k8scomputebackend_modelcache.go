@@ -21,12 +21,16 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/cache"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/sirupsen/logrus"
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -36,13 +40,14 @@ import (
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	modelcachetypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
-	nvcak8sutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
-	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/encryption"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcametrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	modelcachetypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
+	nvcak8sutil "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	nvcav1new "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/encryption"
+	nvcastorage "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 // skip option only for UT, real cluster detach check is must
@@ -113,6 +118,12 @@ func (c K8sComputeBackend) CleanupModelCachingSetupArtifacts(ctx context.Context
 		return fmt.Errorf("failed to cleanup in-flight cache job: %w", err)
 	}
 
+	// A shared claim (ReadWriteMany selection) and a running shared writer are
+	// used by every request for the handle; the claim is reclaimed by the
+	// reference sweep and the writer only once it has finished.
+	if regularModelCacheKeepsSharedClaim(req) {
+		return c.cleanupSharedClaimRequestArtifacts(ctx, initJob, rwPVC.Name)
+	}
 	// cleanup InitJob & its pods, this will clear the rw-pvc also
 	backgroundDeletion := metav1.DeletePropagationBackground
 	err = c.clients.K8s.BatchV1().Jobs(c.bk8s.podInstanceNamespace).Delete(ctx, initJob.Name, metav1.DeleteOptions{
@@ -132,6 +143,266 @@ func (c K8sComputeBackend) CleanupModelCachingSetupArtifacts(ctx context.Context
 	return nil
 }
 
+// retryFailedModelCacheCleanup repeats the cleanup of a failed cache setup for a request that has
+// already recorded its fallback, because an earlier delete may have failed. It acts only in the states
+// that triggered the first cleanup, so a cache that another request has since populated or is still
+// setting up is left alone:
+//   - the writer Job is still present and failed as CheckInitCacheJobState defines it (see failedWriterJob), or
+//   - in the legacy flow, the read-only claim exists but failed to bind.
+//
+// A completed writer whose reader setup failed looks the same as a healthy cache waiting for its readers,
+// so it is not touched here; the next request for the handle continues from that state.
+func (c K8sComputeBackend) retryFailedModelCacheCleanup(ctx context.Context,
+	req *nvcav2beta1.ICMSRequest,
+	rwPVC *v1.PersistentVolumeClaim,
+	initJob *batchv1.Job,
+) error {
+	// Serialize with every cache setup. Without it, another request for the same cache handle
+	// could remove and recreate the writer between the check below and the delete, and this
+	// retry would delete the new, active writer.
+	c.bk8s.modelCacheMtx.Lock()
+	defer c.bk8s.modelCacheMtx.Unlock()
+	log := core.GetLogger(ctx)
+
+	// A failed writer Job does not say the claim is ours. Repeat the checks that setup and the
+	// first cleanup rely on, and leave anything that does not match alone.
+	pvcs := c.clients.K8s.CoreV1().PersistentVolumeClaims(c.bk8s.podInstanceNamespace)
+	claim, claimErr := pvcs.Get(ctx, rwPVC.Name, metav1.GetOptions{})
+	if claimErr != nil && !errors.IsNotFound(claimErr) {
+		return fmt.Errorf("query cache claim %s for cleanup retry: %w", rwPVC.Name, claimErr)
+	}
+	var currentClaim *v1.PersistentVolumeClaim
+	if claimErr == nil {
+		currentClaim = claim
+	}
+	if selection, present, err := regularModelCacheSelection(req); err == nil && present &&
+		selection.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly {
+		job, err := c.failedWriterJob(ctx, initJob.Name, currentClaim)
+		if err != nil || job == nil {
+			return err
+		}
+		switch {
+		case claimErr == nil && isRecordedSharedClaim(claim, selection):
+		case claimErr != nil && job.Spec.Template.Annotations[nvcastorage.ModelCacheWriterPVCUIDAnnotationKey] != "":
+			// The claim is already gone. Only a shared-flow writer carries its claim UID, so the Job is ours.
+		default:
+			log.Infof("cache claim %s is missing or is not the shared claim recorded for request %v/%v, leaving cleanup alone",
+				rwPVC.Name, req.Namespace, req.Name)
+			return nil
+		}
+		return c.removeFailedSharedWriter(ctx, initJob.Name, string(job.UID), rwPVC.Name)
+	}
+
+	// Legacy flow: a shared claim is not ours to remove.
+	if claimErr == nil && slices.Contains(claim.Spec.AccessModes, v1.ReadWriteMany) {
+		log.Infof("cache claim %s is a shared claim, leaving cleanup alone", rwPVC.Name)
+		return nil
+	}
+	roPVCName := strings.ReplaceAll(rwPVC.Name, RWPVCSuffix, ROPVCSuffix)
+	roClaim, roErr := pvcs.Get(ctx, roPVCName, metav1.GetOptions{})
+	var job *batchv1.Job
+	switch {
+	case roErr == nil:
+		// A read-only claim is published, or being set up, unless it failed to bind.
+		if !c.claimFailedToBind(roClaim) {
+			log.Infof("read-only cache claim %s exists and has not failed to bind, leaving cleanup alone", roPVCName)
+			return nil
+		}
+		var err error
+		job, err = c.clients.K8s.BatchV1().Jobs(c.bk8s.podInstanceNamespace).Get(ctx, initJob.Name, metav1.GetOptions{})
+		if errors.IsNotFound(err) {
+			job = nil
+		} else if err != nil {
+			return fmt.Errorf("query writer job %s for cleanup retry: %w", initJob.Name, err)
+		}
+	case errors.IsNotFound(roErr):
+		var err error
+		job, err = c.failedWriterJob(ctx, initJob.Name, currentClaim)
+		if err != nil || job == nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("query read-only cache claim %s for cleanup retry: %w", roPVCName, roErr)
+	}
+	if job == nil {
+		// No writer was observed. Do not delete one created during claim cleanup.
+		return c.cleanupModelCachingClaims(ctx, rwPVC)
+	}
+	return c.cleanupModelCachingResources(ctx, rwPVC, initJob.Name, string(job.UID))
+}
+
+// clearCacheReference drops the cache reference of a request that fell back to non-cached workers. The
+// request uses no cache, and the claim it recorded while the writer ran may already be removed, so the
+// reference would only make the cache sweep track a claim that is gone.
+func (c K8sComputeBackend) clearCacheReference(ctx context.Context, req *nvcav2beta1.ICMSRequest) {
+	if req.Status.CacheReferenceName == "" {
+		return
+	}
+	c.writeEmptyCacheReference(ctx, req)
+}
+
+// clearLiveCacheReference is clearCacheReference for the pass that records the fallback. That pass can
+// start from an informer copy older than the reference the shared-claim setup wrote, so when the copy
+// shows none it reads the live request once instead of trusting the copy.
+func (c K8sComputeBackend) clearLiveCacheReference(ctx context.Context, req *nvcav2beta1.ICMSRequest) {
+	if req.Status.CacheReferenceName == "" {
+		live, err := c.clients.BART.NvcaV2beta1().ICMSRequests(req.Namespace).Get(ctx, req.Name, metav1.GetOptions{})
+		if metrics := nvcametrics.FromContext(ctx); metrics != nil {
+			metrics.TrackK8sAPICall("icmsrequest", err)
+		}
+		if err != nil {
+			core.GetLogger(ctx).WithError(err).Warnf("failed to read request %v/%v to clear its cache reference",
+				req.Namespace, req.Name)
+			return
+		}
+		if live.Status.CacheReferenceName == "" {
+			return
+		}
+	}
+	c.writeEmptyCacheReference(ctx, req)
+}
+
+func (c K8sComputeBackend) writeEmptyCacheReference(ctx context.Context, req *nvcav2beta1.ICMSRequest) {
+	if !c.bk8s.applyICMSRequestStatusChange(ctx, req, func(_ context.Context, sr *nvcav2beta1.ICMSRequest) {
+		sr.Status.CacheReferenceName = ""
+	}) {
+		core.GetLogger(ctx).Warnf("failed to clear the cache reference of request %v/%v", req.Namespace, req.Name)
+		return
+	}
+	req.Status.CacheReferenceName = ""
+}
+
+// RetryFailedModelCacheCleanup runs the cleanup retry for a container function or task whose workers
+// all exist. SyncICMSRequest calls it while instances are in progress and after completion is
+// acknowledged, because requests in those statuses no longer pass through the creation handlers.
+func (c K8sComputeBackend) RetryFailedModelCacheCleanup(ctx context.Context, req *nvcav2beta1.ICMSRequest) error {
+	if c.detectRequestType(req) != ftContainer {
+		return nil
+	}
+	switch req.Spec.Action.Normalize() {
+	case common.FunctionCreationAction:
+		_, _, _, _, initCacheJob, bdCreate := getArtifactsFromReq(req)
+		return c.retryFunctionModelCacheCleanup(ctx, req, bdCreate, initCacheJob)
+	case common.TaskCreationAction:
+		return c.retryTaskModelCacheCleanup(ctx, req)
+	}
+	return nil
+}
+
+// retryFunctionModelCacheCleanup and retryTaskModelCacheCleanup keep the cleanup retry reachable once
+// every worker of a request exists. The creation handlers return before cache setup at that point, so
+// without them a cleanup that failed on a transient error would never run again.
+func (c K8sComputeBackend) retryFunctionModelCacheCleanup(ctx context.Context, req *nvcav2beta1.ICMSRequest,
+	bdCreate, initCacheJob function.LaunchArtifact,
+) error {
+	if !c.bk8s.cachingSupportEnabled || bdCreate.Specification == "" || initCacheJob.Specification == "" ||
+		!c.bk8s.modelCachingFailed(req) {
+		return nil
+	}
+	// The fallback pass may have failed to clear the reference; retry it independently of cleanup.
+	c.clearCacheReference(ctx, req)
+	rwPVC, initJob, err := getModelCacheK8sArtifacts(ctx, bdCreate, initCacheJob, func(client.Object) {})
+	if err != nil {
+		return fmt.Errorf("decode model cache artifacts for cleanup retry: %w", err)
+	}
+	return c.retryFailedModelCacheCleanup(ctx, req, rwPVC, initJob)
+}
+
+func (c K8sComputeBackend) retryTaskModelCacheCleanup(ctx context.Context, req *nvcav2beta1.ICMSRequest) error {
+	spec := req.Spec.CreationMsgInfo.TaskLaunchSpecification
+	if !c.bk8s.cachingSupportEnabled || spec == nil || spec.CacheLaunchSpecification == nil ||
+		!c.bk8s.modelCachingFailed(req) {
+		return nil
+	}
+	// The fallback pass may have failed to clear the reference; retry it independently of cleanup.
+	c.clearCacheReference(ctx, req)
+	// The names depend only on the cache handle, so the same objects task.Translate builds are enough.
+	objs, err := cache.Translate(spec.CacheLaunchSpecification, nil, nil, req.Spec.TaskDetails.TaskID)
+	if err != nil {
+		return fmt.Errorf("translate model cache objects for cleanup retry: %w", err)
+	}
+	var (
+		rwPVC   *v1.PersistentVolumeClaim
+		initJob *batchv1.Job
+	)
+	for _, obj := range objs {
+		switch o := obj.(type) {
+		case *v1.PersistentVolumeClaim:
+			rwPVC = o
+		case *batchv1.Job:
+			initJob = o
+		}
+	}
+	if rwPVC != nil && initJob != nil {
+		return c.retryFailedModelCacheCleanup(ctx, req, rwPVC, initJob)
+	}
+	return nil
+}
+
+// failedWriterJob returns the writer Job when CheckInitCacheJobState would treat it as failed, and nil
+// otherwise. A writer that has not completed has failed when its write claim is missing or failed to
+// bind, when it is past its backoff limit, or when it has been active for InitCacheJobFailureThreshold.
+// claim is the current write claim, nil when it no longer exists. Unlike CheckInitCacheJobState, this
+// makes no changes.
+func (c K8sComputeBackend) failedWriterJob(ctx context.Context, name string, claim *v1.PersistentVolumeClaim) (*batchv1.Job, error) {
+	job, err := c.clients.K8s.BatchV1().Jobs(c.bk8s.podInstanceNamespace).Get(ctx, name, metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query writer job %s for cleanup retry: %w", name, err)
+	}
+	if job.Status.CompletionTime != nil && job.Status.Succeeded > 0 {
+		return nil, nil
+	}
+	if claim == nil || c.claimFailedToBind(claim) {
+		return job, nil
+	}
+	backoffLimit := int32(6)
+	if job.Spec.BackoffLimit != nil {
+		backoffLimit = *job.Spec.BackoffLimit
+	}
+	if job.Status.Failed > backoffLimit {
+		return job, nil
+	}
+	if job.Status.Active != 0 && c.bk8s.k8sTimeConfig != nil &&
+		time.Since(job.CreationTimestamp.Time) >= c.bk8s.k8sTimeConfig.InitCacheJobFailureThreshold {
+		return job, nil
+	}
+	return nil, nil
+}
+
+// claimFailedToBind is the read-only form of the bind failure CheckPVCState reports: the claim
+// is lost with rebind disabled, lost again after a rebind was already attempted (handleLostPVC), or
+// still unbound after the bind grace period. A lost claim whose rebind was not yet requested is left
+// alone, because requesting it belongs to the original pass. It makes no changes, which CheckPVCState can.
+func (c K8sComputeBackend) claimFailedToBind(pvc *v1.PersistentVolumeClaim) bool {
+	switch {
+	case isPVCBound(pvc):
+		return false
+	case pvc.Status.Phase == v1.ClaimLost:
+		if !c.bk8s.pvcRebindEnabled {
+			return true
+		}
+		_, attempted := pvc.Annotations[types.NVCARebindAttemptedAnnotationKey]
+		return attempted
+	}
+	if c.bk8s.k8sTimeConfig == nil {
+		return false
+	}
+	return time.Since(pvc.CreationTimestamp.Time) > c.bk8s.k8sTimeConfig.ModelCacheROPVCBindTimeGracePeriod
+}
+
+// isRecordedSharedClaim mirrors the claim checks in setupRWXReadOnlyModelCachingForRequest: the claim
+// must be ReadWriteMany and, when the selection recorded a StorageClass, be on that class.
+func isRecordedSharedClaim(claim *v1.PersistentVolumeClaim, selection *nvcastorage.PersistedModelCacheStorageSelection) bool {
+	if !slices.Contains(claim.Spec.AccessModes, v1.ReadWriteMany) {
+		return false
+	}
+	return selection.StorageClassName == "" ||
+		(claim.Spec.StorageClassName != nil && *claim.Spec.StorageClassName == selection.StorageClassName)
+}
+
 func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 	rwPVC *v1.PersistentVolumeClaim,
 	initJob *batchv1.Job,
@@ -144,6 +415,18 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 	log := core.GetLogger(ctx)
 	log.Debugf("decoding caching artifacts")
 	metrics := nvcametrics.FromContext(ctx)
+	cleanupFailedCache := func() bool {
+		// Keep the failed resources until fallback is durable. Otherwise a retry
+		// after a failed annotation write could start another cache writer.
+		if err := c.bk8s.markModelCachingFailed(ctx, req); err != nil {
+			log.WithError(err).Warnf("failed to record model caching failure for request %v/%v", req.Namespace, req.Name)
+			return false
+		}
+		if err := c.CleanupModelCachingResources(ctx, rwPVC, initJob.Name); err != nil {
+			log.WithError(err).Error("failed to cleanup ModelCaching resources, needs manual cleanup")
+		}
+		return true
+	}
 
 	if c.bk8s.nvmeshEncryptionEnabled {
 		//If encryption is used, then we need to update StorageClass name in PVC.
@@ -175,8 +458,8 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			if (err != nil && errors.IsNotFound(err)) || (pvObjList != nil && len(pvObjList.Items) == 0) {
 				err = c.SetupInitCacheJobBlockDevice(ctx, rwPVC, initJob, req)
 				if err != nil {
-					c.bk8s.eventRecorder.Event(req, v1.EventTypeWarning,
-						string(types.EventCategoryModelCaching), "failed caching setup, resort to non-caching")
+					c.bk8s.EmitICMSEvent(req, v1.EventTypeWarning,
+						string(types.EventCategoryModelCaching), "failed caching setup, resort to non-caching", nil)
 					log.WithError(err).Error("failed SetupInitCacheJobBlockDevice, model caching will be disabled")
 					return ModelCachingFailed, ""
 				}
@@ -187,12 +470,11 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 				roPVCState, err := c.SetupPVCForReaders(ctx, rwPVC, initJob.Name, req, mf)
 				if err != nil {
 					log.WithError(err).Errorf("failed to SetupPVCForReaders at %v, model caching will be disabled", roPVCState)
-					err = c.CleanupModelCachingResources(ctx, rwPVC, initJob.Name)
-					if err != nil {
-						log.WithError(err).Error("failed to cleanup ModelCaching resources, needs manual cleanup")
+					if !cleanupFailedCache() {
+						return ModelCachingInProgress, ""
 					}
-					c.bk8s.eventRecorder.Event(req, v1.EventTypeWarning,
-						string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching")
+					c.bk8s.EmitICMSEvent(req, v1.EventTypeWarning,
+						string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching", nil)
 					metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingFailed)...).Inc()
 					mc = ModelCachingFailed
 				}
@@ -202,28 +484,26 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			// this is an irrecoverable error on InitCacheJob, NVCA will switch to
 			// No Caching Workflow
 			// Caller will need to use the PodSpec without ROPVC VolumeMount
-			err = c.CleanupModelCachingResources(ctx, rwPVC, initJob.Name)
-			if err != nil {
-				log.WithError(err).Error("failed to cleanup ModelCaching resources, needs manual cleanup")
+			if !cleanupFailedCache() {
+				return ModelCachingInProgress, ""
 			}
-			c.bk8s.eventRecorder.Eventf(req, v1.EventTypeWarning,
-				string(types.EventCategoryModelCaching), "%v failed, resort to non-caching", initJob.Name)
+			c.bk8s.EmitICMSEventf(req, v1.EventTypeWarning,
+				string(types.EventCategoryModelCaching), "%v failed, resort to non-caching", nil, initJob.Name)
 			reason := c.getInitCacheJobFailureReason(ctx, initJob)
-			metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, reason)
+			metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, reason, string(types.HelmCacheBackendNVMesh))
 			return ModelCachingFailed, ""
 		case InitCacheJobCompleted:
 			mc := ModelCachingInProgress
 			roPVCState, err := c.SetupPVCForReaders(ctx, rwPVC, initJob.Name, req, mf)
 			if err != nil {
 				log.WithError(err).Errorf("failed to SetupPVCForReaders at %v, model caching will be disabled", roPVCState)
-				err = c.CleanupModelCachingResources(ctx, rwPVC, initJob.Name)
-				if err != nil {
-					log.WithError(err).Error("failed to cleanup ModelCaching resources, needs manual cleanup")
+				if !cleanupFailedCache() {
+					return ModelCachingInProgress, ""
 				}
-				c.bk8s.eventRecorder.Event(req, v1.EventTypeWarning,
-					string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching")
+				c.bk8s.EmitICMSEvent(req, v1.EventTypeWarning,
+					string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching", nil)
 				metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingFailed)...).Inc()
-				metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCSetupFailed)
+				metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCSetupFailed, string(types.HelmCacheBackendNVMesh))
 				mc = ModelCachingFailed
 			}
 			return mc, ""
@@ -241,16 +521,14 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 		return ModelCachingInProgress, ""
 	case PVCFoundBindFailed:
 		log.WithError(err).Errorf("ROPVC is not getting bound, cleanup Modelcaching resource and deploy without caching")
-		err := c.CleanupModelCachingResources(ctx, rwPVC, initJob.Name)
-		if err != nil {
-			// TODO: Perform Deeper Cleanup on reconciliation
-			log.WithError(err).Errorf("failed to cleanup ModelCaching resources, needs manual cleanup")
+		if !cleanupFailedCache() {
+			return ModelCachingInProgress, ""
 		}
-		c.bk8s.eventRecorder.Eventf(req, v1.EventTypeWarning,
-			string(types.EventCategoryModelCaching), "%v bind failed, resort to non-caching", roPVCName)
+		c.bk8s.EmitICMSEventf(req, v1.EventTypeWarning,
+			string(types.EventCategoryModelCaching), "%v bind failed, resort to non-caching", nil, roPVCName)
 		metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventPVCModelCachingError)...).Inc()
 		metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingFailed)...).Inc()
-		metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCBindFailed)
+		metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCBindFailed, string(types.HelmCacheBackendNVMesh))
 		return ModelCachingFailed, ""
 	case PVCFoundBound:
 		log.Infof("ROPVC %v setup completed, Modelcaching will be enabled for request %v/%v", roPVCName, req.Namespace, req.Name)
@@ -265,7 +543,7 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 				c.bk8s.podInstanceNamespace, initJob.Name)
 		}
 		metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingSuccess)...).Inc()
-		metrics.RecordModelCacheResult(modelcachetypes.ResultSuccess, "")
+		metrics.RecordModelCacheResult(modelcachetypes.ResultSuccess, "", string(types.HelmCacheBackendNVMesh))
 		return ModelCachingCompleted, roPVCName
 	}
 	// Never reached
@@ -317,21 +595,36 @@ func (c K8sComputeBackend) ComputeCleanupCacheReferences(ctx context.Context, ca
 	return nil
 }
 
+// CleanupModelCachingResources removes a failed cache setup: the volume claims and the backing volume
+// policy first, and the writer Job last. The failed Job is what a later cleanup retry keys on, so it is
+// kept until the rest has been removed; deleting it first would leave a partial cleanup nothing to retry from.
 func (c K8sComputeBackend) CleanupModelCachingResources(ctx context.Context,
 	rwPVC *v1.PersistentVolumeClaim, initJobName string) error {
+	return c.cleanupModelCachingResources(ctx, rwPVC, initJobName, "")
+}
+
+func (c K8sComputeBackend) cleanupModelCachingResources(ctx context.Context,
+	rwPVC *v1.PersistentVolumeClaim, initJobName, jobUID string) error {
+	if err := c.cleanupModelCachingClaims(ctx, rwPVC); err != nil {
+		return err
+	}
+	// cleanup InitJob & its pods
+	backgroundDeletion := metav1.DeletePropagationBackground
+	opts := metav1.DeleteOptions{PropagationPolicy: &backgroundDeletion}
+	if jobUID != "" {
+		opts.Preconditions = metav1.NewUIDPreconditions(jobUID)
+	}
+	err := c.clients.K8s.BatchV1().Jobs(c.bk8s.podInstanceNamespace).Delete(ctx, initJobName, opts)
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to cleanup initCacheJob %v/%v: %w", c.bk8s.podInstanceNamespace, initJobName, err)
+	}
+	return nil
+}
+
+func (c K8sComputeBackend) cleanupModelCachingClaims(ctx context.Context, rwPVC *v1.PersistentVolumeClaim) error {
 	log := core.GetLogger(ctx)
 	var pvcObj *v1.PersistentVolumeClaim
 	var err error
-
-	// cleanup InitJob & its pods
-	backgroundDeletion := metav1.DeletePropagationBackground
-	err = c.clients.K8s.BatchV1().Jobs(c.bk8s.podInstanceNamespace).Delete(ctx, initJobName, metav1.DeleteOptions{
-		PropagationPolicy: &backgroundDeletion,
-	})
-	if err != nil && !errors.IsNotFound(err) {
-		log.WithError(err).Warnf("failed to cleanup initCacheJob %v/%v in SetupPVCForReaders, needs manual cleanup",
-			c.bk8s.podInstanceNamespace, initJobName)
-	}
 
 	// ROPVC
 	roPVCName := strings.ReplaceAll(rwPVC.Name, RWPVCSuffix, ROPVCSuffix)
@@ -346,10 +639,10 @@ func (c K8sComputeBackend) CleanupModelCachingResources(ctx context.Context,
 					log.Warnf("RWPVC was also never setup, no PV to update and no PVCs to cleanup")
 					return nil
 				}
-				return fmt.Errorf("failed to get ROPVC, err: %v", err)
+				return fmt.Errorf("failed to get ROPVC: %w", err)
 			}
 		} else {
-			return fmt.Errorf("failed to get ROPVC, err: %v", err)
+			return fmt.Errorf("failed to get ROPVC: %w", err)
 		}
 	}
 
@@ -361,7 +654,12 @@ func (c K8sComputeBackend) CleanupModelCachingResources(ctx context.Context,
 			// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
 			pvObj, err := c.clients.K8s.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
 			if err != nil {
-				return fmt.Errorf("failed to get PV %v to update with PersistentVolumeReclaimPolicy:Delete: %v", pvName, err)
+				if errors.IsNotFound(err) {
+					// Nothing left to update. Go on so the claims and then the failed Job are removed.
+					log.Warnf("PV %v no longer exists, skipping PersistentVolumeReclaimPolicy update", pvName)
+					return nil
+				}
+				return fmt.Errorf("failed to get PV %v to update with PersistentVolumeReclaimPolicy:Delete: %w", pvName, err)
 			}
 
 			// update policy
@@ -371,22 +669,22 @@ func (c K8sComputeBackend) CleanupModelCachingResources(ctx context.Context,
 			return updateErr
 		})
 		if retryErr != nil {
-			return fmt.Errorf("failed to update PV %v with PersistentVolumeReclaimPolicy:Delete, err: %v", pvName, err)
+			return fmt.Errorf("failed to update PV %v with PersistentVolumeReclaimPolicy:Delete: %w", pvName, retryErr)
 		}
 	} else {
-		log.WithError(err).Errorf("unabled to set PersistentVolumeReclaimPolicy because PV name is unknown")
+		log.Errorf("unabled to set PersistentVolumeReclaimPolicy because PV name is unknown")
 	}
 
 	// deleting the RWPVC
 	err = c.clients.K8s.CoreV1().PersistentVolumeClaims(c.bk8s.podInstanceNamespace).Delete(ctx, rwPVC.Name, metav1.DeleteOptions{})
 	if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete RWPVC, err:%v", err)
+		return fmt.Errorf("failed to delete RWPVC: %w", err)
 	}
 
 	// delete the ROPVC
 	err = c.clients.K8s.CoreV1().PersistentVolumeClaims(c.bk8s.podInstanceNamespace).Delete(ctx, roPVCName, metav1.DeleteOptions{})
 	if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete ROPVC, err:%v", err)
+		return fmt.Errorf("failed to delete ROPVC: %w", err)
 	}
 	return nil
 }
@@ -579,6 +877,41 @@ func (c K8sComputeBackend) waitForVolumeDetach(ctx context.Context, volumeName s
    1. Name -> $LaunchSpecification.CacheHandle-ro-pvc
    2. /spec/accessModes -> ReadOnlyMany
 */
+// readerMountOptionsForRequest returns the mount options for the read-only PV
+// that serves req. A durable request carries the catalog's readerMountOptions in
+// its persisted selection; those are required and the configured options are
+// appended except where they would negate one. Requests without a durable
+// selection keep the configured options unchanged, as before.
+func (c K8sComputeBackend) readerMountOptionsForRequest(ctx context.Context, req *nvcav2beta1.ICMSRequest) []string {
+	configured := c.bk8s.csiVolumeMountOptions
+	if req == nil {
+		return configured
+	}
+	raw := req.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey]
+	if raw == "" {
+		return configured
+	}
+	log := core.GetLogger(ctx)
+	selection, err := nvcastorage.ParsePersistedModelCacheStorageSelection(raw)
+	if err != nil {
+		log.WithError(err).Warnf("ignoring invalid model cache selection on %v/%v for reader mount options",
+			req.Namespace, req.Name)
+		return configured
+	}
+	if selection.Mode != nvcastorage.ModelCacheSelectionDurable {
+		return configured
+	}
+	merged, dropped := nvcastorage.MergeReaderMountOptions(selection.RequiredMountOptions, configured)
+	if len(dropped) != 0 {
+		log.WithFields(logrus.Fields{
+			"request":  req.Namespace + "/" + req.Name,
+			"ignored":  nvcastorage.RedactMountOptionValues(dropped),
+			"required": nvcastorage.RedactMountOptionValues(selection.RequiredMountOptions),
+		}).Info("ignoring configured cache mount options that conflict with the required ones")
+	}
+	return merged
+}
+
 func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 	rwPVC *v1.PersistentVolumeClaim, initJobName string, req *nvcav2beta1.ICMSRequest, mf mutateFunc) (ROPVCSetupPhase, error) {
 	log := core.GetLogger(ctx)
@@ -695,7 +1028,7 @@ func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 			// set the new PVCRef
 			pvObj.Spec.ClaimRef = &newPVCRef
 			pvObj.Spec.AccessModes = ROAccessMode
-			pvObj.Spec.MountOptions = c.bk8s.csiVolumeMountOptions
+			pvObj.Spec.MountOptions = c.readerMountOptionsForRequest(ctx, req)
 
 			_, updateErr := c.clients.K8s.CoreV1().PersistentVolumes().Update(ctx, pvObj, metav1.UpdateOptions{})
 			return updateErr

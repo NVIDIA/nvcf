@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: ncp-local
+
+image: rancher/k3s:v1.30.2-k3s2
+servers: 1
+agents: 5
+
+volumes:
+  - volume: ${PWD}/bin/generic-credential-provider:/var/lib/kubelet/plugins/generic-credential-provider # Mount the binary
+    nodeFilters:
+      - all
+  - volume: ${PWD}/config/credential-provider-config.yaml:/etc/kubernetes/credential-provider/config.yaml # Mount the provider config
+    nodeFilters:
+      - all
+  - volume: ${PWD}/secrets/docker-config.json:/etc/kubernetes/secrets/docker-config.json # Mount the docker config
+    nodeFilters:
+      - all
+  - volume: ${PWD}/apps/node-tuning/node-tuning.yaml:/var/lib/rancher/k3s/server/manifests/node-tuning.yaml # Auto-deployed by k3s on startup
+    nodeFilters:
+      - server:*
+
+# Port mappings for k3d's built-in serverlb (klipper)
+# These forward host ports to the load balancer, which then routes to the cluster
+ports:
+  - port: 8080:80 # Host 8080 -> LoadBalancer port 80 (handled by klipper/servicelb)
+    nodeFilters:
+      - loadbalancer
+  - port: 8443:443 # Host 8443 -> LoadBalancer port 443 (handled by klipper/servicelb)
+    nodeFilters:
+      - loadbalancer
+  - port: 10081:10081 # Host 10081 -> LoadBalancer port 10081 (handled by klipper/servicelb)
+    nodeFilters:
+      - loadbalancer
+
+options:
+  k3d: # k3d-managed options
+    wait: true # Wait for cluster to be ready
+    # servicelb (klipper) is enabled by default and manages LoadBalancer services
+  k3s: # Add k3s options for Kubelet args
+    extraArgs:
+      - arg: "--disable=traefik" # Disable built-in Traefik
+        nodeFilters:
+          - server:*
+      - arg: "--image-credential-provider-config=/etc/kubernetes/credential-provider/config.yaml"
+        nodeFilters: # Apply to all nodes
+          - all
+      - arg: "--image-credential-provider-bin-dir=/var/lib/kubelet/plugins/"
+        nodeFilters: # Apply to all nodes
+          - all
+    nodeLabels:
+      - label: usage=workload # same as `--k3s-node-label 'foo=bar@agent:1'` -> this results in a Kubernetes node label
+        nodeFilters:
+          - agent:0
+          - agent:1
+          - agent:2
+      - label: run.ai/simulated-gpu-node-pool=default
+        nodeFilters:
+          - agent:3
+          - agent:4
+      - label: nvidia.com/gpu.family=hopper
+        nodeFilters:
+          - agent:3
+          - agent:4
+      - label: nvidia.com/gpu.machine=PowerEdge-R750
+        nodeFilters:
+          - agent:3
+          - agent:4
+      - label: nvidia.com/cuda.driver.major=555
+        nodeFilters:
+          - agent:3
+          - agent:4
+      - label: nvidia.com/cuda.driver.minor=42
+        nodeFilters:
+          - agent:3
+          - agent:4
+      - label: nvidia.com/cuda.driver.rev=06
+        nodeFilters:
+          - agent:3
+          - agent:4

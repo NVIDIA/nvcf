@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // This package provides utilities for efficiently performing Win32 IO operations in Go.
 // Currently, this package is provides support for genreal IO and management of
 //   - named pipes

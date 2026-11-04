@@ -21,6 +21,7 @@ set -euo pipefail
 PROJECT_ROOT=$(pwd)
 cd generator
 uv sync
+uv run python -m unittest discover -s . -p "test_*.py"
 SOURCE_CONFIG=${PROJECT_ROOT}/generator/source-config.yaml
 
 DOC_DIR="${PROJECT_ROOT}/generator/doc"

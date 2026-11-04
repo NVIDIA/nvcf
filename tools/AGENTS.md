@@ -13,7 +13,8 @@ Scope: everything under `tools/`.
 
 - Put general executable wrapper scripts in `tools/scripts/`.
 - Put CI-focused entrypoint scripts in `tools/ci/`.
-- Put larger Go tools in their own directory under `tools/`, for example `tools/collect-dependencies/` or `tools/sync-synthetic-imports/`.
+- Put larger Go tools in their own directory under `tools/`, for example
+  `tools/collect-dependencies/` or `tools/generate-subproject-ci/`.
 - If a Go tool needs a stable repo entrypoint for CI or docs, add a thin wrapper in `tools/ci/` or `tools/scripts/` as appropriate, or document the exact `go run` or `go build -C` command.
 
 ## Naming

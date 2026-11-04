@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2016 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -112,7 +109,7 @@ func (g *Group) TryGo(f func() error) bool {
 	if g.sem != nil {
 		select {
 		case g.sem <- token{}:
-			// Note: this allows barging iff channels in general allow barging.
+			// Note: this allows barging if and only if channels in general allow barging.
 		default:
 			return false
 		}

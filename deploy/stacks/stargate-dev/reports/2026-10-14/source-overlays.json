@@ -1,0 +1,69 @@
+[
+  {
+    "path": "candidate/deploy/stacks/stargate-dev/environments/local-a.yaml",
+    "reason": "unique local cluster names, namespace, and routing identity",
+    "before": "ed370e40d46f4497f38dad63c6fefa49e769d2de28f73e78bc2cb3bf30d8ef26",
+    "after": "b2156339f3c2906dc0742da23981221078fe399902876955de27db0148d86bbd"
+  },
+  {
+    "path": "candidate/deploy/stacks/stargate-dev/environments/local-b.yaml",
+    "reason": "unique local cluster names, namespace, and routing identity",
+    "before": "10ae22b12f7fd021c4f4276f2890bf0401530f7875334b674845a65ac0328de7",
+    "after": "a462c233cdda9b2674369ed649f880da2e520da3824985cb9ab4e7b65baf5d5e"
+  },
+  {
+    "path": "candidate/deploy/stacks/stargate-dev/scripts/local.py",
+    "reason": "unique local resources and image tags; single-node scheduling validation",
+    "before": "4a1dc3935baeba42a9c59d2997db7607689b4b8330b42016305486959d1f1ad0",
+    "after": "211711cdb36bec7deb314694d0b540bde3d16989f711951a4a81b225546d85eb"
+  },
+  {
+    "path": "candidate/deploy/stacks/stargate-dev/loadtest/queue-bounds-none-max-queued-4.json",
+    "reason": "policy model identity matches the isolated fixture",
+    "before": "a1c84bac9ef685bb83773bb570010e9e765b2fadca0677acd595750d2786830b",
+    "after": "d420e72fce5381163d8513789d710984f98690b3ddde06b14c52656c2578ba47"
+  },
+  {
+    "reason": "identical candidate deployment/benchmark harness for the baseline runtime",
+    "paths": [
+      "deploy/stacks/stargate-dev",
+      "deploy/helm/llm-request-router"
+    ]
+  },
+  {
+    "path": "baseline/deploy/stacks/stargate-dev/scripts/local.py",
+    "reason": "separate baseline image tags",
+    "before": "211711cdb36bec7deb314694d0b540bde3d16989f711951a4a81b225546d85eb",
+    "after": "854ae934b982edee5d2274a929c22494257c753031fc4b6685140aa3a727a66d"
+  },
+  {
+    "path": "baseline/src/libraries/rust/stargate/crates/stargate/BUILD.bazel",
+    "reason": "Bazel image target for original baseline auth source",
+    "before": "7e6d37d1bfa88d42cc1b307d5bf20049ffce09140c18c8ee4a5ccccfc2d04aed",
+    "after": "a723e7189d01fb529400f40964ccf76563300cae050f1c45578ad5079b0849e8"
+  },
+  {
+    "path": "baseline/src/libraries/rust/stargate/crates/mock-dynamo/BUILD.bazel",
+    "reason": "Bazel image target for unchanged baseline mock-engine source",
+    "before": "f1709a5927149cea81f8a6403583a491a241686397de2e59e367116497623ce0",
+    "after": "30ca72f34dc4c63907fe7430352b6b5bcd6ba6964386cde573d4ea90b866ee9b"
+  },
+  {
+    "path": "baseline/deploy/stacks/stargate-dev/charts/stargate-dev-auth/templates/deployment.yaml",
+    "reason": "legacy auth command/probe adapter; only test credentials are used",
+    "before": "93debd447c014349bc9d63574f81b3748f6489277c6d0f92dba8a60c15cca229",
+    "after": "46fb4765f46ed816a09cebc72248c6a818c3d8bbe2b162f9a22e204a36eb45cc"
+  },
+  {
+    "path": "candidate/user.bazelrc",
+    "reason": "matched optimized builds and task-specific cache",
+    "before": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "after": "e7b2a9f19f156e2486fb4767753855be252d511ecc34abd11896b74474e6e627"
+  },
+  {
+    "path": "baseline/user.bazelrc",
+    "reason": "matched optimized builds and task-specific cache",
+    "before": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "after": "e7b2a9f19f156e2486fb4767753855be252d511ecc34abd11896b74474e6e627"
+  }
+]

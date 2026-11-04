@@ -41,6 +41,14 @@ Create a default fully qualified app name.
 {{- end }}
 
 {{/*
+Allow the release namespace to be overridden.
+*/}}
+
+{{- define "admin-issuer-proxy.namespace" -}}
+{{- default .Release.Namespace .Values.adminIssuerProxy.namespace -}}
+{{- end -}}
+
+{{/*
 Create chart name and version as used by the chart label.
 */}}
 

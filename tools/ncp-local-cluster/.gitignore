@@ -1,0 +1,4 @@
+secrets/*.json
+.env
+*/coverage.out
+bin/

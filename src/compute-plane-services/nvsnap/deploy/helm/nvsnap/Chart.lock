@@ -1,0 +1,18 @@
+dependencies:
+- name: cert-manager
+  repository: https://charts.jetstack.io
+  version: v1.16.1
+- name: gpu-operator
+  repository: https://helm.ngc.nvidia.com/nvidia
+  version: v24.9.0
+- name: jaeger
+  repository: https://jaegertracing.github.io/helm-charts
+  version: 3.4.1
+- name: prometheus
+  repository: https://prometheus-community.github.io/helm-charts
+  version: 27.6.0
+- name: grafana
+  repository: https://grafana.github.io/helm-charts
+  version: 9.0.0
+digest: sha256:afb09198c532243af811738ed706db2352d06501446741a2173196da2cd81836
+generated: "2026-05-31T17:11:01.921830458-07:00"

@@ -19,6 +19,7 @@ package agentskill
 
 import (
 	"encoding/json"
+	"io/fs"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -68,7 +69,7 @@ func buildMapFSFromEmbedded(t *testing.T) (fstest.MapFS, *Manifest) {
 	mapFS := make(fstest.MapFS)
 
 	// Copy manifest.json.
-	manifestData, err := realFS.ReadFile("data/manifest.json")
+	manifestData, err := fs.ReadFile(realFS, "data/manifest.json")
 	if err != nil {
 		t.Fatalf("read manifest.json: %v", err)
 	}
@@ -76,7 +77,7 @@ func buildMapFSFromEmbedded(t *testing.T) (fstest.MapFS, *Manifest) {
 
 	// Copy every file listed in the manifest.
 	for _, mf := range m.Files {
-		body, err := realFS.ReadFile("data/" + mf.Path)
+		body, err := fs.ReadFile(realFS, "data/"+mf.Path)
 		if err != nil {
 			t.Fatalf("read %s: %v", mf.Path, err)
 		}

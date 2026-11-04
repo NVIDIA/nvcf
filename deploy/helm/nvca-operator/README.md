@@ -8,6 +8,18 @@ The chart packages the NVCA Operator deployment, which manages NVCA agent pods a
 
 The default chart values do not set the required image registry and repository. They must be supplied through an additional values file at install time, and access to those images must be arranged separately.
 
+## Chart Layout
+
+`deploy/helm/nvca-operator/nvca-operator` is the only chart. Edit it directly.
+
+It is published on two lanes from this one source. The NGC lane renames it to
+`nvca-operator` and injects the control-plane endpoints that cannot live in a
+public repository. The OCI lane publishes it as `helm-nvca-operator`, which the
+compute-plane stack pins.
+
+The chart ships neutral defaults: values that belong to a particular deployment
+are supplied by whoever installs it, not shipped as published defaults.
+
 Example:
 
 ```yaml
@@ -69,11 +81,11 @@ Important settings to review before deployment:
 - `imagePullSecretName` and `generateImagePullSecret` for private registry access
 - `replicaCount`, resource requests, and limits for your environment
 - `otelCollector.enabled` and `otelCollector.config.*` for the optional event-collection sidecar
-- `clusterValidator.*` for the cluster validation hook image and behavior
+- `clusterValidator.*` for the cluster-validator: the operator's init container, the CronJob, and under role `control-plane` the runs the operator starts when the validator spec changes
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
 
 ## Notes
 
 - If you publish or mirror the required images into another registry, set the image registry, repository, tag, and pull secret values explicitly in your override file.
-- When vendoring a new NVCA ref, merge with a release-generating Conventional Commit type. Use `feat` for chart behavior changes and `fix` for patch fixes. A `chore` merge does not create a chart release tag.
+- When vendoring updated NVCA chart inputs, merge with a release-generating Conventional Commit type. Use `feat` for chart behavior changes and `fix` for patch fixes. A `chore` merge does not create a chart release tag.

@@ -1,0 +1,6 @@
+{
+  "scaleUpDetails": {
+    "metric": "worker_utilization",
+    "factor": 1.5
+  }
+}

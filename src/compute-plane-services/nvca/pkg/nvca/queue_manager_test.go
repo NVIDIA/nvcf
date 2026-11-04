@@ -27,11 +27,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,17 +41,17 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/sets"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
-	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	nvcainformers "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions"
-	nvcav2beta1listers "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/listers/nvca/v2beta1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
-	mockqueue "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/mock"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	nvcametrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	nvcainformers "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions"
+	nvcav2beta1listers "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/listers/nvca/v2beta1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	featureflagmock "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	mockqueue "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue/mock"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 const (
@@ -642,6 +642,47 @@ func TestSyncQueuesWithBk8s(t *testing.T) {
 		assert.Len(ct, ps, 0)
 	}
 	require.EventuallyWithT(t, verifyPodsDeleted, 120*time.Second, 100*time.Millisecond)
+}
+
+// TestSyncQueuesTerminationErrorNotMasked verifies that a termination queue
+// pull error keeps the manager status not OK, even when the creation queue
+// pull succeeds.
+func TestSyncQueuesTerminationErrorNotMasked(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	clients := mockKubeClients()
+	b := NewBackendk8sCacheBuilder().
+		WithNamespaceLabels(labels.Set{"foo": "bar"}).
+		WithClients(clients).
+		WithStaticGPUCapacity(10)
+	bc, _, err := b.Start(ctx)
+	require.NoError(t, err)
+
+	// Use distinct queue URLs (mod=true) so the termination queue can fail
+	// independently of the creation queue.
+	queueCreds := getTestQueueCreds(true)
+	createQueue := queueCreds.CreationQueues[testGPUNameDefault]
+
+	qc := &mockqueue.Client{
+		Use10MillisForWaits: true,
+		FailReceiveQueueURL: queueCreds.TerminationQueue.QueueURL,
+		FailReceiveErr:      fmt.Errorf("simulated termination queue pull failure"),
+	}
+	qc.AddMessage(createQueue.QueueURL, queue.ReceiveMessageOutput{
+		MessageID:     creationMessageId,
+		ReceiptHandle: "randomIdTermFail",
+		Body:          []byte(goodCM),
+	})
+
+	bsc := newMockBackendStatusCacheFromK8s(t, bc)
+	metrics := nvcametrics.FromContext(ctx)
+	qm := NewQueueManager(bc, bsc, qc, queueCreds, featureflag.DefaultFetcher, types.MaintenanceModeNone, metrics)
+	assert.True(t, qm.StatusOK())
+
+	err = qm.SyncQueues(ctx)
+	assert.NoError(t, err)
+	assert.False(t, qm.StatusOK(), "status must not be OK when termination queue pull fails")
 }
 
 func TestSyncQueuesWithBk8sFailedCaching(t *testing.T) {
@@ -2354,4 +2395,114 @@ func TestQueueManager_PauseResume(t *testing.T) {
 	sqm.Pause()
 	err = sqm.SyncQueues(ctx)
 	assert.NoError(t, err, "SyncQueues should succeed when paused (skips creation processing)")
+}
+
+func TestSyncQueuesReusedMessageID(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      []byte
+		term      bool
+		mode      types.MaintenanceMode
+		rejected  bool
+		redeliver bool
+		paused    bool
+		legacy    bool
+	}{
+		{name: "function", body: []byte(goodCM)},
+		{name: "task", body: cmsgTaskContainer},
+		{name: "previously rejected function", body: []byte(goodCM), rejected: true},
+		{name: "function redelivery", body: []byte(goodCM), redeliver: true},
+		{name: "task redelivery", body: cmsgTaskContainer, redeliver: true},
+		{name: "rejected task redelivery", body: cmsgTaskContainer, rejected: true, redeliver: true},
+		{name: "legacy rejected task with new request", body: cmsgTaskContainer, rejected: true, legacy: true},
+		{name: "legacy rejected task redelivery", body: cmsgTaskContainer, rejected: true, redeliver: true, legacy: true},
+		{name: "legacy accepted task with new request", body: cmsgTaskContainer, legacy: true},
+		{name: "termination", body: []byte(goodTM), term: true},
+		{name: "termination while paused", body: []byte(goodTM), term: true, paused: true},
+		{name: "termination while cordoned", body: []byte(goodTM), term: true, mode: types.MaintenanceModeCordon},
+		{name: "termination while draining", body: []byte(goodTM), term: true, mode: types.MaintenanceModeCordonAndDrain},
+		{name: "termination redelivery", body: []byte(goodTM), term: true, redeliver: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(newTestContext())
+			t.Cleanup(cancel)
+			clients := mockKubeClients()
+			bk8s := &BackendK8sCache{clients: clients, requestsNamespace: RequestsNamespace, featureFlagFetcher: featureflag.DefaultFetcher}
+			old := &nvcav2beta1.ICMSRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "original", Namespace: RequestsNamespace, Labels: map[string]string{SQSMessageIDKey: "reused-message-id"}},
+				Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "original-request", Action: common.FunctionCreationAction},
+			}
+			if tc.term {
+				old.Spec.Action = common.TerminationAction
+			}
+			if tc.rejected {
+				old.Annotations = map[string]string{ICMSRequestCreationRejectedAnnotation: "previous rejection"}
+			}
+			if tc.legacy {
+				old.Spec.RequestID = ""
+			}
+			_, err := clients.BART.NvcaV2beta1().ICMSRequests(RequestsNamespace).Create(ctx, old, metav1.CreateOptions{})
+			require.NoError(t, err)
+			factory := nvcainformers.NewSharedInformerFactoryWithOptions(clients.BART, ResyncInterval, nvcainformers.WithNamespace(RequestsNamespace))
+			bk8s.icmsRequestLister = mustICMSRequestLister(t, factory)
+			factory.Start(ctx.Done())
+			factory.WaitForCacheSync(ctx.Done())
+
+			var payload map[string]any
+			require.NoError(t, json.Unmarshal(tc.body, &payload))
+			requestID := "new-request"
+			if tc.redeliver {
+				requestID = old.Spec.RequestID
+			}
+			payload["requestId"] = requestID
+			body, err := json.Marshal(payload)
+			require.NoError(t, err)
+			qi := queue.MessageQueueInfo{GPU: "A100", QueueURL: "creation", QueueType: queue.CreationQueue}
+			termQI := queue.MessageQueueInfo{QueueURL: "termination", QueueType: queue.TerminationQueue}
+			selected := qi
+			if tc.term {
+				selected = termQI
+			}
+			qc := &mockqueue.Client{Use10MillisForWaits: true}
+			qc.AddMessage(selected.QueueURL, queue.ReceiveMessageOutput{MessageID: "reused-message-id", ReceiptHandle: "new-delivery", Body: body})
+			mode := tc.mode
+			if mode == "" {
+				mode = types.MaintenanceModeNone
+			}
+			qm := NewQueueManager(bk8s, staticStatusGetter{status: types.AgentHealth{GPUUsage: types.GPUResourceSet{"A100": {Capacity: 8}}}}, qc,
+				types.QueueCredentials{CreationQueues: map[types.GPUName]queue.MessageQueueInfo{"A100": qi}, TerminationQueue: termQI}, featureflag.DefaultFetcher, mode, nvcametrics.FromContext(ctx))
+			if tc.paused {
+				qm.Pause()
+			}
+			require.NoError(t, qm.SyncQueues(ctx))
+			reqs, err := clients.BART.NvcaV2beta1().ICMSRequests(RequestsNamespace).List(ctx, metav1.ListOptions{})
+			require.NoError(t, err)
+			want := 2
+			if tc.redeliver || tc.legacy {
+				want = 1
+			}
+			require.Len(t, reqs.Items, want, "identified requests are distinct; legacy requests keep conservative deduplication")
+			if !tc.redeliver && !tc.legacy {
+				var found bool
+				for _, request := range reqs.Items {
+					if request.Spec.RequestID == requestID {
+						found = true
+						assert.Equal(t, "reused-message-id", request.Labels[SQSMessageIDKey], "persisted labels must remain compatible")
+					}
+				}
+				require.True(t, found)
+			}
+			messages, err := qc.PeekMessage(ctx, queue.ReceiveMessageInput{QueueInfo: selected, MaxNumberOfMessages: 1})
+			require.NoError(t, err)
+			if tc.rejected && tc.redeliver {
+				assert.Empty(t, messages)
+			}
+			if tc.rejected && !tc.redeliver {
+				assert.Len(t, messages, 1, "do not acknowledge a new request as a prior rejected request")
+			}
+			if tc.legacy && !tc.rejected {
+				assert.Len(t, messages, 1, "do not acknowledge an accepted request during queue synchronization")
+			}
+		})
+	}
 }

@@ -1,0 +1,230 @@
+// SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package nvcaconfig
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"reflect"
+	"strings"
+
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/spf13/viper"
+	"go.yaml.in/yaml/v3"
+	"k8s.io/apimachinery/pkg/api/resource"
+)
+
+const (
+	envPrefix = "nvca"
+)
+
+func Init(configFile string) (Config, error) {
+	cfgBytes, err := os.ReadFile(configFile)
+	if err != nil {
+		return Config{}, err
+	}
+	return DecodeConfig(cfgBytes)
+}
+
+func NewViperDecoderConfig() viper.DecoderConfigOption {
+	return func(dc *mapstructure.DecoderConfig) {
+		dc.DecodeHook = mapstructure.ComposeDecodeHookFunc(
+			stringToResourceQuantityHookFunc(),
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.StringToSliceHookFunc(","),
+		)
+	}
+}
+
+func stringToResourceQuantityHookFunc() mapstructure.DecodeHookFuncType {
+	quantityType := reflect.TypeFor[resource.Quantity]()
+	return func(from reflect.Type, to reflect.Type, data any) (any, error) {
+		if from.Kind() != reflect.String || to != quantityType {
+			return data, nil
+		}
+		return resource.ParseQuantity(reflect.ValueOf(data).String())
+	}
+}
+
+func DecodeConfig(data []byte, extraConfigDatas ...[]byte) (cfg Config, err error) {
+	v := viper.NewWithOptions(viper.KeyDelimiter("!"))
+	v.SetEnvPrefix(envPrefix)
+	v.SetConfigType("yaml")
+	if err := AutobindAll(v); err != nil {
+		return cfg, err
+	}
+	// Each input is checked on its own: keys in separate inputs that differ
+	// only by case are a supported override, resolved in input order.
+	if err := validateYAMLKeys(data); err != nil {
+		return cfg, fmt.Errorf("read config: %w", err)
+	}
+	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
+		return cfg, fmt.Errorf("read config: %w", err)
+	}
+	for _, extraCfgData := range extraConfigDatas {
+		if err := validateYAMLKeys(extraCfgData); err != nil {
+			return cfg, fmt.Errorf("merge extra config: %w", err)
+		}
+		if err := v.MergeConfig(bytes.NewReader(extraCfgData)); err != nil {
+			return cfg, fmt.Errorf("merge extra config: %w", err)
+		}
+	}
+	if err := v.Unmarshal(&cfg, NewViperDecoderConfig()); err != nil {
+		err = fmt.Errorf("decode merged config: %w", err)
+		if onlyAgentTimeFieldsFailed(err) {
+			// Decoding stopped before cfg.Validate() ran, so check the fields that did
+			// decode: an unrelated validation failure must stay unrecoverable.
+			if verr := cfg.Validate(); verr != nil {
+				return cfg, fmt.Errorf("validate merged config: %w", verr)
+			}
+			return cfg, &AgentTimeDecodeError{err: err}
+		}
+		return cfg, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return cfg, fmt.Errorf("validate merged config: %w", err)
+	}
+	return cfg, nil
+}
+
+func EncodeConfig(cfg Config, extraConfigs ...Config) ([]byte, error) {
+	v := viper.NewWithOptions(viper.KeyDelimiter("!"))
+	v.SetEnvPrefix(envPrefix)
+	v.SetConfigType("yaml")
+
+	yb, err := yaml.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := v.ReadConfig(bytes.NewReader(yb)); err != nil {
+		return nil, err
+	}
+
+	for _, extraCfg := range extraConfigs {
+		yb, err := yaml.Marshal(extraCfg)
+		if err != nil {
+			return nil, err
+		}
+		if err := v.MergeConfig(bytes.NewReader(yb)); err != nil {
+			return nil, fmt.Errorf("merge extra config: %w", err)
+		}
+	}
+
+	// Recursively update each field with its camel case alias.
+	settings := v.AllSettings()
+	aliases := map[string]string{}
+	if err := recursiveAutobind(&cfg, "", "", "", "", func(fieldName, _, fieldNameCamelCase string) error {
+		aliases[fieldName] = fieldNameCamelCase
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	newSettings := map[string]any{}
+	for fieldName, fieldNameCamelCase := range aliases {
+		fieldSplit := strings.Split(fieldName, ".")
+		fieldCamelCaseSplit := strings.Split(fieldNameCamelCase, ".")
+		nextOldSettings := settings
+		lastNewSettings := newSettings
+		for i, elem := range fieldSplit {
+			currOldSettings := nextOldSettings[elem]
+			if currOldSettings == nil {
+				break
+			}
+			v, ok := currOldSettings.(map[string]any)
+			if !ok || i == len(fieldSplit)-1 {
+				lastNewSettings[fieldCamelCaseSplit[i]] = currOldSettings
+				break
+			}
+			nextOldSettings = v
+			m, ok := lastNewSettings[fieldCamelCaseSplit[i]].(map[string]any)
+			if !ok {
+				m = map[string]any{}
+				lastNewSettings[fieldCamelCaseSplit[i]] = m
+			}
+			lastNewSettings = m
+		}
+	}
+
+	buf := &bytes.Buffer{}
+	enc := yaml.NewEncoder(buf)
+	enc.SetIndent(2)
+	enc.CompactSeqIndent()
+	if err := enc.Encode(newSettings); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+// AgentTimeDecodeError reports that decoding failed only on agent timeout
+// interval fields, for example a duration that overflows time.Duration.
+// Callers detect it with errors.As to tell a recoverable bad timeout value
+// apart from other decode failures.
+//
+// +k8s:deepcopy-gen=false
+type AgentTimeDecodeError struct {
+	err error
+}
+
+func (e *AgentTimeDecodeError) Error() string { return e.err.Error() }
+
+func (e *AgentTimeDecodeError) Unwrap() error { return e.err }
+
+// agentTimeDecodeFieldNames returns the mapstructure error names of every
+// AgentTimeConfig field, derived by reflection so a new timeout field is
+// covered automatically.
+func agentTimeDecodeFieldNames() map[string]bool {
+	t := reflect.TypeFor[AgentTimeConfig]()
+	names := make(map[string]bool, t.NumField())
+	for i := range t.NumField() {
+		names["Agent."+t.Field(i).Name] = true
+	}
+	return names
+}
+
+// onlyAgentTimeFieldsFailed reports whether err contains at least one
+// mapstructure decode failure and every one of them is on an agent timeout
+// field. Any other failing field keeps the whole error unrecoverable.
+func onlyAgentTimeFieldsFailed(err error) bool {
+	timeFields := agentTimeDecodeFieldNames()
+	found := false
+	ok := true
+	var walk func(error)
+	walk = func(e error) {
+		if e == nil {
+			return
+		}
+		if de, isDecode := e.(*mapstructure.DecodeError); isDecode {
+			found = true
+			if !timeFields[de.Name()] {
+				ok = false
+			}
+		}
+		switch u := e.(type) {
+		case interface{ Unwrap() []error }:
+			for _, c := range u.Unwrap() {
+				walk(c)
+			}
+		case interface{ Unwrap() error }:
+			walk(u.Unwrap())
+		}
+	}
+	walk(err)
+	return found && ok
+}

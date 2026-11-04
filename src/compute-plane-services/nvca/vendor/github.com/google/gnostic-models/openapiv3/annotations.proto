@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2022 Google LLC. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,7 +20,7 @@ import "google/protobuf/descriptor.proto";
 import "openapiv3/OpenAPIv3.proto";
 
 // The Go package name.
-option go_package = "./openapiv3;openapi_v3";
+option go_package = "github.com/google/gnostic-models/openapiv3;openapi_v3";
 // This option lets the proto compiler generate Java code inside the package
 // name (see below) instead of inside an outer class. It creates a simpler
 // developer experience by reducing one-level of name nesting and be

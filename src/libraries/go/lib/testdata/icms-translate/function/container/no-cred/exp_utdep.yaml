@@ -199,9 +199,13 @@ spec:
     name: init
     resources: {}
     securityContext:
+      allowPrivilegeEscalation: false
       capabilities:
         drop:
-        - NET_RAW
+        - ALL
+      runAsGroup: 1000
+      runAsNonRoot: true
+      runAsUser: 1000
     volumeMounts:
     - mountPath: /config/models
       name: model-data
@@ -210,6 +214,9 @@ spec:
     - mountPath: /config/shared
       name: config-data
   restartPolicy: Always
+  securityContext:
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
   serviceAccountName: my-sa
   terminationGracePeriodSeconds: 120
   tolerations:
@@ -449,6 +456,10 @@ spec:
           successThreshold: 1
           timeoutSeconds: 1
         name: utils
+        ports:
+        - containerPort: 8010
+          name: worker-metrics
+          protocol: TCP
         readinessProbe:
           failureThreshold: 2
           httpGet:
@@ -480,6 +491,9 @@ spec:
       imagePullSecrets:
       - name: worker-fake-object-name-regcred-0
       restartPolicy: Always
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
       serviceAccountName: my-sa
       terminationGracePeriodSeconds: 120
       tolerations:

@@ -2,16 +2,15 @@
 
 This CLI tool turns a structured YAML specification into a human-readable Markdown document.  
 
-
-## Requirement 
+## Requirement
 
 uv
 
-run uv sync to download the dependecy 
-```
+run uv sync to download the dependency
+
+```bash
 uv sync
 ```
-
 
 ## Command-Line Usage
 
@@ -22,7 +21,7 @@ uv run -m generator -do doc -to gen
 | Option / Flag                     | Type      | Default                              | Description                                                                                       |
 | --------------------------------- | --------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- |
 | `-do`, `--document-output-dir` **(required)**  | Path      | –                                    | Target directory where the Markdown file will be written. It will be created if it does not exist.|
-| `-to`, `--template-output-dir` **(required)**  | Path      | –                                    | Target directory where the comfig template files will be written. It will be created if it does not exist.|
+| `-to`, `--template-output-dir` **(required)**  | Path      | –                                    | Target directory where the config template files will be written. It will be created if it does not exist.|
 | `-c`, `--config`                  | Path      | `source-config.yaml`       | YAML file that defines global attributes and metric lists.                                        |
 | `-df`, `--document-filename`      | string    | `README.md`                          | Name of the generated file (relative to `--output`).                                              |
 | `-h`, `--help`                    | –         | –                                    | Show the built-in help message.                                                                   |

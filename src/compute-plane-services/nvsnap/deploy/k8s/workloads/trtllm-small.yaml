@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# TensorRT-LLM with TinyLlama-1.1B (single GPU) — criu-v2 checkpoint/restore.
+# trtllm-serve exposes an OpenAI-compatible API on port 8000.
+#
+# No injection stack: the criu-v2 in-namespace CRIU engine handles the process
+# at the OS level, so the container just runs stock trtllm-serve under setsid.
+#
+# The legacy interception stack this used to carry is incompatible with
+# criu-v2: /etc/ld.so.preload is mount-namespace wide, and criu-v2 nsenters
+# CRIU into that namespace, so the loader force-loaded the intercept library
+# into CRIU itself and the dump hung before finishing seize.
+#
+# First deploy is slow: ~25GB image pull plus TensorRT engine compilation.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: trtllm-small
+  namespace: nvsnap-system
+  labels:
+    app: trtllm-small
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/demo-name: "TensorRT-LLM"
+    nvsnap.io/desc: "TinyLlama 1.1B on TensorRT-LLM"
+    nvsnap.io/model: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    nvsnap.io/port: "8000"
+    nvsnap.io/gpus: "1"
+    nvsnap.io/path: "criu"
+    nvsnap.io/ckpt-size: "31 GB"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: trtllm
+      image: nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc5
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          ulimit -c unlimited
+          # criu-v2 convention: launch the workload in its own session via
+          # setsid — the agent dumps the GPU leader's session, never container
+          # init. Stdio goes to a rootfs file so CRIU restores those fds as
+          # plain files; bash stays pid1 to reap orphans and tails the file so
+          # kubectl logs keeps working.
+          nohup setsid trtllm-serve \
+            TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --kv_cache_free_gpu_memory_fraction 0.3 > /trtllm.out 2>&1 < /dev/null &
+          tail -F /trtllm.out &
+          while true; do sleep 30; done
+      env:
+        - { name: LD_LIBRARY_PATH, value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PYTHONFAULTHANDLER, value: "1" }
+        - { name: PYTHONUNBUFFERED,   value: "1" }
+        - { name: NVSNAP_LOG_LEVEL,     value: "3" }
+        - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+        - { name: HF_HUB_DISABLE_XET, value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        # TensorRT-LLM runs under HPC-X Open MPI, so UCX initializes even on a
+        # single GPU. Two of its default transports produce VMAs CRIU cannot
+        # dump, and the container is privileged so it sees the node's real
+        # RDMA devices:
+        #   ib    -> maps /dev/infiniband/uverbsN doorbell pages. No CRIU
+        #            plugin claims those, so collect-mappings dies with
+        #            "handle_device_vma plugin failed" (proc_parse.c:121).
+        #   sysv  -> UCX's shm transport allocates a SysV segment alongside its
+        #            POSIX one. criu-v2 nsenters into the container's IPC ns,
+        #            so CRIU sees no ipc ns to dump and rejects the mapping:
+        #            "doesn't live in IPC ns" (cr-dump.c:511).
+        # posix keeps shared memory working; there is no RDMA peer to talk to
+        # on a single-GPU single-node pod. This is only free because the pod is
+        # single-node. A multi-node deployment needs ib, so it needs the device
+        # mappings handled rather than avoided: see NVIDIA/nvcf#891. Do not
+        # promote this to a webhook or cluster-wide default.
+        # Verified: with this set the tree
+        # holds zero infiniband and zero SYSV mappings and the dump succeeds.
+        - { name: UCX_TLS, value: "tcp,self,posix,cma,cuda_copy,cuda_ipc" }
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet:
+          path: /v1/models
+          port: 8000
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 60
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          nvidia.com/gpu: "1"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+
+  restartPolicy: Never

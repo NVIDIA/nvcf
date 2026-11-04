@@ -24,7 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	nvcav1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	nvcav1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 )
 
 // StorageRequestFromV1 converts a v1 StorageRequest to v2beta1 (e.g. when reading v1 from the API).
@@ -84,6 +84,7 @@ func storageRequestSpecFromV1(s *nvcav1.StorageRequestSpec) StorageRequestSpec {
 	if s.ModelCache != nil {
 		out.ModelCache = &ModelCacheSpec{
 			CacheHandle: s.ModelCache.CacheHandle,
+			Backend:     s.ModelCache.Backend,
 			Encryption:  nil,
 		}
 		if s.ModelCache.Encryption != nil {
@@ -111,6 +112,7 @@ func storageRequestSpecToV1(s *StorageRequestSpec) nvcav1.StorageRequestSpec {
 	if s.ModelCache != nil {
 		out.ModelCache = &nvcav1.ModelCacheSpec{
 			CacheHandle: s.ModelCache.CacheHandle,
+			Backend:     s.ModelCache.Backend,
 			Encryption:  nil,
 		}
 		if s.ModelCache.Encryption != nil {

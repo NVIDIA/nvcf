@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue"
 )
 
 var _ queue.Client = (*Client)(nil)
@@ -37,6 +37,10 @@ type QueueMessage struct {
 type Client struct {
 	// Speed up tests using 10's of milliseconds instead of seconds.
 	Use10MillisForWaits bool
+
+	// If set, ReceiveMessage returns FailReceiveErr for FailReceiveQueueURL.
+	FailReceiveQueueURL string
+	FailReceiveErr      error
 
 	queues map[string][]QueueMessage
 	mu     sync.RWMutex
@@ -106,6 +110,10 @@ done:
 
 func (c *Client) ReceiveMessage(ctx context.Context, input queue.ReceiveMessageInput) ([]queue.ReceiveMessageOutput, error) {
 	qi := input.QueueInfo
+
+	if c.FailReceiveErr != nil && qi.QueueURL == c.FailReceiveQueueURL {
+		return nil, c.FailReceiveErr
+	}
 
 	c.mu.Lock()
 	if c.queues == nil {

@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: ${K3D_CLUSTER_NAME}
+
+image: rancher/k3s:v1.30.2-k3s2
+servers: 1
+agents: 2
+
+volumes:
+  - volume: ${PWD}/bin/generic-credential-provider:/var/lib/kubelet/plugins/generic-credential-provider
+    nodeFilters:
+      - all
+  - volume: ${PWD}/config/credential-provider-config.yaml:/etc/kubernetes/credential-provider/config.yaml
+    nodeFilters:
+      - all
+  - volume: ${PWD}/secrets/docker-config.json:/etc/kubernetes/secrets/docker-config.json
+    nodeFilters:
+      - all
+  - volume: ${PWD}/apps/node-tuning/node-tuning.yaml:/var/lib/rancher/k3s/server/manifests/node-tuning.yaml
+    nodeFilters:
+      - server:*
+
+options:
+  k3d:
+    wait: true
+  k3s:
+    extraArgs:
+      - arg: "--disable=traefik"
+        nodeFilters:
+          - server:*
+      - arg: "--image-credential-provider-config=/etc/kubernetes/credential-provider/config.yaml"
+        nodeFilters:
+          - all
+      - arg: "--image-credential-provider-bin-dir=/var/lib/kubelet/plugins/"
+        nodeFilters:
+          - all
+    nodeLabels:
+      - label: usage=workload
+        nodeFilters:
+          - agent:0
+          - agent:1
+      - label: run.ai/simulated-gpu-node-pool=default
+        nodeFilters:
+          - agent:0
+          - agent:1
+      - label: nvidia.com/gpu.family=hopper
+        nodeFilters:
+          - agent:0
+          - agent:1
+      - label: nvidia.com/gpu.machine=PowerEdge-R750
+        nodeFilters:
+          - agent:0
+          - agent:1
+      - label: nvidia.com/cuda.driver.major=555
+        nodeFilters:
+          - agent:0
+          - agent:1
+      - label: nvidia.com/cuda.driver.minor=42
+        nodeFilters:
+          - agent:0
+          - agent:1
+      - label: nvidia.com/cuda.driver.rev=06
+        nodeFilters:
+          - agent:0
+          - agent:1

@@ -1,0 +1,103 @@
+/*
+ * nccl-ioctl-trace.bt — bpftrace script for diagnosing cuda-checkpoint hangs
+ *
+ * Traces nvidia_ioctl calls to identify exactly which ioctl command
+ * cuda-checkpoint blocks on when NCCL state is present.
+ *
+ * Usage (run on GPU node as root):
+ *   bpftrace nccl-ioctl-trace.bt
+ *
+ * In a separate terminal, trigger the checkpoint:
+ *   ./scripts/test-e2e.sh vllm-70b
+ *
+ * When cuda-checkpoint hangs, the last ioctl command printed is the blocker.
+ * Press Ctrl+C to get the summary histogram.
+ *
+ * Key columns:
+ *   pid   — host PID making the ioctl
+ *   comm  — process name (cuda-checkpoint, python, etc.)
+ *   cmd   — nvidia ioctl command code (hex)
+ *   fd    — file descriptor (/dev/nvidia*)
+ *   dur   — how long the ioctl took (us)
+ */
+
+BEGIN
+{
+    printf("Tracing nvidia_ioctl calls... Ctrl+C for summary.\n");
+    printf("%-8s %-20s %-6s %-10s %-10s\n", "PID", "COMM", "FD", "CMD", "EVENT");
+}
+
+/* Entry: record timestamp */
+kprobe:nvidia_ioctl
+{
+    @start[tid] = nsecs;
+    @fd[tid] = arg0;
+    @cmd[tid] = arg1;
+
+    printf("%-8d %-20s %-6d 0x%-8x ENTER\n", pid, comm, arg0, arg1);
+}
+
+/* Return: calculate duration */
+kretprobe:nvidia_ioctl
+/@start[tid]/
+{
+    $dur_us = (nsecs - @start[tid]) / 1000;
+    $ret = retval;
+
+    /* Only print if took > 1ms (filter noise) */
+    if ($dur_us > 1000) {
+        printf("%-8d %-20s %-6d 0x%-8x SLOW %dus ret=%d\n",
+               pid, comm, @fd[tid], @cmd[tid], $dur_us, $ret);
+    }
+
+    @ioctl_duration_us = hist($dur_us);
+    @ioctl_by_cmd[@cmd[tid]] = count();
+
+    /* Track very slow calls (>1s) — these are likely the deadlock */
+    if ($dur_us > 1000000) {
+        @blocked[pid, comm, @cmd[tid]] = count();
+    }
+
+    delete(@start[tid]);
+    delete(@fd[tid]);
+    delete(@cmd[tid]);
+}
+
+/* Also trace cuda-checkpoint process lifecycle */
+tracepoint:sched:sched_process_exec
+/str(args.filename) == "cuda-checkpoint" ||
+ str(args.filename) == "/usr/local/bin/cuda-checkpoint" ||
+ str(args.filename) == "/var/lib/containerd/nvsnap-checkpoints/cuda-checkpoint"/
+{
+    printf("\n>>> cuda-checkpoint EXEC pid=%d\n\n", pid);
+    @cuda_ckpt_pid = pid;
+}
+
+tracepoint:sched:sched_process_exit
+/@cuda_ckpt_pid == pid/
+{
+    printf("\n>>> cuda-checkpoint EXIT pid=%d\n\n", pid);
+    @cuda_ckpt_pid = 0;
+}
+
+END
+{
+    printf("\n=== Summary ===\n");
+
+    printf("\n--- ioctl duration histogram (us) ---\n");
+    print(@ioctl_duration_us);
+
+    printf("\n--- ioctl count by command ---\n");
+    print(@ioctl_by_cmd);
+
+    printf("\n--- blocked calls (>1s) ---\n");
+    print(@blocked);
+
+    clear(@start);
+    clear(@fd);
+    clear(@cmd);
+    clear(@ioctl_duration_us);
+    clear(@ioctl_by_cmd);
+    clear(@blocked);
+    clear(@cuda_ckpt_pid);
+}

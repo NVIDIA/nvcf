@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- $metricsEnabled := dig "metrics" "enabled" false .Values.llmApiGateway }}
+{{- $smEnabled := dig "metrics" "serviceMonitor" "enabled" false .Values.llmApiGateway }}
+{{- if and $smEnabled (not $metricsEnabled) }}
+{{- fail "llmApiGateway.metrics.enabled must be true when llmApiGateway.metrics.serviceMonitor.enabled is true" }}
+{{- end }}
+{{- if and $metricsEnabled $smEnabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "llm-api-gateway.fullname" . }}-metrics
+  labels:
+    {{- include "llm-api-gateway.labels" . | nindent 4 }}
+spec:
+  endpoints:
+    - interval: {{ dig "metrics" "serviceMonitor" "interval" "30s" .Values.llmApiGateway | quote }}
+      path: {{ dig "metrics" "serviceMonitor" "path" "/metrics" .Values.llmApiGateway | quote }}
+      port: {{ dig "metrics" "serviceMonitor" "port" "metrics" .Values.llmApiGateway | quote }}
+  namespaceSelector:
+    matchNames:
+      - {{ include "llm-api-gateway.namespace" . }}
+  selector:
+    matchLabels:
+      {{- include "llm-api-gateway.selectorLabels" . | nindent 6 }}
+{{- end }}

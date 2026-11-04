@@ -8,6 +8,7 @@ receivers:
   prometheus:
     config:
       scrape_configs:
+{{- if .PlatformMetricsFederationEnabled }}
         - job_name: "nvcf-worker"
           scrape_interval: 30s
           scrape_timeout: 25s
@@ -15,7 +16,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               - '{job=~"nvcf-worker", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"utils", __name__=~"(nvcf_worker_service_request_total|nvcf_worker_service_response_total|nvcf_worker_service_stream_streaming_app_ready|nvcf_worker_service_stream_streaming_app_ready_timestamp|nvcf_worker_service_stream_session_duration_seconds_bucket|nvcf_worker_service_stream_session_duration_seconds_count|nvcf_worker_service_stream_session_duration_seconds_sum|nvcf_worker_service_inference_request_time_seconds_total|nvcf_worker_service_inference_uploads_total|nvcf_worker_service_inference_bytes_total|nvcf_worker_service_inference_failure_total|nvcf_worker_service_worker_thread_count_total|nvcf_worker_service_worker_thread_busy_seconds_total|nvcf_worker_service_bytes_total|nvcf_worker_service_request_latency_seconds_bucket|nvcf_worker_service_request_latency_seconds_sum|nvcf_worker_service_request_latency_seconds_count|nvcf_worker_service_stream_latency_seconds_bucket|nvcf_worker_service_stream_latency_seconds_sum|nvcf_worker_service_stream_latency_seconds_count|nvct_worker_service_result_total|nvcf_worker_service_stream_active)"}'
@@ -29,7 +30,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               - '{job=~"nvca", namespace="nvca-system", pod=~"nvca.*", container="agent", __name__=~"(nvca_instance_type_allocatable|nvca_instance_type_capacity)"}'
@@ -44,11 +45,11 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               # kubelet (relabel rules aligned with byoo-prometheus servicemonitor_kubelet.yaml)
-              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"inference|task|", __name__=~"(container_cpu_cfs_throttled_periods_total|container_cpu_cfs_throttled_seconds_total|container_cpu_usage_seconds_total|container_memory_cache|container_memory_rss|container_memory_swap|container_memory_usage_bytes|container_memory_working_set_bytes|container_fs_limit_bytes|container_fs_usage_bytes|container_fs_reads_bytes_total|container_fs_reads_total|container_fs_writes_bytes_total|container_fs_writes_total|container_network_receive_bytes_total|container_network_receive_errors_total|container_network_receive_packets_dropped_total|container_network_receive_packets_total|container_network_transmit_bytes_total|container_network_transmit_errors_total|container_network_transmit_packets_dropped_total|container_network_transmit_packets_total)"}'
+              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"inference|task|POD|", __name__=~"(container_cpu_cfs_throttled_periods_total|container_cpu_cfs_throttled_seconds_total|container_cpu_usage_seconds_total|container_memory_cache|container_memory_rss|container_memory_swap|container_memory_usage_bytes|container_memory_working_set_bytes|container_fs_limit_bytes|container_fs_usage_bytes|container_fs_reads_bytes_total|container_fs_reads_total|container_fs_writes_bytes_total|container_fs_writes_total|container_network_receive_bytes_total|container_network_receive_errors_total|container_network_receive_packets_dropped_total|container_network_receive_packets_total|container_network_transmit_bytes_total|container_network_transmit_errors_total|container_network_transmit_packets_dropped_total|container_network_transmit_packets_total)"}'
           metric_relabel_configs:
             # for container_fs_.+ metrics
             - source_labels: [device]
@@ -68,7 +69,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               # kube-state-metrics (relabel rules aligned with byoo-prometheus servicemonitor_kube-state-metrics.yaml)
@@ -83,7 +84,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               # nvidia-dcgm-exporter (relabel rules aligned with byoo-prometheus servicemonitor_dcgm-exporter.yaml)
@@ -94,6 +95,7 @@ receivers:
               replacement: $1
             - action: labelkeep
               regex: "(__name__|container|DCGM_FI_DRIVER_VERSION|device|job|modelName|pci_bus_id|pod)"
+{{- end }}
         - job_name: opentelemetry-collector
           scrape_interval: 30s
           scrape_timeout: 25s
@@ -103,7 +105,7 @@ receivers:
           metric_relabel_configs:
             - source_labels: [__name__]
               action: keep
-              regex: "(otelcol_receiver_refused_metric_points_total|otelcol_receiver_refused_spans_total|otelcol_receiver_refused_log_records_total|otelcol_receiver_accepted_metric_points_total|otelcol_receiver_accepted_spans_total|otelcol_receiver_accepted_log_records_total|otelcol_exporter_sent_metric_points_total|otelcol_exporter_sent_spans_total|otelcol_exporter_sent_log_records_total|otelcol_exporter_send_failed_metric_points_total|otelcol_exporter_send_failed_spans_total|otelcol_exporter_send_failed_log_records_total|otelcol_processor_incoming_items_total|otelcol_processor_outgoing_items_total)"
+              regex: "(otelcol_.*)"
 
 processors:
   batch:
@@ -127,6 +129,13 @@ processors:
     attributes:
       - key: service.instance.id
         action: delete
+      # target_info is built from resource attributes only, so it never receives
+      # the datapoint labels metricstransform adds. Without a per-instance
+      # attribute every collector federating the same upstream on a node emits an
+      # identical target_info series and the writes conflict on ingest.
+      - key: instance_id
+        action: insert
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
   attributes/add-metadata:
     actions:
       - action: insert
@@ -165,7 +174,7 @@ processors:
         value: "${env:NVCT_TASK_ID:-unknown}"
       {{ end }}
 
-  metricstransform:
+  metrics_transform:
     transforms:
       - include: ^.*$
         match_type: regexp
@@ -208,7 +217,7 @@ processors:
           {{ end }}
 
 extensions:
-  cgroupruntime:
+  cgroup_runtime:
     gomaxprocs:
       enabled: true
     gomemlimit:

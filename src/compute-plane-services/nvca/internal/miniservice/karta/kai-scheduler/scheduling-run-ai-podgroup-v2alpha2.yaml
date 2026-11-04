@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+kind: Karta
+apiVersion: run.ai/v1alpha1
+metadata:
+  name: scheduling-run-ai-podgroup-v2alpha2
+spec:
+  structureDefinition:
+    rootComponent:
+      name: podgroup
+      kind:
+        group: scheduling.run.ai
+        version: v2alpha2
+        kind: PodGroup
+      # Flat PodGroups approximate replica count with minMember (gang size).
+      # Hierarchical PodGroups use minSubGroup / subgroup thresholds and have no
+      # Karta-compatible replica field, so omit scale reporting in that mode.
+      scaleDefinition:
+        replicasPath: .spec.minMember
+      statusDefinition:
+        conditionsDefinition:
+          path: .status.schedulingConditions
+          typeFieldName: type
+          statusFieldName: status
+          messageFieldName: message
+          reasonFieldName: reason
+        statusMappings:
+          initializing:
+            - byExpression:
+                expression: ((.status.resourcesStatus.allocated // {}) | keys | length) == 0
+                expectedResult: "true"
+          running:
+            - byExpression:
+                expression: ((.status.resourcesStatus.allocated // {}) | keys | length) > 0
+                expectedResult: "true"
+          failed:
+            - byConditions:
+                - type: UnschedulableOnNodePool
+                  status: "True"
+    childComponents:
+      - name: pod
+        kind:
+          group: ""
+          version: v1
+          kind: Pod
+        ownerRef: podgroup
+        specDefinition:
+          podTemplateSpecPath: .
+        podSelector:
+          componentTypeSelector:
+            keyPath: .metadata.annotations["pod-group-name"]
+          componentInstanceSelector:
+            idPath: .metadata.labels["kai.scheduler/subgroup-name"]
+  optimizationInstructions:
+    gangScheduling:
+      podGroups:
+        - name: podgroup
+          members:
+            - componentName: pod
+              groupByKeyPaths:
+                - .metadata.annotations["pod-group-name"]

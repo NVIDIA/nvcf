@@ -65,8 +65,9 @@ pub async fn wait_for_cassandra(
 pub async fn wait_for_timeseries_db(
     config: &TimeseriesDbSettings,
     credential_provider: Option<Arc<dyn CredentialProvider + Send + Sync>>,
+    secrets: Option<Arc<SecretFileWatcher>>,
 ) -> Result<Arc<TimeseriesDbClient>, anyhow::Error> {
-    let client = TimeseriesDbClient::new(config, credential_provider)
+    let client = TimeseriesDbClient::new_with_secrets(config, credential_provider, secrets)
         .map(Arc::new)
         .map_err(|e| anyhow::anyhow!("Failed to create TimeseriesDbClient: {}", e))?;
     (|| {

@@ -5,8 +5,8 @@
 ### Self-hosted CLI
 
 You need a working `nvcf-cli` configured against your self-managed cluster.
-If you have not set this up yet, follow the [self-hosted-cli](../user/cli.md) guide to
-install the binary and the [cli-configuration](../user/cli.md) section to point it at your
+If you have not set this up yet, follow the [self-hosted-cli](../overview/cli.md) guide to
+install the binary and the [cli-configuration](../overview/cli.md) section to point it at your
 gateway.
 
 Verify the CLI can reach the cluster before continuing:
@@ -37,13 +37,13 @@ The `grpc_echo_sample` from the same repository shares the
 </Note>
 
 The source, build instructions, and registry push examples are in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/function_samples/load_tester_supreme)
+[NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/load-tester-supreme)
 repository. Build and push the image to whichever container registry your
 cluster has credentials for:
 
 ```bash
-git clone https://github.com/NVIDIA/nv-cloud-function-helpers.git
-cd nv-cloud-function-helpers/examples/function_samples/load_tester_supreme
+git clone https://github.com/NVIDIA/nvcf.git
+cd nvcf/examples/function-samples/load-tester-supreme
 
 # Build
 docker build --platform linux/amd64 -t load_tester_supreme .
@@ -115,8 +115,8 @@ The CLI saves the function and version IDs automatically. Run
 ## Clone the load test scripts
 
 ```bash
-git clone https://github.com/NVIDIA/nv-cloud-function-helpers.git
-cd nv-cloud-function-helpers/examples/load-tests
+git clone https://github.com/NVIDIA/nvcf.git
+cd nvcf/examples/load-tests
 ```
 
 ## Install k6

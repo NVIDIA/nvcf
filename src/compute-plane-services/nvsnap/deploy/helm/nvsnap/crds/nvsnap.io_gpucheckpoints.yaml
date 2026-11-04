@@ -1,0 +1,223 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gpucheckpoints.nvsnap.io
+  annotations:
+    description: "GPU Checkpoint resource for saving and restoring GPU workload state"
+spec:
+  group: nvsnap.io
+  names:
+    kind: GPUCheckpoint
+    listKind: GPUCheckpointList
+    plural: gpucheckpoints
+    singular: gpucheckpoint
+    shortNames:
+      - gpucp
+      - ckpt
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - podName
+              properties:
+                podName:
+                  type: string
+                  description: "Name of the pod to checkpoint"
+                containerName:
+                  type: string
+                  description: "Container to checkpoint (defaults to first)"
+                storageClass:
+                  type: string
+                  description: "StorageClass for checkpoint PVC"
+                retentionDays:
+                  type: integer
+                  default: 30
+                  description: "Days to retain checkpoint"
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - InProgress
+                    - Running
+                    - Completed
+                    - Failed
+                    - Restoring
+                    - Restored
+                message:
+                  type: string
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                checkpointPath:
+                  type: string
+                checkpointSize:
+                  type: integer
+                  format: int64
+                # Content-addressed identity (nvsnap#56). nvsnap-server writes
+                # this on the Completed transition; NVCA Hook B reads it
+                # to mark the function Warm. Without it Hook B refuses to
+                # mark Warm and retries forever — see nvsnap#80, the
+                # 2026-06-02 Hook B retry storm on GCP-H100-a.
+                checkpointHash:
+                  type: string
+                # Node the capture landed on. nvsnap-server.setCheckpointStatus
+                # writes this verbatim; older schema only declared
+                # originalNodeName which nvsnap-server never populates, so
+                # `kubectl get gpucheckpoint` showed Node=<none> always.
+                nodeName:
+                  type: string
+                originalPodUID:
+                  type: string
+                originalNodeName:
+                  type: string
+                imageRef:
+                  type: string
+                gpuCount:
+                  type: integer
+                restoredPodName:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Pod
+          type: string
+          jsonPath: .spec.podName
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Size
+          type: integer
+          jsonPath: .status.checkpointSize
+        - name: Node
+          type: string
+          # Was .status.originalNodeName which nvsnap-server never writes;
+          # nodeName is the field setCheckpointStatus actually populates.
+          jsonPath: .status.nodeName
+        - name: Hash
+          type: string
+          jsonPath: .status.checkpointHash
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gpurestores.nvsnap.io
+  annotations:
+    description: "GPU Restore resource for restoring GPU workloads from checkpoints"
+spec:
+  group: nvsnap.io
+  names:
+    kind: GPURestore
+    listKind: GPURestoreList
+    plural: gpurestores
+    singular: gpurestore
+    shortNames:
+      - gpurs
+      - restore
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - checkpointName
+              properties:
+                checkpointName:
+                  type: string
+                  description: "Name of GPUCheckpoint to restore from"
+                targetNodeName:
+                  type: string
+                  description: "Force restore to specific node"
+                newPodName:
+                  type: string
+                  description: "Name for restored pod"
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Running
+                    - Completed
+                    - Failed
+                message:
+                  type: string
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                restoredPodName:
+                  type: string
+                restoredPodUID:
+                  type: string
+                nodeName:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Checkpoint
+          type: string
+          jsonPath: .spec.checkpointName
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Pod
+          type: string
+          jsonPath: .status.restoredPodName
+        - name: Node
+          type: string
+          jsonPath: .status.nodeName
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

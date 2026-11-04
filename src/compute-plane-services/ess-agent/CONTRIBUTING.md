@@ -26,7 +26,7 @@ of Origin (DCO) sign-off. The DCO is a lightweight mechanism to certify that you
 wrote or otherwise have the right to submit your contribution. The full text of
 the DCO is available at [https://developercertificate.org/](https://developercertificate.org/):
 
-```
+```text
 Developer Certificate of Origin
 Version 1.1
 
@@ -66,7 +66,7 @@ By making a contribution to this project, I certify that:
 
 Add a `Signed-off-by` line to each of your commit messages:
 
-```
+```text
 Signed-off-by: Your Name <your.email@example.com>
 ```
 

@@ -50,7 +50,7 @@ func TestVaultAgentTokenQuery_Fetch(t *testing.T) {
 }
 
 func TestVaultAgentTokenQuery_Fetch_missingFile(t *testing.T) {
-	// Use a non-existant token file path.
+	// Use a non-existent token file path.
 	d, err := NewVaultAgentTokenQuery("/tmp/invalid-file")
 	if err != nil {
 		t.Fatal(err)

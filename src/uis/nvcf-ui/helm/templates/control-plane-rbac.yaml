@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Namespaced: the monitor writes its health ConfigMap only into its own
+# namespace (NAMESPACE = metadata.namespace), so ConfigMap access stays scoped
+# to the release namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "nvcf-ui.controlPlane.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcf-ui.controlPlane.labels" . | nindent 4 }}
+rules:
+  # Write the control-plane-health ConfigMap (server-side apply) and read it back.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "nvcf-ui.controlPlane.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcf-ui.controlPlane.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "nvcf-ui.controlPlane.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "nvcf-ui.controlPlane.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Cluster-scoped: components.yaml addresses workloads by their own namespace, so
+# the monitor must read workloads and pods in ANY namespace to evaluate health
+# (see k8shealth.go). These grants are read-only. The resource name is suffixed
+# with the namespace so multiple releases in different namespaces don't collide
+# on these cluster-scoped objects.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "nvcf-ui.controlPlane.fullname" . }}-{{ .Release.Namespace }}
+  labels:
+    {{- include "nvcf-ui.controlPlane.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "nvcf-ui.controlPlane.fullname" . }}-{{ .Release.Namespace }}
+  labels:
+    {{- include "nvcf-ui.controlPlane.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "nvcf-ui.controlPlane.fullname" . }}-{{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "nvcf-ui.controlPlane.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

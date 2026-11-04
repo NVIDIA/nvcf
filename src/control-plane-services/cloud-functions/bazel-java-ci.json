@@ -1,0 +1,6 @@
+{
+  "ci_lane": "docker-host",
+  "component_kind": "java-service",
+  "id": "cloud-functions",
+  "tests_skip": false
+}

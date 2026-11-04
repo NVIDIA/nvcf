@@ -19,11 +19,14 @@ package clustermgmt
 
 import (
 	"context"
+	"errors"
+	"net/url"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
-	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
-	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvidiaiov1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvcaoptypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
 // HelmManagedClient is kept for backward compatibility but now simply wraps
@@ -42,5 +45,34 @@ func NewHelmManagedClient(
 	vaultMountPathTemplate string,
 ) *HelmManagedClient {
 	return &HelmManagedClient{newConfigMapClient(
-		envType, fetcher, vaultMountPathTemplate, withClusterSourceMapper(nvcaoptypes.ClusterSourceHelmManaged))}
+		envType,
+		fetcher,
+		vaultMountPathTemplate,
+		withRequiredHelmManagedVaultAddress(),
+		withClusterSourceMapper(nvcaoptypes.ClusterSourceHelmManaged),
+	)}
+}
+
+// withRequiredHelmManagedVaultAddress rejects enabled Vault configuration that
+// cannot produce a valid token audience or Vault Agent server address.
+func withRequiredHelmManagedVaultAddress() clusterMapper {
+	return func(_ context.Context, _ nvidiaiov1.EnvType, src *clusterDTO, _ *Cluster) error {
+		if !src.vaultEnabled() {
+			return nil
+		}
+
+		address := src.VaultConfig.Address
+		parsed, err := url.Parse(address)
+		if err != nil ||
+			address != strings.TrimSpace(address) ||
+			(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Hostname() == "" ||
+			parsed.User != nil ||
+			parsed.RawQuery != "" ||
+			parsed.Fragment != "" {
+			return errors.New("vaultConfig.address must be an absolute HTTP(S) URL with no credentials, query, or fragment when OAuth is enabled")
+		}
+
+		return nil
+	}
 }

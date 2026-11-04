@@ -1,0 +1,7 @@
+# Mark code-generator output as generated so GitHub collapses it in pull
+# request diffs and excludes it from language statistics. These files are
+# produced by `make codegen-update` and `make openapigen-update` from the
+# types in pkg/apis/; review the types, not the output.
+**/zz_generated*.go linguist-generated=true
+**/generated.openapi.go linguist-generated=true
+pkg/client/** linguist-generated=true

@@ -26,7 +26,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
 
 var scheme = runtime.NewScheme()
@@ -79,6 +79,8 @@ type LaunchSpecification struct {
 	ICMSEnvironment string `json:"icmsEnvironment"`
 	CloudProvider   string `json:"cloudProvider"`
 	GPUName         string `json:"gpuName"`
+	// MaxRequestConcurrency is the per-instance limit from the NVCF deployment GPU specification.
+	MaxRequestConcurrency int `json:"maxRequestConcurrency,omitempty"`
 
 	// Helm chart function components of the launch spec.
 	*common.HelmChartLaunchSpecification `json:",inline"`

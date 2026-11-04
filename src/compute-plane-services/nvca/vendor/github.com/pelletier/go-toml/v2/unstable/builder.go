@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 package unstable
 
 // root contains a full AST.
@@ -8,15 +5,6 @@ package unstable
 // It is immutable once constructed with Builder.
 type root struct {
 	nodes []Node
-}
-
-// Iterator over the top level nodes.
-func (r *root) Iterator() Iterator {
-	it := Iterator{}
-	if len(r.nodes) > 0 {
-		it.node = &r.nodes[0]
-	}
-	return it
 }
 
 func (r *root) at(idx reference) *Node {
@@ -36,12 +24,10 @@ type builder struct {
 	lastIdx int
 }
 
-func (b *builder) Tree() *root {
-	return &b.tree
-}
-
 func (b *builder) NodeAt(ref reference) *Node {
-	return b.tree.at(ref)
+	n := b.tree.at(ref)
+	n.nodes = &b.tree.nodes
+	return n
 }
 
 func (b *builder) Reset() {
@@ -51,24 +37,28 @@ func (b *builder) Reset() {
 
 func (b *builder) Push(n Node) reference {
 	b.lastIdx = len(b.tree.nodes)
+	n.next = -1
+	n.child = -1
 	b.tree.nodes = append(b.tree.nodes, n)
 	return reference(b.lastIdx)
 }
 
 func (b *builder) PushAndChain(n Node) reference {
 	newIdx := len(b.tree.nodes)
+	n.next = -1
+	n.child = -1
 	b.tree.nodes = append(b.tree.nodes, n)
 	if b.lastIdx >= 0 {
-		b.tree.nodes[b.lastIdx].next = newIdx - b.lastIdx
+		b.tree.nodes[b.lastIdx].next = int32(newIdx) //nolint:gosec // TOML ASTs are small
 	}
 	b.lastIdx = newIdx
 	return reference(b.lastIdx)
 }
 
 func (b *builder) AttachChild(parent reference, child reference) {
-	b.tree.nodes[parent].child = int(child) - int(parent)
+	b.tree.nodes[parent].child = int32(child) //nolint:gosec // TOML ASTs are small
 }
 
 func (b *builder) Chain(from reference, to reference) {
-	b.tree.nodes[from].next = int(to) - int(from)
+	b.tree.nodes[from].next = int32(to) //nolint:gosec // TOML ASTs are small
 }

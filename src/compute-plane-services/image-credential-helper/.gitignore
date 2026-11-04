@@ -6,3 +6,6 @@ _output/
 # Test items
 __debug_bin*
 coverage.out
+
+# Bazel
+bazel-*

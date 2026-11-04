@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "parseutil",
+    srcs = ["parseutil.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/parseutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_hashicorp_go_secure_stdlib_parseutil//:parseutil",
+        "@com_github_hashicorp_go_sockaddr//:go-sockaddr",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":parseutil",
+    visibility = ["//visibility:public"],
+)

@@ -33,12 +33,12 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
 )
 
 const (
 	// ScopeName is the instrumentation scope name.
-	ScopeName = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry"
+	ScopeName = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/telemetry"
 )
 
 func GetTracer() oteltrace.Tracer {

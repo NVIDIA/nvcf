@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2012-2023 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -110,7 +107,7 @@ func (c *EncodedConn) Publish(subject string, v any) error {
 	if err != nil {
 		return err
 	}
-	return c.Conn.publish(subject, _EMPTY_, nil, b)
+	return c.Conn.publish(subject, _EMPTY_, false, nil, b)
 }
 
 // PublishRequest will perform a Publish() expecting a response on the
@@ -123,7 +120,7 @@ func (c *EncodedConn) PublishRequest(subject, reply string, v any) error {
 	if err != nil {
 		return err
 	}
-	return c.Conn.publish(subject, reply, nil, b)
+	return c.Conn.publish(subject, reply, true, nil, b)
 }
 
 // Request will create an Inbox and perform a Request() call

@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -294,7 +295,7 @@ func TestRenderPlain_CheckStream(t *testing.T) {
 		CheckStarted{Category: "pre-kubernetes-setup", ID: "gateway-api"},
 		CheckCompleted{Category: "pre-kubernetes-setup", ID: "gateway-api", Passed: false, Severity: "error", Message: "Gateway API CRDs not installed", HintURL: "https://docs.nvidia.com/nvcf/self-hosted/gateway-api"},
 		CategoryCompleted{Category: "pre-kubernetes-setup", PassedCount: 13, FailedCount: 1, DurationSec: 2.4},
-		Final{Success: false, Verdict: "failed", TotalChecks: 14, PassedCount: 13, FailedCount: 1},
+		Final{Success: false, Verdict: "failed", TotalChecks: 15, PassedCount: 13, FailedCount: 1, WarningCount: 1},
 	}
 
 	for _, ev := range events {
@@ -447,4 +448,19 @@ func TestRenderPlain_Uninstall(t *testing.T) {
 	}
 	require.NoError(t, r.Close())
 	assertGolden(t, "testdata/plain_uninstall.golden", buf.String())
+}
+
+// Every row's message is printed, so a skipped or unverified pass reads apart
+// from a verified one, and an ID longer than the padded column stays apart
+// from passed=.
+func TestRenderPlain_CheckRowsKeepTheirMessage(t *testing.T) {
+	var buf bytes.Buffer
+	r := newPlainRendererForTest(&buf, (&fakeClock{times: []time.Time{ts("2026-04-29T03:45:01Z")}}).Now)
+	require.NoError(t, r.Emit(context.Background(), CheckCompleted{
+		Category: "registry-credentials", ID: "registry-cred-123456789012.dkr.ecr.us-west-2.amazonaws.com",
+		Passed: true, Severity: "info", Message: "skipped (ECR uses SigV4)",
+	}))
+	assert.Contains(t, buf.String(),
+		`registry-credentials/registry-cred-123456789012.dkr.ecr.us-west-2.amazonaws.com passed=true `+
+			`message="skipped (ECR uses SigV4)"`)
 }

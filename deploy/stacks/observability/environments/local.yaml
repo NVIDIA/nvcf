@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Local example. Change this one value to control, compute, or all to render the
+# corresponding complete default stack.
+observability:
+  profile: disabled

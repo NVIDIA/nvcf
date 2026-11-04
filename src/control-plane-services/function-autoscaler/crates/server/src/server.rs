@@ -17,23 +17,27 @@
  * limitations under the License.
  */
 
-use rs_autoscaler::health::HealthStatus;
 use rs_autoscaler::{
     health::Health,
     metrics,
     nvcf_api::{nvcf_client::NvcfApiService, oauth2_client::OAuth2Client},
     routes,
-    scaling::{policy_cache::PolicyCache, ScalingPolicy, ScalingSettings},
+    scaling::{
+        policy_cache::PolicyCache, validate_discovery_interval, ActiveFunctionSource,
+        ScalingPolicy, ScalingSettings,
+    },
     secrets::secrets_file_watcher::SecretFileWatcher,
     settings, startup, timeseries_db, work,
-    work::new_function_state_cache,
+    work::{
+        local_registry::LocalFunctionRegistry, new_function_state_cache, new_metric_routing_cache,
+    },
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{collections::HashMap, net::SocketAddr};
 
-use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
+use axum::{http::StatusCode, response::IntoResponse};
 use rand::Rng;
 use rs_autoscaler::tracing_init;
 use tokio::signal;
@@ -43,20 +47,20 @@ const NODE_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project_name = env!("CARGO_PKG_NAME");
+    let (_cli_args, config) = settings::parse_settings();
+    validate_discovery_interval(config.scaling.discover_new_functions_interval)?;
+
     let node_id = gethostname::gethostname()
         .into_string()
         .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
-    let region: String = std::env::var("AWS_REGION").unwrap_or_default();
     tracing::info!("Node ID: {}", node_id);
-    let node_id = if !region.is_empty() {
-        format!("{}.{}", node_id, region)
+    let node_id = if !config.region.is_empty() {
+        format!("{}.{}", node_id, config.region)
     } else {
         node_id
     };
     // Initialize shutdown signal
     let shutdown = Arc::new(AtomicBool::new(false));
-
-    let (_cli_args, config) = settings::parse_settings();
 
     let secrets_path = config
         .secrets_path
@@ -64,7 +68,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("secrets_path is required but not provided in configuration")?;
 
     let metrics_settings = &config.server.metrics;
-    metrics::init_metrics(metrics_settings).expect("failed initializing metrics");
+    if metrics_settings.is_enabled() {
+        metrics::init_metrics(metrics_settings).expect("failed initializing metrics");
+    }
 
     let secrets_file_watcher = Arc::new(SecretFileWatcher::new(secrets_path).await?);
 
@@ -72,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut tracing_settings = config.server.tracing.clone();
     if let Some(tracing_key) = tracing_key {
-        // Ensure headers is initialized to a default HashMap if None
+        // Preserve configured tracing headers while replacing the token placeholder.
         let headers = tracing_settings.headers.get_or_insert_with(HashMap::new);
         headers.insert("lightstep-access-token".to_string(), tracing_key.access_key);
     }
@@ -101,11 +107,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start the probe server immediately so liveness probes respond while waiting for dependencies.
     // Liveness always returns 200; readiness returns 503 until Cassandra/TimeseriesDb are healthy.
     const PROBE_PORT: u16 = 8181;
-    let health_app = Router::new()
-        .route("/admin/health/liveness", get(routes::get_liveness))
-        .route("/admin/health/readiness", get(routes::get_readiness))
-        .route("/health", get(routes::get_health))
-        .with_state(health.clone());
+    // /info is served here too, so build metadata stays readable while the
+    // service is still waiting on Cassandra.
+    let health_app = routes::health_router(health.clone());
     let probe_addr = SocketAddr::from(([0, 0, 0, 0], PROBE_PORT));
     let probe_listener = tokio::net::TcpListener::bind(probe_addr).await?;
     tracing::info!("Probe server listening on {}", probe_addr);
@@ -127,10 +131,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cassandra_service_manager =
         startup::wait_for_cassandra(&config.cassandra, secrets_file_watcher.clone()).await;
 
-    health.register_health_checker(cassandra_service_manager.clone());
+    health
+        .register_health_checker(cassandra_service_manager.clone())
+        .await;
 
     tracing::info!("Initializing TimeseriesDb client (waiting with exponential backoff until up)");
-    let timeseries_db_credential_provider = if !config.timeseries_db.disable_auth {
+    let timeseries_db_credential_provider = if config.timeseries_db.effective_auth_mode()
+        == timeseries_db::TimeseriesDbAuthMode::Token
+    {
         tracing::info!("Initializing TimeseriesDb credentials provider for token generation");
         Some(Arc::new(
             timeseries_db::timeseries_db_client::AuthnCredentialProvider::new(
@@ -145,11 +153,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let timeseries_db_client =
-        startup::wait_for_timeseries_db(&config.timeseries_db, timeseries_db_credential_provider)
-            .await?;
+    let timeseries_db_client = startup::wait_for_timeseries_db(
+        &config.timeseries_db,
+        timeseries_db_credential_provider,
+        Some(secrets_file_watcher.clone()),
+    )
+    .await?;
 
-    health.register_health_checker(timeseries_db_client.clone());
+    health
+        .register_health_checker(timeseries_db_client.clone())
+        .await;
 
     // Start coordinated health monitoring for all registered services
     health
@@ -161,6 +174,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scaling_settings = initialize_scaling_settings(
         config.scaling.clone(),
         config.nvcf_api.oauth2_token_api_address.clone(),
+        config.nvcf_api.oauth2_token_scope.clone(),
+        config.nvcf_api.nvcf_api_grpc_address.clone(),
         secrets_file_watcher.clone(),
     )
     .await;
@@ -170,23 +185,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let health_monitor = Arc::clone(&health);
     let node_id_health = node_id.clone();
 
-    tracing::info!(
-        "Creating a new node entry for {} if not exists",
-        node_id_health
-    );
-    // Create a new node entry in Cassandra
+    tracing::info!("Reporting initial node health for {}", node_id_health);
     let current_health = health_monitor.get_health();
-    if current_health.overall_status == HealthStatus::Healthy {
-        work::create_new_node(
-            &node_id_health,
-            &HealthStatus::Healthy,
-            &cassandra_health_manager,
-        )
-        .await?;
-    } else {
-        panic!(
-            "Node is not healthy, cannot start service: {:?}",
-            current_health.overall_status
+    if let Err(e) = work::create_new_node(
+        &node_id_health,
+        &current_health.overall_status,
+        &cassandra_health_manager,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %e,
+            health = ?current_health.overall_status,
+            "Initial node health report failed; background health reporting will retry"
         );
     }
 
@@ -225,6 +236,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let function_state_cache = Arc::new(new_function_state_cache());
+    let metric_routing_cache = Arc::new(new_metric_routing_cache());
+    let local_registry = (config.scaling.active_function_source
+        == ActiveFunctionSource::LocalDiscovery)
+        .then(|| {
+            Arc::new(LocalFunctionRegistry::new(Duration::from_secs(
+                config.cassandra.recently_invoked_ttl_seconds.max(1) as u64,
+            )))
+        });
+
+    let local_discovery_task = if let Some(registry) = local_registry.clone() {
+        let client = Arc::clone(&timeseries_db_client);
+        let buckets = Arc::clone(&bucket_manager);
+        let env = config.timeseries_db.env.clone();
+        let ignore_env = config.timeseries_db.ignore_env;
+        let interval = config.scaling.discover_new_functions_interval;
+        let lookback = Duration::from_secs(
+            config
+                .scaling
+                .discovery_recently_invoked_lookback_minutes
+                .checked_mul(60)
+                .ok_or("scaling.discovery_recently_invoked_lookback_minutes is too large")?,
+        );
+        Some(tokio::spawn(async move {
+            // Spread the additional discovery load across replicas. The first
+            // tick still happens soon after startup to warm the empty registry.
+            let jitter_millis = rand::rng().random_range(0..5000);
+            tokio::time::sleep(Duration::from_millis(jitter_millis)).await;
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                if buckets.get_my_buckets().is_empty() {
+                    continue;
+                }
+                match work::discovery::fetch_timeseries_db_active_functions(
+                    &client, &env, ignore_env, lookback,
+                )
+                .await
+                {
+                    Ok(functions) => registry.merge(functions, &buckets),
+                    Err(error) => {
+                        metrics::record_local_discovery_failure();
+                        tracing::error!(error = %error, "Local function discovery failed");
+                    }
+                }
+            }
+        }))
+    } else {
+        None
+    };
 
     tracing::info!("Initializing NVCF API client");
     let cassandra_service_manager_nvcf = Arc::clone(&cassandra_service_manager);
@@ -243,7 +303,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timeseries_db_env_discover = config.timeseries_db.env.clone();
     let timeseries_db_ignore_env = config.timeseries_db.ignore_env;
     let lock_manager_discover = Arc::clone(&lock_manager);
-    tokio::spawn(async move {
+    let discovery_recently_invoked_lookback = Duration::from_secs(
+        config
+            .scaling
+            .discovery_recently_invoked_lookback_minutes
+            .checked_mul(60)
+            .ok_or("scaling.discovery_recently_invoked_lookback_minutes is too large")?,
+    );
+    let discovery_task = tokio::spawn(async move {
         let jitter_millis = rand::rng().random_range(0..5000);
         let discovery_interval =
             config.scaling.discover_new_functions_interval + Duration::from_millis(jitter_millis);
@@ -261,6 +328,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &timeseries_db_env_discover,
                 timeseries_db_ignore_env,
                 config.scaling.discovery_lock_duration.as_secs() as i32,
+                discovery_recently_invoked_lookback,
             )
             .await
             {
@@ -295,6 +363,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bucket_manager_p0 = Arc::clone(&bucket_manager);
     let lock_manager_p0 = Arc::clone(&lock_manager);
     let function_state_cache_p0 = Arc::clone(&function_state_cache);
+    let metric_routing_cache_p0 = Arc::clone(&metric_routing_cache);
+    let local_registry_p0 = local_registry.clone();
     let scaling_loop_interval = config.scaling.scaling_loop_interval;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(scaling_loop_interval);
@@ -306,9 +376,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 scaling_settings_p0.clone(),
                 &timeseries_db_env_p0,
                 timeseries_db_ignore_env,
-                &bucket_manager_p0,
+                Arc::clone(&bucket_manager_p0),
                 &lock_manager_p0,
                 Arc::clone(&function_state_cache_p0),
+                Arc::clone(&metric_routing_cache_p0),
+                local_registry_p0.clone(),
             )
             .await
             {
@@ -318,14 +390,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Main app on 8080
-    let app = Router::new()
-        .route("/health", get(routes::get_health))
-        .route("/admin/health/liveness", get(routes::get_liveness))
-        .route("/admin/health/readiness", get(routes::get_readiness))
-        .with_state(health.clone())
-        .fallback(handler_404);
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    // Main app
+    let app = routes::health_router(health.clone()).fallback(handler_404);
+    let addr = config
+        .server
+        .listen_addr()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
 
     let shutdown_clone = shutdown.clone();
     let shutdown_signal = async move {
@@ -339,12 +409,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Listening on {}", addr);
 
-    axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    let server =
+        axum::serve(listener, app.into_make_service()).with_graceful_shutdown(shutdown_signal);
+    let local_discovery_exit = async {
+        match local_discovery_task {
+            Some(task) => task.await,
+            None => std::future::pending().await,
+        }
+    };
+
+    tokio::select! {
+        result = server => result?,
+        result = discovery_task => {
+            return Err(discovery_task_error("function discovery", result).into());
+        }
+        result = local_discovery_exit => {
+            return Err(discovery_task_error("local function discovery", result).into());
+        }
+    }
 
     tracing::warn!("Server terminated");
     Ok(())
+}
+
+fn discovery_task_error(name: &str, result: Result<(), tokio::task::JoinError>) -> std::io::Error {
+    let message = match result {
+        Ok(()) => format!("{name} task exited unexpectedly"),
+        Err(error) => format!("{name} task failed: {error}"),
+    };
+    tracing::error!("{message}");
+    std::io::Error::other(message)
 }
 
 async fn handler_404() -> impl IntoResponse {
@@ -355,6 +449,8 @@ async fn handler_404() -> impl IntoResponse {
 async fn initialize_scaling_settings(
     mut settings: ScalingSettings,
     oauth2_token_api_address: String,
+    oauth2_token_scope: String,
+    nvcf_api_grpc_address: String,
     secrets_watcher: Arc<SecretFileWatcher>,
 ) -> ScalingSettings {
     match &settings.policy {
@@ -367,12 +463,20 @@ async fn initialize_scaling_settings(
         ScalingPolicy::Custom(config) => {
             tracing::info!(
                 "Using Custom scaling policy - per-function configs from gRPC endpoint: {}",
-                config.grpc_endpoint
+                nvcf_api_grpc_address
             );
-            tracing::info!("Cache configuration: TTL={}s", config.ttl_seconds);
+            tracing::info!(
+                "Policy cache configuration: TTL={}s, request timeout={}s",
+                config.ttl_seconds,
+                config.request_timeout_seconds,
+            );
 
             // Create OAuth2 client for gRPC auth (same auth mechanism as NVCF API)
-            let oauth2_client = match OAuth2Client::new(oauth2_token_api_address, secrets_watcher) {
+            let oauth2_client = match OAuth2Client::new(
+                oauth2_token_api_address,
+                oauth2_token_scope,
+                secrets_watcher,
+            ) {
                 Ok(client) => Arc::new(client),
                 Err(e) => {
                     tracing::error!("Failed to create OAuth2 client for policy cache: {}. Falling back to default thresholds.", e);
@@ -380,11 +484,14 @@ async fn initialize_scaling_settings(
                 }
             };
 
-            // Initialize the policy cache
+            // Initialize the policy cache. Uses the same NVCF API gRPC
+            // endpoint as the scaling loop's Autoscaler client, since both
+            // are the same upstream Autoscaler service.
             match PolicyCache::new(
-                config.grpc_endpoint.clone(),
+                nvcf_api_grpc_address,
                 oauth2_client,
                 config.ttl_seconds,
+                config.request_timeout_seconds,
                 settings.policy_cache_max_capacity,
                 config.default_thresholds.clone(),
                 config.default_factors.clone(),

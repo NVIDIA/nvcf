@@ -1,0 +1,27 @@
+---
+# Source: kai-scheduler/templates/default-shard.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: kai.scheduler/v1
+kind: SchedulingShard
+metadata:
+  name: default
+  annotations:
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  partitionLabelValue: ""
+  goMemLimitRatio: 0.9
+  placementStrategy:
+    gpu: binpack
+    cpu: binpack
+  plugins:
+    nodeplacement:
+      arguments:
+        cpu: spread
+        gpu: binpack
+  actions:
+    consolidation:
+      enabled: false
+    preempt:
+      enabled: false

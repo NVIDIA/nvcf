@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Copyright 2020 The Prometheus Authors
+// Copyright The Prometheus Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -28,6 +28,7 @@ type (
 
 // NetTCP returns the IPv4 kernel/networking statistics for TCP datagrams
 // read from /proc/net/tcp.
+//
 // Deprecated: Use github.com/mdlayher/netlink#Conn (with syscall.AF_INET) instead.
 func (fs FS) NetTCP() (NetTCP, error) {
 	return newNetTCP(fs.proc.Path("net/tcp"))
@@ -35,6 +36,7 @@ func (fs FS) NetTCP() (NetTCP, error) {
 
 // NetTCP6 returns the IPv6 kernel/networking statistics for TCP datagrams
 // read from /proc/net/tcp6.
+//
 // Deprecated: Use github.com/mdlayher/netlink#Conn (with syscall.AF_INET6) instead.
 func (fs FS) NetTCP6() (NetTCP, error) {
 	return newNetTCP(fs.proc.Path("net/tcp6"))
@@ -42,6 +44,7 @@ func (fs FS) NetTCP6() (NetTCP, error) {
 
 // NetTCPSummary returns already computed statistics like the total queue lengths
 // for TCP datagrams read from /proc/net/tcp.
+//
 // Deprecated: Use github.com/mdlayher/netlink#Conn (with syscall.AF_INET) instead.
 func (fs FS) NetTCPSummary() (*NetTCPSummary, error) {
 	return newNetTCPSummary(fs.proc.Path("net/tcp"))
@@ -49,6 +52,7 @@ func (fs FS) NetTCPSummary() (*NetTCPSummary, error) {
 
 // NetTCP6Summary returns already computed statistics like the total queue lengths
 // for TCP datagrams read from /proc/net/tcp6.
+//
 // Deprecated: Use github.com/mdlayher/netlink#Conn (with syscall.AF_INET6) instead.
 func (fs FS) NetTCP6Summary() (*NetTCPSummary, error) {
 	return newNetTCPSummary(fs.proc.Path("net/tcp6"))

@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use crate::metrics;
-use crate::nats::NatsService;
+use crate::nats::{NatsService, PollingRequestOwner};
 use crate::nvcf_api::{
     nvcf::{
         worker_invoke_function_request::{
@@ -24,15 +24,19 @@ use crate::nvcf_api::{
             },
             StatelessConfig,
         },
-        InputAssetReference, StringKv, WorkerInvokeFunctionRequest,
+        InputAssetReference, StringKv, WorkerInvokeFunctionRequest, WorkerResultTracking,
     },
     AllowedFunctionInvocations, AllowedFunctionVersion, NVCFService,
 };
 use crate::rate_limit::{LimitResult, RateLimitService};
 use crate::request_id::RequestId;
 use crate::routes::{
-    app_error::AppError, body_stream, http_headers::remove_hop_by_hop_headers,
-    input_asset_header::InputAssetHeader, nvcf_status_header::NVCFStatusHeader, tlb::FunctionId,
+    app_error::AppError,
+    body_stream,
+    http_headers::{inject_invocation_region_header, remove_hop_by_hop_headers},
+    input_asset_header::InputAssetHeader,
+    nvcf_status_header::NVCFStatusHeader,
+    tlb::FunctionId,
 };
 use crate::s3::{Error, S3Service};
 use crate::settings::AppConfig;
@@ -74,27 +78,42 @@ pub struct FunctionRouting {
 struct InflightRequestGuard {
     nats_service: Arc<NatsService>,
     request_id: RequestId,
+    function_id: Uuid,
     function_version_id: Uuid,
+    nca_id: String,
     completed: bool,
+    // True once a status was returned (server-side error). Lets Drop tell a
+    // server error from a client disconnect (future dropped, no status).
+    status_returned: bool,
 }
 
 impl InflightRequestGuard {
     fn new(
         nats_service: Arc<NatsService>,
         request_id: RequestId,
+        function_id: Uuid,
         function_version_id: Uuid,
+        nca_id: String,
     ) -> Self {
         Self {
             nats_service,
             request_id,
+            function_id,
             function_version_id,
+            nca_id,
             completed: false,
+            status_returned: false,
         }
     }
 
     fn mark_completed(&mut self) {
         tracing::trace!("InflightRequestGuard mark_completed called");
         self.completed = true;
+    }
+
+    // A status was returned (server-side error); keep Drop from counting it as 499.
+    fn mark_status_returned(&mut self) {
+        self.status_returned = true;
     }
 }
 
@@ -107,6 +126,22 @@ impl Drop for InflightRequestGuard {
             self.completed
         );
         if !self.completed {
+            // No status produced => client early disconnect. Record it so it's
+            // countable (server errors are already counted via
+            // `AppError::into_response`).
+            if !self.status_returned {
+                tracing::info!(
+                    request_id = %self.request_id,
+                    function_id = %self.function_id,
+                    function_version_id = %self.function_version_id,
+                    nca_id = %self.nca_id,
+                    "client disconnected before a response was produced; recording client early disconnect"
+                );
+                metrics::record_nvcf_application_error(
+                    metrics::CLIENT_EARLY_DISCONNECT_STATUS.to_string(),
+                    Some(self.function_id.to_string()),
+                );
+            }
             let nats_svc = self.nats_service.clone();
             let req_id = self.request_id;
             let version_id = self.function_version_id;
@@ -114,6 +149,11 @@ impl Drop for InflightRequestGuard {
             task::spawn(
                 async move {
                     tracing::trace!("InflightRequestGuard cancelling request.");
+                    // tear down workers already running this request
+                    if let Err(e) = nats_svc.publish_cancel(req_id, version_id).await {
+                        tracing::warn!("Failed to publish cancel for {:?}: {:?}", req_id, e);
+                    }
+                    // drop the message if it hasn't been picked up yet
                     match timeout(
                         Duration::from_secs(10),
                         nats_svc.cancel_request(req_id, version_id),
@@ -139,6 +179,7 @@ impl Drop for InflightRequestGuard {
     }
 }
 
+/// Authorize an initial invocation and retain its caller for subsequent polling.
 #[allow(clippy::too_many_arguments)]
 pub async fn pexec(
     Path(function_routing): Path<FunctionRouting>,
@@ -181,6 +222,7 @@ pub async fn pexec(
 
     let (mut parts, request_body) = req.into_parts();
     remove_hop_by_hop_headers(&mut parts.headers);
+    inject_invocation_region_header(&mut parts.headers, nats_service.invocation_region_header());
     let stream_full_request = app_config.worker_stream_properties.stream_full_request
         || is_only_stream_full_request_opt_in(&parts.headers);
     let headers = if stream_full_request {
@@ -248,7 +290,14 @@ pub async fn pexec(
 
     if has_rate_limit
         && rate_limit_service
-            .check_rate_limit(nca_id.clone(), function_id, function_version_id, sync_check)
+            .check_rate_limit(
+                allowed_functions.authed_client_subject.clone(),
+                nca_id.clone(),
+                allowed_functions.authed_client_owner_nca_id.clone(),
+                function_id,
+                function_version_id,
+                sync_check,
+            )
             .await
             == LimitResult::Limited
     {
@@ -331,26 +380,50 @@ pub async fn pexec(
     tracing::trace!("Message sent to NATS");
 
     // Now we know we have a request in flight, create the guard.
-    let mut inflight_guard =
-        InflightRequestGuard::new(nats_service.clone(), request_id, function_version_id);
-    let response = handle_streaming_response(
+    let mut inflight_guard = InflightRequestGuard::new(
+        nats_service.clone(),
+        request_id,
+        function_id,
+        function_version_id,
+        nca_id.clone(),
+    );
+    let response = match handle_streaming_response(
         nats_service.clone(),
         function_id,
         function_version_id,
-        nca_id,
+        Some(PollingRequestOwner {
+            nca_id,
+            subject: allowed_functions.authed_client_subject,
+        }),
         request_id,
         poll_duration,
         start_time,
         None,
         response_rx,
     )
-    .await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            // Server-side error returns a status; mark it so Drop doesn't count a 499.
+            inflight_guard.mark_status_returned();
+            return Err(err.into());
+        }
+    };
 
     // If we got here, we are done and can mark the guard as completed so it doesn't cancel
     inflight_guard.mark_completed();
 
     // cancel requests if timed out on initial invocation since there will be nobody to listen for the response if it ever comes
     if response.status() == StatusCode::GATEWAY_TIMEOUT {
+        // tear down workers already running this request
+        if let Err(err) = nats_service
+            .publish_cancel(request_id, function_version_id)
+            .await
+        {
+            tracing::warn!("failed to publish cancel for timed out request {}", err)
+        }
+        // drop the message if it hasn't been picked up yet
         if let Err(err) = nats_service
             .cancel_request(request_id, function_version_id)
             .await
@@ -405,20 +478,22 @@ fn is_tlb(extensions: &Extensions) -> bool {
     extensions.get::<FunctionId>().is_some()
 }
 
+/// Preserve known ownership on intermediate responses without adopting legacy polls.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(
     level = Level::DEBUG,
     skip(
         nats_service,
         attach_response_rx,
-        start_time
+        start_time,
+        owner
     )
 )]
 pub(crate) async fn handle_streaming_response(
     nats_service: Arc<NatsService>,
     function_id: Uuid,
     function_version_id: Uuid,
-    nca_id: String,
+    owner: Option<PollingRequestOwner>,
     request_id: RequestId,
     poll_duration: Duration,
     start_time: SystemTime,
@@ -434,19 +509,23 @@ pub(crate) async fn handle_streaming_response(
             response?
         }
         _ = tokio::time::sleep(poll_duration + Duration::from_secs(2)) => {
-            tracing::warn!("generating gateway timeout response for request id {request_id}");
-            StatusCode::GATEWAY_TIMEOUT.into_response()
+            gateway_timeout_response(function_id, request_id)
         }
     };
 
-    if response.status() == StatusCode::ACCEPTED {
+    // Legacy polls must neither adopt the polling caller nor extend the old
+    // record's expiry; otherwise a rolling upgrade cannot age out old records.
+    if let (StatusCode::ACCEPTED, Some(owner)) = (response.status(), owner.as_ref()) {
         nats_service
             .record_polling_request(
                 region,
                 request_id,
-                function_id,
-                function_version_id,
-                start_time,
+                &WorkerResultTracking {
+                    function_id: function_id.to_string(),
+                    function_version_id: function_version_id.to_string(),
+                    request_time: Some(start_time.into()),
+                },
+                owner,
             )
             .await?;
     }
@@ -474,13 +553,22 @@ pub(crate) async fn handle_streaming_response(
                 metrics::record_invocation_end(
                     function_id.to_string(),
                     function_version_id.to_string(),
-                    nca_id.to_string(),
                     start_time,
                 );
             }),
         },
     );
     Ok(Response::from_parts(parts, Body::new(recorded_body)))
+}
+
+fn gateway_timeout_response(function_id: Uuid, request_id: RequestId) -> Response {
+    tracing::warn!("generating gateway timeout response for request id {request_id}");
+    metrics::record_nvcf_application_error(
+        StatusCode::GATEWAY_TIMEOUT.as_str().to_string(),
+        Some(function_id.to_string()),
+    );
+    Span::current().record("app_error", "true");
+    StatusCode::GATEWAY_TIMEOUT.into_response()
 }
 
 #[tracing::instrument(level = Level::TRACE, skip(s3_service))]
@@ -573,5 +661,234 @@ struct FnOnDrop {
 impl Drop for FnOnDrop {
     fn drop(&mut self) {
         (self.fn_on_drop)();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use metrics_util::MetricKind;
+    use std::time::Duration;
+    use testcontainers_modules::nats::Nats;
+    use testcontainers_modules::testcontainers::core::Mount;
+    use testcontainers_modules::testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt};
+
+    #[test]
+    fn gateway_timeout_response_records_function_error_metric() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let function_id = Uuid::new_v4();
+
+        ::metrics::with_local_recorder(&recorder, || {
+            let response = gateway_timeout_response(function_id, RequestId::new());
+            assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        });
+
+        let metric_value = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find_map(|(key, _, _, value)| {
+                let matches = key.kind() == MetricKind::Counter
+                    && key.key().name() == "app.invocation.error"
+                    && key
+                        .key()
+                        .labels()
+                        .any(|label| label.key() == "http_status_code" && label.value() == "504")
+                    && key.key().labels().any(|label| {
+                        label.key() == "function_id" && label.value() == function_id.to_string()
+                    });
+                matches.then_some(value)
+            })
+            .expect("gateway timeout response should record app.invocation.error by function_id");
+
+        assert_eq!(metric_value, DebugValue::Counter(1));
+    }
+
+    async fn make_nats_service() -> (Arc<NatsService>, async_nats::Client, ContainerAsync<Nats>) {
+        let container = Nats::default()
+            .with_tag("2.10.25")
+            .with_mount(
+                Mount::bind_mount(
+                    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/mocks/nats-server.conf"),
+                    "/nats-server.conf",
+                )
+                .with_access_mode(
+                    testcontainers_modules::testcontainers::core::AccessMode::ReadOnly,
+                ),
+            )
+            .start()
+            .await
+            .expect("start nats");
+        let host = container.get_host().await.unwrap().to_string();
+        let port = container.get_host_port_ipv4(4222).await.unwrap();
+        let address = format!("nats://{}:{}", host, port);
+
+        let nats_properties = crate::nats::NatsProperties {
+            nats_address: address.clone(),
+            ..Default::default()
+        };
+        let svc = NatsService::new(
+            &nats_properties,
+            "http://dummy.localhost",
+            None,
+            &crate::settings::GrpcClientConfig::default(),
+        )
+        .await
+        .expect("create NatsService");
+
+        let observer = async_nats::connect(&address).await.unwrap();
+        (Arc::new(svc), observer, container)
+    }
+
+    /// Drop on an unfinished guard broadcasts cancel with the request id.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires docker; run with cargo test -- --ignored"]
+    async fn test_inflight_guard_drop_publishes_cancel() {
+        let (svc, observer, _container) = make_nats_service().await;
+        let request_id = RequestId::new();
+        let fvid = Uuid::new_v4();
+        let mut sub = observer
+            .subscribe(format!("nvcf.cancel.{}", fvid))
+            .await
+            .unwrap();
+        observer.flush().await.unwrap();
+
+        {
+            let _guard = InflightRequestGuard::new(
+                svc.clone(),
+                request_id,
+                Uuid::new_v4(),
+                fvid,
+                "nca-test".to_string(),
+            );
+            // dropped at end of scope without mark_completed
+        }
+
+        let msg = tokio::time::timeout(Duration::from_secs(5), sub.next())
+            .await
+            .expect("should receive cancel within timeout")
+            .expect("subscription should not close");
+        assert_eq!(
+            std::str::from_utf8(&msg.payload).unwrap(),
+            request_id.to_string()
+        );
+    }
+
+    /// A completed guard stays silent on Drop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires docker; run with cargo test -- --ignored"]
+    async fn test_inflight_guard_drop_no_publish_when_completed() {
+        let (svc, observer, _container) = make_nats_service().await;
+        let request_id = RequestId::new();
+        let fvid = Uuid::new_v4();
+        let mut sub = observer
+            .subscribe(format!("nvcf.cancel.{}", fvid))
+            .await
+            .unwrap();
+        observer.flush().await.unwrap();
+
+        {
+            let mut guard = InflightRequestGuard::new(
+                svc.clone(),
+                request_id,
+                Uuid::new_v4(),
+                fvid,
+                "nca-test".to_string(),
+            );
+            guard.mark_completed();
+        }
+
+        let result = tokio::time::timeout(Duration::from_millis(300), sub.next()).await;
+        assert!(result.is_err(), "completed guard must not publish a cancel");
+    }
+
+    /// A client disconnect (dropped without a status ever produced) records a
+    /// client early disconnect.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires docker; run with cargo test -- --ignored"]
+    async fn test_inflight_guard_drop_records_client_early_disconnect() {
+        let (svc, _observer, _container) = make_nats_service().await;
+        let function_id = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        ::metrics::with_local_recorder(&recorder, || {
+            let _guard = InflightRequestGuard::new(
+                svc.clone(),
+                RequestId::new(),
+                function_id,
+                fvid,
+                "nca-test".to_string(),
+            );
+            // dropped without mark_completed / mark_status_returned => client disconnect
+        });
+
+        let value = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find_map(|(key, _, _, value)| {
+                let matches = key.kind() == MetricKind::Counter
+                    && key.key().name() == "app.invocation.error"
+                    && key.key().labels().any(|label| {
+                        label.key() == "http_status_code"
+                            && label.value() == metrics::CLIENT_EARLY_DISCONNECT_STATUS
+                    })
+                    && key.key().labels().any(|label| {
+                        label.key() == "function_id" && label.value() == function_id.to_string()
+                    });
+                matches.then_some(value)
+            })
+            .expect(
+                "client disconnect should record a client-early-disconnect app.invocation.error",
+            );
+
+        assert_eq!(value, DebugValue::Counter(1));
+    }
+
+    /// A server-side early exit (status was returned) must NOT be counted as a
+    /// client early disconnect.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires docker; run with cargo test -- --ignored"]
+    async fn test_inflight_guard_drop_no_client_early_disconnect_on_server_error() {
+        let (svc, _observer, _container) = make_nats_service().await;
+        let function_id = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        ::metrics::with_local_recorder(&recorder, || {
+            let mut guard = InflightRequestGuard::new(
+                svc.clone(),
+                RequestId::new(),
+                function_id,
+                fvid,
+                "nca-test".to_string(),
+            );
+            // a status was produced (server-side early exit)
+            guard.mark_status_returned();
+        });
+
+        let found_disconnect =
+            snapshotter
+                .snapshot()
+                .into_vec()
+                .into_iter()
+                .any(|(key, _, _, _)| {
+                    key.key().name() == "app.invocation.error"
+                        && key.key().labels().any(|label| {
+                            label.key() == "http_status_code"
+                                && label.value() == metrics::CLIENT_EARLY_DISCONNECT_STATUS
+                        })
+                });
+
+        assert!(
+            !found_disconnect,
+            "server-side error must not record a client early disconnect"
+        );
     }
 }

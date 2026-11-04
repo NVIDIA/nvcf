@@ -22,7 +22,7 @@ import (
 	"slices"
 	"strings"
 
-	nvcfv1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvcfv1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
 
 type EventCategory string
@@ -44,6 +44,11 @@ const (
 	// Default namespace names
 	DefaultNVCASystemNamespace   = "nvca-system"
 	DefaultNVCARequestsNamespace = "nvcf-backend"
+
+	// CreatedByOperatorAnnotation marks a namespace the operator created, as
+	// opposed to a pre-existing namespace it only labels. Uninstall deletes a
+	// configured requests namespace only when it carries this annotation.
+	CreatedByOperatorAnnotation = "nvca.nvcf.nvidia.io/created-by-operator"
 
 	// CRD names
 	StorageRequestCRDName = "storagerequests.nvca.nvcf.nvidia.io"

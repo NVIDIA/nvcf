@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
 
 func TestApplyEnvOverrides(t *testing.T) {
@@ -55,6 +55,19 @@ func TestApplyEnvOverrides(t *testing.T) {
 			overrides: map[string]string{"INIT_CONTAINER": "custom:v2"},
 			wantEnvs:  map[string]string{"INIT_CONTAINER": "custom:v2", "OTHER": "value"},
 			wantErr:   false,
+		},
+		{
+			name: "normalizes lowercase override key",
+			envB64: encodeTestEnv(map[string]string{
+				"BYOO_OTEL_COLLECTOR_CONTAINER": "original:v1",
+				"OTHER":                         "value",
+			}),
+			overrides: map[string]string{"byoo_otel_collector_container": "custom:v2"},
+			wantEnvs: map[string]string{
+				"BYOO_OTEL_COLLECTOR_CONTAINER": "custom:v2",
+				"OTHER":                         "value",
+			},
+			wantErr: false,
 		},
 		{
 			name:      "add new key",

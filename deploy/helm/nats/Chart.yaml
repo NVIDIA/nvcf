@@ -20,10 +20,10 @@ description: NVCF Helm chart for deploying NATS with opinionated defaults
 type: application
 
 # The version of this chart
-version: 0.6.0
+version: 0.7.0
 
 # NATS Server version
-appVersion: "2.11.10"
+appVersion: "2.14.9"
 
 dependencies:
   - name: nats

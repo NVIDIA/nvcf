@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright (c) 2015-2016 Dave Collins <dave@davec.name>
 //
 // Permission to use, copy, modify, and distribute this software for any

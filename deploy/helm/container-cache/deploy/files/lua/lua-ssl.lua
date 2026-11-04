@@ -14,7 +14,7 @@
 -- limitations under the License.
 -- generate and cache an (expiring) CA bundle based on the
 -- intermediate CA we have from vault and our private key.
--- use it to MITM the incomming TLS connection and masquerade
+-- use it to MITM the incoming TLS connection and masquerade
 -- as which ever host the client asked for. this requires the
 -- client to accept the CA chain from vault.
 local ssl            = require "ngx.ssl"
@@ -128,6 +128,21 @@ local function generate_ca_signed(sni_name, sni_ip, server_ip)
     -- RFC-3280 4.2.1.2
     assert(crt:add_extension(x509_extension.new("subjectKeyIdentifier", "hash", {
         subject = crt
+    })))
+
+    -- RFC 5280 4.2.1.1. Required in practice, not just for conformance:
+    -- OpenSSL 3.x rejects a certificate with no authorityKeyIdentifier when
+    -- X509_V_FLAG_X509_STRICT is set, with "Missing Authority Key Identifier".
+    -- Python 3.13's ssl.create_default_context() enables that flag by default,
+    -- so without this extension every request from a Python 3.13 client fails
+    -- certificate verification against this proxy.
+    --
+    -- "keyid,issuer" rather than "keyid:always": keyid is copied from the
+    -- issuer's subjectKeyIdentifier when it has one, and falls back to issuer
+    -- name and serial when it does not, so this cannot fail on a signing CA
+    -- that lacks a SKID.
+    assert(crt:add_extension(x509_extension.new("authorityKeyIdentifier", "keyid,issuer", {
+        issuer = ca_crt
     })))
 
     -- All done; sign

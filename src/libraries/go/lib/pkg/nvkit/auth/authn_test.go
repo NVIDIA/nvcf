@@ -31,8 +31,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/test/utils"
+	nverrors "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/test/utils"
 )
 
 const (
@@ -195,7 +195,7 @@ func TestAuthnConfig_HttpClientWithAuth(t *testing.T) {
 			} else {
 				assert.NotEqual(t, httpClient, clientWithAuth, tc.desc)
 				expectedNumCalls = 2
-				// If refresh interval is configured wait for atleast one background refresh to trigger
+				// If refresh interval is configured wait for at least one background refresh to trigger
 				if tc.cfg.RefreshConfig.Interval > 0 {
 					time.Sleep(time.Duration(2*tc.cfg.RefreshConfig.Interval) * time.Second)
 					// Remove the refresh job to avoid race condition with httpmock call during Deactivation

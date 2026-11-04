@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# check-mpl-audit — verify the ess-agent MPL modification record matches
+# files that carry NVIDIA's "Not a contribution" header.
+
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+ESS_AGENT_DIR="${REPO_ROOT}/src/compute-plane-services/ess-agent"
+ESS_AGENT_REL="src/compute-plane-services/ess-agent"
+AUDIT_FILE="${ESS_AGENT_DIR}/mpl-files-modified.md"
+
+if [[ ! -d "${ESS_AGENT_DIR}" ]]; then
+    echo "check-mpl-audit: ${ESS_AGENT_DIR} is absent; skipping."
+    exit 0
+fi
+
+if [[ ! -f "${AUDIT_FILE}" ]]; then
+    echo "ERROR: missing MPL audit file ${AUDIT_FILE#${REPO_ROOT}/}."
+    exit 1
+fi
+
+listed_paths=()
+modified_paths=()
+
+contains_path() {
+    local needle="$1"
+    shift
+
+    local path
+    for path in "$@"; do
+        if [[ "${path}" == "${needle}" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "${line}" =~ ^-[[:space:]]+\`([^\`]+)\`:[[:space:]].+$ ]] || continue
+    listed_paths+=("${BASH_REMATCH[1]}")
+done < "${AUDIT_FILE}"
+
+while IFS= read -r file; do
+    rel_path="${file#${ESS_AGENT_DIR}/}"
+    rel_path="${rel_path#${ESS_AGENT_REL}/}"
+
+    if python3 - "${file}" <<'PY'
+from pathlib import Path
+import sys
+
+content = Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
+sys.exit(0 if "Not a contribution" in content else 1)
+PY
+    then
+        modified_paths+=("${rel_path}")
+    fi
+done < <(git -C "${REPO_ROOT}" grep -l "SPDX-License-Identifier: MPL-2.0" -- src/compute-plane-services/ess-agent || true)
+
+missing_from_audit=()
+for rel_path in "${modified_paths[@]:-}"; do
+    [[ -n "${rel_path}" ]] || continue
+    if [[ ${#listed_paths[@]} -eq 0 ]] || ! contains_path "${rel_path}" "${listed_paths[@]:-}"; then
+        missing_from_audit+=("${rel_path}")
+    fi
+done
+
+stale_audit_entries=()
+for rel_path in "${listed_paths[@]:-}"; do
+    [[ -n "${rel_path}" ]] || continue
+    full_path="${ESS_AGENT_DIR}/${rel_path}"
+    if [[ ! -f "${full_path}" ]]; then
+        stale_audit_entries+=("${rel_path} (missing file)")
+        continue
+    fi
+
+    if ! grep -q "SPDX-License-Identifier: MPL-2.0" "${full_path}"; then
+        stale_audit_entries+=("${rel_path} (not MPL)")
+        continue
+    fi
+
+    if ! python3 - "${full_path}" <<'PY'
+from pathlib import Path
+import sys
+
+content = Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
+sys.exit(0 if "Not a contribution" in content else 1)
+PY
+    then
+        stale_audit_entries+=("${rel_path} (missing Not a contribution header)")
+    fi
+done
+
+if [[ ${#missing_from_audit[@]} -gt 0 || ${#stale_audit_entries[@]} -gt 0 ]]; then
+    if [[ ${#missing_from_audit[@]} -gt 0 ]]; then
+        printf 'ERROR: MPL-modified files missing from %s:\n' "${AUDIT_FILE#${REPO_ROOT}/}"
+        printf '  - %s\n' "${missing_from_audit[@]}"
+    fi
+
+    if [[ ${#stale_audit_entries[@]} -gt 0 ]]; then
+        printf 'ERROR: stale entries in %s:\n' "${AUDIT_FILE#${REPO_ROOT}/}"
+        printf '  - %s\n' "${stale_audit_entries[@]}"
+    fi
+
+    exit 1
+fi
+
+echo "MPL audit file is in sync with NVIDIA-modified MPL files."

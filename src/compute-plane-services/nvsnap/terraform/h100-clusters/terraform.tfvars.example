@@ -1,0 +1,70 @@
+// Copy this to `terraform.tfvars` and fill in.
+// terraform.tfvars is gitignored (Terraform convention; double-check
+// the repo's .gitignore covers it before committing).
+
+// ─── REQUIRED ───────────────────────────────────────────────────────────
+
+// Confirmed 2026-05-17: provision INTO YOUR_GPU_PROJECT
+// (display name SIS-GCP-STAGE). you@example.com has IAM access
+// here via the SIS-GCP-STAGE group. The reservation we consume
+// (gsc-a3-megagpu-8g-shared-res-3) lives in a SEPARATE owner project
+// (YOUR_RESERVATION_PROJECT) — see reservation_project_id below.
+project_id = "YOUR_GPU_PROJECT"
+
+// ─── DEFAULTS — adjust if needed ───────────────────────────────────────
+
+// Reservation is in asia-southeast1-c; if it moves, change zone +
+// region together.
+// region = "asia-southeast1"
+// zone   = "asia-southeast1-c"
+
+// reservation_project_id = "YOUR_RESERVATION_PROJECT"
+// reservation_name       = "gsc-a3-megagpu-8g-shared-res-3"
+
+// Cluster names. Defaults are GCP-H100-a / GCP-H100-b.
+// cluster_a_name = "GCP-H100-a"
+// cluster_b_name = "GCP-H100-b"
+
+// Default 8 + 8. If the reservation is 16 you can't go higher; if
+// it's larger you can scale up here.
+// nodes_per_cluster = 8
+
+// ─── GKE control plane: shared defaults ────────────────────────────────
+//
+// release_channel: RAPID (newest) / REGULAR / STABLE / EXTENDED (oldest).
+// EXTENDED is the only channel still carrying 1.31 (which we need to
+// stay on Ubuntu 22.04 / kernel 5.15 — see NvSnap issue #41).
+// release_channel    = "EXTENDED"
+// kubernetes_version = "1.31.14-gke.1942000"
+
+// ─── Per-cluster overrides (pick + choose OS per cluster) ──────────────
+//
+// Cluster A: pin to the kernel-5.15 baseline. Empty values below inherit
+// the shared defaults above.
+// kubernetes_version_a = ""
+// release_channel_a    = ""
+
+// Cluster B: choose ONE of the two modes.
+//
+//   (1) Ubuntu 24.04 / kernel 6.8 — exercise the newer kernel.
+//       Verify nvcr.io/nvidia/driver:<ver>-ubuntu24.04 exists for the
+//       Operator's pinned driver version before applying (mode 1
+//       won't pull the -ubuntu22.04 tag).
+//         kubernetes_version_b = "1.35.3-gke.1389000"
+//         release_channel_b    = "REGULAR"
+//
+//   (2) Mirror cluster A (Ubuntu 22.04 / kernel 5.15) for cross-cluster
+//       cascade testing. Leave empty to inherit the shared defaults.
+//         kubernetes_version_b = ""
+//         release_channel_b    = ""
+
+// Subnet / pod / service CIDRs. Defaults don't overlap with the
+// example-gpu-cluster test cluster (which uses 10.0.0.0/16
+// for nodes and 192.168.0.0/16 for pods). If you share a wider org
+// VPC where these conflict, override.
+// subnet_a_cidr   = "10.40.0.0/22"
+// subnet_b_cidr   = "10.44.0.0/22"
+// pods_a_cidr     = "10.48.0.0/16"
+// pods_b_cidr     = "10.52.0.0/16"
+// services_a_cidr = "10.56.0.0/20"
+// services_b_cidr = "10.56.16.0/20"

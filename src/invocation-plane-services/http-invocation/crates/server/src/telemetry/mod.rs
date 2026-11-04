@@ -16,11 +16,14 @@
 pub mod settings;
 
 use crate::telemetry::settings::{OtelResourceSettings, TracingSettings};
+use opentelemetry::propagation::TextMapCompositePropagator;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithTonicConfig};
+use opentelemetry_sdk::propagation::{BaggagePropagator, TraceContextPropagator};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
+use tonic::transport::ClientTlsConfig;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -64,6 +67,13 @@ pub fn initialize_tracing(
     let mut exporter_builder = SpanExporter::builder().with_tonic();
 
     if let Some(endpoint) = settings.otlp_endpoint() {
+        // tonic only enables TLS when an explicit `ClientTlsConfig` is supplied; the
+        // `tls-webpki-roots` feature alone is not enough — without this the channel will
+        // fail with "Connecting to HTTPS without TLS enabled" against an `https://` collector.
+        if endpoint.starts_with("https://") {
+            exporter_builder =
+                exporter_builder.with_tls_config(ClientTlsConfig::new().with_enabled_roots());
+        }
         exporter_builder = exporter_builder.with_endpoint(endpoint);
     }
 
@@ -92,6 +102,7 @@ pub fn initialize_tracing(
         .build();
 
     opentelemetry::global::set_tracer_provider(provider.clone());
+    register_text_map_propagator();
 
     // --- Build tracing-subscriber and install as global default ---
     let tracer = provider.tracer(service_name.to_string());
@@ -106,4 +117,79 @@ pub fn initialize_tracing(
         .init();
 
     TracingGuard { provider }
+}
+
+/// Register a W3C trace-context + baggage propagator as the OpenTelemetry
+/// global. Inbound `traceparent` headers, outbound NATS carriers, and the
+/// `OtelGrpcLayer` / `reqwest_tracing::TracingMiddleware` outbound clients all
+/// resolve through this global; without it they silently degrade to a noop and
+/// every request starts a fresh root trace.
+fn register_text_map_propagator() {
+    opentelemetry::global::set_text_map_propagator(TextMapCompositePropagator::new(vec![
+        Box::new(TraceContextPropagator::new()),
+        Box::new(BaggagePropagator::new()),
+    ]));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opentelemetry::trace::TraceContextExt;
+    use std::collections::HashMap;
+
+    // Regression test: the propagator registration was silently dropped once
+    // during a refactor (nv_svc_facilities -> in-tree telemetry). If it breaks
+    // again, every request will start a fresh root trace and no downstream
+    // service will see a `traceparent`.
+    #[test]
+    fn global_propagator_extracts_w3c_traceparent() {
+        register_text_map_propagator();
+
+        let mut carrier: HashMap<String, String> = HashMap::new();
+        carrier.insert(
+            "traceparent".into(),
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01".into(),
+        );
+
+        let cx = opentelemetry::global::get_text_map_propagator(|p| p.extract(&carrier));
+        let span_context = cx.span().span_context().clone();
+
+        assert!(
+            span_context.is_valid(),
+            "global propagator did not extract the traceparent — is it registered?"
+        );
+        assert_eq!(
+            span_context.trace_id().to_string(),
+            "0af7651916cd43dd8448eb211c80319c"
+        );
+        assert_eq!(span_context.span_id().to_string(), "b7ad6b7169203331");
+    }
+
+    // Outbound side of the same wire — exercised in production by NATS publish,
+    // OtelGrpcLayer, and reqwest TracingMiddleware.
+    #[test]
+    fn global_propagator_injects_w3c_traceparent() {
+        use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
+        register_text_map_propagator();
+
+        let span_context = SpanContext::new(
+            TraceId::from_hex("0af7651916cd43dd8448eb211c80319c").unwrap(),
+            SpanId::from_hex("b7ad6b7169203331").unwrap(),
+            TraceFlags::SAMPLED,
+            true,
+            TraceState::default(),
+        );
+        let cx = opentelemetry::Context::new().with_remote_span_context(span_context);
+
+        let mut carrier: HashMap<String, String> = HashMap::new();
+        opentelemetry::global::get_text_map_propagator(|p| p.inject_context(&cx, &mut carrier));
+
+        let traceparent = carrier
+            .get("traceparent")
+            .expect("global propagator did not inject `traceparent` — is it registered?");
+        assert!(
+            traceparent.contains("0af7651916cd43dd8448eb211c80319c"),
+            "unexpected traceparent value: {traceparent}"
+        );
+    }
 }

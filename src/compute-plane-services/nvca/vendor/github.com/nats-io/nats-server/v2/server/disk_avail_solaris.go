@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2025 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,8 +16,8 @@
 package server
 
 import (
-	"os"
 	"golang.org/x/sys/unix"
+	"os"
 )
 
 func diskAvailable(storeDir string) int64 {
@@ -38,4 +35,3 @@ func diskAvailable(storeDir string) int64 {
 	}
 	return ba
 }
-

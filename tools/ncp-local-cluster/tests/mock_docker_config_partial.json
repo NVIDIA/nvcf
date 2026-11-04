@@ -1,0 +1,7 @@
+{
+  "auths": {
+    "partial-registry.com": {
+      "email": "user@example.com"
+    }
+  }
+} 

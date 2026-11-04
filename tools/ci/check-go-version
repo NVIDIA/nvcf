@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Asserts that Go toolchain declarations are consistent.
+#
+# There are deliberately TWO toolchains here, not one, and conflating them is a
+# mistake this script exists partly to prevent:
+#
+#   1. The hermetic Bazel SDK, declared once in tools/go-toolchain/go.mod.
+#      Everything built through rules_go uses it. Bazel derives it via
+#      go_sdk.from_file and GitHub Actions via setup-go's go-version-file, so
+#      almost nothing repeats the literal.
+#
+#   2. The host Go shipped in the bazel-ci container image. Exactly one thing
+#      uses it: byoo-otel-collector's otelcol genrule, which shells out to
+#      `go build` against $PATH because the collector's 250-module graph does
+#      not resolve under rules_go. That toolchain is paired with
+#      src/compute-plane-services/byoo-otel-collector/go.work, and the pairing
+#      is what must hold, not equality with the Bazel SDK.
+#
+# Before this existed, four versions were live at once: 1.25.0 in Bazel, 1.25.6
+# in the CI image, 1.26.0 in two workflows, and 1.25.11 in a service go.mod. CI
+# linted with one and compiled with another.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${repo_root}"
+
+anchor_file="tools/go-toolchain/go.mod"
+expected="$(awk '/^toolchain go/ { sub(/^go/, "", $2); print $2; exit }' "${anchor_file}")"
+if [ -z "${expected}" ]; then
+  echo "error: no toolchain directive in ${anchor_file}" >&2
+  exit 1
+fi
+echo "expected Go toolchain: ${expected}  (from ${anchor_file})"
+
+failures=0
+report() { echo "  MISMATCH: $*" >&2; failures=$((failures + 1)); }
+
+# go.work.bazel must match: Bazel requires a literal there.
+work_go="$(awk '/^go / { print $2; exit }' go.work.bazel)"
+if [ "${work_go}" != "${expected}" ]; then
+  report "go.work.bazel declares ${work_go}"
+else
+  echo "  ok: go.work.bazel"
+fi
+
+# No workflow may pin a literal; they must derive from the anchor.
+if literals=$(grep -rn "go-version: '" .github/workflows/*.yml 2>/dev/null); then
+  while IFS= read -r line; do
+    report "workflow pins a literal Go version: ${line}"
+  done <<<"${literals}"
+else
+  echo "  ok: no workflow pins a literal Go version"
+fi
+
+# Nothing may reintroduce a literal SDK version in the root module.
+if grep -q 'go_sdk.download(version' MODULE.bazel; then
+  report "MODULE.bazel uses go_sdk.download with a literal; use go_sdk.from_file"
+else
+  echo "  ok: MODULE.bazel derives the SDK from the anchor"
+fi
+
+# The host toolchain is a separate concern. byoo-otel-collector's otelcol
+# genrule compiles against the bazel-ci image's Go, so the version that image
+# ships must match byoo's go.work, NOT the hermetic Bazel SDK above. Asserting
+# equality with the SDK here would break that pairing and silently change how
+# the shipped collector binary is compiled.
+byoo_dir="src/compute-plane-services/byoo-otel-collector"
+byoo_work="${byoo_dir}/go.work"
+if [ ! -d "${byoo_dir}" ]; then
+  echo "  host toolchain: byoo-otel-collector is absent; nothing requires host Go"
+elif [ -f "${byoo_work}" ]; then
+  byoo_go="$(awk '/^go / { print $2; exit }' "${byoo_work}")"
+  echo "  host toolchain: byoo-otel-collector expects Go ${byoo_go}"
+  echo "                  the bazel-ci image must ship that version, because"
+  echo "                  the otelcol genrule builds against \$PATH go."
+  if [ "${byoo_go}" = "${expected}" ]; then
+    echo "  note: it currently equals the Bazel SDK version; that is incidental,"
+    echo "        the two are allowed to differ."
+  fi
+else
+  report "${byoo_dir} exists but ${byoo_work} is missing; the host toolchain requirement cannot be stated"
+fi
+
+if [ "${failures}" -ne 0 ]; then
+  echo "${failures} Go toolchain declaration(s) disagree with ${anchor_file}" >&2
+  exit 1
+fi
+echo "all Go toolchain declarations agree"

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2021 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -334,4 +331,11 @@ func IoctlLoopSetStatus64(fd int, value *LoopInfo64) error {
 // IoctlLoopConfigure configures all loop device parameters in a single step
 func IoctlLoopConfigure(fd int, value *LoopConfig) error {
 	return ioctlPtr(fd, LOOP_CONFIGURE, unsafe.Pointer(value))
+}
+
+// IoctlPidfdInfo fetches information about a pidfd.
+// The Mask field of the info argument indicates which
+// values to fetch.
+func IoctlPidfdInfo(fd int, info *PidfdInfo) error {
+	return ioctlPtr(fd, PIDFD_GET_INFO, unsafe.Pointer(info))
 }

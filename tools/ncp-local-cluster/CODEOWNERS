@@ -1,0 +1,6 @@
+# CODEOWNERS for ncp-local-cluster.
+* @dsx-ai-factory/nvcf-dev
+
+# Monitoring components
+/apps/kube-state-metrics/ @dsx-ai-factory/nvcf-dev
+/apps/kube-prometheus-stack/ @dsx-ai-factory/nvcf-dev

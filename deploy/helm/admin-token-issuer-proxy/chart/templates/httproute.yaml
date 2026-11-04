@@ -47,7 +47,6 @@ spec:
         value: {{ .Values.adminIssuerProxy.gateway.path }}
     backendRefs:
     - name: {{ include "admin-issuer-proxy.fullname" . }}
-      namespace: {{ .Release.Namespace }}
+      namespace: {{ include "admin-issuer-proxy.namespace" . }}
       port: {{ .Values.adminIssuerProxy.service.port }}
 {{- end }}
-

@@ -13,33 +13,84 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- $serverFullname := include "nvcf-openbao.serverFullname" . }}
+{{- if ne (include "nvcf-openbao.jwtLifecycleMode" .) "bridge" }}
+{{- $versioned := eq (include "nvcf-openbao.jwtLifecycleMode" .) "versioned" }}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ .Release.Name }}-migrations
+  name: {{ $serverFullname }}-migrations
+  namespace: {{ include "nvcf-openbao.namespace" . }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "1"
 spec:
   template:
+    {{- with .Values.openbao.hooks.migrations.podAnnotations }}
+    metadata:
+      annotations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
       {{- with .Values.openbao.global.imagePullSecrets }}
       imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.openbao.hooks.migrations.schedulingGates }}
+      schedulingGates:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       restartPolicy: OnFailure
       # this is the same service account created for hook-post-01-initcluster
       # this job can access secrets and exec to bao
-      serviceAccountName: {{ .Release.Name }}-initialize-cluster
+      serviceAccountName: {{ $serverFullname }}-initialize-cluster
+      {{- if $versioned }}
+      initContainers:
+        - name: jwt-plugin-version
+          image: "{{ include "openbao.image" (dict "image" .Values.openbao.server.image "name" "openbao.server.image") }}"
+          imagePullPolicy: {{ .Values.openbao.server.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              {{- include "nvcf-openbao.adminEnvironment" . | nindent 14 }}
+              jwt-plugin-lifecycle wait-ready
+              {{- include "nvcf-openbao.copyJWTManifest" . | nindent 14 }}
+          volumeMounts:
+            - name: jwt-plugin-version
+              mountPath: /versions
+            - name: {{ $serverFullname }}-root-token
+              mountPath: /secrets/root_token
+              readOnly: true
+          resources:
+            {{- toYaml .Values.openbao.hooks.migrations.resources | nindent 12 }}
+      {{- end }}
       containers:
         - name: bao-migrations
           image: "{{ include "openbao.image" (dict "image" .Values.openbao.migrations.image "name" "openbao.migrations.image") }}"
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           imagePullPolicy: {{ .Values.openbao.migrations.image.pullPolicy }}
           volumeMounts:
-            - name: {{ .Release.Name }}-root-token
+            {{- if $versioned }}
+            - name: jwt-plugin-version
+              mountPath: /versions
+              readOnly: true
+            {{- end }}
+            - name: {{ $serverFullname }}-root-token
               mountPath: /secrets/root_token
               readOnly: true
-            - name: {{ .Release.Name }}-jwt
+            - name: {{ $serverFullname }}-jwt
               mountPath: /secrets/jwt
               readOnly: true
             {{- if .Values.openbao.migrations.issuerDiscovery.caBundleSecretName }}
@@ -48,6 +99,13 @@ spec:
               readOnly: true
             {{- end }}
           env:
+            {{- include "nvcf-openbao.kubectlEnv" . | nindent 12 }}
+            - name: JWT_PLUGIN_LIFECYCLE_MODE
+              value: {{ include "nvcf-openbao.jwtLifecycleMode" . | quote }}
+            {{- if $versioned }}
+            - name: BAO_JWT_PLUGIN_VERSIONS_FILE
+              value: /versions/manifest.env
+            {{- end }}
             - name: OIDC_DISCOVERY_ENABLED
               value: "{{ .Values.openbao.migrations.issuerDiscovery.enabled }}"
             - name: OIDC_DISCOVERY_URL
@@ -61,14 +119,20 @@ spec:
             {{- with .Values.openbao.migrations.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          resources:
+            {{- toYaml .Values.openbao.hooks.migrations.resources | nindent 12 }}
       volumes:
-        - name: {{ .Release.Name }}-root-token
+        {{- if $versioned }}
+        - name: jwt-plugin-version
+          emptyDir: {}
+        {{- end }}
+        - name: {{ $serverFullname }}-root-token
           secret:
-            secretName: {{ .Release.Name }}-root-token
+            secretName: {{ $serverFullname }}-root-token
             items:
             - key: root_token
               path: root_token
-        - name: {{ .Release.Name }}-jwt
+        - name: {{ $serverFullname }}-jwt
           secret:
             secretName: cluster-jwt
             items:
@@ -82,3 +146,4 @@ spec:
             - key: ca.crt
               path: ca.crt
       {{- end }}
+{{- end }}

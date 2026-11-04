@@ -135,7 +135,7 @@ func TestWatchResources_EmitsCountsForEachType(t *testing.T) {
 	}, 3*time.Second, 50*time.Millisecond, "did not see all 5 resource types")
 
 	last := sink.lastByResource()
-	assert.Equal(t, 4, last["namespaces"].Num)        // phaseNum baked in
+	assert.Equal(t, 4, last["namespaces"].Num)           // phaseNum baked in
 	assert.Equal(t, "apply-cp", last["namespaces"].Name) // phaseName baked in
 	assert.Equal(t, "namespaces", last["namespaces"].Resource)
 	assert.Equal(t, 2, last["namespaces"].Done)

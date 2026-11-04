@@ -1,0 +1,17 @@
+---
+# Source: kai-scheduler/templates/rbac/queuecontroller-binding.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kai-queuecontroller
+subjects:
+- kind: ServiceAccount
+  name: queue-controller
+  namespace: kai-scheduler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: queuecontroller

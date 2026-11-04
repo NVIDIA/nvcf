@@ -1,0 +1,137 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_test")
+load("@aspect_bazel_lib//lib:expand_template.bzl", "expand_template")
+load("@rs_autoscaler_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//rules/oci:defs.bzl", "rust_oci_image")
+
+# Stamps the real release version and commit into the binary. tools/
+# workspace_status.sh emits STABLE_VERSION/STABLE_GIT_COMMIT_FULL;
+# expand_template substitutes them on --stamp (release) builds and falls
+# back to dev defaults otherwise. Fed to the Rust targets via rustc_env_files.
+expand_template(
+    name = "version_env",
+    out = "version.env",
+    stamp_substitutions = {
+        "{VERSION}": "{{STABLE_VERSION}}",
+        "{GIT_COMMIT}": "{{STABLE_GIT_COMMIT_FULL}}",
+    },
+    substitutions = {
+        "{VERSION}": "0.0.0-dev",
+        "{GIT_COMMIT}": "unknown",
+    },
+    template = [
+        "CARGO_PKG_VERSION={VERSION}",
+        "NVCF_GIT_COMMIT={GIT_COMMIT}",
+    ],
+)
+
+# build.rs uses tonic-build + prost-build to compile crates/server/proto/nvcf.proto.
+# Inside the crate it tries to find protoc via protoc_bin_vendored, but we
+# override PROTOC to the hermetic @com_google_protobuf//:protoc the bzlmod protoc
+# extension fetches; same pattern as nvcf-invocation-service !313.
+cargo_build_script(
+    name = "build_script",
+    edition = "2021",
+    srcs = ["build.rs"],
+    build_script_env = {
+        "PROTOC": "$(execpath @com_google_protobuf//:protoc)",
+        # @com_google_protobuf//:well_known_type_protos is a filegroup whose files
+        # live in the cargo_runfiles tree under protobuf+/src/google/protobuf/
+        # (sibling of _main/). cargo_build_script runs from
+        # _main/crates/server/, so the well-known-type include dir resolves
+        # via three parent hops.
+        "PROTOC_WKT_DIR": "../../../../../../protobuf+/src",
+    },
+    data = glob(["proto/**/*.proto"]) + [
+        "@com_google_protobuf//:well_known_type_protos",
+    ],
+    tools = [
+        "@com_google_protobuf//:protoc",
+    ],
+    deps = all_crate_deps(build = True),
+)
+
+rust_library(
+    name = "rs_autoscaler_lib",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/server.rs"],
+    ),
+    aliases = aliases(),
+    crate_name = "rs_autoscaler",
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env_files = [":version_env"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":build_script",
+        "//src/libraries/rust/nvcf-info:nvcf-info-autoscaler",
+    ] + all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "server",
+    srcs = ["src/server.rs"],
+    aliases = aliases(),
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env_files = [":version_env"],
+    visibility = ["//visibility:public"],
+    deps = [":rs_autoscaler_lib"] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "rs_autoscaler_test",
+    crate = ":rs_autoscaler_lib",
+    deps = all_crate_deps(normal_dev = True),
+)
+
+# Multi-arch OCI image. distroless/cc base (libc; required for Rust +
+# openssl-sys-vendored), binary at /usr/local/bin/server.
+# Build/load/index/tar targets live here. The internal NGC publish
+# lanes (kaze, nv-ngc-devops, ncp-dev) are defined under
+# //nvidia-internal:* so the registry coordinates stay out of the
+# public OSS snapshot.
+pkg_tar(
+    name = "config_layer",
+    srcs = glob(["resources/*.yaml"]),
+    package_dir = "/etc/server/config",
+    visibility = ["//visibility:private"],
+)
+
+# The distroless/cc base ships ENTRYPOINT ["/usr/bin/shelless_ulimit"], a shim
+# that raises RLIMIT_NOFILE (soft -> hard) when ULIMIT_FLAG=1 before exec'ing
+# its arguments. The legacy Dockerfile relied on that base entrypoint plus
+# ENV ULIMIT_FLAG=1; rust_oci_image otherwise overrides the entrypoint with just
+# [binary_path], bypassing the shim and leaving the default 1024 soft fd limit.
+# Restore the shim + flag so the Bazel image matches the Dockerfile.
+rust_oci_image(
+    name = "image",
+    base = "@distroless_cc",
+    binary = ":server",
+    binary_path = "/usr/local/bin/server",
+    entrypoint = [
+        "/usr/bin/shelless_ulimit",
+        "/usr/local/bin/server",
+    ],
+    env = {"ULIMIT_FLAG": "1"},
+    extra_layers = [":config_layer"],
+    tags = ["rs-autoscaler"],
+    user = "1000:1000",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "image_numeric_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":image_index"],
+)

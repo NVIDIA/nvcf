@@ -1,0 +1,1947 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::kv_cache::*;
+use super::openai::*;
+use super::stats_stream::*;
+use super::test_control::*;
+use super::timing::*;
+use super::*;
+use axum::Json;
+use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::http::HeaderValue;
+use axum::routing::{get, post, put};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+fn request() -> ChatRequest {
+    serde_json::from_value(serde_json::json!({
+        "stream": true, "model": "dummy-model", "max_tokens": 1, "messages": []
+    }))
+    .unwrap()
+}
+
+fn test_stats_events() -> broadcast::Sender<StatsStreamEvent> {
+    let (tx, _) = broadcast::channel(1024);
+    tx
+}
+
+fn test_state() -> AppState {
+    AppState {
+        model_name: "dummy-model".to_string(),
+        output_tokens: OutputTokenConfig::fixed(1),
+        context_length_tokens: 0,
+        decode_rate: DecodeRate::TokenDelay {
+            base_ms: 0,
+            jitter_ms: 0,
+        },
+        ttft: Duration::ZERO,
+        ttft_jitter_ms: 0,
+        prefill_tokens_per_s: 0.0,
+        request_slots: None,
+        health_delay: Duration::ZERO,
+        kv_cache: Arc::new(Mutex::new(KvCacheState::new(0))),
+        engine: None,
+        stats_events: test_stats_events(),
+        test_control: TestControlState::with_discovered_models(["dummy-model".to_string()]),
+    }
+}
+
+/// Checks that a stargate-dev mockdc argument set parses and selects the
+/// batched engine. The rendered argv is asserted by
+/// deploy/stacks/stargate-dev/tests/test_invariants.py; update both together.
+#[test]
+fn dev_chart_argv_shapes_parse() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--http-listen-addr=0.0.0.0:8090",
+        "--model-name=stargate-dev-model",
+        "--engine-model=batched",
+        "--num-gpu-workers=14",
+        "--kv-cache-capacity-tokens=1000000",
+        "--context-length-tokens=131072",
+        "--output-tokens-min=128",
+        "--output-tokens-max=8192",
+        "--output-token-distribution=gaussian",
+    ])
+    .expect("chart argv should parse");
+    let config = args
+        .engine_config()
+        .unwrap()
+        .expect("chart argv selects the batched engine");
+    assert_eq!(config.num_gpu_workers, 14);
+    // The chart sets Pylon --max-engine-concurrency to numGpuWorkers x 25.
+    assert_eq!(config.max_concurrency(), 14 * 25);
+    assert_eq!(config.kv_cache_capacity_tokens, 1_000_000);
+    // The explicit limits match the h100-llama-3.1-8b profile.
+    let profile = Profile::H100Llama31EightB;
+    assert_eq!(
+        args.behavior().unwrap().context_length_tokens,
+        profile.behavior().context_length_tokens
+    );
+    assert_eq!(
+        args.output_tokens().unwrap(),
+        profile.default_output_tokens()
+    );
+}
+
+#[test]
+fn h100_llama_profile_selects_complete_behavior() {
+    let args = Args::try_parse_from(["mock-dynamo", "--profile", "h100-llama-3.1-8b"])
+        .expect("profile should parse");
+
+    assert_eq!(
+        args.behavior().expect("profile behavior should be valid"),
+        Behavior {
+            context_length_tokens: 131_072,
+            decode_rate: DecodeRate::Uniform {
+                min_tokens_per_s: 128.0,
+                max_tokens_per_s: 200.0,
+            },
+            ttft_ms: 10,
+            ttft_jitter_ms: 20,
+            prefill_tokens_per_s: 7000.0,
+            max_concurrent_requests: 25,
+            kv_cache_capacity_tokens: 400_000,
+        }
+    );
+    assert_eq!(
+        args.output_tokens()
+            .expect("profile output token defaults should be valid"),
+        OutputTokenConfig {
+            min: 128,
+            max: 8192,
+            distribution: OutputTokenDistribution::Gaussian,
+        }
+    );
+}
+
+#[test]
+fn h100_llama_profile_rejects_manual_overrides() {
+    let error = Args::try_parse_from([
+        "mock-dynamo",
+        "--profile",
+        "h100-llama-3.1-8b",
+        "--token-delay-ms",
+        "1",
+    ])
+    .expect_err("manual behavior overrides should conflict with a profile");
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn profile_output_token_defaults_can_be_overridden() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--profile",
+        "h100-llama-3.1-8b",
+        "--output-tokens-min",
+        "64",
+        "--output-tokens-max",
+        "512",
+        "--output-token-distribution",
+        "uniform",
+    ])
+    .expect("profile output token defaults should be overridable");
+
+    assert_eq!(
+        args.output_tokens()
+            .expect("output token override should be valid"),
+        OutputTokenConfig {
+            min: 64,
+            max: 512,
+            distribution: OutputTokenDistribution::Uniform,
+        }
+    );
+}
+
+#[test]
+fn output_rate_range_is_complete_ordered_and_deterministic() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--output-tps-min",
+        "120",
+        "--output-tps-max",
+        "200",
+    ])
+    .expect("complete output rate bounds should parse");
+    assert_eq!(
+        args.behavior()
+            .expect("ordered bounds should be valid")
+            .decode_rate,
+        DecodeRate::Uniform {
+            min_tokens_per_s: 120.0,
+            max_tokens_per_s: 200.0,
+        }
+    );
+    assert!(
+        Args::try_parse_from(["mock-dynamo", "--output-tps-min", "120"]).is_err(),
+        "one output rate bound must not silently select a partial range"
+    );
+
+    let reversed = Args::try_parse_from([
+        "mock-dynamo",
+        "--output-tps-min",
+        "200",
+        "--output-tps-max",
+        "120",
+    ])
+    .expect("individual output rate bounds should parse");
+    assert!(reversed.behavior().is_err());
+
+    let first = distributed_output_rate("request-a", 120.0, 200.0);
+    assert_eq!(first, distributed_output_rate("request-a", 120.0, 200.0));
+    assert!((120.0..=200.0).contains(&first));
+}
+
+#[tokio::test]
+async fn pylon_canary_streams_one_correct_token() {
+    let state = AppState {
+        output_tokens: OutputTokenConfig {
+            min: 100,
+            max: 200,
+            distribution: OutputTokenDistribution::Gaussian,
+        },
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(state);
+    let (addr, server) = spawn_test_app(app).await;
+    let response = json_response(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        "connection: close\r\nx-request-id: canary-00000000-0000-4000-8000-000000000000-g0-1",
+        r#"{"model":"dummy-model","messages":[{"role":"user","content":"1+1="}],"max_tokens":237,"stream":true}"#,
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("content-type: text/event-stream"));
+    assert!(response.contains(r#""content":"2""#));
+    assert_eq!(response.matches(r#""content":""#).count(), 1);
+    assert!(response.contains("data: [DONE]"));
+    server.abort();
+}
+
+async fn spawn_test_app(app: Router) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test server should bind");
+    let addr = listener.local_addr().expect("local address should exist");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("test server should serve");
+    });
+    (addr, server)
+}
+
+async fn send_json_request(
+    addr: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    headers: &str,
+    body: &str,
+) -> tokio::net::TcpStream {
+    let mut stream = tokio::net::TcpStream::connect(addr)
+        .await
+        .expect("test client should connect");
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nhost: {addr}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n{headers}\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("request should write");
+    stream
+}
+
+async fn json_response(
+    addr: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    headers: &str,
+    body: &str,
+) -> String {
+    read_to_end(&mut send_json_request(addr, method, path, headers, body).await).await
+}
+
+#[tokio::test]
+async fn test_controls_isolate_chat_failure_by_model() {
+    let controls = TestControlState::default();
+
+    controls
+        .update_model(
+            "model-b",
+            ModelTestControlUpdate {
+                chat_failure: Some(true),
+                ..ModelTestControlUpdate::default()
+            },
+        )
+        .await;
+
+    assert!(!controls.chat_failure_enabled("model-a").await);
+    assert!(controls.chat_failure_enabled("model-b").await);
+
+    controls
+        .update_model(
+            "model-b",
+            ModelTestControlUpdate {
+                chat_failure: Some(false),
+                ..ModelTestControlUpdate::default()
+            },
+        )
+        .await;
+
+    assert!(!controls.chat_failure_enabled("model-b").await);
+}
+
+#[tokio::test]
+async fn test_controls_hold_bringup_until_the_model_gate_is_released() {
+    let controls = TestControlState::default();
+    controls
+        .update_model(
+            "model-a",
+            ModelTestControlUpdate {
+                bringup_blocked: Some(true),
+                ..ModelTestControlUpdate::default()
+            },
+        )
+        .await;
+    let waiting_controls = controls.clone();
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let waiter = tokio::spawn(async move {
+        entered_tx.send(()).expect("test should observe waiter");
+        waiting_controls.wait_for_bringup_release("model-a").await;
+    });
+    entered_rx.await.expect("waiter should start");
+    tokio::task::yield_now().await;
+    assert!(!waiter.is_finished());
+
+    controls
+        .update_model(
+            "model-a",
+            ModelTestControlUpdate {
+                bringup_blocked: Some(false),
+                ..ModelTestControlUpdate::default()
+            },
+        )
+        .await;
+
+    tokio::time::timeout(Duration::from_secs(1), waiter)
+        .await
+        .expect("released bringup should finish")
+        .expect("bringup waiter should not panic");
+}
+
+#[tokio::test]
+async fn test_controls_count_endpoint_model_and_request_class() {
+    let controls = TestControlState::default();
+    let recorded = [
+        (
+            TestEndpoint::ChatCompletions,
+            "model-a",
+            TestRequestClass::PylonGenerated,
+        ),
+        (
+            TestEndpoint::ChatCompletions,
+            "model-a",
+            TestRequestClass::ApiGateway,
+        ),
+        (
+            TestEndpoint::Embeddings,
+            "model-b",
+            TestRequestClass::ApiGateway,
+        ),
+    ];
+    for (endpoint, model, request_class) in recorded {
+        controls
+            .record_request(endpoint, model, request_class)
+            .await;
+    }
+
+    let snapshot = controls.snapshot().await;
+    for (endpoint, model, request_class, expected) in recorded
+        .map(|(endpoint, model, class)| (endpoint, model, class, 1))
+        .into_iter()
+        .chain([(
+            TestEndpoint::Responses,
+            "model-a",
+            TestRequestClass::ApiGateway,
+            0,
+        )])
+    {
+        assert_eq!(snapshot.counter(endpoint, model, request_class), expected);
+    }
+}
+
+#[tokio::test]
+async fn test_control_http_api_updates_one_model_and_reports_request_counters() {
+    let state = test_state();
+    let observed_control = state.test_control.clone();
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .route(
+            "/test-control/models/{model}",
+            put(update_model_test_control),
+        )
+        .route("/test-control", get(test_control_snapshot))
+        .with_state(state);
+    let (addr, server) = spawn_test_app(app).await;
+
+    let update_body = r#"{"chat_failure":true}"#;
+    let update_response = json_response(
+        addr,
+        "PUT",
+        "/test-control/models/model-b",
+        "connection: close",
+        update_body,
+    )
+    .await;
+    assert!(update_response.starts_with("HTTP/1.1 200 OK"));
+    assert!(update_response.contains(r#""model-b":{"chat_failure":true,"bringup_blocked":false}"#));
+
+    let failed_body = r#"{"model":"model-b","messages":[],"max_tokens":1,"stream":false}"#;
+    let failed_response = json_response(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        "connection: close\r\nx-request-id: calibration-00000000-0000-4000-8000-000000000000-7",
+        failed_body,
+    )
+    .await;
+    assert!(failed_response.starts_with("HTTP/1.1 503 Service Unavailable"));
+
+    let successful_body = r#"{"model":"model-a","messages":[],"max_tokens":1,"stream":false}"#;
+    let successful_response = json_response(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        "connection: close\r\nx-request-id: user-7",
+        successful_body,
+    )
+    .await;
+    assert!(successful_response.starts_with("HTTP/1.1 200 OK"));
+    assert!(successful_response.contains("content-type: application/json"));
+    let (_, body) = successful_response
+        .split_once("\r\n\r\n")
+        .expect("chat response should contain a body");
+    let mut body: serde_json::Value =
+        serde_json::from_str(body).expect("chat response should be valid JSON");
+    assert!(
+        body["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("chatcmpl-mock-"))
+    );
+    body["id"] = serde_json::json!("chatcmpl-mock-id");
+    assert_eq!(
+        body,
+        serde_json::from_str::<serde_json::Value>(
+            r#"{"id":"chatcmpl-mock-id","object":"chat.completion","model":"model-a","choices":[{"index":0,"message":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+        )
+        .expect("expected chat response fixture should be valid JSON")
+    );
+
+    let snapshot_response = raw_http_request(
+        addr,
+        &format!("GET /test-control HTTP/1.1\r\nhost: {addr}\r\nconnection: close\r\n\r\n"),
+    )
+    .await;
+    assert!(snapshot_response.starts_with("HTTP/1.1 200 OK"));
+    assert!(snapshot_response.contains(r#""endpoint":"chat_completions""#));
+    assert!(snapshot_response.contains(r#""request_class":"pylon_generated""#));
+    assert!(snapshot_response.contains(r#""request_class":"api_gateway""#));
+
+    let snapshot = observed_control.snapshot().await;
+    assert_eq!(
+        snapshot.counter(
+            TestEndpoint::ChatCompletions,
+            "model-b",
+            TestRequestClass::PylonGenerated,
+        ),
+        1
+    );
+    assert_eq!(
+        snapshot.counter(
+            TestEndpoint::ChatCompletions,
+            "model-a",
+            TestRequestClass::ApiGateway,
+        ),
+        1
+    );
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn model_discovery_http_api_returns_and_replaces_authoritative_models() {
+    let state = test_state();
+    state
+        .test_control
+        .replace_discovered_models(vec!["model-b".to_string(), "model-a".to_string()])
+        .await
+        .expect("valid model IDs should be accepted");
+    let test_control = state.test_control.clone();
+    let app = Router::new()
+        .route("/v1/models", get(list_models))
+        .route(
+            "/test-control/discovery-models",
+            put(replace_discovery_models),
+        )
+        .with_state(state);
+    let (addr, server) = spawn_test_app(app).await;
+
+    let initial = json_response(addr, "GET", "/v1/models", "connection: close", "").await;
+    assert!(initial.contains(
+        r#"{"object":"list","data":[{"id":"model-a","object":"model"},{"id":"model-b","object":"model"}]}"#
+    ));
+    assert_eq!(test_control.snapshot().await.model_discovery_requests, 1);
+
+    let replaced = json_response(
+        addr,
+        "PUT",
+        "/test-control/discovery-models",
+        "connection: close",
+        r#"{"models":[]}"#,
+    )
+    .await;
+    assert!(replaced.starts_with("HTTP/1.1 200 OK"));
+    assert!(replaced.contains(r#""discovered_models":[]"#));
+
+    let empty = json_response(addr, "GET", "/v1/models", "connection: close", "").await;
+    assert!(empty.contains(r#"{"object":"list","data":[]}"#));
+    assert_eq!(test_control.snapshot().await.model_discovery_requests, 2);
+
+    server.abort();
+}
+
+#[test]
+fn counts_openai_embedding_input_items() {
+    assert_eq!(embedding_item_count(&serde_json::json!("single input")), 1);
+    assert_eq!(embedding_item_count(&serde_json::json!(["a", "b"])), 2);
+    assert_eq!(embedding_item_count(&serde_json::json!([1, 2, 3])), 1);
+    assert_eq!(
+        embedding_item_count(&serde_json::json!([[1, 2], [3, 4], [5]])),
+        3
+    );
+    assert_eq!(embedding_item_count(&serde_json::json!([])), 0);
+}
+
+fn embedding_tokens(input: serde_json::Value) -> usize {
+    request_embedding_tokens(&HeaderMap::new(), &input)
+}
+
+#[test]
+fn embedding_token_estimates_follow_input_shape() {
+    assert_eq!(embedding_tokens(serde_json::json!("abcd")), 4);
+    assert_eq!(embedding_tokens(serde_json::json!([1, 2, 3])), 3);
+    assert_eq!(embedding_tokens(serde_json::json!(["alpha", "b"])), 6);
+    assert_eq!(
+        embedding_tokens(serde_json::json!([[1, 2], [3, 4], [5]])),
+        5
+    );
+    assert_eq!(
+        embedding_tokens(serde_json::json!(["abc", [1, 2], true])),
+        6
+    );
+    assert_eq!(embedding_tokens(serde_json::json!({"unexpected": true})), 1);
+}
+
+#[test]
+fn embedding_token_estimates_preserve_empty_batch_item_work() {
+    assert_eq!(embedding_tokens(serde_json::json!(["", "b"])), 2);
+    assert_eq!(embedding_tokens(serde_json::json!([[], [1, 2]])), 3);
+}
+
+#[test]
+fn embedding_token_header_override_clamps_to_nonzero() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-input-tokens", HeaderValue::from_static("0"));
+
+    assert_eq!(
+        request_embedding_tokens(&headers, &serde_json::json!(["alpha", "beta"])),
+        1
+    );
+}
+
+#[test]
+fn embedding_format_controls_mock_embedding_value_shape() {
+    assert_eq!(
+        serde_json::to_value(deterministic_embedding_value(
+            0,
+            EmbeddingEncodingFormat::Float
+        ))
+        .unwrap(),
+        serde_json::json!([0.0, 0.125, -0.25])
+    );
+    assert_eq!(
+        serde_json::to_value(deterministic_embedding_value(
+            0,
+            EmbeddingEncodingFormat::Base64
+        ))
+        .unwrap(),
+        "AAAAAAAAAAA="
+    );
+}
+
+#[test]
+fn chat_stream_chunks_preserve_delta_and_finish_shapes() {
+    for (chunk, delta, finish_reason) in [
+        (
+            ChatStreamChunk::Role,
+            serde_json::json!({ "role": "assistant" }),
+            serde_json::Value::Null,
+        ),
+        (
+            ChatStreamChunk::Content("token"),
+            serde_json::json!({ "content": "token" }),
+            serde_json::Value::Null,
+        ),
+        (
+            ChatStreamChunk::Stop,
+            serde_json::json!({}),
+            serde_json::json!("stop"),
+        ),
+    ] {
+        let value: serde_json::Value =
+            serde_json::from_str(&chat_chunk_json("id", "model", chunk, false)).unwrap();
+        assert_eq!(value["choices"][0]["delta"], delta);
+        assert_eq!(value["choices"][0]["finish_reason"], finish_reason);
+        assert!(value.get("usage").is_none());
+    }
+}
+
+#[tokio::test]
+async fn streaming_chat_usage_reports_actual_output_only_when_requested() {
+    let state = AppState {
+        output_tokens: OutputTokenConfig {
+            min: 100,
+            max: 100,
+            distribution: OutputTokenDistribution::Uniform,
+        },
+        context_length_tokens: 5,
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(state);
+    let (address, server) = spawn_test_app(app).await;
+    for include_usage in [None, Some(false), Some(true)] {
+        let mut body = serde_json::json!({
+            "model": "dummy-model", "messages": [], "stream": true, "max_tokens": 100
+        });
+        if let Some(include_usage) = include_usage {
+            body["stream_options"] = serde_json::json!({"include_usage": include_usage});
+        }
+        let response = json_response(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            "connection: close\r\nx-input-tokens: 2\r\nx-output-tokens: 100",
+            &body.to_string(),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        let data: Vec<_> = response
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .collect();
+        assert_eq!(data.last(), Some(&"[DONE]"));
+        let events: Vec<serde_json::Value> = data[..data.len() - 1]
+            .iter()
+            .map(|data| serde_json::from_str(data).unwrap())
+            .collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event["choices"][0]["delta"]["content"].is_string())
+                .count(),
+            3
+        );
+        if include_usage == Some(true) {
+            let (usage, output_events) = events.split_last().unwrap();
+            assert_eq!(usage["choices"], serde_json::json!([]));
+            assert_eq!(
+                usage["usage"],
+                serde_json::json!({"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5})
+            );
+            assert!(
+                output_events
+                    .iter()
+                    .all(|event| event.get("usage") == Some(&serde_json::Value::Null))
+            );
+        } else {
+            assert!(events.iter().all(|event| event.get("usage").is_none()));
+        }
+    }
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn embeddings_endpoint_returns_json_without_stream() {
+    let state = test_state();
+    let app = Router::new()
+        .route("/v1/embeddings", post(embeddings))
+        .with_state(state);
+    let (addr, server) = spawn_test_app(app).await;
+
+    let request_body = serde_json::json!({
+        "model": "request-model",
+        "input": ["alpha", "beta"],
+        "encoding_format": "float",
+    })
+    .to_string();
+    let response = json_response(
+        addr,
+        "POST",
+        "/v1/embeddings",
+        "connection: close\r\nx-input-tokens: 9",
+        &request_body,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains(r#""object":"list""#));
+    assert!(response.contains(r#""model":"request-model""#));
+    assert!(response.contains(r#""index":1"#));
+    assert!(response.contains(r#""prompt_tokens":9"#));
+    assert!(response.contains(r#""total_tokens":9"#));
+
+    server.abort();
+}
+
+const DECISION_ECHO_HEADERS: &str = "connection: close\r\nx-input-tokens: 11\r\nx-request-id: req-decision\r\nx-model: decision-model\r\ntypesafe-danger-zone-images: true\r\nx-vendor-test: v";
+
+async fn spawn_decision_app(
+    state: AppState,
+) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    spawn_test_app(decision_routes().with_state(state)).await
+}
+
+fn response_body_json(response: &str) -> serde_json::Value {
+    let (_, body) = response
+        .split_once("\r\n\r\n")
+        .expect("response should have a body");
+    serde_json::from_str(body).expect("response body should be json")
+}
+
+#[tokio::test]
+async fn decisions_endpoint_returns_answers_and_echoes_request_details() {
+    let state = test_state();
+    let observed_control = state.test_control.clone();
+    let (addr, server) = spawn_decision_app(state).await;
+    let request_body = serde_json::json!({
+        "model": "decision-model",
+        "input": "is it a cat?",
+        "questions": [{"type": "predicate", "name": "cat", "text": "cat?"}],
+    })
+    .to_string();
+    let response = json_response(
+        addr,
+        "POST",
+        "/v1/decisions",
+        DECISION_ECHO_HEADERS,
+        &request_body,
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.contains("x-mock-echo-typesafe-danger-zone-images: true"));
+    let body = response_body_json(&response);
+    assert_eq!(body["model"], "decision-model");
+    assert_eq!(body["answers"][0]["type"], "predicate");
+    assert_eq!(body["answers"][0]["name"], "cat");
+    assert_eq!(body["answers"][0]["probability"], 0.99);
+    assert_eq!(body["usage"]["input_tokens"], 11);
+    assert_eq!(body["usage"]["total_tokens"], 12);
+    assert_eq!(body["usage"]["input_tokens_details"]["cached_tokens"], 0);
+    assert_eq!(
+        body["usage"]["output_tokens_details"]["reasoning_tokens"],
+        0
+    );
+    assert_eq!(body["echo"]["typesafe-danger-zone-images"], "true");
+    assert_eq!(body["echo"]["x-vendor-test"], "v");
+    assert_eq!(body["echo"]["x-model"], "decision-model");
+    assert_eq!(body["echo"]["x-input-tokens"], "11");
+    assert_eq!(body["echo"]["x-request-id"], "req-decision");
+    assert_eq!(body["echo"]["body_length"], request_body.len());
+    assert_eq!(body["echo"]["credentials_received"], false);
+    let snapshot = observed_control.snapshot().await;
+    assert_eq!(
+        snapshot.counter(
+            TestEndpoint::Decisions,
+            "decision-model",
+            TestRequestClass::ApiGateway
+        ),
+        1
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn systemone_endpoint_returns_answers_and_echoes_request_details() {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let request_body = serde_json::json!({
+        "model": "decision-model",
+        "state": "frame",
+        "questions": {"cat": {"type": "noul", "text": "cat?"}},
+    })
+    .to_string();
+    let response = json_response(
+        addr,
+        "POST",
+        "/v1/systemone",
+        DECISION_ECHO_HEADERS,
+        &request_body,
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.contains("x-mock-echo-typesafe-danger-zone-images: true"));
+    let body = response_body_json(&response);
+    assert_eq!(body["model"], "decision-model");
+    assert_eq!(body["answers"]["cat"]["type"], "noul");
+    assert_eq!(body["answers"]["cat"]["noul"], 0.99);
+    assert_eq!(body["usage"]["input_tokens"], 11);
+    assert_eq!(body["echo"]["typesafe-danger-zone-images"], "true");
+    assert_eq!(body["echo"]["x-vendor-test"], "v");
+    assert_eq!(body["echo"]["body_length"], request_body.len());
+    server.abort();
+}
+
+async fn decision_answers(path: &str, questions: serde_json::Value) -> serde_json::Value {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let request_body = serde_json::json!({"model": "m", "input": "x", "questions": questions});
+    let response = json_response(
+        addr,
+        "POST",
+        path,
+        "connection: close",
+        &request_body.to_string(),
+    )
+    .await;
+    server.abort();
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    response_body_json(&response)["answers"].clone()
+}
+
+#[tokio::test]
+async fn decisions_answers_follow_each_question_type() {
+    let answers = decision_answers(
+        "/v1/decisions",
+        serde_json::json!([
+            {"type": "predicate", "name": "p", "text": "t"},
+            {"type": "choice", "name": "c", "choices": [true, false]},
+            {"type": "choice", "name": "o", "choices": [{"value": "red", "description": "d"}, "blue"]},
+            {"type": "score", "name": "s", "levels": [{"label": "low", "description": "d"}, "high"]},
+            {"type": "box", "name": "b", "text": "find it"},
+            {"type": "future", "name": "u"}
+        ]),
+    )
+    .await;
+
+    assert_eq!(
+        answers,
+        serde_json::json!([
+            {"type": "predicate", "name": "p", "probability": 0.99},
+            {"type": "choice", "name": "c", "choice": true,
+             "probabilities": [{"value": true, "probability": 0.99}, {"value": false, "probability": 0.01}],
+             "confidence": 0.99},
+            {"type": "choice", "name": "o", "choice": "red",
+             "probabilities": [{"value": "red", "probability": 0.99}, {"value": "blue", "probability": 0.01}],
+             "confidence": 0.99},
+            {"type": "score", "name": "s", "score": 0.01,
+             "probabilities": [
+                {"value": 0, "label": "low", "probability": 0.99},
+                {"value": 1, "label": "high", "probability": 0.01}],
+             "confidence": 0.99},
+            {"type": "box", "name": "b",
+             "box": {"top": 0.1, "bottom": 0.9, "left": 0.1, "right": 0.9}, "confidence": 0.99},
+            {"type": "future", "name": "u", "probability": 0.99}
+        ])
+    );
+}
+
+#[tokio::test]
+async fn systemone_answers_follow_each_question_type() {
+    let answers = decision_answers(
+        "/v1/systemone",
+        serde_json::json!({
+            "n": {"type": "noul", "text": "t"},
+            "c": {"type": "choice", "criteria": {"alpha": "first", "beta": "second"}},
+            "s": {"type": "score", "criteria": ["bad", "good"]},
+            "b": {"type": "box", "text": "find it"},
+            "u": {"type": "future"}
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        answers,
+        serde_json::json!({
+            "n": {"type": "noul", "noul": 0.99},
+            "c": {"type": "choice", "choice": "alpha", "confidence": 0.99,
+                  "probabilities": {"alpha": 0.99, "beta": 0.01}},
+            "s": {"type": "score", "score": 0.01, "confidence": 0.99,
+                  "legend": {"0": "bad", "1": "good"},
+                  "probabilities": {"0": 0.99, "1": 0.01}},
+            "b": {"type": "box", "box": {"top": 0.1, "bottom": 0.9, "left": 0.1, "right": 0.9},
+                  "confidence": 0.99},
+            "u": {"type": "noul", "noul": 0.99}
+        })
+    );
+}
+
+#[tokio::test]
+async fn decision_echo_reports_the_sha256_of_the_received_body() {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let mut digests = Vec::new();
+    for body in [r#"{"questions":[]}"#, "{}"] {
+        let response =
+            json_response(addr, "POST", "/v1/decisions", "connection: close", body).await;
+        digests.push(response_body_json(&response)["echo"]["body_sha256"].clone());
+    }
+    server.abort();
+    assert_eq!(
+        digests,
+        [
+            "5c9253d29ca1fc9c4f7683bfe5dadd87e2dbce3e46af6ee80404bc7259b41e1e",
+            "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn decision_endpoints_serve_rate_limit_and_validation_errors_on_request() {
+    let state = test_state();
+    let mut stats_events = state.stats_events.subscribe();
+    let (addr, server) = spawn_decision_app(state).await;
+    let request_body = r#"{"model":"decision-model","input":"x","questions":[]}"#;
+    for path in ["/v1/decisions", "/v1/systemone"] {
+        let limited = json_response(
+            addr,
+            "POST",
+            &format!("{path}?mock_error=429"),
+            "connection: close",
+            request_body,
+        )
+        .await;
+        assert!(limited.starts_with("HTTP/1.1 429"), "{path}: {limited}");
+        assert!(limited.contains("retry-after: 7"), "{path}: {limited}");
+        let body = response_body_json(&limited);
+        if path == "/v1/decisions" {
+            assert_eq!(body["error"]["type"], "rate_limit_error");
+        } else {
+            assert_eq!(body["detail"][0]["msg"], "Rate limit exceeded", "{body}");
+        }
+
+        let invalid = json_response(
+            addr,
+            "POST",
+            &format!("{path}?mock_error=400"),
+            "connection: close",
+            request_body,
+        )
+        .await;
+        assert!(invalid.starts_with("HTTP/1.1 400"), "{path}: {invalid}");
+        let body = response_body_json(&invalid);
+        if path == "/v1/decisions" {
+            assert_eq!(body["error"]["type"], "invalid_request_error");
+        } else {
+            assert!(body["detail"].is_array(), "{body}");
+        }
+    }
+    server.abort();
+    assert!(
+        matches!(
+            stats_events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ),
+        "canned errors must not report processed tokens"
+    );
+}
+
+#[tokio::test]
+async fn decision_echo_omits_absent_headers_and_reports_credentials_without_values() {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let body = r#"{"model":"m","questions":[]}"#;
+    for (headers, credentials) in [
+        ("connection: close", false),
+        ("connection: close\r\nauthorization: Bearer secret", true),
+        ("connection: close\r\nx-api-key: secret", true),
+        ("connection: close\r\ncookie: session=secret", true),
+    ] {
+        for path in ["/v1/decisions", "/v1/systemone"] {
+            let response = json_response(addr, "POST", path, headers, body).await;
+            assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+            assert!(!response.contains("secret"), "{path}: {response}");
+            let echo = response_body_json(&response)["echo"].clone();
+            assert_eq!(
+                echo["credentials_received"], credentials,
+                "{path} {headers}"
+            );
+            for absent in ["typesafe-danger-zone-images", "x-model", "x-request-id"] {
+                assert!(echo.get(absent).is_none(), "{path}: {echo}");
+            }
+        }
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn decision_endpoints_reject_malformed_bodies_in_the_native_shape() {
+    let state = test_state();
+    let mut stats_events = state.stats_events.subscribe();
+    let (addr, server) = spawn_decision_app(state).await;
+    for body in ["not json", "", "[1]", "null", r#"{"questions":[]} {}"#] {
+        for path in ["/v1/decisions", "/v1/systemone"] {
+            let response = json_response(addr, "POST", path, "connection: close", body).await;
+            assert!(
+                response.starts_with("HTTP/1.1 400"),
+                "{path} {body:?}: {response}"
+            );
+            let error = response_body_json(&response);
+            if path == "/v1/decisions" {
+                assert_eq!(error["error"]["type"], "invalid_request_error", "{error}");
+            } else {
+                assert_eq!(error["detail"][0]["type"], "value_error", "{error}");
+            }
+        }
+    }
+    server.abort();
+    assert!(matches!(
+        stats_events.try_recv(),
+        Err(broadcast::error::TryRecvError::Empty)
+    ));
+}
+
+#[tokio::test]
+async fn decision_endpoints_answer_empty_questions_with_a_default() {
+    for questions in [serde_json::json!([]), serde_json::Value::Null] {
+        assert_eq!(
+            decision_answers("/v1/decisions", questions).await,
+            serde_json::json!([{"type": "predicate", "probability": 0.99}])
+        );
+    }
+    for questions in [serde_json::json!({}), serde_json::Value::Null] {
+        assert_eq!(
+            decision_answers("/v1/systemone", questions).await,
+            serde_json::json!({"question": {"type": "noul", "noul": 0.99}})
+        );
+    }
+}
+
+#[tokio::test]
+async fn decision_endpoints_reject_bodies_over_the_route_limit() {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let body = "x".repeat((16 << 20) + 1);
+    for path in ["/v1/decisions", "/v1/systemone"] {
+        let response = json_response(addr, "POST", path, "connection: close", &body).await;
+        assert!(response.starts_with("HTTP/1.1 413"), "{path}: {response}");
+    }
+    server.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn decision_endpoints_apply_the_configured_pacing() {
+    for route in ["/v1/decisions", "/v1/systemone"] {
+        let state = AppState {
+            prefill_tokens_per_s: 100.0,
+            ttft: Duration::from_secs(10),
+            ..test_state()
+        };
+        let mut stats_events = state.stats_events.subscribe();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-request-id",
+            HeaderValue::from_static("req-decision-pace"),
+        );
+        headers.insert("x-input-tokens", HeaderValue::from_static("100"));
+        let body = axum::body::Bytes::from_static(br#"{"model":"m","questions":[]}"#);
+        let request = if route == "/v1/decisions" {
+            tokio::spawn(decisions(
+                State(state),
+                headers,
+                axum::extract::RawQuery(None),
+                body,
+            ))
+        } else {
+            tokio::spawn(systemone(
+                State(state),
+                headers,
+                axum::extract::RawQuery(None),
+                body,
+            ))
+        };
+        let mut processed = Vec::new();
+        for _ in 0..2 {
+            let StatsStreamEvent::Stats {
+                tokens_processed,
+                finished,
+                ..
+            } = stats_events
+                .recv()
+                .await
+                .expect("stats event should arrive")
+            else {
+                panic!("expected a stats event");
+            };
+            assert!(!finished, "{route}");
+            processed.push(tokens_processed);
+        }
+        assert_eq!(
+            processed,
+            [Some(0), Some(100)],
+            "{route}: prefill takes 1 s"
+        );
+        assert!(
+            !request.is_finished(),
+            "{route}: TTFT should delay the answer"
+        );
+        tokio::time::advance(Duration::from_secs(10)).await;
+        let response = request.await.expect("request task should finish");
+        assert_eq!(response.status(), axum::http::StatusCode::OK, "{route}");
+        let StatsStreamEvent::Stats { finished, .. } =
+            stats_events.recv().await.expect("final stats event")
+        else {
+            panic!("expected a stats event");
+        };
+        assert!(finished, "{route}");
+    }
+}
+
+#[tokio::test]
+async fn decision_endpoints_accept_base64_image_bodies_above_the_default_limit() {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let image = "QUJD".repeat(13 * 1024 * 1024 / 4);
+    let request_body = serde_json::json!({
+        "model": "decision-model",
+        "input": [{"type": "input_image", "image_url": format!("data:image/png;base64,{image}")}],
+        "questions": [{"type": "predicate", "name": "cat"}],
+    })
+    .to_string();
+    for path in ["/v1/decisions", "/v1/systemone"] {
+        let response = json_response(addr, "POST", path, "connection: close", &request_body).await;
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{path}");
+        assert!(
+            response.contains(&format!(r#""body_length":{}"#, request_body.len())),
+            "{path}"
+        );
+    }
+    server.abort();
+}
+
+#[test]
+fn output_token_selection_supports_overrides_and_bounded_distributions() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-output-tokens", HeaderValue::from_static("64"));
+    let uniform = OutputTokenConfig {
+        min: 120,
+        max: 200,
+        distribution: OutputTokenDistribution::Uniform,
+    };
+    let gaussian = OutputTokenConfig {
+        distribution: OutputTokenDistribution::Gaussian,
+        ..uniform
+    };
+
+    assert_eq!(
+        select_output_tokens(&headers, "request-a", uniform, Some(32)),
+        64
+    );
+    for config in [uniform, gaussian] {
+        let selected = select_output_tokens(&HeaderMap::new(), "request-a", config, None);
+        assert_eq!(
+            selected,
+            select_output_tokens(&HeaderMap::new(), "request-a", config, None)
+        );
+        assert!((120..=200).contains(&selected));
+        assert_eq!(
+            select_output_tokens(&HeaderMap::new(), "request-a", config, Some(16)),
+            16
+        );
+    }
+}
+
+#[test]
+fn selected_output_tokens_are_bounded_by_remaining_context() {
+    assert_eq!(
+        bounded_output_tokens(120_000, 20_000, 131_072),
+        Some(11_072)
+    );
+    assert_eq!(bounded_output_tokens(131_072, 1, 131_072), None);
+    assert_eq!(bounded_output_tokens(usize::MAX, 64, 0), Some(64));
+}
+
+#[tokio::test]
+async fn chat_completion_saturates_total_tokens_at_usize_max() {
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(test_state());
+    let (addr, server) = spawn_test_app(app).await;
+
+    let response = json_response(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        &format!(
+            "connection: close\r\nx-input-tokens: {}\r\nx-output-tokens: 1",
+            usize::MAX
+        ),
+        r#"{"model":"dummy-model","messages":[],"stream":false}"#,
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains(&format!(r#""total_tokens":{}"#, usize::MAX)));
+    server.abort();
+}
+
+#[test]
+fn prefill_delay_scales_with_input_tokens() {
+    assert_eq!(prefill_delay(4_000, 2_000.0), Duration::from_secs(2));
+}
+
+#[test]
+fn timing_boundaries_saturate_and_keep_deterministic_jitter() {
+    assert_eq!(prefill_delay(1, 0.0), Duration::ZERO);
+    assert_eq!(prefill_delay(1, f64::NAN), Duration::ZERO);
+    assert_eq!(prefill_delay(1, f64::INFINITY), Duration::ZERO);
+    assert_eq!(prefill_delay(usize::MAX, 0.5), Duration::MAX);
+    assert_eq!(jitter_ms("request-a", "salt", 0), 0);
+    assert!(jitter_ms("request-a", "salt", 10) <= 10);
+    assert_eq!(
+        jitter_ms("request-a", "salt", u64::MAX),
+        18_127_296_015_107_935_538
+    );
+}
+
+fn completed_cache_access(
+    cache: &mut KvCacheState,
+    cache_affinity_key: Option<&str>,
+    input_tokens: usize,
+) -> KvCacheAccess {
+    let access = cache.access(cache_affinity_key, input_tokens);
+    access.with_commit(cache.commit(cache_affinity_key, input_tokens))
+}
+
+#[test]
+fn kv_cache_hit_skips_subsequent_prefill() {
+    let mut cache = KvCacheState::new(1_000);
+
+    assert!(!completed_cache_access(&mut cache, Some("cak-a"), 100).hit);
+    assert!(completed_cache_access(&mut cache, Some("cak-a"), 100).hit);
+    assert_eq!(cache.stats("dummy-model").kv_cache_used_tokens, 100);
+    assert_eq!(cache.stats("dummy-model").kv_cache_free_tokens, 900);
+    assert_eq!(cache.stats("dummy-model").kv_cache_hit_count, 1);
+    assert_eq!(cache.stats("dummy-model").kv_cache_miss_count, 1);
+}
+
+#[test]
+fn kv_cache_hit_prefills_only_the_growing_prompt_suffix() {
+    let mut cache = KvCacheState::new(200_000);
+
+    let cold = completed_cache_access(&mut cache, Some("coding-session-a"), 100_000);
+    assert_eq!(cold.reused_input_tokens, 0);
+    assert_eq!(cold.uncached_input_tokens, 100_000);
+
+    let follow_up = completed_cache_access(&mut cache, Some("coding-session-a"), 102_000);
+    assert!(follow_up.hit);
+    assert_eq!(follow_up.reused_input_tokens, 100_000);
+    assert_eq!(follow_up.uncached_input_tokens, 2_000);
+    assert_eq!(
+        prefill_delay(follow_up.uncached_input_tokens as usize, 2_000.0),
+        Duration::from_secs(1)
+    );
+    assert_eq!(cache.stats("dummy-model").kv_cache_used_tokens, 102_000);
+}
+
+#[test]
+fn kv_cache_does_not_publish_an_in_flight_prefix_as_retained() {
+    let mut cache = KvCacheState::new(200_000);
+
+    let first = cache.access(Some("coding-session-a"), 100_000);
+    assert!(!first.hit);
+
+    let overlapping = cache.access(Some("coding-session-a"), 100_000);
+    assert!(
+        !overlapping.hit,
+        "a request that has not completed modeled prefill must not warm later work"
+    );
+    cache.commit(Some("coding-session-a"), 100_000);
+    assert!(cache.access(Some("coding-session-a"), 100_000).hit);
+}
+
+#[test]
+fn kv_cache_shorter_follow_up_does_not_shrink_retained_prefix() {
+    let mut cache = KvCacheState::new(200_000);
+
+    assert!(!completed_cache_access(&mut cache, Some("coding-session-a"), 100_000).hit);
+    let shorter = completed_cache_access(&mut cache, Some("coding-session-a"), 50_000);
+    assert_eq!(shorter.reused_input_tokens, 50_000);
+
+    let longer_again = cache.access(Some("coding-session-a"), 100_000);
+    assert_eq!(longer_again.reused_input_tokens, 100_000);
+    assert_eq!(longer_again.uncached_input_tokens, 0);
+    assert_eq!(cache.stats("dummy-model").kv_cache_used_tokens, 100_000);
+}
+
+#[tokio::test]
+async fn chat_completion_retains_prefix_only_after_modeled_prefill_completes() {
+    let state = AppState {
+        prefill_tokens_per_s: 100.0,
+        kv_cache: Arc::new(Mutex::new(KvCacheState::new(1_000))),
+        ..test_state()
+    };
+    let observed_cache = state.kv_cache.clone();
+    let mut stats_events = state.stats_events.subscribe();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-request-id",
+        HeaderValue::from_static("req-prefill-cache"),
+    );
+    headers.insert("x-input-tokens", HeaderValue::from_static("100"));
+    headers.insert("x-cache-affinity-key", HeaderValue::from_static("cache-a"));
+
+    let mut chat_request = request();
+    chat_request.messages = vec![serde_json::json!({ "content": "x".repeat(100) })];
+    let request = tokio::spawn(chat_completions(State(state), headers, Json(chat_request)));
+    tokio::time::timeout(Duration::from_millis(100), stats_events.recv())
+        .await
+        .expect("stream request should announce work before prefill completes")
+        .expect("stats event stream should stay open");
+    assert_eq!(
+        observed_cache
+            .lock()
+            .await
+            .stats("dummy-model")
+            .kv_cache_entries,
+        0,
+        "in-flight input processing must not retain a reusable prefix"
+    );
+
+    tokio::time::timeout(Duration::from_secs(2), request)
+        .await
+        .expect("request should finish modeled prefill")
+        .expect("request task should not fail");
+    assert_eq!(
+        observed_cache
+            .lock()
+            .await
+            .stats("dummy-model")
+            .kv_cache_used_tokens,
+        100
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn non_streaming_chat_reports_input_when_prefill_completes() {
+    let state = AppState {
+        prefill_tokens_per_s: 100.0,
+        ttft: Duration::from_secs(10),
+        ..test_state()
+    };
+    let mut stats_events = state.stats_events.subscribe();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-request-id",
+        HeaderValue::from_static("req-prefill-stats"),
+    );
+    headers.insert("x-input-tokens", HeaderValue::from_static("100"));
+    let mut chat_request = request();
+    chat_request.stream = Some(false);
+
+    let request = tokio::spawn(chat_completions(State(state), headers, Json(chat_request)));
+    let StatsStreamEvent::Stats {
+        tokens_processed,
+        tokens_generated,
+        finished,
+        ..
+    } = stats_events
+        .recv()
+        .await
+        .expect("baseline event should arrive")
+    else {
+        panic!("expected a stats event");
+    };
+    assert_eq!(tokens_processed, Some(0));
+    assert_eq!(tokens_generated, Some(0));
+    assert!(!finished);
+
+    tokio::time::advance(Duration::from_millis(999)).await;
+    assert!(matches!(
+        stats_events.try_recv(),
+        Err(broadcast::error::TryRecvError::Empty)
+    ));
+    tokio::time::advance(Duration::from_millis(1)).await;
+
+    let StatsStreamEvent::Stats {
+        tokens_processed,
+        tokens_generated,
+        finished,
+        ..
+    } = stats_events
+        .recv()
+        .await
+        .expect("prefill event should arrive")
+    else {
+        panic!("expected a stats event");
+    };
+    assert_eq!(tokens_processed, Some(100));
+    assert_eq!(tokens_generated, Some(0));
+    assert!(!finished);
+    assert!(
+        !request.is_finished(),
+        "TTFT should still delay the response"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn responses_reports_input_without_waiting_for_stream_polling() {
+    let state = AppState {
+        prefill_tokens_per_s: 100.0,
+        ttft: Duration::from_secs(10),
+        ..test_state()
+    };
+    let mut stats_events = state.stats_events.subscribe();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-request-id",
+        HeaderValue::from_static("req-response-prefill"),
+    );
+    headers.insert("x-input-tokens", HeaderValue::from_static("100"));
+    let response_request = ResponsesRequest {
+        stream: Some(true),
+        model: Some("dummy-model".to_string()),
+        max_output_tokens: Some(1),
+        input: None,
+    };
+
+    let request = tokio::spawn(responses(State(state), headers, Json(response_request)));
+    stats_events
+        .recv()
+        .await
+        .expect("baseline event should arrive");
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let StatsStreamEvent::Stats {
+        tokens_processed,
+        tokens_generated,
+        finished,
+        ..
+    } = stats_events
+        .recv()
+        .await
+        .expect("prefill event should arrive")
+    else {
+        panic!("expected a stats event");
+    };
+
+    assert_eq!(tokens_processed, Some(100));
+    assert_eq!(tokens_generated, Some(0));
+    assert!(!finished);
+    request
+        .await
+        .expect("responses request should return a stream");
+}
+
+#[test]
+fn kv_cache_evicts_least_recently_used_entry() {
+    let mut cache = KvCacheState::new(300);
+
+    assert!(!completed_cache_access(&mut cache, Some("cak-a"), 100).hit);
+    assert!(!completed_cache_access(&mut cache, Some("cak-b"), 100).hit);
+    assert!(completed_cache_access(&mut cache, Some("cak-a"), 100).hit);
+    let access = completed_cache_access(&mut cache, Some("cak-c"), 150);
+    assert!(!access.hit);
+    assert_eq!(access.evicted_entries, 1);
+    assert_eq!(access.evicted_tokens, 100);
+
+    assert!(completed_cache_access(&mut cache, Some("cak-a"), 100).hit);
+    assert!(!completed_cache_access(&mut cache, Some("cak-b"), 100).hit);
+    assert_eq!(cache.stats("dummy-model").kv_cache_eviction_count, 2);
+    assert_eq!(cache.stats("dummy-model").kv_cache_evicted_tokens, 250);
+}
+
+#[tokio::test]
+async fn streaming_response_delays_first_data_frame_until_ttft() {
+    let state = AppState {
+        ttft: Duration::from_millis(120),
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .route("/pylon/v1/stats/stream", get(stats_stream))
+        .with_state(state);
+    let (addr, server) = spawn_test_app(app).await;
+
+    let body = r#"{"model":"dummy-model","messages":[],"max_tokens":1,"stream":true}"#;
+    let mut stream = send_json_request(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        "x-request-id: req-ttft",
+        body,
+    )
+    .await;
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), read_until_sse_data(&mut stream))
+            .await
+            .is_err(),
+        "mock emitted an SSE data frame before configured TTFT elapsed"
+    );
+    tokio::time::timeout(Duration::from_secs(1), read_until_sse_data(&mut stream))
+        .await
+        .expect("SSE data should arrive after TTFT")
+        .expect("SSE data read should succeed");
+    server.abort();
+}
+
+#[tokio::test]
+async fn streaming_response_exposes_stats_stream_endpoint() {
+    let state = AppState {
+        output_tokens: OutputTokenConfig::fixed(2),
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .route("/pylon/v1/stats/stream", get(stats_stream))
+        .with_state(state);
+    let (addr, server) = spawn_test_app(app).await;
+
+    let body = r#"{"model":"dummy-model","messages":[{"role":"user","content":"hello world"}],"max_tokens":2,"stream":true}"#;
+    let mut stream = send_json_request(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        "x-request-id: req-contract\r\nx-input-tokens: 11",
+        body,
+    )
+    .await;
+
+    let response = read_until_done(&mut stream).await;
+    assert!(!response.contains(r#""usage":"#));
+
+    let mut stream = tokio::net::TcpStream::connect(addr)
+        .await
+        .expect("test client should connect");
+    stream
+        .write_all(
+            format!(
+                "GET /pylon/v1/stats/stream HTTP/1.1\r\nhost: {addr}\r\nconnection: close\r\n\r\n",
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("stats stream request should write");
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        read_until_contains(&mut stream, "application/x-ndjson"),
+    )
+    .await
+    .expect("stats stream headers should arrive")
+    .expect("stats stream response should read");
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("content-type: application/x-ndjson"));
+    server.abort();
+}
+
+#[test]
+fn stats_stream_events_are_ndjson() {
+    let event = StatsStreamEvent::Stats {
+        v: 1,
+        request_id: "req-1".to_string(),
+        model: "dummy-model".to_string(),
+        tokens_processed: Some(11),
+        tokens_generated: Some(2),
+        finished: true,
+    };
+
+    let line = String::from_utf8(ndjson_event(&event).to_vec()).unwrap();
+
+    assert_eq!(
+            line,
+            r#"{"type":"stats","v":1,"request_id":"req-1","model":"dummy-model","tokens_processed":11,"tokens_generated":2,"finished":true}"#
+                .to_string()
+                + "\n"
+        );
+}
+
+#[tokio::test]
+async fn responses_endpoint_streams_response_events_without_private_stats_headers() {
+    let state = AppState {
+        output_tokens: OutputTokenConfig::fixed(2),
+        kv_cache: Arc::new(Mutex::new(KvCacheState::new(10_000))),
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/responses", post(responses))
+        .with_state(state);
+    let (addr, server) = spawn_test_app(app).await;
+
+    let cases = [
+        (None, 1),
+        (Some(serde_json::json!("hello")), 5),
+        (Some(serde_json::json!(["hi", {"x": 1}])), 9),
+        (Some(serde_json::json!({"x": 1})), 7),
+    ];
+    let mut response = String::new();
+    for (index, (input, expected_tokens)) in cases.into_iter().enumerate() {
+        let mut request_body = serde_json::json!({
+            "model": "request-model",
+            "max_output_tokens": 2,
+            "stream": true,
+        });
+        if let Some(input) = input {
+            request_body["input"] = input;
+        }
+        response = json_response(
+            addr,
+            "POST",
+            "/v1/responses",
+            &format!("connection: close\r\nx-request-id: req-responses-{index}\r\nx-input-tokens: {expected_tokens}\r\nx-cache-affinity-key: cache-{index}"),
+            &request_body.to_string(),
+        )
+        .await;
+        assert!(response.contains(&format!(
+            "x-kv-cache-uncached-input-tokens: {expected_tokens}"
+        )));
+        assert!(response.contains(&format!(r#""input_tokens":{expected_tokens}"#)));
+    }
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("x-kv-cache-hit: false"));
+    assert!(response.contains("x-kv-cache-reused-input-tokens: 0"));
+    assert!(response.contains("x-kv-cache-uncached-input-tokens: 7"));
+    assert!(response.contains("content-type: text/event-stream"));
+
+    let (_, body_text) = response
+        .split_once("\r\n\r\n")
+        .expect("response should contain a body");
+    assert!(body_text.contains("event: response.created"));
+    assert!(body_text.contains("event: response.output_text.delta"));
+    assert!(body_text.contains("event: response.completed"));
+    assert!(body_text.contains(r#""type":"response.completed""#));
+    assert!(body_text.contains(r#""object":"response""#));
+    assert!(body_text.contains(r#""status":"completed""#));
+    assert!(body_text.contains(r#""model":"request-model""#));
+    assert!(body_text.contains(r#""input_tokens":7"#));
+    assert!(body_text.contains(r#""output_tokens":2"#));
+    assert!(body_text.contains(r#""total_tokens":9"#));
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn responses_endpoint_rejects_non_streaming_requests() {
+    let state = AppState {
+        output_tokens: OutputTokenConfig::fixed(2),
+        kv_cache: Arc::new(Mutex::new(KvCacheState::new(10_000))),
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/responses", post(responses))
+        .with_state(state);
+    let (addr, server) = spawn_test_app(app).await;
+
+    let request_body = serde_json::json!({
+        "model": "request-model",
+        "input": "hello",
+        "stream": false,
+    })
+    .to_string();
+    let response = json_response(
+        addr,
+        "POST",
+        "/v1/responses",
+        "connection: close\r\nx-request-id: req-responses-nonstream\r\nx-input-tokens: 5",
+        &request_body,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(response.contains("stream=true"));
+
+    server.abort();
+}
+
+async fn read_until_sse_data(stream: &mut tokio::net::TcpStream) -> std::io::Result<()> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 1024];
+    loop {
+        let read = stream.read(&mut buffer).await?;
+        if read == 0 {
+            return Ok(());
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        if String::from_utf8_lossy(&bytes).contains("\ndata:") {
+            return Ok(());
+        }
+    }
+}
+
+async fn read_until_done(stream: &mut tokio::net::TcpStream) -> String {
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 1024];
+    loop {
+        let read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buffer))
+            .await
+            .expect("response should continue")
+            .expect("response should read");
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        if String::from_utf8_lossy(&bytes).contains("data: [DONE]") {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+async fn read_to_end(stream: &mut tokio::net::TcpStream) -> String {
+    let mut bytes = Vec::new();
+    stream
+        .read_to_end(&mut bytes)
+        .await
+        .expect("response should read to end");
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+async fn raw_http_request(addr: std::net::SocketAddr, request: &str) -> String {
+    let mut stream = tokio::net::TcpStream::connect(addr)
+        .await
+        .expect("test client should connect");
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("request should write");
+    read_to_end(&mut stream).await
+}
+
+async fn read_until_contains(
+    stream: &mut tokio::net::TcpStream,
+    needle: &str,
+) -> std::io::Result<String> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 1024];
+    loop {
+        let read = stream.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        let text = String::from_utf8_lossy(&bytes);
+        if text.contains(needle) {
+            return Ok(text.to_string());
+        }
+    }
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+#[test]
+fn profile_defaults_to_the_batched_engine_with_configurable_workers() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--profile",
+        "h100-llama-3.1-8b",
+        "--num-gpu-workers",
+        "4",
+    ])
+    .unwrap();
+    let config = args
+        .engine_config()
+        .unwrap()
+        .expect("profile uses batched engine");
+    assert_eq!(config.num_gpu_workers, 4);
+    assert_eq!(config.max_concurrency(), 100);
+
+    let legacy = Args::try_parse_from([
+        "mock-dynamo",
+        "--profile",
+        "h100-llama-3.1-8b",
+        "--engine-model",
+        "legacy",
+    ])
+    .unwrap();
+    assert!(legacy.engine_config().unwrap().is_none());
+    assert!(
+        Args::try_parse_from(["mock-dynamo"])
+            .unwrap()
+            .engine_config()
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        Args::try_parse_from(["mock-dynamo", "--num-gpu-workers", "4"])
+            .unwrap()
+            .engine_config()
+            .is_err(),
+        "batched-only flags must not be ignored by the legacy model"
+    );
+}
+
+#[test]
+fn batched_engine_flags_override_profile_costs() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--engine-model",
+        "batched",
+        "--max-num-seqs",
+        "8",
+        "--kv-cache-capacity-tokens",
+        "1000",
+        "--step-prefill-ms-per-token",
+        "0.1",
+    ])
+    .unwrap();
+    let config = args.engine_config().unwrap().unwrap();
+    assert_eq!(config.max_num_seqs, 8);
+    assert_eq!(config.kv_cache_capacity_tokens, 1000);
+    assert_eq!(config.step_prefill_ms_per_token, 0.1);
+    assert!(
+        Args::try_parse_from([
+            "mock-dynamo",
+            "--engine-model",
+            "batched",
+            "--num-gpu-workers",
+            "0"
+        ])
+        .unwrap()
+        .engine_config()
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn batched_engine_reuses_cached_prefixes_across_requests() {
+    let engine = engine_driver::EngineDriver::spawn(mock_engine::EngineConfig {
+        num_gpu_workers: 1,
+        max_num_seqs: 4,
+        max_batched_tokens: 10_000,
+        step_fixed_ms: 1.0,
+        step_decode_ms_per_seq: 0.0,
+        step_prefill_ms_per_token: 0.1,
+        kv_cache_capacity_tokens: 100_000,
+    })
+    .unwrap();
+    let state = AppState {
+        output_tokens: OutputTokenConfig::fixed(3),
+        engine: Some(engine),
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(state.clone());
+    let (addr, _server) = spawn_test_app(app).await;
+    let body = serde_json::json!({"model": "dummy-model", "messages": []}).to_string();
+    let send = || {
+        json_response(
+            addr,
+            "POST",
+            "/v1/chat/completions",
+            "connection: close\r\nx-input-tokens: 2000\r\nx-cache-affinity-key: shared-prefix",
+            &body,
+        )
+    };
+
+    let started = std::time::Instant::now();
+    let cold = send().await;
+    let cold_elapsed = started.elapsed();
+    assert!(cold.contains("x-kv-cache-hit: false"), "{cold}");
+    assert!(cold.contains("x-kv-cache-uncached-input-tokens: 2000"));
+    assert!(cold.contains(r#""completion_tokens":3"#));
+    // 2,000 prefill tokens at 0.1 ms each.
+    assert!(
+        cold_elapsed >= Duration::from_millis(200),
+        "{cold_elapsed:?}"
+    );
+
+    let warm = send().await;
+    assert!(warm.contains("x-kv-cache-hit: true"), "{warm}");
+    assert!(warm.contains("x-kv-cache-reused-input-tokens: 2000"));
+
+    // The cached entry holds the prompt and its three output tokens.
+    let Json(stats) = kv_cache_stats(State(state)).await;
+    assert_eq!(
+        (stats.kv_cache_used_tokens, stats.kv_cache_capacity_tokens),
+        (2003, 100_000)
+    );
+
+    let streamed = json_response(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        "connection: close\r\nx-input-tokens: 2000\r\nx-cache-affinity-key: shared-prefix",
+        &serde_json::json!({"model": "dummy-model", "messages": [], "stream": true}).to_string(),
+    )
+    .await;
+    assert!(streamed.contains("x-kv-cache-hit: true"), "{streamed}");
+    assert_eq!(streamed.matches(r#""content":"#).count(), 3, "{streamed}");
+    assert!(streamed.contains("[DONE]"), "{streamed}");
+}
+
+#[test]
+fn stats_stream_pings_advertise_batched_engine_concurrency() {
+    let advertised = StatsStreamEvent::Ping {
+        v: 1,
+        model: Some("dummy-model".to_string()),
+        max_engine_concurrency: Some(100),
+    };
+    assert_eq!(
+        String::from_utf8(ndjson_event(&advertised).to_vec()).unwrap(),
+        "{\"type\":\"ping\",\"v\":1,\"model\":\"dummy-model\",\"max_engine_concurrency\":100}\n"
+    );
+    let legacy = StatsStreamEvent::Ping {
+        v: 1,
+        model: None,
+        max_engine_concurrency: None,
+    };
+    assert_eq!(
+        String::from_utf8(ndjson_event(&legacy).to_vec()).unwrap(),
+        "{\"type\":\"ping\",\"v\":1}\n"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropping_an_engine_request_frees_its_slot() {
+    let engine = engine_driver::EngineDriver::spawn(mock_engine::EngineConfig {
+        num_gpu_workers: 1,
+        max_num_seqs: 1,
+        max_batched_tokens: 10_000,
+        step_fixed_ms: 1.0,
+        step_decode_ms_per_seq: 0.0,
+        step_prefill_ms_per_token: 0.0,
+        kv_cache_capacity_tokens: 100_000,
+    })
+    .unwrap();
+    let mut running = engine.submit(None, 10, 1_000_000);
+    running.first_token().await;
+    let mut waiting = engine.submit(None, 10, 1);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), waiting.first_token())
+            .await
+            .is_err(),
+        "the only slot is busy"
+    );
+
+    // A client disconnect drops the request, which cancels it in the engine.
+    drop(running);
+    tokio::time::timeout(Duration::from_millis(100), waiting.first_token())
+        .await
+        .expect("the cancelled request's slot serves the waiting request");
+}

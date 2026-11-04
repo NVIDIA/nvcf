@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
  * Copyright 2020-2022 The NATS Authors
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +25,12 @@ import (
 )
 
 const libVersion = 2
+
+// MaxTokenSize is the maximum size of a JWT token in bytes
+const MaxTokenSize = 1024 * 1024 // 1MB
+
+// ErrTokenTooLarge is returned when a token exceeds MaxTokenSize
+var ErrTokenTooLarge = errors.New("token too large")
 
 type identifier struct {
 	Type          ClaimType `json:"type,omitempty"`
@@ -59,6 +62,9 @@ type v1ClaimsDataDeletedFields struct {
 // doesn't match the expected algorithm, or the claim is
 // not valid or verification fails an error is returned.
 func Decode(token string) (Claims, error) {
+	if len(token) > MaxTokenSize {
+		return nil, fmt.Errorf("token size %d exceeds maximum of %d bytes: %w", len(token), MaxTokenSize, ErrTokenTooLarge)
+	}
 	// must have 3 chunks
 	chunks := strings.Split(token, ".")
 	if len(chunks) != 3 {

@@ -1,0 +1,33 @@
+{{- if .Values.nvctApi.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "nvct-api.fullname" . }}
+  namespace: {{ include "nvct-api.namespace" . }}
+  labels:
+    {{- include "nvct-api.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "nvct-api.fullname" . }}
+  minReplicas: {{ .Values.nvctApi.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.nvctApi.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.nvctApi.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.nvctApi.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.nvctApi.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.nvctApi.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}

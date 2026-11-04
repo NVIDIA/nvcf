@@ -406,6 +406,10 @@ spec:
           successThreshold: 1
           timeoutSeconds: 1
         name: utils
+        ports:
+        - containerPort: 8010
+          name: worker-metrics
+          protocol: TCP
         readinessProbe:
           failureThreshold: 2
           httpGet:
@@ -436,6 +440,9 @@ spec:
           name: config-data
       imagePullSecrets:
       - name: worker-fake-object-name-regcred-0
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
       serviceAccountName: my-sa
       terminationGracePeriodSeconds: 120
       tolerations:

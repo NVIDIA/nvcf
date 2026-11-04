@@ -33,6 +33,16 @@ const HOP_HEADERS: [http::header::HeaderName; 9] = [
     http::header::UPGRADE,
 ];
 
+pub(crate) const NVCF_INVOCATION_REGION: http::header::HeaderName =
+    http::header::HeaderName::from_static("nvcf-invocation-region");
+
+pub(crate) fn inject_invocation_region_header(
+    headers: &mut http::HeaderMap,
+    region: &http::HeaderValue,
+) {
+    headers.insert(NVCF_INVOCATION_REGION, region.clone());
+}
+
 /// Removes hop-by-hop headers from the given header map.
 /// Copied from httputil.ReverseProxy because it's private.
 pub fn remove_hop_by_hop_headers(headers: &mut http::HeaderMap) {
@@ -215,6 +225,38 @@ mod tests {
 
         // Headers not mentioned should remain
         assert_eq!(headers.get("x-header-4").unwrap(), "value4");
+    }
+
+    #[test]
+    fn invocation_region_header_replaces_client_value() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            NVCF_INVOCATION_REGION,
+            HeaderValue::from_static("client-region-1"),
+        );
+        headers.append(
+            "NVCF-INVOCATION-REGION",
+            HeaderValue::from_static("client-region-2"),
+        );
+        headers.insert("x-user-header", HeaderValue::from_static("user-value"));
+
+        inject_invocation_region_header(&mut headers, &HeaderValue::from_static("server-region"));
+
+        let values = headers.get_all(NVCF_INVOCATION_REGION);
+        assert_eq!(values.iter().count(), 1);
+        assert_eq!(values.iter().next().unwrap(), "server-region");
+        assert_eq!(headers.get("x-user-header").unwrap(), "user-value");
+    }
+
+    #[test]
+    fn invocation_region_header_is_added_when_absent() {
+        let mut headers = HeaderMap::new();
+
+        inject_invocation_region_header(&mut headers, &HeaderValue::from_static("server-region"));
+
+        let values = headers.get_all(NVCF_INVOCATION_REGION);
+        assert_eq!(values.iter().count(), 1);
+        assert_eq!(values.iter().next().unwrap(), "server-region");
     }
 
     #[test]

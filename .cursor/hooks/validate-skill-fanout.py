@@ -1,0 +1,1 @@
+../../ai-tooling/dev/hooks/validate-skill-fanout.py

@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Benchmark harness. Not packaged into an OCI image.
+
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+# Workspace-local Cargo deps (own-workspace `workspace = true`).
+_WORKSPACE_DEPS = [
+    "//src/libraries/rust/stargate/crates/proto:stargate-proto",
+    "//src/libraries/rust/stargate/crates/protocol:stargate-protocol",
+    "//src/libraries/rust/stargate/crates/stargate:stargate_lib",
+    "//src/libraries/rust/stargate/crates/stargate-tls:stargate-tls",
+]
+
+rust_binary(
+    name = "stargate-bench",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    # src/k8s/render.rs pulls in the collector template via
+    # include_str!("otel_collector.yaml"); make the non-.rs data file
+    # available to the compiler.
+    compile_data = glob(["src/**/*.yaml"]),
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "stargate-bench_test",
+    crate = ":stargate-bench",
+    data = ["//src/libraries/rust/stargate:benches"],
+    # Scenario lookup uses the manifest's ancestors. Resolve it within the
+    # test's runfiles tree instead of the build sandbox's source directory.
+    rustc_env = {
+        "CARGO_MANIFEST_DIR": "src/libraries/rust/stargate/crates/stargate-bench",
+    },
+    deps = all_crate_deps(normal_dev = True),
+)
+
+py_test(
+    name = "benchmark_usage_test",
+    srcs = ["benchmark_usage_test.py"],
+    main = "benchmark_usage_test.py",
+    args = [
+        "$(rootpath //src/libraries/rust/stargate/crates/mock-dynamo:mock-dynamo)",
+        "$(rootpath :stargate-bench)",
+    ],
+    data = [
+        "//src/libraries/rust/stargate/crates/mock-dynamo:mock-dynamo",
+        ":stargate-bench",
+    ],
+    python_version = "3.11",
+    size = "small",
+)

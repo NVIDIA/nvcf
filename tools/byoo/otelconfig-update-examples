@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 tool_root="${repo_root}/tools/byoo"
 examples_root="${repo_root}/src/libraries/go/lib/examples/otelconfig/byoo-otel-collector"
-create_cmd="./testdata/otelconfig/create/main.go"
+create_cmd="./otelconfig-create"
 
 local_secrets_path="${examples_root}/secrets"
 real_secrets_path="/etc/byoo-otel-collector/secrets"
@@ -24,8 +24,11 @@ for input_file in testdata/otelconfig/*.json; do
                 go run "${create_cmd}" "${input_file}" _output "${backend_type}" "${req_type}" "${compute_type}"
                 generated_file="_output/byoo-otel-collector/config.${compute_type}_${backend_type}_${req_type}.yaml"
                 target_file="${examples_root}/${backend_type}/config_${compute_type}_${req_type}_${basename}.yaml"
-                cp "${generated_file}" "${target_file}"
-                sed -i "s|${local_secrets_path}|${real_secrets_path}|g" "${target_file}"
+                # Rewrite the local secrets path to the in-cluster one. Not
+                # "sed -i": that form is GNU-only and fails on BSD sed, so the
+                # substitution goes through a temporary file instead.
+                sed "s|${local_secrets_path}|${real_secrets_path}|g" \
+                    "${generated_file}" > "${target_file}"
                 rm "${generated_file}"
             done
         done

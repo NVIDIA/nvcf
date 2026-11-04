@@ -1,0 +1,169 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+syntax = "proto3";
+
+package nvct;
+
+import "google/protobuf/timestamp.proto";
+
+option java_multiple_files = true;
+option java_package = "com.nvidia.nvct.proto";
+
+service Worker {
+    rpc Connect (ConnectRequest) returns (ConnectResponse);
+    rpc SendHeartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+    rpc SendResultMetadata (stream ResultMetadataRequest) returns (ResultMetadataResponse);
+    rpc GetArtifacts (ArtifactsRequest) returns (ArtifactsResponse);
+    rpc RefreshToken (RefreshTokenRequest) returns (RefreshTokenResponse);
+    rpc RequestSecretCredentials (SecretCredentialsRequest) returns (SecretCredentialsResponse);
+}
+
+message ConnectRequest {
+    string instanceId = 1;
+    string taskId = 2;
+}
+
+message ConnectResponse {
+    string connectedRegion = 1;
+}
+
+message HeartbeatRequest {
+    string instanceId = 1;
+    string taskId = 2;
+    string instanceType = 3;
+    ExecutionStatus status = 4;       // ERRORED, EXCEEDED_MAX_DURATION
+    optional string errorMessage = 5;
+}
+
+message HeartbeatResponse {
+    string taskId = 1;              // UUID
+    string ExecutionStatus = 2;     // COMPLETED, ERRORED, etc.
+}
+
+message StringKV {
+    string key = 1;
+    string value = 2;
+}
+
+message ResultMetadata {
+    bytes body = 1;
+}
+
+message ErrorDetails {
+    string type = 1;
+    string title = 2;
+    uint32 status = 3;
+    string detail = 4;
+}
+
+enum ExecutionStatus {
+    ERRORED = 0;
+    IN_PROGRESS = 1;
+    COMPLETED = 2;
+    PENDING_EVALUATION = 3;
+    EXCEEDED_MAX_RUNTIME_DURATION = 4;
+    EXCEEDED_MAX_QUEUED_DURATION = 5;
+    QUEUED = 6;
+    LAUNCHED = 7;
+    RUNNING = 8;
+    CANCELED = 9;
+    TASK_CONTAINER_INITIALIZING = 10;
+    WORKER_TERMINATED = 11;
+}
+
+message ResultMetadataRequest {
+    string taskId = 1;                // UUID
+    string instanceId = 2;            // UUID
+    string instanceType = 3;
+    ExecutionStatus status = 4;       // ERRORED, IN_PROGRESS, COMPLETED, etc.
+    optional uint32 percentComplete = 5;
+    string resultName = 6;            // Result/Checkpoints metadata
+    oneof result {
+        ResultMetadata metadata = 7; // Results/Checkpoints metadata
+        ErrorDetails errorDetails = 8;
+    }
+}
+
+message ResultMetadataResponse {
+    string taskId = 1;              // UUID
+    string ExecutionStatus = 2;     // COMPLETED, ERRORED, etc.
+}
+
+message ArtifactsRequest {
+    string taskId = 1;      // UUID
+}
+
+message ArtifactsResponse {
+    repeated ArtifactResponse artifacts = 1;
+    message ArtifactResponse {
+        string name = 1;
+        string version = 2;
+        ArtifactKindEnum kind = 3;
+        repeated ArtifactFile files = 4;
+        enum ArtifactKindEnum {
+            MODEL = 0;
+            RESOURCE = 1;
+        }
+        message ArtifactFile {
+            string path = 1;
+            string url = 2;
+        }
+    }
+}
+
+message RefreshTokenRequest {
+    string taskId = 1;    // UUID
+}
+
+message RefreshTokenResponse {
+    string token = 1;
+}
+
+message SecretCredentialsRequest {
+    string taskId = 1;
+}
+
+message SecretCredentialsResponse {
+    string secretCredentialsToken = 1;
+    google.protobuf.Timestamp expiration = 2;
+}
+
+
+service Skyway {
+    rpc AuthGetLogs (SkywayAuthRequest) returns (SkywayAuthResponse);
+    rpc AuthExecuteCommand (SkywayAuthRequest) returns (SkywayAuthResponse);
+    rpc AuthListInstances (SkywayAuthRequest) returns (SkywayAuthResponse);
+}
+
+
+message SkywayAuthRequest {
+    string clientAuthorizationToken = 1;
+    string taskId = 2;
+    // used for super admins (KAS) to invoke on behalf of a given nca id
+    optional string targetNcaId = 3;
+}
+
+message SkywayAuthResponse {
+    message Instance {
+        string instanceId = 1;
+        string location = 2;
+        string state = 3;
+    }
+    string taskId = 1;
+    string clientAuthSubject = 2;
+    string clientNcaId = 3;
+    optional string backend = 4;
+    repeated Instance instances = 5;
+}

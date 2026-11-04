@@ -14,8 +14,6 @@
 // limitations under the License.
 
 // Package cobraautobind registers Cobra CLI flags from a struct shape and binds them to Viper.
-//
-// TODO(NVCF-9201): unit-test coverage is below the lib module threshold; add tests for this package.
 package cobraautobind
 
 import (
@@ -96,19 +94,21 @@ func recursiveAutobind(cmd *cobra.Command, v *viper.Viper, config any, prefix st
 			continue
 		}
 
-		switch field.Type.Kind() {
+		fieldType := field.Type
+	bindFlag:
+		switch fieldType.Kind() {
 		case reflect.String:
 			cmd.Flags().String(fullFlag, defStr, usage)
 
 		case reflect.Int:
-			def, err := parseDefault(defStr, field.Type.String(), fullFlag, strconv.Atoi)
+			def, err := parseDefault(defStr, fieldType.String(), fullFlag, strconv.Atoi)
 			if err != nil {
 				return err
 			}
 			cmd.Flags().Int(fullFlag, def, usage)
 
 		case reflect.Int32:
-			def, err := parseDefault(defStr, field.Type.String(), fullFlag, func(s string) (int32, error) {
+			def, err := parseDefault(defStr, fieldType.String(), fullFlag, func(s string) (int32, error) {
 				i, err := strconv.ParseInt(s, 10, 32)
 				return int32(i), err
 			})
@@ -118,7 +118,7 @@ func recursiveAutobind(cmd *cobra.Command, v *viper.Viper, config any, prefix st
 			cmd.Flags().Int32(fullFlag, def, usage)
 
 		case reflect.Int64:
-			def, err := parseDefault(defStr, field.Type.String(), fullFlag, func(s string) (int64, error) {
+			def, err := parseDefault(defStr, fieldType.String(), fullFlag, func(s string) (int64, error) {
 				return strconv.ParseInt(s, 10, 64)
 			})
 			if err != nil {
@@ -127,7 +127,7 @@ func recursiveAutobind(cmd *cobra.Command, v *viper.Viper, config any, prefix st
 			cmd.Flags().Int64(fullFlag, def, usage)
 
 		case reflect.Uint16:
-			def, err := parseDefault(defStr, field.Type.String(), fullFlag, func(s string) (uint16, error) {
+			def, err := parseDefault(defStr, fieldType.String(), fullFlag, func(s string) (uint16, error) {
 				i, err := strconv.ParseUint(s, 10, 16)
 				return uint16(i), err
 			})
@@ -137,14 +137,14 @@ func recursiveAutobind(cmd *cobra.Command, v *viper.Viper, config any, prefix st
 			cmd.Flags().Uint16(fullFlag, def, usage)
 
 		case reflect.Bool:
-			def, err := parseDefault(defStr, field.Type.String(), fullFlag, strconv.ParseBool)
+			def, err := parseDefault(defStr, fieldType.String(), fullFlag, strconv.ParseBool)
 			if err != nil {
 				return err
 			}
 			cmd.Flags().Bool(fullFlag, def, usage)
 
 		case reflect.Float32, reflect.Float64:
-			def, err := parseDefault(defStr, field.Type.String(), fullFlag, func(s string) (float64, error) {
+			def, err := parseDefault(defStr, fieldType.String(), fullFlag, func(s string) (float64, error) {
 				return strconv.ParseFloat(s, 64)
 			})
 			if err != nil {
@@ -153,10 +153,14 @@ func recursiveAutobind(cmd *cobra.Command, v *viper.Viper, config any, prefix st
 			cmd.Flags().Float64(fullFlag, def, usage)
 
 		case reflect.Slice:
-			if field.Type.Elem().Kind() != reflect.String {
+			if fieldType.Elem().Kind() != reflect.String {
 				continue
 			}
 			cmd.Flags().StringSlice(fullFlag, nil, usage)
+
+		case reflect.Ptr:
+			fieldType = fieldType.Elem()
+			goto bindFlag
 
 		default:
 			return &UnsupportedFieldTypeError{

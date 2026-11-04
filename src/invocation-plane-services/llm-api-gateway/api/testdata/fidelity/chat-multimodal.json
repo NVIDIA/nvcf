@@ -1,0 +1,160 @@
+{
+  "description": "Image and input_audio parts, message extensions and vendor options reach the backend.",
+  "path": "/v1/chat/completions",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Describe the input.",
+        "vendor_message": {
+          "cache": null
+        }
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Image and audio"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "data:image/png;base64,AAAA",
+              "detail": "low"
+            },
+            "vendor_part": false
+          },
+          {
+            "type": "input_audio",
+            "input_audio": {
+              "data": "UklGRg==",
+              "format": "wav",
+              "vendor_audio": {
+                "channels": 1
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "max_tokens": 32,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "ignore_eos": true
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Describe the input.",
+        "vendor_message": {
+          "cache": null
+        }
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Image and audio"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "data:image/png;base64,AAAA",
+              "detail": "low"
+            },
+            "vendor_part": false
+          },
+          {
+            "type": "input_audio",
+            "input_audio": {
+              "data": "UklGRg==",
+              "format": "wav",
+              "vendor_audio": {
+                "channels": 1
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "max_tokens": 32,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "ignore_eos": true,
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    }
+  },
+  "upstream_input_tokens": "84",
+  "upstream_affinity_key": "mt:v1:payload:c992c9ee7ae47d5ce2c2b4577813fa12d3b31ffa7b44966d47b65cac8535f453",
+  "upstream_response": {
+    "sse": [
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "content": "OK"
+              },
+              "finish_reason": "stop"
+            }
+          ]
+        }
+      },
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 2,
+            "total_tokens": 9
+          }
+        }
+      },
+      {
+        "data": "[DONE]"
+      }
+    ]
+  },
+  "response": {
+    "json": {
+      "id": "chatcmpl-fidelity",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "fn-alpha/company/model",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "OK"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 2,
+        "total_tokens": 9
+      }
+    }
+  }
+}

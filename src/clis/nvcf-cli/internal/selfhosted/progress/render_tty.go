@@ -31,6 +31,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+
+	"nvcf-cli/internal/selfhosted/severity"
 )
 
 // RenderMode discriminates the layout the bubbletea Model produces.
@@ -192,6 +194,14 @@ type ModelOpts struct {
 	// Leave both empty (the default) for single-cluster mode.
 	ControlPlaneContext string
 	ComputePlaneContext string
+
+	// OnQuit runs when the operator presses a quit key. Bubbletea reads the
+	// terminal in raw mode, so Ctrl-C arrives as a key press, not a signal:
+	// without this, quitting closed the dashboard while the command kept
+	// running behind it. It is called synchronously inside Update, so it must
+	// not block: cancel a context or signal a channel, and leave the cleanup
+	// to the command.
+	OnQuit func()
 }
 
 // checkCategoryState holds the accumulated state for one pre-flight check
@@ -206,15 +216,15 @@ type checkCategoryState struct {
 
 // checkRow tracks a single check within a category.
 type checkRow struct {
-	id          string
-	started     bool
-	finished    bool
-	passed      bool
-	severity    string
-	message     string
-	startMsg    string // human label from CheckStarted.Message, shown while in-flight
-	detail      string
-	hintURL     string
+	id       string
+	started  bool
+	finished bool
+	passed   bool
+	severity severity.Severity
+	message  string
+	startMsg string // human label from CheckStarted.Message, shown while in-flight
+	detail   string
+	hintURL  string
 }
 
 // Model is the bubbletea Elm-architecture model that backs the TTY renderer.
@@ -223,12 +233,13 @@ type checkRow struct {
 // owned by TTYRenderer.
 type Model struct {
 	// identity (set at construction)
-	cluster     string
-	target      string
-	stack       string
-	controlCtx  string // M+9: control-plane kubeconfig context (empty → single-cluster)
-	computeCtx  string // M+9: compute-plane kubeconfig context (empty → single-cluster)
-	nowFunc func() time.Time
+	cluster    string
+	target     string
+	stack      string
+	controlCtx string // M+9: control-plane kubeconfig context (empty → single-cluster)
+	computeCtx string // M+9: compute-plane kubeconfig context (empty → single-cluster)
+	nowFunc    func() time.Time
+	onQuit     func()
 
 	// dynamic state (mutated by Update)
 	started  time.Time
@@ -246,7 +257,7 @@ type Model struct {
 	clusterGroupID    string
 	nvcfBackendHealth string
 	finalDuration     time.Duration
-	planOnly          bool    // true when reached via --plan-only short-circuit
+	planOnly          bool     // true when reached via --plan-only short-circuit
 	planned           *Planned // non-nil when --plan-only emitted a Planned event
 
 	// failure summary
@@ -279,9 +290,16 @@ type Model struct {
 	recentEvents []RecentEvent
 
 	// check mode (mode == ModeCheck)
-	checkCategories  []checkCategoryState
-	checkCategoryIdx map[string]int
-	totalChecks      int // hint from ModelOpts; 0 means derive from accumulated rows
+	checkCategories   []checkCategoryState
+	checkCategoryIdx  map[string]int
+	totalChecks       int // hint from ModelOpts; 0 means derive from accumulated rows
+	checkFinalTotal   int
+	checkFinalPassed  int
+	checkFinalFailed  int
+	checkFinalWarned  int
+	checkFinalVerdict string
+	checkFinalSuccess bool
+	checkCancelled    bool // final event came from SIGINT/SIGTERM, not a verdict
 
 	// log tail (LogLine ring buffer; rendered as a "Recent" panel during
 	// long phases like apply-cp). Capacity is fixed; new lines push older
@@ -350,6 +368,7 @@ func NewModel(opts ModelOpts) Model {
 		asciiOnly:   opts.AsciiOnly,
 		mode:        opts.Mode,
 		totalChecks: opts.TotalChecks,
+		onQuit:      opts.OnQuit,
 	}
 
 	switch opts.Mode {
@@ -433,6 +452,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
+			if m.onQuit != nil {
+				m.onQuit()
+			}
 			return m, tea.Quit
 		}
 		return m, nil
@@ -687,16 +709,7 @@ func (m Model) applyStatusEvent(e Event) (tea.Model, tea.Cmd) {
 func (m Model) applyCheckEvent(e Event) (tea.Model, tea.Cmd) {
 	switch ev := e.(type) {
 	case CheckStarted:
-		i, ok := m.checkCategoryIdx[ev.Category]
-		if !ok {
-			i = len(m.checkCategories)
-			m.checkCategories = append(m.checkCategories, checkCategoryState{
-				name: ev.Category,
-				keys: map[string]int{},
-			})
-			m.checkCategoryIdx[ev.Category] = i
-		}
-		cat := &m.checkCategories[i]
+		cat := m.checkCategory(ev.Category)
 		if _, exists := cat.keys[ev.ID]; !exists {
 			cat.keys[ev.ID] = len(cat.checks)
 			cat.checks = append(cat.checks, checkRow{id: ev.ID, started: true, startMsg: ev.Message})
@@ -704,11 +717,9 @@ func (m Model) applyCheckEvent(e Event) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case CheckCompleted:
-		ci, ok := m.checkCategoryIdx[ev.Category]
-		if !ok {
-			return m, nil
-		}
-		cat := &m.checkCategories[ci]
+		// A row the budget stopped before it started has no CheckStarted, and
+		// may be the first of its category: it still needs a place.
+		cat := m.checkCategory(ev.Category)
 		ri, exists := cat.keys[ev.ID]
 		if !exists {
 			// CheckStarted may have been suppressed; insert a row in finished state.
@@ -727,20 +738,35 @@ func (m Model) applyCheckEvent(e Event) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case CategoryCompleted:
-		ci, ok := m.checkCategoryIdx[ev.Category]
-		if !ok {
-			return m, nil
-		}
-		cat := &m.checkCategories[ci]
+		cat := m.checkCategory(ev.Category)
 		cat.duration = time.Duration(ev.DurationSec * float64(time.Second))
 		cat.final = true
 		return m, nil
 
 	case Final:
 		m.finished = true
+		m.checkFinalTotal = ev.TotalChecks
+		m.checkFinalPassed = ev.PassedCount
+		m.checkFinalFailed = ev.FailedCount
+		m.checkFinalWarned = ev.WarningCount
+		m.checkFinalVerdict = ev.Verdict
+		m.checkFinalSuccess = ev.Success
+		m.checkCancelled = ev.Cancelled
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// checkCategory returns the named category, adding it in arrival order when
+// it is new. The pointer is valid until the next category is added.
+func (m *Model) checkCategory(name string) *checkCategoryState {
+	i, ok := m.checkCategoryIdx[name]
+	if !ok {
+		i = len(m.checkCategories)
+		m.checkCategories = append(m.checkCategories, checkCategoryState{name: name, keys: map[string]int{}})
+		m.checkCategoryIdx[name] = i
+	}
+	return &m.checkCategories[i]
 }
 
 // percentOf returns done/total clamped to [0, 1]. A zero Total renders an
@@ -1147,7 +1173,7 @@ func (m Model) renderSplitHeader(now time.Time) string {
 
 // renderChecklist produces the 8-line phase list. Each line is of the form
 //
-//	    <marker>  <num>. <name padded>          <duration>
+//	<marker>  <num>. <name padded>          <duration>
 //
 // The marker carries the phase state in glyph form so an ASCII-only render
 // retains all distinctions.
@@ -1742,12 +1768,12 @@ func (m Model) viewStatus(now time.Time) string {
 // humanCategoryName maps raw category identifiers to human-readable labels.
 func humanCategoryName(raw string) string {
 	names := map[string]string{
-		"local-host-tools":    "Local host",
-		"kubernetes-api":      "Kubernetes API",
+		"local-host-tools":     "Local host",
+		"kubernetes-api":       "Kubernetes API",
 		"pre-kubernetes-setup": "Cluster setup",
-		"cluster":             "Cluster",
-		"control-plane":       "Control plane",
-		"compute-plane":       "Compute plane",
+		"cluster":              "Cluster",
+		"control-plane":        "Control plane",
+		"compute-plane":        "Compute plane",
 	}
 	if n, ok := names[raw]; ok {
 		return n
@@ -1757,17 +1783,22 @@ func humanCategoryName(raw string) string {
 
 // checkGlyph returns the bracketed glyph for a check row. Matches install-mode
 // convention: bracket + unicode, unchanged in ASCII-only mode (AsciiOnly only
-// strips ANSI color codes, not unicode characters).
+// strips ANSI color codes, not unicode characters). A warning, tallied and
+// exited on as one, gets its own mark.
 func checkGlyph(row checkRow) string {
 	switch {
-	case row.finished && row.passed:
-		return "[✓]"
-	case row.finished && !row.passed:
-		return "[✘]"
-	case row.started && !row.finished:
-		return "[▶]"
-	default:
+	case !row.finished && row.started:
+		return "[\u25b6]"
+	case !row.finished:
 		return "[ ]"
+	}
+	switch severity.Of(row.passed, row.severity) {
+	case severity.Pass:
+		return "[\u2713]"
+	case severity.Warn:
+		return "[!]"
+	default:
+		return "[\u2718]"
 	}
 }
 
@@ -1813,7 +1844,13 @@ func (m Model) viewCheck(now time.Time) string {
 	}
 
 	// ── status line ───────────────────────────────────────────────────────────
-	passed, failed, total := m.checkTally()
+	passed, failed, warned, total := m.checkTally()
+	if m.finished && m.checkFinalTotal > 0 {
+		passed = m.checkFinalPassed
+		failed = m.checkFinalFailed
+		warned = m.checkFinalWarned
+		total = m.checkFinalTotal
+	}
 	if total < m.totalChecks {
 		total = m.totalChecks
 	}
@@ -1831,17 +1868,27 @@ func (m Model) viewCheck(now time.Time) string {
 		}
 	}
 
-	allFinished := !anyInFlight && m.finished
+	tally := fmt.Sprintf("%d/%d passed, %d failed", passed, total, failed)
+	if warned > 0 {
+		tally += fmt.Sprintf(", %d warning(s)", warned)
+	}
+	// Once finished, the final event's verdict decides, as it does the exit
+	// code and the JSON and plain output.
 	var statusLine string
 	switch {
-	case anyInFlight || (!m.finished && len(m.checkCategories) > 0 && !allFinished):
-		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, 0 failed)", passed, total)
-	case m.finished && failed > 0:
-		statusLine = fmt.Sprintf("Status: ✘ failed  (%d/%d passed, %d failed)", passed, total, failed)
-	case m.finished && failed == 0:
-		statusLine = fmt.Sprintf("Status: ✓ ok  (%d/%d passed, 0 failed)", passed, total)
+	case m.finished && m.checkCancelled:
+		// Checks cut short by the interrupt are neither passed nor failed.
+		statusLine = fmt.Sprintf("Status: cancelled  (%s)", tally)
+	case anyInFlight || !m.finished:
+		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, %d failed)", passed, total, failed)
+	case m.checkFinalVerdict == "timeout":
+		statusLine = fmt.Sprintf("Status: \u2718 timed out  (%s)", tally)
+	case !m.checkFinalSuccess || failed > 0:
+		statusLine = fmt.Sprintf("Status: \u2718 failed  (%s)", tally)
+	case warned > 0:
+		statusLine = fmt.Sprintf("Status: \u2713 ok with warnings  (%s)", tally)
 	default:
-		statusLine = fmt.Sprintf("Status: in progress  (%d/%d passed, 0 failed)", passed, total)
+		statusLine = fmt.Sprintf("Status: \u2713 ok  (%s)", tally)
 	}
 
 	b.WriteString("\n")
@@ -1851,21 +1898,26 @@ func (m Model) viewCheck(now time.Time) string {
 	return b.String()
 }
 
-// checkTally returns (passed, failed, total) counts from all accumulated check rows.
-func (m Model) checkTally() (passed, failed, total int) {
+// checkTally counts finished rows by the rule the final event uses,
+// severity.Of, and every row toward the total.
+func (m Model) checkTally() (passed, failed, warned, total int) {
 	for _, cat := range m.checkCategories {
 		for _, row := range cat.checks {
 			total++
-			if row.finished {
-				if row.passed {
-					passed++
-				} else {
-					failed++
-				}
+			if !row.finished {
+				continue
+			}
+			switch severity.Of(row.passed, row.severity) {
+			case severity.Pass:
+				passed++
+			case severity.Fail:
+				failed++
+			default:
+				warned++
 			}
 		}
 	}
-	return passed, failed, total
+	return passed, failed, warned, total
 }
 
 // ─── style helpers ────────────────────────────────────────────────────────────
@@ -1987,11 +2039,13 @@ func resourceLabelFor(resource string) string {
 // invoked early so callers can't deadlock on tea.Program.Send (which blocks
 // indefinitely against an unstarted program). Start is idempotent. Close is
 // safe to call before Start (no-op) so deferred cleanup on construction-error
-// paths doesn't deadlock either.
+// paths doesn't deadlock either, and safe to call again.
 type TTYRenderer struct {
 	program *tea.Program
 	started atomic.Bool
-	runErr  error
+	// done is closed once Run has returned and runErr is set.
+	done   chan struct{}
+	runErr error
 }
 
 // NewTTYRenderer constructs a TTYRenderer drawing to stderr. The same stderr
@@ -2010,9 +2064,11 @@ func NewTTYRenderer(stderr io.Writer, opts ModelOpts) *TTYRenderer {
 		// dashboard vertically (iter #10 from dev-VM E2E).
 		tea.WithAltScreen(),
 	)
-	return &TTYRenderer{
-		program: prog,
-	}
+	return newTTYRendererFor(prog)
+}
+
+func newTTYRendererFor(prog *tea.Program) *TTYRenderer {
+	return &TTYRenderer{program: prog, done: make(chan struct{})}
 }
 
 // Start launches the bubbletea Run loop in a goroutine. Idempotent — calling
@@ -2025,6 +2081,7 @@ func (r *TTYRenderer) Start() {
 	go func() {
 		_, err := r.program.Run()
 		r.runErr = err
+		close(r.done)
 	}()
 }
 
@@ -2042,13 +2099,18 @@ func (r *TTYRenderer) Emit(_ context.Context, e Event) error {
 
 // Close requests Program shutdown and waits for the Run loop to return.
 // Safe to call before Start (no-op) so deferred Close() on error paths
-// doesn't deadlock. After Wait returns, runErr is safe to read — bubbletea
-// guarantees happens-before from Run completion to Wait return.
+// doesn't deadlock, and safe to call again or concurrently. It waits on done
+// rather than tea.Program.Wait, which returns only once, signals before Run
+// has returned, and never returns when Run fails to start.
 func (r *TTYRenderer) Close() error {
 	if !r.started.Load() {
 		return nil
 	}
 	r.program.Quit()
-	r.program.Wait()
+	<-r.done
 	return r.runErr
 }
+
+// OwnsTerminal reports that the dashboard draws on the alternate screen:
+// anything else written to the terminal before Close returns is lost.
+func (r *TTYRenderer) OwnsTerminal() bool { return true }

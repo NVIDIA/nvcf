@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "watch",
+    srcs = [
+        "vault_token.go",
+        "view.go",
+        "watcher.go",
+    ],
+    importpath = "github.com/hashicorp/consul-template/watch",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/ess-agent/api",
+        "//src/compute-plane-services/ess-agent/config",
+        "//src/compute-plane-services/ess-agent/dependency",
+        "//src/compute-plane-services/ess-agent/nv",
+        "//src/compute-plane-services/ess-agent/nv/telemetry",
+        "@com_github_pkg_errors//:errors",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":watch",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "watch_test",
+    srcs = [
+        "dependencies_test.go",
+        "vault_token_test.go",
+        "view_test.go",
+        "watch_test.go",
+        "watcher_test.go",
+    ],
+    embed = [":watch"],
+    # Integration test. TestMain spawns a real `vault` binary; tests
+    # panic with "vault not found on $PATH" without it. See the
+    # comment on //dependency:dependency_test for details and how
+    # to run locally with binaries on PATH.
+    tags = ["manual"],
+    deps = [
+        "//src/compute-plane-services/ess-agent/api",
+        "//src/compute-plane-services/ess-agent/config",
+        "//src/compute-plane-services/ess-agent/dependency",
+    ],
+)

@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NVCA Operator values for standalone self-managed installation
+# Replace <REGISTRY> and <REPOSITORY> with your container registry settings.
+
+# Operator image
+image:
+  repository: "<REGISTRY>/<REPOSITORY>/nvca-operator"
+
+# NVCA agent image
+nvcaImage:
+  repositoryOverride: "<REGISTRY>/<REPOSITORY>/nvca"
+  
+generateImagePullSecret: false
+
+# NGC configuration -- self-managed mode does not use NGC cloud services.
+# The serviceKey is not used but the field is required by the chart.
+ngcConfig:
+  clusterSource: self-managed
+  serviceKey: "not-used"
+
+# Self-managed backend configuration
+selfManaged:
+  featureGateValues: ["DynamicGPUDiscovery", "SelfHosted", "KAIScheduler"]
+  imageCredHelper:
+    imageRepository: "<REGISTRY>/<REPOSITORY>/nvcf-image-credential-helper"
+  sharedStorage:
+    imageRepository: "<REGISTRY>/<REPOSITORY>/samba"
+# Uncomment for node selectors
+# nodeSelector:
+#   key: nvcf.nvidia.com/workload
+#   value: control-plane

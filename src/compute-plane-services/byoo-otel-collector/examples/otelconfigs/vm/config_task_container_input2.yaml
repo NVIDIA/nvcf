@@ -40,7 +40,7 @@ receivers:
         - job_name: opentelemetry-collector
           metric_relabel_configs:
             - action: keep
-              regex: (otelcol_receiver_refused_metric_points_total|otelcol_receiver_refused_spans_total|otelcol_receiver_refused_log_records_total|otelcol_receiver_accepted_metric_points_total|otelcol_receiver_accepted_spans_total|otelcol_receiver_accepted_log_records_total|otelcol_exporter_sent_metric_points_total|otelcol_exporter_sent_spans_total|otelcol_exporter_sent_log_records_total|otelcol_exporter_send_failed_metric_points_total|otelcol_exporter_send_failed_spans_total|otelcol_exporter_send_failed_log_records_total|otelcol_processor_incoming_items_total|otelcol_processor_outgoing_items_total)
+              regex: (otelcol_.*)
               source_labels:
                 - __name__
           scrape_interval: 30s
@@ -136,15 +136,19 @@ receivers:
             - targets:
                 - workload-0.default.svc.cluster.local:8010
 exporters:
-  otlphttp/GRAFANA_CLOUD-Grafana_prd-logs:
+  otlp_http/GRAFANA_CLOUD-Grafana_prd-logs:
     auth:
       authenticator: basicauth/GRAFANA_CLOUD-Grafana_prd-logs
     endpoint: endpoint
-  otlphttp/GRAFANA_CLOUD-Grafana_prd-metrics:
+    sending_queue:
+      enabled: true
+      num_consumers: 10
+      queue_size: 1000
+  otlp_http/GRAFANA_CLOUD-Grafana_prd-metrics:
     auth:
       authenticator: basicauth/GRAFANA_CLOUD-Grafana_prd-metrics
     endpoint: endpoint
-  otlphttp/GRAFANA_CLOUD-Grafana_prd-traces:
+  otlp_http/GRAFANA_CLOUD-Grafana_prd-traces:
     auth:
       authenticator: basicauth/GRAFANA_CLOUD-Grafana_prd-traces
     endpoint: endpoint
@@ -189,7 +193,7 @@ processors:
     check_interval: 1s
     limit_percentage: 80
     spike_limit_percentage: 10
-  metricstransform:
+  metrics_transform:
     transforms:
       - action: update
         include: ^.*$
@@ -220,6 +224,24 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
+      - action: insert
+        key: instance_id
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
+  transform/drop_empty_labels:
+    error_mode: ignore
+    metric_statements:
+      - context: resource
+        statements:
+          - set(resource.attributes, Filter(resource.attributes, (_, v) => v != ""))
+      - context: scope
+        statements:
+          - set(scope.attributes, Filter(scope.attributes, (_, v) => v != ""))
+  transform/set_observed_time:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(log.observed_time, Now()) where log.observed_time_unix_nano == 0
 extensions:
   basicauth/GRAFANA_CLOUD-Grafana_prd-logs:
     client_auth:
@@ -233,7 +255,7 @@ extensions:
     client_auth:
       password: ${file:/etc/byoo-otel-collector/secrets/Grafana_prd-apiKey}
       username: ${file:/etc/byoo-otel-collector/secrets/Grafana_prd-instanceId}
-  cgroupruntime:
+  cgroup_runtime:
     gomaxprocs:
       enabled: true
     gomemlimit:
@@ -259,7 +281,7 @@ service:
         public: "true"
       level: warn
     metrics:
-      level: normal
+      level: detailed
       readers:
         - pull:
             exporter:
@@ -267,9 +289,13 @@ service:
                 host: ${env:OTEL_POD_IP:-0.0.0.0}
                 port: 18888
     resource:
-      service.name: byoo-otel-collector
-      service.namespace: sr-fake-namespace
-      task.id: taskid123
+      attributes:
+        - name: service.namespace
+          value: sr-fake-namespace
+        - name: service.name
+          value: byoo-otel-collector
+        - name: task.id
+          value: taskid123
     traces:
       processors:
         - batch:
@@ -277,16 +303,18 @@ service:
               otlp:
                 endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
                 headers:
-                  lightstep-access-token: ${env:OTEL_TRACING_ACCESS_TOKEN}
+                  - name: lightstep-access-token
+                    value: ${env:OTEL_TRACING_ACCESS_TOKEN}
                 protocol: grpc
   pipelines:
     logs:
       receivers:
         - otlp
       exporters:
-        - otlphttp/GRAFANA_CLOUD-Grafana_prd-logs
+        - otlp_http/GRAFANA_CLOUD-Grafana_prd-logs
       processors:
         - memory_limiter
+        - transform/set_observed_time
         - attributes/add-metadata
         - batch
     metrics:
@@ -294,25 +322,26 @@ service:
         - otlp
         - prometheus
       exporters:
-        - otlphttp/GRAFANA_CLOUD-Grafana_prd-metrics
+        - otlp_http/GRAFANA_CLOUD-Grafana_prd-metrics
       processors:
         - memory_limiter
         - filter/metrics
         - resource
-        - metricstransform
+        - transform/drop_empty_labels
+        - metrics_transform
         - batch
     traces:
       receivers:
         - otlp
       exporters:
-        - otlphttp/GRAFANA_CLOUD-Grafana_prd-traces
+        - otlp_http/GRAFANA_CLOUD-Grafana_prd-traces
       processors:
         - memory_limiter
         - attributes/add-metadata
         - batch
   extensions:
     - healthcheckv2
-    - cgroupruntime
+    - cgroup_runtime
     - basicauth/GRAFANA_CLOUD-Grafana_prd-logs
     - basicauth/GRAFANA_CLOUD-Grafana_prd-metrics
     - basicauth/GRAFANA_CLOUD-Grafana_prd-traces

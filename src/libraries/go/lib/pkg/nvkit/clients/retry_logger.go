@@ -26,8 +26,13 @@ import (
 // the global zap logger. Thus, it can be used by retryable http client
 type retryLogger struct{}
 
+// Error logs at warn level on purpose. The retryable http client calls this for
+// every failed attempt inside its retry loop, including attempts it goes on to
+// retry successfully, and it returns the final error to the caller regardless.
+// Logging each attempt at error level reports transient conditions as failures
+// and multiplies the volume by the retry count.
 func (l *retryLogger) Error(msg string, keysAndValues ...interface{}) {
-	zap.S().Errorw(msg, keysAndValues...)
+	zap.S().Warnw(msg, keysAndValues...)
 }
 
 func (l *retryLogger) Info(msg string, keysAndValues ...interface{}) {

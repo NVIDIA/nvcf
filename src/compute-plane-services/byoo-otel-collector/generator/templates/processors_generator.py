@@ -38,7 +38,7 @@ class CONSTANT(StrEnum):
 
 
 class AttributeMetricsTransformGenerator:
-    """Generates the `attributes/add-metadata` and `metricstransform` YAML content for different back-ends.
+    """Generates the `attributes/add-metadata` and `metrics_transform` YAML content for different back-ends.
 
     This utility reads the *source-config.yaml* file once during initialization
     and subsequently produces correctly formatted YAML content that can be
@@ -114,7 +114,7 @@ class AttributeMetricsTransformGenerator:
         # attributes/add-metadata
         attr_lines: list[str] = []
 
-        # metricstransform
+        # metrics_transform
         metricstransform_lines: list[str] = []
 
         for attr_name, attr_info in self._config_value_map[backend].items():
@@ -152,7 +152,7 @@ class AttributeMetricsTransformGenerator:
         value_template: str,
         additional_condition: str | None,
     ) -> None:
-        """Appends metricstransform operation lines."""
+        """Appends metrics_transform operation lines."""
         indent = 8 * " "  # eight spaces
         if additional_condition:
             lines.append(f"{indent}{{{{- if {additional_condition} }}}}")

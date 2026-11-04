@@ -23,8 +23,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	cmnhttp "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	cmnhttp "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/http"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,17 +39,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
-	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	mscontroller "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
-	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcaauth "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/auth"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/gc"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	nvcametrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
+	mscontroller "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/miniservice"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	nvcav1new "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	nvcaerrors "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 var (
@@ -63,6 +64,46 @@ func init() {
 
 // startControllerManagerForAgent creates and starts a controller-runtime manager
 // for auxiliary CRD controllers.
+// storageControllerTypes returns the StorageRequest controller types to
+// register with the agent's controller manager. The model-cache controller is
+// included only when caching is enabled, since it backs all storage-class-
+// selected cache backends (NVMesh / shared-FS / Samba). Callers pass the stable
+// agent-level caching flag (a.CachingSupportEnabled), not a live feature-flag
+// lookup, so the set is deterministic for the lifetime of the agent.
+func storageControllerTypes(cachingEnabled bool) []nvcav1new.StorageRequestType {
+	sts := []nvcav1new.StorageRequestType{
+		nvcav1new.SharedStorageRequest,
+		nvcav1new.InternalPersistentStorageRequest,
+	}
+	if cachingEnabled {
+		sts = append(sts, nvcav1new.ModelCacheRequest)
+	}
+	return sts
+}
+
+// agentManagerCacheOptions returns the cache options of the agent's controller
+// manager. DefaultTransform also applies to the informers that the manager
+// creates lazily on a first read, and to every ByObject entry that sets no
+// transform of its own.
+func agentManagerCacheOptions() cache.Options {
+	return cache.Options{
+		DefaultTransform: k8sutil.StripManagedFields,
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.Event{}: {
+				// Exclude Kyverno events from the cache entirely.
+				// These PolicyViolation events are not actionable by users and can
+				// be very numerous, contributing to memory pressure. This filter
+				// is applied server-side so events never come over the wire.
+				Field: fields.AndSelectors(
+					fields.OneTermNotEqualSelector("reportingComponent", "kyverno-admission"),
+					fields.OneTermNotEqualSelector("reportingComponent", "kyverno-scan"),
+					fields.OneTermNotEqualSelector("reportingComponent", "kyverno-generate"),
+				),
+			},
+		},
+	}
+}
+
 func startControllerManagerForAgent(
 	ctx context.Context,
 	a *Agent,
@@ -75,36 +116,22 @@ func startControllerManagerForAgent(
 	mgr, err := ctrl.NewManager(clients.Config, manager.Options{
 		Scheme:        mgrScheme,
 		WebhookServer: fakeWebhookServer{},
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Event{}: {
-					// Exclude Kyverno events from the cache entirely.
-					// These PolicyViolation events are not actionable by users and can
-					// be very numerous, contributing to memory pressure. This filter
-					// is applied server-side so events never come over the wire.
-					// See DGXCINC-3086.
-					Field: fields.AndSelectors(
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-admission"),
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-scan"),
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-generate"),
-					),
-				},
-			},
-		},
+		Cache:         agentManagerCacheOptions(),
 	})
 	if err != nil {
 		log.WithError(err).Error("Failed to create controller manager")
 		return fmt.Errorf("create controller manager: %v", err)
 	}
 
-	// Create storage controllers for each type
-	sts := []nvcav1new.StorageRequestType{
-		nvcav1new.SharedStorageRequest,
-		nvcav1new.InternalPersistentStorageRequest,
-	}
-	if a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.HelmCachingSupport) {
-		sts = append(sts, nvcav1new.ModelCacheRequest)
-	}
+	// Create storage controllers for each type. The model-cache controller
+	// backs every storage-class-selected cache backend (NVMesh / shared-FS /
+	// Samba), so it is registered whenever caching is enabled.
+	cachingEnabled := a.CachingSupportEnabled
+	sts := storageControllerTypes(cachingEnabled)
+	log.WithField("controllers", sts).
+		WithField("caching_support_enabled", cachingEnabled).
+		WithField("caching_support_flag", a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.CachingSupport)).
+		Info("Registering storage controllers")
 	for _, st := range sts {
 		if err := storage.BuildController(a.Config, st, mgr,
 			a.ClusterName,
@@ -119,15 +146,54 @@ func startControllerManagerForAgent(
 			log.WithError(err).Errorf("Failed to create storage controller %s", st)
 			return fmt.Errorf("create storage controller %s: %v", st, err)
 		}
+		log.WithField("type", st).Info("Registered storage controller")
+	}
+
+	// Seed the model cache mount option defaults once, after the manager cache
+	// has started. A failure is logged rather than fatal: without the ConfigMap
+	// the reconciler falls back to the configured mount options.
+	if cachingEnabled {
+		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			if err := storage.EnsureCacheMountOptionsConfigMap(ctx, mgr.GetClient(), ""); err != nil {
+				log.WithError(err).Error("Failed to seed the cache mount option defaults")
+				return nil
+			}
+			log.Info("Cache mount option defaults are in place")
+			return nil
+		})); err != nil {
+			return fmt.Errorf("register cache mount options seeder: %w", err)
+		}
 	}
 
 	log.Info("Starting MiniService controller")
+	k8sVersion, err := resolveK8sVersion(ctx, a.K8sVersion, a.backendk8scache.clients.DiscoveryClient)
+	if err != nil {
+		return fmt.Errorf("resolve Kubernetes version for MiniService controller: %w", err)
+	}
 
-	hrHTTPClient := cmnhttp.NewRetryableClient(ctx,
+	kartas, err := mscontroller.GetKartaObjects(ctx, a.backendk8scache.clients)
+	if err != nil {
+		log.Error(err, "Failed to detect Karta resource")
+		return fmt.Errorf("detect karta resource: %w", err)
+	}
+
+	revalHTTPOpts := []cmnhttp.Option{
 		cmnhttp.WithAppVersionUserAgent(types.AppName),
 		cmnhttp.WithRequestHeader(types.HeaderNVClusterID, a.ClusterID),
+	}
+	if a.ClientMetricsEnabled && a.clientMetricsRecorder != nil {
+		revalHTTPOpts = append(revalHTTPOpts, cmnhttp.WithTransportWrapper(func(inner http.RoundTripper) http.RoundTripper {
+			return clientmetrics.NewTransport(inner, a.clientMetricsRecorder, clientmetrics.PeerServiceReVal)
+		}))
+	}
+	hrHTTPClient := cmnhttp.NewRetryableClient(ctx, revalHTTPOpts...)
+	rvClient := mscontroller.NewReValClient(
+		a.HelmReValServiceURL,
+		tf,
+		hrHTTPClient,
+		metrics,
+		mscontroller.WithReValHostHeaderOverride(a.HelmReValServiceHostHeaderOverride),
 	)
-	rvClient := mscontroller.NewReValClient(a.HelmReValServiceURL, tf, hrHTTPClient, metrics)
 	if err := mscontroller.BuildController(ctx, a.Config, mgr, rvClient,
 		a.backendk8scache.nfClient,
 		a.backendk8scache.regITCache,
@@ -135,7 +201,7 @@ func startControllerManagerForAgent(
 		mscontroller.ControllerOptions{
 			SystemNamespace:            a.SystemNamespace,
 			ICMSRequestNamespace:       a.RequestsNamespace,
-			K8sVersion:                 a.K8sVersion,
+			K8sVersion:                 k8sVersion,
 			FeatureFlagFetcher:         a.backendk8scache.featureFlagFetcher,
 			K8sTimeConfig:              a.K8sTimeConfig,
 			InstanceNamespaceLabels:    a.NamespaceLabels,
@@ -144,6 +210,8 @@ func startControllerManagerForAgent(
 			ClusterRegion:              a.ClusterRegion,
 			ImageCredentialHelperImage: a.ImageCredentialHelperImage,
 			CustomAnnotations:          a.backendk8scache.customAnnotations,
+			Kartas:                     kartas,
+			NsightProfilingAllowlist:   a.backendk8scache.nsightProfilingAllowlist,
 		},
 	); err != nil {
 		log.WithError(err).Error("Failed to create miniservice controller")
@@ -169,6 +237,7 @@ func startControllerManagerForAgent(
 
 	// Add GC cleaners to the manager
 	gcRunnable := gc.NewRunnable(clients, metrics, gc.DefaultInterval, a.RequestsNamespace)
+	gcRunnable.SetLogContext(ctx)
 	if err := mgr.Add(gcRunnable); err != nil {
 		log.WithError(err).Error("Failed to add GC controller to controller manager")
 		return fmt.Errorf("add GC controller to controller manager: %v", err)

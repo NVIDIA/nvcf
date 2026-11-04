@@ -35,6 +35,51 @@ If release name contains chart name it will be used as a full name.
 {{- end -}}
 
 {{/*
+Resolve the fullname used by the embedded OpenBao chart.
+*/}}
+{{- define "nvcf-openbao.serverFullname" -}}
+{{- $openbaoValues := default dict (get .Values "openbao") -}}
+{{- if get $openbaoValues "fullnameOverride" -}}
+{{- get $openbaoValues "fullnameOverride" | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default "openbao" (get $openbaoValues "nameOverride") -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "nvcf-openbao.jwtLifecycleMode" -}}
+{{- $lifecycle := .Values.openbao.jwtPluginLifecycle | default dict -}}
+{{- $mode := get $lifecycle "mode" | default "legacy" -}}
+{{- if not (has $mode (list "legacy" "bridge" "versioned")) -}}
+{{- fail "openbao.jwtPluginLifecycle.mode must be legacy, bridge, or versioned" -}}
+{{- end -}}
+{{- $mode -}}
+{{- end -}}
+
+{{- define "nvcf-openbao.adminEnvironment" -}}
+export BAO_ADDR="http://{{ include "nvcf-openbao.serverFullname" . }}-active:8200"
+export BAO_TOKEN="$(cat /secrets/root_token/root_token)"
+{{- end -}}
+
+{{- define "nvcf-openbao.copyJWTManifest" -}}
+cp /openbao/jwt-plugin-versions.env /versions/manifest.env
+{{- end -}}
+
+{{/*
+Allow the release namespace to be overridden.
+*/}}
+{{- define "nvcf-openbao.namespace" -}}
+{{- $openbaoValues := default dict (get .Values "openbao") -}}
+{{- $globalValues := default dict (get $openbaoValues "global") -}}
+{{- $namespace := default .Release.Namespace (get $openbaoValues "namespace") -}}
+{{- default $namespace (get $globalValues "namespace") -}}
+{{- end -}}
+
+{{/*
 Create chart name and version as used by the chart label.
 */}}
 
@@ -55,4 +100,21 @@ Usage: {{ include "openbao.image" (dict "image" .Values.openbao.migrations.image
 {{- $repository := required (printf "A valid image repository is required for %s.repository" $name) $image.repository -}}
 {{- $tag := required (printf "A valid image tag is required for %s.tag" $name) $image.tag -}}
 {{- printf "%s/%s:%s" $registry $repository $tag -}}
+{{- end -}}
+
+{{/* Select a bundled kubectl without overriding the image default when unset. */}}
+{{- define "nvcf-openbao.kubectlEnv" -}}
+{{- $minor := get .Values.openbao.migrations "kubectlMinor" | toString -}}
+{{- if not (has $minor (list "" "1.36" "1.37")) -}}
+{{- fail "openbao.migrations.kubectlMinor must be empty, 1.36, or 1.37" -}}
+{{- end -}}
+{{- if $minor -}}
+{{- range .Values.openbao.migrations.env -}}
+{{- if eq .name "NVCF_KUBECTL_MINOR" -}}
+{{- fail "set openbao.migrations.kubectlMinor or NVCF_KUBECTL_MINOR in openbao.migrations.env, not both" -}}
+{{- end -}}
+{{- end -}}
+- name: NVCF_KUBECTL_MINOR
+  value: {{ $minor | quote }}
+{{- end -}}
 {{- end -}}

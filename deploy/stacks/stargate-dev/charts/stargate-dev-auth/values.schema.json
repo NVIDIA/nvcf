@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "credentials"],
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serviceToken", "workerToken", "routingKey"],
+      "properties": {
+        "serviceToken": {"type": "string", "minLength": 1},
+        "workerToken": {"type": "string", "minLength": 1},
+        "routingKey": {"type": "string", "minLength": 1}
+      }
+    },
+    "resources": {"type": "object"}
+  }
+}

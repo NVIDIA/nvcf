@@ -1,0 +1,23 @@
+{
+  "name": "example-helm-task",
+  "description": "Task launched via a Helm chart with a custom validation policy.",
+  "gpuSpecification": {
+    "gpu": "H100",
+    "instanceType": "NCP.GPU.H100_1x",
+    "backend": "ncp-local",
+    "configuration": {
+      "image": {
+        "repository": "nvcr.io/0651155215864979/ncp-dev/example-helm-trainer",
+        "tag": "0.1.0"
+      },
+      "replicaCount": 1
+    },
+    "helmValidationPolicy": {
+      "name": "Default"
+    }
+  },
+  "helmChart": "https://helm.ngc.nvidia.com/0651155215864979/example-charts/charts/example-trainer-0.1.0.tgz",
+  "tags": ["example", "helm"],
+  "maxRuntimeDuration": "PT2H",
+  "resultHandlingStrategy": "NONE"
+}

@@ -26,4 +26,10 @@ Re-run of `setup_lls.sh` does not overwrite an existing cert (idempotent).
 
 ## Usage
 
-Invoked by the migrations framework when the LLS addon is enabled. See the main [README](../README.md) and environment configuration for enabling addons.
+Invoked by the migrations framework when the LLS addon is enabled (`ADDONS_LLS_ENABLED=true`). The SIS chart owns invocation via `sis/templates/hook-lls-migrations.yaml`, which sets `CORE_MIGRATIONS_ENABLED=false` + `ADDONS_LLS_ENABLED=true` so the Job runs the LLS addon only.
+
+## Failure semantics
+
+Fail-hard when enabled. If the script aborts, the entrypoint records the failure and exits non-zero — same contract as core migrations. Combined with the SIS Job's `restartPolicy: OnFailure` + `backoffLimit`, transient errors retry but deterministic failures surface as a Job-level failure that blocks the Helm hook. `MIGRATIONS_ALLOW_FAILURES=true` is the explicit operator escape hatch for emergency rollback.
+
+**Note:** prior versions of the entrypoint logged LLS failures without propagating them — a green Job could mask a broken LLS setup. This version closes that gap; any deployment whose `setup_lls.sh` was silently failing will start surfacing the failure on upgrade.

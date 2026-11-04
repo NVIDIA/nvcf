@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 )
@@ -48,7 +48,7 @@ type tokenVerifier interface {
 }
 
 type JWTCache struct {
-	// Followings are immutable configurations.
+	// Following are immutable configurations.
 
 	fetcher tokenFetcher
 	// nowFunc returns current time, inject as dependency for testing.
@@ -56,7 +56,7 @@ type JWTCache struct {
 	expiryMargin time.Duration
 	jwtVerifier  tokenVerifier
 
-	// sync.Mutex protects followings mutable states
+	// sync.Mutex protects following mutable states
 	sync.Mutex
 	token  string
 	expiry *time.Time

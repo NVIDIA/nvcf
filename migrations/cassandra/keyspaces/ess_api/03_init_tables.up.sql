@@ -26,7 +26,7 @@ CREATE TYPE IF NOT EXISTS ess_api.entity_type (
 -- Top-level namespace registry. Each namespace scopes all secrets and entities.
 CREATE TABLE IF NOT EXISTS ess_api.namespaces (
     namespace                             text,
-    ssa_authorizations                    map<text, frozen<authorization>>,
+    oauth_authorizations                  map<text, frozen<authorization>>, -- new primary column for tenant (non-notary) auths, oauth wins over ssa on read-merge
     notary_authorizations                 map<text, frozen<authorization>>,
     entity_types                          map<text, frozen<entity_type>>,
     created_at                            timestamp,
@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS ess_api.namespaces (
     previous_entity_hash_size             int,
     deleted_at                            timestamp,
     require_lwt_for_secret_version_writes boolean,
+    authorizations_version                timeuuid,  -- monotonic version bumped on every authorizations write (migration compare-and-set)
     PRIMARY KEY (namespace)
 );
 

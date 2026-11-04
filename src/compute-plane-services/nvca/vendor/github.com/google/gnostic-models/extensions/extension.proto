@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2017 Google LLC. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,7 +42,7 @@ option java_package = "org.gnostic.v1";
 option objc_class_prefix = "GNX";
 
 // The Go package name.
-option go_package = "./extensions;gnostic_extension_v1";
+option go_package = "github.com/google/gnostic-models/extensions;gnostic_extension_v1";
 
 // The version number of Gnostic.
 message Version {

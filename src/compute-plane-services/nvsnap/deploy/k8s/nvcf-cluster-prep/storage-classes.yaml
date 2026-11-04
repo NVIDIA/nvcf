@@ -1,0 +1,129 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NVCF storage classes for GKE.
+#
+# Mirrors the upstream nvmesh template at
+# $HOME/nvcf/sbom/sbom-templates/templates/components/nvcf-storage/storage-classes.yaml.tmpl
+# but substitutes GCP's pd.csi provisioner since NVMesh isn't on GKE.
+#
+# Two classes, matching NVCF naming so the existing helm charts that
+# reference `nvcf-sc` and `nvcf-function-storage-sc` work unchanged:
+#
+#   nvcf-sc                  — durable cache/storage (Retain)
+#   nvcf-function-storage-sc — per-function ephemeral (Delete)
+#
+# Both use pd-ssd (fast SSD, ext4) — XFS isn't supported by GKE's PD CSI
+# driver out of the box. Apply once per cluster.
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvcf-sc
+  # Default class for persistent caches (container layers, model weights).
+  # Retain so accidental PVC delete doesn't lose 100s of GB of pulled state.
+allowVolumeExpansion: true
+provisioner: pd.csi.storage.gke.io
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+parameters:
+  type: pd-ssd
+  csi.storage.k8s.io/fstype: ext4
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvcf-function-storage-sc
+  # Per-function scratch. Delete reclaim — when the function's PVC is
+  # cleaned up the disk goes with it.
+allowVolumeExpansion: true
+provisioner: pd.csi.storage.gke.io
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+parameters:
+  type: pd-ssd
+  csi.storage.k8s.io/fstype: ext4
+---
+# Hyperdisk ML — the recommended L2 per-capture PVC backend on GKE.
+#
+# Supports ReadWriteOnce (the writer PVC) and ReadOnlyMany (the
+# post-snapshot reader PVC). nvsnap#81 made the L2 backend request
+# exactly that pair instead of ReadWriteMany, so Hyperdisk ML works
+# end-to-end now. Fields match Google's example at
+# https://cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/hyperdisk-ml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: hyperdisk-ml
+allowVolumeExpansion: false
+provisioner: pd.csi.storage.gke.io
+reclaimPolicy: Delete
+# WaitForFirstConsumer so the volume lands in a zone where its
+# consuming pod will schedule. Matches GKE doc recommendation.
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  type: hyperdisk-ml
+  # provisioned-throughput-on-create is the only documented throughput
+  # knob for hyperdisk-ml. Value from GKE doc example; revisit after
+  # measuring real workload demand.
+  provisioned-throughput-on-create: "10000Mi"
+mountOptions:
+  # GKE-doc-suggested read-ahead for sequential ML reads.
+  - read_ahead_kb=4096
+---
+# Filestore CSI — an alternative L2 per-capture PVC backend on GKE.
+# Post-nvsnap#81 the L2 writer PVC is ReadWriteOnce, so Hyperdisk ML
+# (above) is the recommended backing. Filestore stays here for
+# operators who want RWX semantics (e.g. multiple writer Jobs in
+# future, or workloads with broader access-mode needs).
+#
+# Filestore Basic SSD is the cheapest tier that works for L2; bump
+# to ENTERPRISE / ZONAL for higher-throughput fan-out (100 Gbps
+# class). Operators must also provision the underlying Filestore
+# instance — this SC is dynamic-provisioning capable, the CSI driver
+# will create the instance on PVC bind. Pre-flight requirement: the
+# GKE addon `gcp-filestore-csi-driver` must be enabled on the
+# cluster (terraform: addons_config.gcp_filestore_csi_driver_config).
+#
+# Reference for L2 wiring: helm values.yaml `agent.l2.storageClass:
+# filestore-rwx`.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: filestore-rwx
+allowVolumeExpansion: true
+provisioner: filestore.csi.storage.gke.io
+# Delete reclaim: per-capture PVCs are ephemeral — the L2 backend
+# wipes them after the snapshot → rox-<hash> clone transition.
+reclaimPolicy: Delete
+# WaitForFirstConsumer so the volume binds in the zone of the
+# consuming writer Job pod; reduces cross-zone egress for the
+# capture-write workload.
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  tier: BASIC_SSD
+  # network/connect-mode: required for the Filestore CSI driver to
+  # know which VPC to peer with. Defaults to the GKE cluster's
+  # primary network; override if your cluster uses non-default VPC.
+  network: default
+---
+# VolumeSnapshotClass for GKE's pd.csi driver (nvsnap#63). Required by
+# the L2 PerCapturePVCBackend to snapshot rwx-<hash> → rox-<hash>.
+# GKE installs the snapshot controller + CRDs as part of the bundled
+# pd-csi addon, but doesn't ship a default SnapshotClass — operators
+# must create one. This is the canonical instance we use for the
+# rwx/rox transition.
+#
+# Both pd-ssd and hyperdisk-ml are backed by pd.csi.storage.gke.io;
+# this single SnapshotClass covers snapshots from any of those.
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: csi-gce-pd-snapshot-class
+driver: pd.csi.storage.gke.io
+# Delete: when the catalog row + agent.Delete(hash) reclaims the
+# rox-<hash> PVC, the originating snapshot goes with it. (Snapshots
+# don't survive their source PVC's lifecycle for our use case;
+# Retain would leak storage.)
+deletionPolicy: Delete

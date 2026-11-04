@@ -1,0 +1,164 @@
+{
+  "account": {
+    "ncaId": "%s",
+    "clientIds": [
+      "%s"
+    ],
+    "name": "%s",
+    "registryCredentials": [
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000001",
+        "registryHostname": "docker.io",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000002",
+        "registryHostname": "779846807323.dkr.ecr.us-west-2.amazonaws.com",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000003",
+        "registryHostname": "public.ecr.aws",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000004",
+        "registryHostname": "test-volcengine-registry-cn-beijing.cr.volces.com",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000005",
+        "registryHostname": "test1-bmfvajfxgfcrhba5.azurecr.io",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000006",
+        "registryHostname": "demo.goharbor.io",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000007",
+        "registryHostname": "artifactorytest12345.jfrog.io",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000008",
+        "registryHostname": "stg.nvcr.io",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc2hvdWxkLW5vdC1iZS11c2Vk"
+        },
+        "artifactTypes": [
+          "CONTAINER"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000009",
+        "registryHostname": "localhost-ngc",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc2hvdWxkLW5vdC1iZS11c2Vk"
+        },
+        "artifactTypes": [
+          "CONTAINER"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000010",
+        "registryHostname": "api.stg.ngc.nvidia.com",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc2hvdWxkLW5vdC1iZS11c2Vk"
+        },
+        "artifactTypes": [
+          "MODEL",
+          "RESOURCE"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000011",
+        "registryHostname": "localhost-ngc",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc2hvdWxkLW5vdC1iZS11c2Vk"
+        },
+        "artifactTypes": [
+          "MODEL",
+          "RESOURCE"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000012",
+        "registryHostname": "helm.stg.ngc.nvidia.com",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc2hvdWxkLW5vdC1iZS11c2Vk"
+        },
+        "artifactTypes": [
+          "HELM"
+        ]
+      },
+      {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000013",
+        "registryHostname": "localhost-ngc",
+        "secret": {
+          "name": "should-not-be-used",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc2hvdWxkLW5vdC1iZS11c2Vk"
+        },
+        "artifactTypes": [
+          "HELM"
+        ]
+      }
+    ],
+    "maxTasksAllowed": "%d"
+  }
+}

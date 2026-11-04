@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "wrapping",
+    srcs = ["wrapinfo.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/wrapping",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":wrapping",
+    visibility = ["//visibility:public"],
+)

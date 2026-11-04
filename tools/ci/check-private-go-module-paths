@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+repo_root="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+manifest="${repo_root}/imports.yaml"
+default_private_go_module_host="${PRIVATE_GO_MODULE_HOST:-gitlab""-master.nvidia.com}"
+private_host_pattern="${PRIVATE_GO_MODULE_HOST_PATTERN:-${default_private_go_module_host//./\.}/}"
+
+declare -a native_roots=()
+
+usage() {
+    cat <<'EOF'
+Usage: ./tools/ci/check-private-go-module-paths
+
+Fail if any monorepo-native import root contains private GitLab Go module paths or
+imports in .go, go.mod, or go.work files.
+EOF
+}
+
+trim_value() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    value="${value%\"}"
+    value="${value#\"}"
+    value="${value%\'}"
+    value="${value#\'}"
+    printf '%s' "${value}"
+}
+
+normalize_authoritative_source() {
+    local value
+    value="$(trim_value "${1:-}")"
+    value="${value,,}"
+    if [[ -z "${value}" || "${value}" == "upstream" ]]; then
+        printf 'upstream'
+        return 0
+    fi
+    case "${value}" in
+        native|monorepo)
+            printf 'native'
+            ;;
+        *)
+            echo "invalid authoritative_source in ${manifest}: ${value}" >&2
+            return 1
+            ;;
+    esac
+}
+
+record_manifest_entry() {
+    local current_path="$1"
+    local current_source="$2"
+    local path
+
+    path="$(trim_value "${current_path}")"
+    [[ -n "${path}" ]] || return 0
+
+    if [[ "${current_source}" == "native" ]]; then
+        native_roots+=("${repo_root}/$(trim_value "${path}")")
+    fi
+}
+
+load_native_roots() {
+    local line current_path="" current_source="upstream"
+
+    [[ -f "${manifest}" ]] || {
+        # imports.yaml is intentionally not published to the OSS mirror. Without
+        # it there are no declared synthetic-import roots to enumerate, so leave
+        # native_roots empty; the caller then reports "no native roots" and exits
+        # clean. On GitLab, where the manifest exists, the full check still runs.
+        echo "check-private-go-module-paths: ${manifest} not present; no native import roots to scan."
+        return 0
+    }
+
+    while IFS= read -r line; do
+        if [[ "${line}" =~ ^[[:space:]]*-[[:space:]]*path:[[:space:]]+(.*)$ ]]; then
+            record_manifest_entry "${current_path}" "${current_source}"
+            current_path="${BASH_REMATCH[1]}"
+            current_source="upstream"
+            continue
+        fi
+        if [[ "${line}" =~ ^[[:space:]]*authoritative_source:[[:space:]]+(.*)$ ]]; then
+            current_source="$(normalize_authoritative_source "${BASH_REMATCH[1]}")"
+        fi
+    done < "${manifest}"
+
+    record_manifest_entry "${current_path}" "${current_source}"
+}
+
+scan_root() {
+    local root="$1"
+    local rel_root="${root#"${repo_root}/"}"
+    local file rel_file line
+    local found=0
+
+    if [[ ! -d "${root}" ]]; then
+        echo "ERROR: native import root is missing: ${rel_root}" >&2
+        return 1
+    fi
+
+    while IFS= read -r -d '' file; do
+        rel_file="${file#"${repo_root}/"}"
+        while IFS= read -r line; do
+            [[ -n "${line}" ]] || continue
+            printf '%s\n' "${line/#${file}:/${rel_file}:}"
+            found=1
+        done < <(grep -nH -E "${private_host_pattern}" "${file}" || true)
+    done < <(
+        find "${root}" \
+            \( -name .git -o -name vendor -o -name node_modules -o -name target -o -name .venv -o -name venv \) -prune -o \
+            -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.work' \) -print0
+    )
+
+    return "${found}"
+}
+
+main() {
+    if [[ $# -gt 0 ]]; then
+        case "$1" in
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                echo "unexpected argument: $1" >&2
+                usage >&2
+                exit 1
+                ;;
+        esac
+    fi
+
+    load_native_roots
+
+    if [[ "${#native_roots[@]}" -eq 0 ]]; then
+        echo "No monorepo-native import roots found in imports.yaml"
+        exit 0
+    fi
+
+    local failures=0
+    local root rel_root
+    for root in "${native_roots[@]}"; do
+        rel_root="${root#"${repo_root}/"}"
+        echo "Checking ${rel_root} for private GitLab Go module paths"
+        if scan_root "${root}"; then
+            echo "OK   ${rel_root} has no private GitLab Go module paths"
+        else
+            echo "FAIL ${rel_root} contains private GitLab Go module paths" >&2
+            failures=1
+        fi
+    done
+
+    if [[ "${failures}" -ne 0 ]]; then
+        exit 1
+    fi
+
+    echo "All monorepo-native import roots are free of private GitLab Go module paths"
+}
+
+main "$@"

@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
-Copyright The Kubernetes Authors.
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,6 +26,14 @@ type ICMSRequestListerExpansion interface{}
 // ICMSRequestNamespaceListerExpansion allows custom methods to be added to
 // ICMSRequestNamespaceLister.
 type ICMSRequestNamespaceListerExpansion interface{}
+
+// ModelCacheBindingListerExpansion allows custom methods to be added to
+// ModelCacheBindingLister.
+type ModelCacheBindingListerExpansion interface{}
+
+// ModelCacheBindingNamespaceListerExpansion allows custom methods to be added to
+// ModelCacheBindingNamespaceLister.
+type ModelCacheBindingNamespaceListerExpansion interface{}
 
 // StorageRequestListerExpansion allows custom methods to be added to
 // StorageRequestLister.

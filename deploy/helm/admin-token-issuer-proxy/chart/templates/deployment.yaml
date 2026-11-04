@@ -17,10 +17,15 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "admin-issuer-proxy.fullname" . }}
+  namespace: {{ include "admin-issuer-proxy.namespace" . }}
   labels:
     {{- include "admin-issuer-proxy.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.adminIssuerProxy.replicaCount }}
+  {{- with .Values.adminIssuerProxy.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "admin-issuer-proxy.selectorLabels" . | nindent 6 }}
@@ -90,8 +95,11 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.adminIssuerProxy.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.adminIssuerProxy.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-

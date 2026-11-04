@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# vllm-70b FRESH pod — customer-shape pod that triggers rootfs-only
+# restore via the nvsnap.io/restore-from annotation. The webhook is the
+# only path that adds storage to this pod; the spec is intentionally
+# what a customer would write with no awareness of nvsnap.
+#
+# Portable: no nodeName pin. The webhook injects nodeAffinity if the
+# backend reports CapturedOnNodes (Local backend); for the multi-node
+# backend the rootfs delta is fetched via cascade (peer agent → blobstore).
+#
+# test-e2e.sh substitutes the real capture hash for __CAPTURE_HASH__
+# before applying — it's the SHA-256 the agent assigns to the source
+# pod's HashInput composition. Find it via:
+#   kubectl -n nvsnap-system get cm -l nvsnap.io/source-engine=vllm \
+#     -o jsonpath='{.items[*].metadata.annotations.nvsnap\.io/capture-hash}'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-70b-restored
+  namespace: nvsnap-system
+  labels:
+    app: vllm-70b-restored
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/restore-from: "__CAPTURE_HASH__"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:v0.20.0
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          mkdir -p /var/run/vllm
+          vllm serve \
+            --model meta-llama/Llama-3.1-70B-Instruct \
+            --host 0.0.0.0 --port 8000 \
+            --max-model-len 4096 \
+            --tensor-parallel-size 4 \
+            --gpu-memory-utilization 0.85
+      env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: HF_HOME
+          value: "/root/.cache/huggingface"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef: { name: hf-token, key: token }
+        - name: VLLM_ENABLE_V1_MULTIPROCESSING
+          value: "1"
+        - name: VLLM_RPC_BASE_PATH
+          value: "/var/run/vllm"
+        - name: HF_HUB_DISABLE_XET
+          value: "1"
+        - name: VLLM_LOGGING_LEVEL
+          value: "INFO"
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 8000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        failureThreshold: 120
+      resources:
+        limits:
+          nvidia.com/gpu: "4"
+        requests:
+          nvidia.com/gpu: "4"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 32Gi }
+
+  restartPolicy: Never

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2025 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -244,6 +241,9 @@ func (ms *MsgScheduling) decode(b []byte) (uint64, error) {
 	stamp := binary.LittleEndian.Uint64(b[9:])
 	b = b[headerLen:]
 	for i := uint64(0); i < count; i++ {
+		if len(b) < 2 {
+			return 0, io.ErrUnexpectedEOF
+		}
 		sl := int(binary.LittleEndian.Uint16(b))
 		b = b[2:]
 		if len(b) < sl {
@@ -252,11 +252,11 @@ func (ms *MsgScheduling) decode(b []byte) (uint64, error) {
 		subj := string(b[:sl])
 		b = b[sl:]
 		ts, tn := binary.Varint(b)
-		if tn < 0 {
+		if tn <= 0 {
 			return 0, io.ErrUnexpectedEOF
 		}
 		seq, vn := binary.Uvarint(b[tn:])
-		if vn < 0 {
+		if vn <= 0 {
 			return 0, io.ErrUnexpectedEOF
 		}
 		ms.init(seq, subj, ts)

@@ -1,0 +1,40 @@
+{{- $secretPath := printf "secrets/%s-secrets.yaml" (requiredEnv "HELMFILE_ENV") -}}
+{{- $secretValues := readFile $secretPath | fromYaml -}}
+{{- $migrationEnv := dig "openbao" "migrations" "env" (list) $secretValues -}}
+{{- $workerCallbackProxyEnabled := eq (dig "workerCallbackProxy" "enabled" false .Values | toString) "true" -}}
+{{- $allowedDomains := dig "addons" "llm" "pki" "allowedDomains" "" .Values -}}
+{{- /* Same rule as nvcf.servicePki.allowedDomains in global.yaml.gotmpl, which
+     this file cannot include: add the worker callback proxy's frontend and
+     grpc-proxy pod domains when the list does not already cover them. */ -}}
+{{- if $workerCallbackProxyEnabled }}
+{{- $domains := $allowedDomains | toString | trim }}
+{{- range $need := list (dig "workerCallbackProxy" "workerDomain" "" .Values | toString | trim | lower) "grpc-headless.nvcf.svc.cluster.local" }}
+{{- $covered := false }}
+{{- range $allowed := splitList "," $domains }}
+{{- $allowed = trim $allowed | lower }}
+{{- if and $allowed (or (eq $need $allowed) (hasSuffix (printf ".%s" $allowed) $need)) }}
+{{- $covered = true }}
+{{- end }}
+{{- end }}
+{{- if and $need (not $covered) }}
+{{- $domains = ternary $need (printf "%s,%s" $domains $need) (eq $domains "") }}
+{{- end }}
+{{- end }}
+{{- $allowedDomains = $domains }}
+{{- end }}
+openbao:
+  migrations:
+    env:
+{{- with $migrationEnv }}
+{{ toYaml . | nindent 6 }}
+{{- end }}
+      - name: ADDONS_LLM_ENABLED
+        value: {{ dig "addons" "llm" "enabled" false .Values | quote }}
+{{- if $workerCallbackProxyEnabled }}
+      - name: NVCF_SERVICE_PKI_ENABLED
+        value: "true"
+{{- end }}
+      - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
+        value: {{ $allowedDomains | quote }}
+      - name: ADMIN_ISSUER_PROXY_ENABLED
+        value: {{ dig "adminIssuerProxy" "enabled" true .Values | quote }}

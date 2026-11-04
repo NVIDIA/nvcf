@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# vllm-tp2 FRESH pod — customer-shape pod that triggers cachedir restore via
+# the nvsnap.io/restore-from annotation. The webhook is the only thing that
+# adds storage here; the spec is intentionally what a customer would write
+# with no awareness of nvsnap.
+#
+# NOT a criu-v2 placeholder. Multi-GPU cannot use CRIU: the agent refuses it
+# outright (checkpoint.go, "multi-GPU CRIU is unsupported ... use the
+# rootfs-only path"), and test-e2e.sh routes anything requesting >= 2 GPUs to
+# the cachedir path. A placeholder here would sit in the sleep loop forever
+# because nothing POSTs /v1/restore on the cachedir path, and the readiness
+# probe would never flip.
+#
+# Portable: no nodeName pin. The webhook injects nodeAffinity if the backend
+# reports CapturedOnNodes (Local backend); otherwise the cache is fetched via
+# cascade (peer agent -> blobstore).
+#
+# test-e2e.sh substitutes the real capture hash for __CAPTURE_HASH__.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-tp2-restored
+  namespace: nvsnap-system
+  labels:
+    app: vllm-tp2-restored
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/restore-from: "__CAPTURE_HASH__"
+spec:
+  # Matches the source manifest and every other restore manifest: nothing in
+  # a restored workload talks to the API server (the agent does the restore),
+  # so a privileged pod has no reason to carry the default SA credential.
+  automountServiceAccountToken: false
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:v0.20.0
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          mkdir -p /var/run/vllm
+          vllm serve \
+            --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+            --host 0.0.0.0 --port 8000 \
+            --max-model-len 2048 \
+            --tensor-parallel-size 2 \
+            --enforce-eager \
+            --disable-custom-all-reduce \
+            --gpu-memory-utilization 0.3
+      env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: HF_HOME
+          value: "/root/.cache/huggingface"
+        # TP=2 requires the multi-process engine (EngineCore + TP workers).
+        - name: VLLM_ENABLE_V1_MULTIPROCESSING
+          value: "1"
+        - name: VLLM_RPC_BASE_PATH
+          value: "/var/run/vllm"
+        - name: HF_HUB_DISABLE_XET
+          value: "1"
+        - name: VLLM_LOGGING_LEVEL
+          value: "INFO"
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 8000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        failureThreshold: 120
+      resources:
+        limits:
+          nvidia.com/gpu: "2"
+        requests:
+          nvidia.com/gpu: "2"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+
+  restartPolicy: Never

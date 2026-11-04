@@ -25,7 +25,7 @@ from templates.prometheus_config_generator import PrometheusConfigGenerator
 
 class SilentUndefined(Undefined):
     '''
-    Dont break pageloads because vars arent there!
+    Dont break pageloads because vars aren't there!
     '''
     def _fail_with_undefined_error(self, *args, **kwargs):
         return None
@@ -101,4 +101,4 @@ class TemplateBuilder:
             with open(f"{self.output_folder}/generated_{source_template}", "w", encoding="utf-8") as f:
                 f.write(rendered_yaml)
 
-            print(f"Config templates gererated at {self.output_folder}/generated_{source_template}")
+            print(f"Config templates generated at {self.output_folder}/generated_{source_template}")

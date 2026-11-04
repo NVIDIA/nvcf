@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2009,2010 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -603,95 +600,6 @@ func Connectx(fd int, srcIf uint32, srcAddr, dstAddr Sockaddr, associd SaeAssocI
 
 	err = connectx(fd, &endpoints, associd, flags, iov, &n, connid)
 	return
-}
-
-const minIovec = 8
-
-func Readv(fd int, iovs [][]byte) (n int, err error) {
-	iovecs := make([]Iovec, 0, minIovec)
-	iovecs = appendBytes(iovecs, iovs)
-	n, err = readv(fd, iovecs)
-	readvRacedetect(iovecs, n, err)
-	return n, err
-}
-
-func Preadv(fd int, iovs [][]byte, offset int64) (n int, err error) {
-	iovecs := make([]Iovec, 0, minIovec)
-	iovecs = appendBytes(iovecs, iovs)
-	n, err = preadv(fd, iovecs, offset)
-	readvRacedetect(iovecs, n, err)
-	return n, err
-}
-
-func Writev(fd int, iovs [][]byte) (n int, err error) {
-	iovecs := make([]Iovec, 0, minIovec)
-	iovecs = appendBytes(iovecs, iovs)
-	if raceenabled {
-		raceReleaseMerge(unsafe.Pointer(&ioSync))
-	}
-	n, err = writev(fd, iovecs)
-	writevRacedetect(iovecs, n)
-	return n, err
-}
-
-func Pwritev(fd int, iovs [][]byte, offset int64) (n int, err error) {
-	iovecs := make([]Iovec, 0, minIovec)
-	iovecs = appendBytes(iovecs, iovs)
-	if raceenabled {
-		raceReleaseMerge(unsafe.Pointer(&ioSync))
-	}
-	n, err = pwritev(fd, iovecs, offset)
-	writevRacedetect(iovecs, n)
-	return n, err
-}
-
-func appendBytes(vecs []Iovec, bs [][]byte) []Iovec {
-	for _, b := range bs {
-		var v Iovec
-		v.SetLen(len(b))
-		if len(b) > 0 {
-			v.Base = &b[0]
-		} else {
-			v.Base = (*byte)(unsafe.Pointer(&_zero))
-		}
-		vecs = append(vecs, v)
-	}
-	return vecs
-}
-
-func writevRacedetect(iovecs []Iovec, n int) {
-	if !raceenabled {
-		return
-	}
-	for i := 0; n > 0 && i < len(iovecs); i++ {
-		m := int(iovecs[i].Len)
-		if m > n {
-			m = n
-		}
-		n -= m
-		if m > 0 {
-			raceReadRange(unsafe.Pointer(iovecs[i].Base), m)
-		}
-	}
-}
-
-func readvRacedetect(iovecs []Iovec, n int, err error) {
-	if !raceenabled {
-		return
-	}
-	for i := 0; n > 0 && i < len(iovecs); i++ {
-		m := int(iovecs[i].Len)
-		if m > n {
-			m = n
-		}
-		n -= m
-		if m > 0 {
-			raceWriteRange(unsafe.Pointer(iovecs[i].Base), m)
-		}
-	}
-	if err == nil {
-		raceAcquire(unsafe.Pointer(&ioSync))
-	}
 }
 
 //sys	connectx(fd int, endpoints *SaEndpoints, associd SaeAssocID, flags uint32, iov []Iovec, n *uintptr, connid *SaeConnID) (err error)

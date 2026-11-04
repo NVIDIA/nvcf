@@ -1,7 +1,4 @@
 #!/bin/bash -e
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 
 ERROR_COUNT=0
 while read -r file

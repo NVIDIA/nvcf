@@ -35,7 +35,7 @@ Additionally, Cloud Functions supports [Low Latency Streaming (LLS) functions](.
 
 The following is a reference of available variables via the headers of the invocation message (auto-populated by Cloud Functions), accessible within the container.
 
-For examples of how to extract and use some of these variables, see [NVCF Container Helper Functions](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main).
+For examples of how to extract and use some of these variables, see [NVCF Container Helper Functions](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/python/nv-cloud-function-helpers).
 
 | Name                         | Description                                             |
 | ---------------------------- | ------------------------------------------------------- |

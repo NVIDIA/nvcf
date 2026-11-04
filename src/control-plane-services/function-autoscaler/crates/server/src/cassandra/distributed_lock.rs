@@ -19,7 +19,7 @@ use crate::cassandra::cassandra_service::CassandraServiceManager;
 use crate::metrics;
 use crate::models::DistributedLock;
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use tracing;
 
@@ -61,16 +61,21 @@ impl DistributedLockManager {
         lock_name: String,
         lock_duration_seconds: i32,
     ) -> Result<bool> {
-        self.cassandra_service
+        let acquired = self
+            .cassandra_service
             .put_lock(
                 &DistributedLock {
-                    lock_name,
+                    lock_name: lock_name.clone(),
                     node_id: self.node_id.clone(),
                     acquired_at: Utc::now(),
                 },
                 lock_duration_seconds,
             )
-            .await
+            .await?;
+        if !acquired {
+            metrics::record_distributed_lock_acquisition_failure(&lock_name);
+        }
+        Ok(acquired)
     }
 
     pub async fn get_lock(&self, lock_name: &str) -> Result<Option<DistributedLock>> {
@@ -90,25 +95,42 @@ impl DistributedLockManager {
     }
 }
 
+/// Outcome of an ownership-conditional lock release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockRelease {
+    /// This acquisition still held the lock and it was deleted.
+    Released,
+    /// The lock row was already gone, so its TTL expired before release.
+    Expired,
+    /// The lock expired and was acquired again, by another node or by this one.
+    Reacquired,
+}
+
 pub struct DistributedLockGuard {
     lock_name: String,
+    node_id: String,
+    acquired_at: DateTime<Utc>,
     cassandra_service: Arc<CassandraServiceManager>,
     released: bool,
 }
 
 impl DistributedLockGuard {
+    /// Inserts the lock row with a TTL of `lock_duration_seconds` if no live row exists.
+    /// Returns `Some(guard)` if acquired, `None` if another holder owns the lock.
+    /// The guard records `node_id` and `acquired_at` so release only targets this acquisition.
     pub async fn try_acquire(
         lock_name: String,
         node_id: String,
         cassandra_service: Arc<CassandraServiceManager>,
         lock_duration_seconds: i32,
     ) -> Result<Option<Self>> {
+        let acquired_at = Utc::now();
         let lock_acquired = cassandra_service
             .put_lock(
                 &DistributedLock {
                     lock_name: lock_name.clone(),
-                    node_id,
-                    acquired_at: Utc::now(),
+                    node_id: node_id.clone(),
+                    acquired_at,
                 },
                 lock_duration_seconds,
             )
@@ -117,6 +139,8 @@ impl DistributedLockGuard {
         if lock_acquired {
             Ok(Some(Self {
                 lock_name,
+                node_id,
+                acquired_at,
                 cassandra_service,
                 released: false,
             }))
@@ -128,37 +152,76 @@ impl DistributedLockGuard {
 }
 
 impl Drop for DistributedLockGuard {
+    /// Releases the lock from a spawned task with an ownership-conditional delete.
+    /// A stale guard deletes nothing. Expiry is routine when work outlasts the lock, so it
+    /// logs at debug; re-acquisition (even by this node) means holders overlapped, so it
+    /// logs a warning. On error, retries once after 5s with the same condition.
     fn drop(&mut self) {
         if !self.released {
             let lock_name = self.lock_name.clone();
+            let node_id = self.node_id.clone();
+            let acquired_at = self.acquired_at;
             let cassandra_service = self.cassandra_service.clone();
 
             tokio::spawn(async move {
-                match cassandra_service.delete_lock(&lock_name).await {
-                    Ok(()) => {
+                match cassandra_service
+                    .delete_lock_if_owner(&lock_name, &node_id, acquired_at)
+                    .await
+                {
+                    Ok(LockRelease::Released) => {
                         tracing::info!("Released lock {} during drop", lock_name);
+                    }
+                    Ok(LockRelease::Expired) => {
+                        tracing::debug!("Lock {} expired before drop, skipping release", lock_name);
+                    }
+                    Ok(LockRelease::Reacquired) => {
+                        tracing::warn!(
+                            "Lock {} was re-acquired after node {}'s hold expired, skipping release at drop",
+                            lock_name,
+                            node_id
+                        );
                     }
                     Err(e) => {
                         tracing::error!("Failed to release lock {} during drop: {}", lock_name, e);
 
                         // If deletion fails, spawn a task to retry after the lock duration
                         let retry_lock_name = lock_name.clone();
+                        let retry_node_id = node_id.clone();
                         let retry_cassandra_service = cassandra_service.clone();
                         tokio::spawn(async move {
                             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                            if let Err(e) =
-                                retry_cassandra_service.delete_lock(&retry_lock_name).await
+                            match retry_cassandra_service
+                                .delete_lock_if_owner(&retry_lock_name, &retry_node_id, acquired_at)
+                                .await
                             {
-                                tracing::error!(
-                                    "Failed to release lock {} during retry: {}",
-                                    retry_lock_name,
-                                    e
-                                );
-                            } else {
-                                tracing::info!(
-                                    "Successfully released lock {} during retry",
-                                    retry_lock_name
-                                );
+                                Ok(LockRelease::Released) => {
+                                    tracing::info!(
+                                        "Successfully released lock {} during retry",
+                                        retry_lock_name
+                                    );
+                                }
+                                // Includes the case where the first attempt actually applied
+                                // but its response was lost.
+                                Ok(LockRelease::Expired) => {
+                                    tracing::debug!(
+                                        "Lock {} already gone at retry, skipping release",
+                                        retry_lock_name
+                                    );
+                                }
+                                Ok(LockRelease::Reacquired) => {
+                                    tracing::warn!(
+                                        "Lock {} was re-acquired after node {}'s hold expired, skipping release at retry",
+                                        retry_lock_name,
+                                        retry_node_id
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to release lock {} during retry: {}",
+                                        retry_lock_name,
+                                        e
+                                    );
+                                }
                             }
                         });
                     }

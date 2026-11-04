@@ -21,13 +21,13 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
-	cmnotel "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otel"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	cmnotel "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otel"
 	"go.opentelemetry.io/otel"
 	otelattr "go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 )
 
 // OTel attributes follow the naming standards for Open Telemetry attributes
@@ -82,7 +82,7 @@ func InvokeWithSpan(ctx context.Context,
 }
 
 // WithName gives the name of the tracer,
-// otherwise the default "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca"
+// otherwise the default "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca"
 // will be used
 func WithName(name string) TracerOption {
 	return func(to *TracerOptions) {

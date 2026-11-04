@@ -26,6 +26,7 @@
 set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+REPO_ROOT="$(realpath "${REPO_ROOT}")"
 IMPORTS_MANIFEST="${REPO_ROOT}/imports.yaml"
 
 HEADER_WINDOW=24
@@ -40,10 +41,10 @@ HEADER_SNIPPETS=(
 
 SKIP_DIR_NAMES=(
     .git .hg .svn .venv venv __pycache__ .pytest_cache
-    .mypy_cache .tox node_modules target vendor nvidia-lpu-vendor
+    .mypy_cache .tox node_modules target vendor
 )
 
-SKIP_FILE_NAMES=(sonar-project.properties)
+SKIP_FILE_NAMES=()
 
 # Generated Go filename patterns (ERE).
 GENERATED_GO_PATTERNS=(
@@ -244,11 +245,14 @@ classify_language() {
     local ext="${name##*.}"
 
     case "${ext}" in
-        go)         echo "go" ;;
-        py)         echo "python" ;;
-        java)       echo "java" ;;
-        rs)         echo "rust" ;;
-        properties) echo "java-properties" ;;
+        go)             echo "go" ;;
+        py)             echo "python" ;;
+        java)           echo "java" ;;
+        rs)             echo "rust" ;;
+        properties)     echo "java-properties" ;;
+        ts|tsx)         echo "typescript" ;;
+        js|jsx|mjs|cjs) echo "javascript" ;;
+        css)            echo "css" ;;
         yaml|yml|tpl)
             if is_under_chart_root "${filepath}"; then
                 echo "helm"
@@ -288,10 +292,25 @@ looks_generated() {
 # ---------------------------------------------------------------------------
 # Check whether the required header snippets are present.
 # ---------------------------------------------------------------------------
+read_license_header_window() {
+    local filepath="$1"
+    local header
+
+    # Executable scripts need the shebang on line 1. Treat it as outside the
+    # license header window so script files can remain directly executable.
+    header=$(head -n "$((HEADER_WINDOW + 1))" "${filepath}" 2>/dev/null) || true
+    if [[ "${header}" == '#!'* ]]; then
+        header="${header#*$'\n'}"
+    else
+        header="$(printf '%s\n' "${header}" | head -n "${HEADER_WINDOW}")"
+    fi
+    printf '%s' "${header}"
+}
+
 has_required_header() {
     local filepath="$1"
     local header
-    header=$(head -n "${HEADER_WINDOW}" "${filepath}" 2>/dev/null) || true
+    header="$(read_license_header_window "${filepath}")"
     for snippet in "${HEADER_SNIPPETS[@]}"; do
         [[ "${header}" != *"${snippet}"* ]] && return 1
     done
@@ -304,7 +323,7 @@ has_allowed_spdx_header() {
 
     [[ ${#ALLOWED_SPDX_DIRS[@]} -eq 0 ]] && return 1
 
-    header=$(head -n "${HEADER_WINDOW}" "${filepath}" 2>/dev/null) || true
+    header="$(read_license_header_window "${filepath}")"
     for (( i=0; i<${#ALLOWED_SPDX_DIRS[@]}; i++ )); do
         allow_dir="${ALLOWED_SPDX_DIRS[i]}"
         license_id="${ALLOWED_SPDX_IDS[i]}"
@@ -361,16 +380,38 @@ build_find_prune() {
     echo -n " ) -prune -o"
 }
 
+path_has_skipped_dir_component() {
+    local filepath="$1"
+    local rel_path component skip_dir
+    local -a path_components
+
+    [[ "${filepath}" == "${REPO_ROOT}/"* ]] || return 1
+    rel_path="${filepath#"${REPO_ROOT}"/}"
+
+    IFS='/' read -r -a path_components <<< "${rel_path}"
+    for component in "${path_components[@]}"; do
+        for skip_dir in "${SKIP_DIR_NAMES[@]}"; do
+            [[ "${component}" == "${skip_dir}" ]] && return 0
+        done
+    done
+
+    return 1
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
-if [[ ! -f "${IMPORTS_MANIFEST}" ]]; then
-    echo "missing ${IMPORTS_MANIFEST}" >&2
-    exit 1
+# imports.yaml is intentionally not published to the OSS mirror, so on GitHub
+# it is absent. It only groups the failure output by import path; the header
+# check itself does not need it. Fall back to top-level directory grouping when
+# it is missing, matching how check-private-go-module-paths and
+# collect-dependencies handle the same absence, instead of hard-failing.
+if [[ -f "${IMPORTS_MANIFEST}" ]]; then
+    load_imports
+else
+    echo "note: ${IMPORTS_MANIFEST} absent (OSS mirror); grouping headers by top-level directory" >&2
 fi
-
-load_imports
 discover_oss_allowlists
 discover_chart_roots
 
@@ -447,6 +488,9 @@ CHECKED=0
 
 # Build find args
 FIND_ROOTS=("${REPO_ROOT}")
+if [[ ${#SEARCH_PATHS[@]} -gt 0 ]]; then
+    FIND_ROOTS=("${SEARCH_PATHS[@]}")
+fi
 PRUNE_ARGS=()
 for d in "${SKIP_DIR_NAMES[@]}"; do
     PRUNE_ARGS+=(-name "${d}" -o)
@@ -455,6 +499,12 @@ unset 'PRUNE_ARGS[${#PRUNE_ARGS[@]}-1]'
 
 while IFS= read -r filepath; do
     [[ -z "${filepath}" ]] && continue
+
+    # `find -name vendor -prune` does not catch targeted scans rooted below
+    # vendor, so apply skipped directory names to each discovered file too.
+    if path_has_skipped_dir_component "${filepath}"; then
+        continue
+    fi
 
     name="${filepath##*/}"
 
@@ -499,9 +549,11 @@ while IFS= read -r filepath; do
     group=$(determine_group "${rel_path}")
     FAILURES+=("${group}	${rel_path}	${lang}")
 
-done < <(find "${REPO_ROOT}" \( "${PRUNE_ARGS[@]}" \) -prune -o \
+done < <(find "${FIND_ROOTS[@]}" \( "${PRUNE_ARGS[@]}" \) -prune -o \
     \( -name '*.go' -o -name '*.py' -o -name '*.java' -o -name '*.rs' \
-       -o -name '*.properties' -o -name '*.yaml' -o -name '*.yml' -o -name '*.tpl' \) \
+       -o -name '*.properties' -o -name '*.yaml' -o -name '*.yml' -o -name '*.tpl' \
+       -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \
+       -o -name '*.mjs' -o -name '*.cjs' -o -name '*.css' \) \
     -type f -print 2>/dev/null | LC_ALL=C sort)
 
 # ---------------------------------------------------------------------------

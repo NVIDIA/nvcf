@@ -1,0 +1,67 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+macro_rules! impl_display {
+    ($type:ty, $name:literal) => {
+        impl std::fmt::Display for $type {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str($name)
+            }
+        }
+    };
+}
+
+mod algorithm;
+mod cluster_comparator;
+mod config;
+pub(crate) mod dynamic_config;
+pub(crate) mod expression;
+mod factory;
+mod power_of_n;
+mod pulsar;
+mod pulsar_wait_and_widen;
+mod random;
+mod request;
+mod round_robin;
+mod router;
+#[cfg(test)]
+pub(crate) mod routing_methods;
+mod session;
+mod target_state;
+#[cfg(test)]
+mod tests;
+mod wait_and_widen;
+
+pub use algorithm::LoadBalancer;
+pub(crate) use algorithm::input_work_seconds_for_request;
+pub(super) use algorithm::{HashInputBuilder, cache_affinity_key_is_cacheable, input_work_units};
+pub use cluster_comparator::ClusterComparator;
+pub(super) use cluster_comparator::{Ttft, ttft};
+pub(crate) use config::PulsarRendezvousWeight;
+pub use config::{
+    LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,
+    LoadBalancerAlgorithmSettings, LoadBalancerConfig, LoadBalancerModelConfig,
+    LoadBalancerRequestPolicy, LoadBalancerRoutingAlgorithmError, LoadBalancerSeedError,
+    MAX_POWER_OF_N_SAMPLE_COUNT, PowerOfNAlgorithmConfig, WaitAndWidenAlgorithmConfig,
+};
+pub use factory::create_load_balancer_with_config;
+pub use request::{LoadBalancerCandidateChoice, LoadBalancerDecision, LoadBalancerRequest};
+pub use router::{
+    LoadBalancerAlgorithmResolution, LoadBalancerCandidateSelection, LoadBalancerRouter,
+};
+pub use session::{LastClusterHint, SessionClassification, SessionState};
+pub(crate) use session::{record_session_selection, record_session_state};
+pub(crate) use target_state::LoadBalancerDefinition;
+pub use target_state::LoadBalancerTargetState;

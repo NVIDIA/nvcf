@@ -1,0 +1,156 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- $name := include "matrix.name" . }}
+{{- $ann := dict }}
+{{- if .Values.criuCapture }}{{ $_ := set $ann "nvsnap.io/criu-capture" "true" }}{{ end }}
+{{- with .Values.cacheSalt }}{{ $_ := set $ann "nvsnap.io/cache-salt" . }}{{ end }}
+{{- if eq .Values.kind "StatefulSet" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: {{ $name }}}
+spec:
+  serviceName: {{ $name }}-ranks
+  replicas: {{ .Values.podsPerInstance }}
+  podManagementPolicy: Parallel
+  selector: {matchLabels: {app: {{ $name }}}}
+  template:
+    metadata:
+      labels: {app: {{ $name }}}
+      {{- with $ann }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "matrix.podSpec" . | nindent 6 }}
+{{- else if eq .Values.kind "Deployment" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: {{ $name }}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: {{ $name }}}}
+  template:
+    metadata:
+      labels: {app: {{ $name }}}
+      {{- with $ann }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "matrix.podSpec" . | nindent 6 }}
+{{- else if eq .Values.kind "Pod" }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $name }}-0
+  labels: {app: {{ $name }}}
+spec:
+  {{- include "matrix.podSpec" . | nindent 2 }}
+{{- else if eq .Values.kind "LeaderWorkerSet" }}
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata: {name: {{ $name }}}
+spec:
+  replicas: 1
+  leaderWorkerTemplate:
+    size: {{ .Values.podsPerInstance }}
+    workerTemplate:
+      metadata:
+        labels: {app: {{ $name }}}
+        {{- with $ann }}
+        annotations: {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        {{- include "matrix.podSpec" . | nindent 8 }}
+{{- else if eq .Values.kind "DynamoGraphDeployment" }}
+{{- /* The Dynamo operator turns this into Grove PodCliques: a frontend and
+       a vLLM worker, multi-node when podsPerInstance > 1, as production
+       Dynamo functions run. The operator adds probes and /dev/shm. */}}
+{{- $v := .Values }}
+{{- $tp := mul $v.podsPerInstance $v.gpusPerPod }}
+{{- /* v1alpha1: the version NVCF accepts in a Helm function; the operator
+       stores it as v1beta1. */}}
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: {{ $name }}
+  {{- with $v.dynamo.discoveryBackend }}
+  annotations: {nvidia.com/dynamo-discovery-backend: {{ . | quote }}}
+  {{- end }}
+spec:
+  backendFramework: vllm
+  {{- with $v.dynamo.discoveryBackend }}
+  annotations: {nvidia.com/dynamo-discovery-backend: {{ . | quote }}}
+  {{- end }}
+  {{- if or $v.dynamo.etcdNats $v.dynamo.namespace }}
+  envs:
+    {{- if $v.dynamo.etcdNats }}
+    - {name: NATS_SERVER, value: "nats://mini-service-nats:4222"}
+    - {name: ETCD_ENDPOINTS, value: "mini-service-etcd:2379"}
+    - {name: DYN_REQUEST_PLANE, value: nats}
+    {{- end }}
+    {{- with $v.dynamo.namespace }}
+    - {name: DYN_NAMESPACE, value: {{ . | quote }}}
+    - {name: DYN_NAMESPACE_PREFIX, value: {{ . | quote }}}
+    {{- end }}
+  {{- end }}
+  services:
+    Frontend:
+      componentType: frontend
+      replicas: 1
+      {{- with $v.dynamo.runtimeVersion }}
+      runtimeVersionOverride: {{ . | quote }}
+      {{- end }}
+      {{- if $v.criuCapture }}
+      # A companion of the captured instance: the capture freezes it too.
+      extraPodMetadata:
+        annotations: {nvsnap.io/criu-capture: "true"}
+      {{- end }}
+      extraPodSpec:
+        {{- if $v.ngcImagePullSecretName }}
+        imagePullSecrets: [{name: {{ $v.ngcImagePullSecretName }}}]
+        {{- end }}
+        mainContainer:
+          image: {{ $v.dynamo.image }}
+    VllmWorker:
+      componentType: worker
+      replicas: 1
+      {{- with $v.dynamo.runtimeVersion }}
+      runtimeVersionOverride: {{ . | quote }}
+      {{- end }}
+      {{- if gt (int $v.podsPerInstance) 1 }}
+      multinode: {nodeCount: {{ $v.podsPerInstance }}}
+      {{- end }}
+      sharedMemory: {size: {{ $v.shmSize | quote }}}
+      resources:
+        limits:
+          gpu: {{ $v.gpusPerPod | quote }}
+      extraPodMetadata:
+        annotations:
+          nvidia.com/vllm-distributed-executor-backend: mp
+          {{- range $k, $val := $ann }}
+          {{ $k }}: {{ $val | quote }}
+          {{- end }}
+      extraPodSpec:
+        {{- if $v.ngcImagePullSecretName }}
+        imagePullSecrets: [{name: {{ $v.ngcImagePullSecretName }}}]
+        {{- end }}
+        {{- if $v.computeDomain }}
+        resourceClaims:
+          - {name: imex-channel, resourceClaimTemplateName: {{ $name }}-imex-channel}
+        {{- end }}
+        mainContainer:
+          image: {{ $v.dynamo.image }}
+          {{- if $v.computeDomain }}
+          resources:
+            claims: [{name: imex-channel}]
+          {{- end }}
+          command: ["python3", "-m", "dynamo.vllm"]
+          args: ["--model", "{{ $v.model }}", "--tensor-parallel-size", "{{ $tp }}", "--max-model-len", "{{ $v.maxModelLen }}", "--gpu-memory-utilization", "{{ $v.gpuMemoryUtilization }}"
+                 {{- range $v.dynamo.extraArgs }}, {{ . | quote }}{{ end }}]
+          env:
+            - {name: HF_HUB_DISABLE_XET, value: "1"}
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+{{- else }}
+{{- fail (printf "kind %q: want StatefulSet, Deployment, Pod, LeaderWorkerSet or DynamoGraphDeployment" .Values.kind) }}
+{{- end }}

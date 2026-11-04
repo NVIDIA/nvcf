@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Rootfs/cachedir-path restore for vllm-small.
+#
+# Why a separate manifest from vllm-small-restore.yaml: the CRIU restore yaml
+# chains restore-entrypoint + nvsnap-lib LD_PRELOAD and waits for a CRIU dump
+# (inventory.img) at /checkpoints — meaningless on the rootfs/cachedir path.
+# Here the mutating webhook (cachedir mode) RO-mounts the captured cache at
+# /opt/nvsnap based on nvsnap.io/restore-from, re-injects the cache env
+# (HF_HOME → /opt/nvsnap/...), and prewarms it; the container then boots vLLM
+# cleanly against the warm cache — no in-process restore step, no model
+# download. test-e2e.sh substitutes __CAPTURE_HASH__ and __NODE_NAME__.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-small-restored
+  namespace: nvsnap-system
+  labels:
+    app: vllm-small-restored
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/restore-from: "__CAPTURE_HASH__"
+spec:
+  nodeName: __NODE_NAME__
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:v0.20.0
+      imagePullPolicy: IfNotPresent
+      # No LD_PRELOAD / nvsnap-lib / ld.so.preload: the rootfs path is a warm
+      # cold-boot, not a CRIU process restore.
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          vllm serve \
+            --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --max-model-len 2048 \
+            --gpu-memory-utilization 0.3
+      env:
+        # NB: HF_HOME is intentionally NOT set here. The cachedir webhook
+        # re-injects it (→ /opt/nvsnap/...) and RO-mounts the captured cache;
+        # setting our own would shadow the webhook's mount.
+        - { name: PYTHONUNBUFFERED,     value: "1" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+        - { name: HF_HUB_DISABLE_XET,   value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 8000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 60
+      resources:
+        limits:   { nvidia.com/gpu: "1" }
+        requests: { nvidia.com/gpu: "1" }
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+
+  restartPolicy: Never

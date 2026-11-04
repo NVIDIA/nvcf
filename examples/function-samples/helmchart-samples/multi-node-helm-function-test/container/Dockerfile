@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM public.ecr.aws/hpc-cloud/nccl-tests:cuda12.8.1-efa1.43.2-ofiv1.16.3-ncclv2.27.7-1-testsv2.16.9
+ARG BASE_IMAGE=public.ecr.aws/hpc-cloud/nccl-tests:latest
+FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -56,7 +57,7 @@ RUN cd nvbandwidth && \
 
 # install python requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt --break-system-packages  
+RUN pip install --no-cache-dir -r requirements.txt --break-system-packages 2>/dev/null || pip install --no-cache-dir -r requirements.txt
 
 # add tooling for using kubctl to connect between nodes
 RUN mkdir tools

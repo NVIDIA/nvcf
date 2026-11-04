@@ -30,20 +30,23 @@ import (
 type fakeClusterDeleter struct {
 	deleteErr    error
 	deleteCalled bool
+	ncaID        string
 	clusterID    string
 }
 
-func (f *fakeClusterDeleter) DeleteCluster(_ context.Context, _, clusterID string) error {
+func (f *fakeClusterDeleter) DeleteCluster(_ context.Context, _, ncaID, clusterID string) error {
 	f.deleteCalled = true
+	f.ncaID = ncaID
 	f.clusterID = clusterID
 	return f.deleteErr
 }
 
 func TestUnregister_HappyPath(t *testing.T) {
 	fake := &fakeClusterDeleter{}
-	err := Unregister(context.Background(), fake, "http://sis", "cl-abc123")
+	err := Unregister(context.Background(), fake, "http://sis", "nca-xyz", "cl-abc123")
 	require.NoError(t, err)
 	assert.True(t, fake.deleteCalled)
+	assert.Equal(t, "nca-xyz", fake.ncaID)
 	assert.Equal(t, "cl-abc123", fake.clusterID)
 }
 
@@ -52,7 +55,7 @@ func TestUnregister_NotFoundIsIdempotent(t *testing.T) {
 	for _, errMsg := range []string{"cluster not found", "HTTP 404 Not Found", "404 page not found"} {
 		t.Run(errMsg, func(t *testing.T) {
 			fake := &fakeClusterDeleter{deleteErr: errors.New(errMsg)}
-			err := Unregister(context.Background(), fake, "http://sis", "cl-gone")
+			err := Unregister(context.Background(), fake, "http://sis", "nca-xyz", "cl-gone")
 			require.NoError(t, err, "expected nil for not-found error: %q", errMsg)
 		})
 	}
@@ -61,7 +64,7 @@ func TestUnregister_NotFoundIsIdempotent(t *testing.T) {
 func TestUnregister_500Propagates(t *testing.T) {
 	serverErr := errors.New("internal server error 500")
 	fake := &fakeClusterDeleter{deleteErr: serverErr}
-	err := Unregister(context.Background(), fake, "http://sis", "cl-abc")
+	err := Unregister(context.Background(), fake, "http://sis", "nca-xyz", "cl-abc")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, serverErr)
 }

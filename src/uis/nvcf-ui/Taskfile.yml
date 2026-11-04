@@ -1,0 +1,83 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+version: "3"
+
+includes:
+  ui:
+    taskfile: ./ui/Taskfile.yml
+    dir: ./ui
+  backend:
+    taskfile: ./backend/Taskfile.yml
+    dir: ./backend
+
+tasks:
+  setup:
+    desc: Bootstrap dev environment
+    cmds:
+      - go install github.com/google/addlicense@v1.2.0
+      - task: ui:install
+      - task: backend:install
+
+  generate:
+    desc: Generate typed API hooks, TypeScript models, and MSW mock handlers from OpenAPI spec
+    cmds:
+      - task: ui:generate
+      - task: license:add
+
+  typecheck:
+    desc: Type-check the UI
+    cmds:
+      - task: ui:typecheck
+
+  build:
+    desc: Build UI into the backend static dir and compile the Go binaries
+    cmds:
+      - task: ui:build
+        vars:
+          OUT_DIR: ../backend/static
+      - task: backend:build
+
+  test:
+    desc: Run all tests
+    cmds:
+      - task: ui:test
+      - task: backend:test
+
+  lint:
+    desc: Run all linters
+    cmds:
+      - task: ui:lint
+      - task: backend:lint
+      - task: license:check
+
+  lint:fix:
+    desc: Auto-fix all lint issues
+    cmds:
+      - task: ui:lint:fix
+      - task: backend:lint:fix
+      - task: license:add
+
+  license:check:
+    desc: Check for missing license headers
+    cmds:
+      - task: license:add
+        vars:
+          FLAGS: -check
+
+  license:add:
+    desc: Add missing license headers
+    cmds:
+      - addlicense {{.FLAGS}} -f license-header.txt -ignore "**/node_modules/**" -ignore "**/pnpm-lock.yaml" -ignore "backend/static/**" -ignore "backend/bin/**" -ignore "ui/dist/**" -ignore "bazel-*/**" .

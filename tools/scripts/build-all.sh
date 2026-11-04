@@ -15,9 +15,6 @@ build_module() {
   (cd "$dir" && GOWORK=off go build ./...)
 }
 
-echo "==> tools/sync-synthetic-imports"
-(cd "$root/tools/sync-synthetic-imports" && GOWORK=off go build -ldflags="-s -w" -o "$root/tools/scripts/sync-synthetic-imports" ./cmd)
-
 build_module "$root/tools/collect-dependencies" "tools/collect-dependencies"
 build_module "$root/tools/generate-subproject-ci" "tools/generate-subproject-ci"
 build_module "$root/tools/byoo" "tools/byoo"

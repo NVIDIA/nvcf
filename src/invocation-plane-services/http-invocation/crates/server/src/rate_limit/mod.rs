@@ -60,7 +60,9 @@ pub enum LimitResult {
 
 #[derive(Eq, PartialEq, Hash, Debug)]
 struct RateLimitCacheKey {
+    client_auth_subject: String,
     nca_id: String,
+    owner_nca_id: String,
     function_id: Uuid,
     function_version_id: Uuid,
 }
@@ -114,7 +116,9 @@ impl RateLimitService {
     /// 4. **Synchronous Check for function with sync_check set to true**. If function config has sync_check set to true, always performs synchronous check with the rate limiter service to confirm the status.
     pub async fn check_rate_limit(
         &self,
+        client_auth_subject: String,
         nca_id: String,
+        owner_nca_id: String,
         function_id: Uuid,
         function_version_id: Uuid,
         sync_check: bool,
@@ -125,7 +129,9 @@ impl RateLimitService {
         // Is the call known to have been rate limited? Or is sync_check set to true?
         if sync_check
             || self.rate_limit_cache.contains_key(&RateLimitCacheKey {
+                client_auth_subject: client_auth_subject.clone(),
                 nca_id: nca_id.clone(),
+                owner_nca_id: owner_nca_id.clone(),
                 function_id,
                 function_version_id,
             })
@@ -134,7 +140,9 @@ impl RateLimitService {
             let result = Self::check_rate_external(
                 self.client.clone(),
                 self.rate_limit_address.clone(),
+                client_auth_subject.clone(),
                 nca_id.clone(),
+                owner_nca_id.clone(),
                 function_id,
                 function_version_id,
             )
@@ -143,7 +151,9 @@ impl RateLimitService {
             if let Err(Error::Limited) = result {
                 self.rate_limit_cache.insert(
                     RateLimitCacheKey {
+                        client_auth_subject,
                         nca_id,
+                        owner_nca_id,
                         function_id,
                         function_version_id,
                     },
@@ -164,7 +174,9 @@ impl RateLimitService {
                 if let Err(Error::Limited) = Self::check_rate_external(
                     client,
                     rate_limit_address,
+                    client_auth_subject.clone(),
                     nca_id.clone(),
+                    owner_nca_id.clone(),
                     function_id,
                     function_version_id,
                 )
@@ -173,7 +185,9 @@ impl RateLimitService {
                     // Upon rate limit, update in-memory flag to prevent future requests
                     rate_limit_cache.insert(
                         RateLimitCacheKey {
+                            client_auth_subject,
                             nca_id,
+                            owner_nca_id,
                             function_id,
                             function_version_id,
                         },
@@ -192,7 +206,9 @@ impl RateLimitService {
     async fn check_rate_external(
         mut client: RateLimitServiceClient<OtelGrpcService<AuthSvc>>,
         rate_limit_address: String,
+        client_auth_subject: String,
         nca_id: String,
+        owner_nca_id: String,
         function_id: Uuid,
         function_version_id: Uuid,
     ) -> Result<(), Error> {
@@ -201,6 +217,8 @@ impl RateLimitService {
                 nca_id,
                 function_id: function_id.to_string(),
                 function_version_id: function_version_id.to_string(),
+                client_auth_subject,
+                owner_nca_id,
             })
             .await;
         match &response {
@@ -264,7 +282,9 @@ mod tests {
         // Test that disabled service always returns Allowed
         let result = service
             .check_rate_limit(
+                "test-client".to_string(),
                 "test-nca".to_string(),
+                "test-owner-nca".to_string(),
                 uuid::Uuid::new_v4(),
                 uuid::Uuid::new_v4(),
                 false,

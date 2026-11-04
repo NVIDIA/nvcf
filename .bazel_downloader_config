@@ -1,0 +1,4 @@
+# Prefer the Google Maven Central mirror for repository-rule downloads that
+# hardcode repo1.maven.org. Coursier dependencies still use MODULE.bazel's
+# maven.install repositories.
+rewrite (repo1.maven.org)/(maven2/.*) https://maven-central.storage-download.googleapis.com/$2

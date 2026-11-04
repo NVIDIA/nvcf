@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -34,10 +34,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice/chartcache"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/miniservice/chartcache"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	featureflagmock "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
 )
 
 func testHelmConfig(url, values string) common.HelmConfig {
@@ -55,12 +55,15 @@ func TestPrepareUpgradeIfNeeded(t *testing.T) {
 	nsName := "test-ns"
 	msName := "test-ms"
 
+	// Each case describes the MiniService generation and revision state before update detection,
+	// plus the expected lifecycle state after it runs.
 	tests := []struct {
 		name               string
 		generation         int64
 		observedGeneration int64
 		revision           int64
 		specValues         string
+		workloadConfig     *v1alpha1.WorkloadConfig
 		phase              v1alpha1.MiniServicePhase
 		existingCMs        []*corev1.ConfigMap
 		wantUpgrade        bool
@@ -77,6 +80,20 @@ func TestPrepareUpgradeIfNeeded(t *testing.T) {
 			wantUpgrade:        false,
 			wantRevision:       0,
 			wantPhase:          v1alpha1.MiniServiceInstalling,
+		},
+		{
+			name:               "workload config generation during initial install continues install",
+			generation:         2,
+			observedGeneration: 1,
+			revision:           0,
+			specValues:         `{"key": "initial"}`,
+			workloadConfig: &v1alpha1.WorkloadConfig{
+				FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
+			},
+			phase:        v1alpha1.MiniServiceInstalling,
+			wantUpgrade:  false,
+			wantRevision: 0,
+			wantPhase:    v1alpha1.MiniServiceInstalling,
 		},
 		{
 			name:               "same generation, no upgrade",
@@ -160,6 +177,7 @@ func TestPrepareUpgradeIfNeeded(t *testing.T) {
 				Spec: v1alpha1.MiniServiceSpec{
 					Namespace:       nsName,
 					HelmChartConfig: testHelmConfig("https://helm.example.com/chart.tgz", tt.specValues),
+					WorkloadConfig:  tt.workloadConfig,
 				},
 				Status: v1alpha1.MiniServiceStatus{
 					Phase:              tt.phase,
@@ -193,13 +211,15 @@ func TestPrepareUpgradeIfNeeded(t *testing.T) {
 				now:        func() time.Time { return fixedTime },
 			}
 
-			err := r.prepareUpgradeIfNeeded(ctx, ms)
+			err := r.prepareUpdateIfNeeded(ctx, ms)
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantRevision, ms.Status.Revision)
 			assert.Equal(t, tt.wantPhase, ms.Status.Phase)
 			if tt.wantUpgrade {
 				assert.Nil(t, ms.Status.RenderDetails)
+			} else {
+				assert.NotNil(t, ms.Status.RenderDetails)
 			}
 		})
 	}
@@ -500,7 +520,7 @@ func TestRevisionUpgradeCycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, changed, "new values should differ from revision 0")
 
-	require.NoError(t, r.prepareUpgradeIfNeeded(ctx, ms))
+	require.NoError(t, r.prepareUpdateIfNeeded(ctx, ms))
 	assert.Equal(t, int64(1), ms.Status.Revision)
 	assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
 	assert.Nil(t, ms.Status.RenderDetails, "render details should be cleared for re-render")
@@ -539,7 +559,7 @@ func TestRevisionUpgradeCycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, changed, "values unchanged since revision 1")
 
-	require.NoError(t, r.prepareUpgradeIfNeeded(ctx, ms))
+	require.NoError(t, r.prepareUpdateIfNeeded(ctx, ms))
 	assert.Equal(t, int64(1), ms.Status.Revision, "revision should not bump when values are unchanged")
 	assert.Equal(t, v1alpha1.MiniServiceRunning, ms.Status.Phase, "phase should remain Running")
 }

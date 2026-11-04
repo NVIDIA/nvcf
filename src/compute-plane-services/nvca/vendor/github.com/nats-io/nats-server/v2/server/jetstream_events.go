@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2020-2025 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -272,9 +269,10 @@ type JSStreamBatchAbandonedAdvisory struct {
 type BatchAbandonReason string
 
 var (
-	BatchTimeout    BatchAbandonReason = "timeout"
-	BatchLarge      BatchAbandonReason = "large"
-	BatchIncomplete BatchAbandonReason = "incomplete"
+	BatchTimeout            BatchAbandonReason = "timeout"
+	BatchLarge              BatchAbandonReason = "large"
+	BatchIncomplete         BatchAbandonReason = "incomplete"
+	BatchRequirementsNotMet BatchAbandonReason = "unsupported"
 )
 
 // JSConsumerLeaderElectedAdvisoryType is sent when the system elects a leader for a consumer.

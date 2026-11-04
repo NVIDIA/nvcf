@@ -83,3 +83,87 @@ Create the name of the service account to use
 {{- printf "{\"auths\":{\"%s\":{\"username\":\"%s\",\"password\":\"%s\",\"email\":\"%s\",\"auth\":\"%s\"}}}" .registry .username .password .email (printf "%s:%s" .username .password | b64enc) | b64enc }}
 {{- end }}
 {{- end }}
+
+{{/*
+Detect the cluster profile from live Kubernetes objects available to Helm.
+*/}}
+{{- define "multi-node-test.detectClusterProfile" -}}
+{{- $detection := .Values.clusterProfileDetection | default dict -}}
+{{- $roceDeviceClassName := default "roce.networking.k8s.aws" $detection.roceDeviceClassName -}}
+{{- $efaResourceName := default "vpc.amazonaws.com/efa" $detection.efaResourceName -}}
+{{- $mlnxResourceName := default "nvidia.com/mlnxnics" $detection.mlnxResourceName -}}
+{{- $deviceClass := dict -}}
+{{- if .Capabilities.APIVersions.Has "resource.k8s.io/v1/DeviceClass" -}}
+{{- $deviceClass = lookup "resource.k8s.io/v1" "DeviceClass" "" $roceDeviceClassName -}}
+{{- end -}}
+{{- if not (empty $deviceClass) -}}
+aws-gb300
+{{- else -}}
+{{- $nodes := lookup "v1" "Node" "" "" | default dict -}}
+{{- $hasEfa := false -}}
+{{- $hasMlnx := false -}}
+{{- range $node := (get $nodes "items" | default list) -}}
+{{- $allocatable := dig "status" "allocatable" dict $node -}}
+{{- if hasKey $allocatable $efaResourceName -}}
+{{- $hasEfa = true -}}
+{{- end -}}
+{{- if hasKey $allocatable $mlnxResourceName -}}
+{{- $hasMlnx = true -}}
+{{- end -}}
+{{- end -}}
+{{- if $hasEfa -}}
+aws-gb200
+{{- else if $hasMlnx -}}
+ncp-gb200
+{{- else -}}
+{{- fail (printf "clusterProfile=auto could not identify a supported cluster profile. Set clusterProfile to one of aws-gb200, aws-gb300, or ncp-gb200, or grant Helm permission to read DeviceClass/%s and list Nodes with allocatable %s or %s" $roceDeviceClassName $efaResourceName $mlnxResourceName) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Resolve the selected cluster profile name.
+*/}}
+{{- define "multi-node-test.clusterProfileName" -}}
+{{- $requested := default "ncp-gb200" .Values.clusterProfile -}}
+{{- $profiles := .Values.clusterProfiles | default dict -}}
+{{- $profileName := $requested -}}
+{{- if eq $requested "auto" -}}
+{{- if not (.Values.clusterProfileDetection.enabled | default false) -}}
+{{- fail "clusterProfile=auto requires clusterProfileDetection.enabled=true" -}}
+{{- end -}}
+{{- $profileName = include "multi-node-test.detectClusterProfile" . -}}
+{{- end -}}
+{{- if not (hasKey $profiles $profileName) -}}
+{{- fail (printf "unsupported clusterProfile %q. Set clusterProfile to one of aws-gb200, aws-gb300, ncp-gb200, or auto" $profileName) -}}
+{{- end -}}
+{{- $profileName -}}
+{{- end }}
+
+{{/*
+Build effective profile values. Top-level chart values override selected
+profile values where old override files used them.
+*/}}
+{{- define "multi-node-test.effectiveProfileValues" -}}
+{{- $profileName := include "multi-node-test.clusterProfileName" . -}}
+{{- $profile := deepCopy (index .Values.clusterProfiles $profileName) -}}
+{{- with .Values.nodesPerInstance -}}
+{{- $_ := set $profile "nodesPerInstance" . -}}
+{{- end -}}
+{{- with .Values.image -}}
+{{- $_ := set $profile "image" (mergeOverwrite (deepCopy (get $profile "image" | default dict)) .) -}}
+{{- end -}}
+{{- with .Values.resources -}}
+{{- $_ := set $profile "resources" . -}}
+{{- end -}}
+{{- with .Values.podAnnotations -}}
+{{- $_ := set $profile "podAnnotations" (mergeOverwrite (deepCopy (get $profile "podAnnotations" | default dict)) .) -}}
+{{- end -}}
+{{- with .Values.securityContext -}}
+{{- $_ := set $profile "securityContext" . -}}
+{{- end -}}
+{{- with .Values.resourceClaimTemplate -}}
+{{- $_ := set $profile "resourceClaimTemplate" (mergeOverwrite (deepCopy (get $profile "resourceClaimTemplate" | default dict)) .) -}}
+{{- end -}}
+{{- toYaml $profile -}}
+{{- end }}

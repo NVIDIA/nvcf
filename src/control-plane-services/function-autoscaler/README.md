@@ -1,6 +1,39 @@
 # NVCF Autoscaler
 
-A high-performance, distributed autoscaling service for NVIDIA Cloud Functions (NVCF) built in Rust. This service periodically monitors function invocation and usage patterns and horizontally scales NVCF functions.
+The Function Autoscaler's documentation is available in the [Function Autoscaling overview](https://docs.nvidia.com/nvcf/function-autoscaling-overview).
+
+The NVCF Function Autoscaler is a distributed Rust service that monitors function utilization and uses it to determine the ideal instance count per function on the NVCF control plane. It runs as a horizontally scaled deployment on the same Kubernetes cluster as the rest of the control plane.
+
+## Build with Bazel
+
+Release images are built from the component's published source tag. Follow
+[monorepo release automation](../../../docs/dev/github-release-process.md) for versioning and maintenance releases.
+Local image builds do not publish a release.
+
+Requires [bazelisk](https://github.com/bazelbuild/bazelisk) and
+`libssl-dev` installed (Ubuntu / Debian). The bazel-ci image ships
+both; dev machines with `build-essential` + `libssl-dev` work.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run all tests with auto-retry on timing-sensitive failures.
+bazel test //... --flaky_test_attempts=3
+
+# Build the multi-arch OCI image index.
+bazel build //crates/server:image_index
+
+# Load the host-arch image into the local docker daemon.
+bazel run //crates/server:image_load
+
+# Repin crate_universe after Cargo.lock changes.
+CARGO_BAZEL_REPIN=1 bazel mod tidy
+```
+
+Follow the [release workflow](../../../docs/dev/github-release-process.md)
+for source versions and image publication. Check the published index for
+required platform digests before selecting it in a stack.
 
 ```mermaid
 sequenceDiagram
@@ -28,18 +61,19 @@ sequenceDiagram
     Autoscaler->>Cassandra: Write predicted count, refresh function TTL
 ```
 
-## 🛠️ Development
+## Development
 
 ### Prerequisites
 
-- **Rust**: 1.75+ (see `rust-toolchain.toml`)
-- **Docker**: For local development and testing
-- **Cassandra**: Local instance or access to cluster
-- **VictoriaMetrics**: Local instance (included in docker-compose)
+- Rust: 1.75+ (see `rust-toolchain.toml`)
+- Docker: For local development and testing
+- Cassandra: Local instance or access to cluster
+- VictoriaMetrics: Local instance (included in docker-compose)
 
 ### Local Development Setup
 
-1. **Start the Local Environment**:
+1. Start the Local Environment:
+
    ```bash
    # Start core services (Cassandra, VictoriaMetrics, Grafana)
    cd local_env
@@ -49,22 +83,23 @@ sequenceDiagram
    docker-compose --profile local up
    ```
 
-   **Core services** (`docker-compose up`) will start:
+   Core services (`docker-compose up`) will start:
    - Cassandra database on port 9042
    - VictoriaMetrics on port 8428
    - Grafana on port 3000
 
-   **With local profile** (`docker-compose --profile local up`) additionally includes:
+   With local profile (`docker-compose --profile local up`) additionally includes:
    - Mock NVCF API Server on port 8082
 
-2. **Configure Settings**:
+2. Configure Settings:
    For local setup, passing a settings.yaml file is not supported yet. It uses the default settings set by `AppSettings`.
 
-3. **Mock NVCF API Server**:
+3. Mock NVCF API Server:
 
    The mock server can be started in two ways:
 
-   **Option 1: Docker Compose with local profile (Recommended)**
+   Option 1: Docker Compose with local profile (Recommended)
+
    ```bash
    cd local_env
    docker-compose --profile local up
@@ -73,15 +108,17 @@ sequenceDiagram
    FUNCTION_COUNT=5 docker-compose --profile local up
    ```
 
-   **Option 2: Manual setup (when not using local profile)**
+   Option 2: Manual setup (when not using local profile)
 
    - Install dependencies:
+
    ```bash
    cd local_env/mock_server
    pip install -r requirements.txt
    ```
 
    - Start the mock server on port 8082:
+
    ```bash
    python mock_server.py
    ```
@@ -90,12 +127,13 @@ sequenceDiagram
 
    The mock server simulates the NVCF API scaling functionality and provides test metrics to VictoriaMetrics.
 
-   **Scale Function Endpoint**:
-   - **URL**: `/v2/nvcf/accounts/{ncaId}/predictions/functions/{funcId}/versions/{versionId}`
-   - **Method**: `PUT`
-   - **Content-Type**: `application/json`
+   Scale Function Endpoint:
+   - URL: `/v2/nvcf/accounts/{ncaId}/predictions/functions/{funcId}/versions/{versionId}`
+   - Method: `PUT`
+   - Content-Type: `application/json`
 
-   **Request Body**:
+   Request Body:
+
    ```json
    {
        "requiredNumberOfInstances": 5,
@@ -104,7 +142,8 @@ sequenceDiagram
    }
    ```
 
-   **Example using curl**:
+   Example using curl:
+
    ```bash
    curl -X PUT http://localhost:8082/v2/nvcf/accounts/test-nca/predictions/functions/$(uuidgen)/versions/$(uuidgen) \
      -H "Content-Type: application/json" \
@@ -115,7 +154,8 @@ sequenceDiagram
      }'
    ```
 
-4. **Run the Service**:
+4. Run the Service:
+
    ```bash
    cargo run --bin server
    ```
@@ -131,7 +171,7 @@ The service uses YAML configuration with the following key sections:
 - `metrics`: Prometheus and OpenTelemetry settings
 - `tracing`: Distributed tracing configuration
 
-## 📊 Monitoring & Observability
+## Monitoring & Observability
 
 ### Health Endpoints
 
@@ -173,7 +213,7 @@ Metrics are exposed in Prometheus format on port `41337` (configurable via `metr
 
 Distributed tracing is configured via the `tracing` section in settings. Spans are emitted for TSDB queries and NVCF API calls.
 
-## 🧪 Testing
+## Testing
 
 ```bash
 # Run all tests
@@ -198,7 +238,7 @@ FUNCTION_COUNT=10 docker-compose --profile local up -d
 cargo run
 ```
 
-## 📋 API Reference
+## API Reference
 
 ### Autoscaling Operations
 
@@ -211,26 +251,26 @@ The service automatically handles:
 
 ### Integration Points
 
-- **NVCF API**: Function scaling operations
-- **TSDB**: Historical metrics collection
-- **Cassandra**: Distributed state storage
+- NVCF API: Function scaling operations
+- TSDB: Historical metrics collection
+- Cassandra: Distributed state storage
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
-1. **Cassandra Connection Issues**:
+1. Cassandra Connection Issues:
    - Verify SSL certificates are properly configured
    - Check network connectivity to Cassandra cluster
    - Validate credentials in secrets file
-   - Create `/etc/app/config` directory if it does not exist
+   - Create `/etc/server/config` directory if it does not exist
 
-2. **TSDB Query Failures**:
+2. TSDB Query Failures:
    - Confirm TSDB endpoint accessibility
    - Verify authentication tokens are valid
    - Check query syntax and time ranges
 
-3. **NVCF API Errors**:
+3. NVCF API Errors:
    - Validate JWT token generation
    - Check function permissions and status
    - Verify API endpoint configurations
@@ -244,12 +284,12 @@ server:
   envfilter_directive: "server=debug,cassandra=info,timeseries_db=warn"
 ```
 
-## 🤝 Contributing
+## Contributing
 
-1. **Code Standards**: Follow Rust conventions and run `cargo fmt`
-2. **Testing**: Add unit tests for new functionality
-3. **Documentation**: Update README and inline docs
-4. **Linting**: Ensure `cargo clippy` passes without warnings
+1. Code Standards: Follow Rust conventions and run `cargo fmt`
+2. Testing: Add unit tests for new functionality
+3. Documentation: Update README and inline docs
+4. Linting: Ensure `cargo clippy` passes without warnings
 
 ### Development Workflow
 
@@ -259,7 +299,7 @@ server:
 4. Submit PR
 5. Address review feedback
 
-## 📄 License
+## License
 
 SPDX-License-Identifier: Apache-2.0
 

@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/../../.." && pwd)"
+script_path="$repo_root/tools/ci/cleanup-docs-preview"
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+
+fake_bin="$workdir/bin"
+mkdir -p "$fake_bin"
+
+cat > "$fake_bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+output=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output)
+      output="$2"
+      shift 2
+      ;;
+    --write-out)
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$output" ]]; then
+  echo "fake curl expected --output" >&2
+  exit 2
+fi
+
+printf '%s' "${FAKE_CURL_BODY:-[]}" > "$output"
+printf '%s' "${FAKE_CURL_STATUS:-200}"
+exit "${FAKE_CURL_EXIT:-0}"
+EOF
+chmod +x "$fake_bin/curl"
+
+cat > "$fake_bin/fern" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "${FAKE_FERN_LOG:?}"
+EOF
+chmod +x "$fake_bin/fern"
+
+PATH="/bin:/usr/bin" \
+FERN_BOT="" \
+CI_API_V4_URL="https://gitlab.example.com/api/v4" \
+CI_PROJECT_ID="268903" \
+CI_PROJECT_NAME="nvcf" \
+CI_COMMIT_SHA="b2a55e6b352b92ade9d453c72d1478eedfaf1c07" \
+  "$script_path" > "$workdir/output.txt" 2>&1
+if ! grep -q "FERN_BOT is not set" "$workdir/output.txt"; then
+  echo "expected cleanup to skip before requiring tools when FERN_BOT is missing"
+  cat "$workdir/output.txt"
+  exit 1
+fi
+
+run_cleanup() {
+  PATH="$fake_bin:$PATH" \
+  FERN_BOT="${FERN_BOT:-token}" \
+  CI_API_V4_URL="https://gitlab.example.com/api/v4" \
+  CI_PROJECT_ID="268903" \
+  CI_PROJECT_NAME="nvcf" \
+  CI_COMMIT_SHA="b2a55e6b352b92ade9d453c72d1478eedfaf1c07" \
+  FAKE_FERN_LOG="$workdir/fern.log" \
+  FAKE_CURL_BODY="${FAKE_CURL_BODY:-[]}" \
+  FAKE_CURL_STATUS="${FAKE_CURL_STATUS:-200}" \
+  FAKE_CURL_EXIT="${FAKE_CURL_EXIT:-0}" \
+    "$script_path" > "$workdir/output.txt" 2>&1
+}
+
+FAKE_CURL_BODY='{"message":"401 Unauthorized"}'
+FAKE_CURL_STATUS="401"
+if ! run_cleanup; then
+  echo "expected cleanup to skip non-array GitLab responses without failing"
+  cat "$workdir/output.txt"
+  exit 1
+fi
+if [[ -f "$workdir/fern.log" ]]; then
+  echo "expected no preview deletion when GitLab response is non-array"
+  cat "$workdir/fern.log"
+  exit 1
+fi
+if ! grep -q "GitLab API returned HTTP 401" "$workdir/output.txt"; then
+  echo "expected output to mention skipped GitLab API status"
+  cat "$workdir/output.txt"
+  exit 1
+fi
+
+rm -f "$workdir/fern.log"
+FAKE_CURL_BODY='[{"iid":323,"merge_commit_sha":null,"squash_commit_sha":"b2a55e6b352b92ade9d453c72d1478eedfaf1c07","sha":"4031ce1419538f78fb357947652d6e315a54d333"}]'
+FAKE_CURL_STATUS="200"
+run_cleanup
+if ! grep -q '^docs preview delete nvcf-mr-323$' "$workdir/fern.log"; then
+  echo "expected squash-merged commit to clean up MR preview"
+  cat "$workdir/fern.log"
+  exit 1
+fi
+
+echo "test-cleanup-docs-preview: PASS"

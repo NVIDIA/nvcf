@@ -1,0 +1,156 @@
+{{- if and .Values.webhook.enabled .Values.agent.l2.restoreNamespaces }}
+{{- /* Guard first: a disabled feature must emit nothing at all. With the guard below the license header, Helm still renders the header as a document and kubectl rejects it. */ -}}
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- /*
+NetworkPolicy that allows restore pods (nvsnap-l2-wait init container)
+in customer namespaces to reach nvsnap-server in this chart's release
+namespace on its REST API port.
+
+Why required: NVCA function pods admit into nvcf-backend by default,
+which carries restrictive default NetworkPolicies. Without this rule,
+nvsnap-l2-wait's HTTP GET to nvsnap-server times out and the init chain
+stalls in `Init:N/M`. We observed this on GCP-H100-a 2026-06-03:
+DNS resolved fine (10.56.1.82) but TCP egress was denied by the
+namespace's stock `allow-egress-internet-no-internal-no-api` policy.
+
+This policy is opt-in via `agent.l2.restoreNamespaces` so operators
+who keep restore pods in nvsnap-system itself (single-namespace dev
+clusters) aren't charged the extra NetworkPolicy.
+
+Design notes:
+  - One policy per restore namespace. Helm renders one YAML doc per
+    entry in agent.l2.restoreNamespaces.
+  - podSelector: {} — applies to ALL pods in the restore namespace,
+    not just ones with our annotation. The nvsnap-l2-wait init runs
+    from a per-pod injection, so the source pods themselves don't
+    carry a stable label we could select on without admission-time
+    coordination. Allowing all-pod egress to ONE service on ONE port
+    is the cheapest correct shape.
+  - to.namespaceSelector + podSelector targets nvsnap-server pods only
+    — not the entire nvsnap-system namespace. Tightest possible scope.
+  - Port is hardcoded to 8080 (nvsnap-server's REST port). If the
+    chart adds a TLS variant later, this template needs a sibling
+    entry for 8443.
+
+Future: when nvsnap#179 (NVCA-side gate) lands, this policy can be
+deleted along with the nvsnap-l2-wait container itself — restore pods
+won't talk to nvsnap-server anymore.
+*/ -}}
+{{- range $ns := .Values.agent.l2.restoreNamespaces }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nvsnap-allow-egress-nvsnap-server
+  namespace: {{ $ns }}
+  labels:
+    {{- include "nvsnap.labels" $ | nindent 4 }}
+  annotations:
+    nvsnap.io/purpose: |
+      Allow nvsnap-l2-wait init container (nvsnap#147) to reach
+      nvsnap-server's pvc-state poll endpoint. Without this, restore
+      pods in this namespace stall in Init:N/M with the nvsnap-l2-wait
+      HTTP poll timing out.
+spec:
+  podSelector: {}        # all pods — nvsnap-l2-wait is a webhook-injected init container, no stable pod label
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app: nvsnap-server
+      ports:
+        - protocol: TCP
+          port: 8080
+{{- end }}
+{{- end }}
+
+{{- /*
+Sibling policy for the init-container restore-prep strategy
+(nvsnap#202). When webhook.restorePrepStrategy=init-container, the
+webhook-injected `nvsnap-mount-prep` init container POSTs to the
+node-local nvsnap-agent's /v1/restore/prep (HTTP, port 8081) to drive the
+writable-overlay mounts, then polls until ready. The same stock
+`allow-egress-internet-no-internal-no-api` policy that blocks nvsnap-server
+egress also drops this pod->agent traffic, so the init container fails
+with `dial tcp <agent-ip>:8081: i/o timeout` and the pod recycles in
+Init:N/M (observed GCP-H100-a 2026-06-11, whisper-large-v3 rootfs
+restore).
+
+IMPORTANT: the nvsnap-agent DaemonSet runs hostNetwork:true, so its
+"pod IP" is the NODE IP and it carries the CNI's host/node identity —
+NOT a pod identity. A `to.podSelector` egress rule therefore never
+matches it (verified on GKE Dataplane V2 / Cilium), so this rule
+targets the agent by `ipBlock` over the node CIDR instead. Set
+webhook.agentHostCIDR to the cluster's node-IP range; if it's empty we
+don't render this policy (and init-container restore will be blocked by
+the namespace's default egress deny — use restorePrepStrategy=inline,
+which needs no pod->agent egress, or fill this in).
+
+Only rendered when the init-container strategy is selected AND
+agentHostCIDR is set. The default inline strategy does the mount inside
+the webhook and needs no pod->agent egress.
+*/ -}}
+{{- if and .Values.webhook.enabled (eq (.Values.webhook.restorePrepStrategy | default "inline") "init-container") (or (not .Values.agent.hostNetwork) .Values.webhook.agentHostCIDR) .Values.agent.l2.restoreNamespaces }}
+{{- range $ns := .Values.agent.l2.restoreNamespaces }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nvsnap-allow-egress-nvsnap-agent
+  namespace: {{ $ns }}
+  labels:
+    {{- include "nvsnap.labels" $ | nindent 4 }}
+  annotations:
+    nvsnap.io/purpose: |
+      Allow the nvsnap-mount-prep init container (nvsnap#202) to reach the
+      node-local hostNetwork nvsnap-agent's /v1/restore/prep endpoint
+      (port {{ $.Values.webhook.agentHostPort | default 8081 }}) via the
+      node CIDR. Required only for restorePrepStrategy=init-container.
+spec:
+  podSelector: {}        # all pods — nvsnap-mount-prep is a webhook-injected init container, no stable pod label
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- if $.Values.agent.hostNetwork }}
+        # hostNetwork: the agent carries NODE identity, so a podSelector never
+        # matches it (verified on GKE Dataplane V2 / Cilium) and the rule has
+        # to name the whole node CIDR -- every node, on this port, for every
+        # pod in the namespace.
+        - ipBlock:
+            cidr: {{ $.Values.webhook.agentHostCIDR }}
+        {{- else }}
+        # Pod networking: the agent has a pod identity again, so the rule can
+        # name exactly the agent pods and nothing else. This is the concrete
+        # payoff of GH #490 -- no operator-supplied CIDR, and the grant shrinks
+        # from "the node network" to "these pods".
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "nvsnap.agent.selectorLabels" $ | nindent 14 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.webhook.agentHostPort | default 8081 }}
+{{- end }}
+{{- end }}

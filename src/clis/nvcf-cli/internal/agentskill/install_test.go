@@ -20,6 +20,7 @@ package agentskill
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,7 +64,7 @@ func TestInstall_WritesPublicUserSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read SKILL.md: %v", err)
 	}
-	embeddedContent, err := FS().ReadFile("data/nvcf-self-managed-cli/SKILL.md")
+	embeddedContent, err := fs.ReadFile(FS(), "data/nvcf-self-managed-cli/SKILL.md")
 	if err != nil {
 		t.Fatalf("read embedded SKILL.md: %v", err)
 	}
@@ -118,11 +119,10 @@ func TestInstall_Idempotent(t *testing.T) {
 	}
 }
 
-// TestInstall_RefusesOnCorruptManifest — Verify is exercised independently in
+// TestInstall_RefusesOnCorruptManifest covers Verify independently in
 // manifest_test.go; Install's call to Verify is a thin pass-through. Adding a
-// test seam here would require exporting embeddedFS or adding a package-level
-// override, which is unnecessary complexity given manifest_test.go already
-// exercises every corruption path.
+// package-level FS override would add unnecessary complexity because
+// manifest_test.go already exercises every corruption path.
 
 func TestUninstall_RemovesAll(t *testing.T) {
 	tmpDir := t.TempDir()

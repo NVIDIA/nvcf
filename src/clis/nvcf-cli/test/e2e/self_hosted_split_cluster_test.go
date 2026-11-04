@@ -59,7 +59,7 @@ func TestE2E_T8_SplitClusterCleanReRun(t *testing.T) {
 	//   1. setupSplitClusters(t, "cp", "gpu1")  // k3d cluster create both
 	//   2. nvcfBin := requireNvcfBin(t)
 	//   3. run `up --control-plane-context=k3d-cp --compute-plane-context=k3d-gpu1
-	//      --cluster-name=split-t8 --sis-url=https://sis.local --token=$JWT --json`
+	//      --cluster-name=split-t8 --icms-url=https://sis.local --token=$JWT --json`
 	//   4. assert exit 0; parse JSONL: phase 6 (register) has Context=k3d-gpu1
 	//   5. re-run identical command; assert exit 0; assert phase 6 emits "register
 	//      would be no-op; existing row will be reused"

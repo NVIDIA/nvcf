@@ -1,0 +1,490 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package dsl
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
+func TestUpdateYAMLKeysCreatesMissingMapsAndLists(t *testing.T) {
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env.yaml")
+	writeFile(t, path, "global:\n  storageClass: local-path\n")
+
+	keys := [][2]string{
+		{"global.imagePullSecrets[0].name", "nvcr-pull-secret"},
+		{"global.image.repository", "${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}"},
+	}
+	if err := UpdateYAMLKeys(path, keys); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	got, _ := os.ReadFile(path)
+	out := string(got)
+	for _, want := range []string{
+		"storageClass: local-path",
+		"imagePullSecrets:",
+		"name: nvcr-pull-secret",
+		"repository: test-org/test-team",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestUpdateYAMLKeysRejectsScalarInPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env.yaml")
+	writeFile(t, path, "global: scalar\n")
+
+	err := UpdateYAMLKeys(path, [][2]string{{"global.image.registry", "nvcr.io"}})
+	if err == nil {
+		t.Fatal("expected error when scalar blocks descent")
+	}
+}
+
+func TestReadYAMLKeyFoundAndMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env.yaml")
+	writeFile(t, path, `global:
+  image:
+    registry: nvcr.io
+list:
+  - first
+  - second
+`)
+
+	cases := []struct {
+		name  string
+		key   string
+		want  string
+		found bool
+	}{
+		{"map leaf", "global.image.registry", "nvcr.io", true},
+		{"list index", "list[1]", "second", true},
+		{"missing top key", "absent", "", false},
+		{"missing nested", "global.image.repository", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok, err := ReadYAMLKey(path, tc.key)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if ok != tc.found {
+				t.Fatalf("found = %v, want %v", ok, tc.found)
+			}
+			if got != tc.want {
+				t.Fatalf("value = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequireNonEmptyYAMLKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "registration.yaml")
+	writeFile(t, path, `clusterID: cluster-123
+clusterGroupID: ""
+selfManaged:
+  identitySource: psat
+`)
+
+	if err := RequireNonEmptyYAMLKeys(path, []string{"clusterID", "selfManaged.identitySource"}); err != nil {
+		t.Fatalf("non-empty keys: %v", err)
+	}
+
+	t.Run("missing key", func(t *testing.T) {
+		err := RequireNonEmptyYAMLKeys(path, []string{"clusterID", "missingID"})
+		if err == nil || !strings.Contains(err.Error(), `row 2`) || !strings.Contains(err.Error(), `key "missingID" is missing`) {
+			t.Fatalf("err = %v, want row-specific missing-key error", err)
+		}
+	})
+
+	t.Run("empty value", func(t *testing.T) {
+		err := RequireNonEmptyYAMLKeys(path, []string{"clusterGroupID"})
+		if err == nil || !strings.Contains(err.Error(), `row 1`) || !strings.Contains(err.Error(), `key "clusterGroupID" is empty`) {
+			t.Fatalf("err = %v, want row-specific empty-value error", err)
+		}
+	})
+}
+
+func TestMatchYAMLSubtreeExactAndSubset(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profile.yaml")
+	writeFile(t, path, `apiVersion: nvcf.nvidia.com/v1alpha1
+kind: ControlPlaneProfile
+controlPlane:
+  clusterName: ncp-local
+  region: us-west-1
+  endpoints:
+    inCluster:
+      icmsURL: http://api.sis.svc.cluster.local:8080
+      revalURL: http://reval.nvcf.svc.cluster.local:8080
+`)
+
+	subsetExpected := `controlPlane:
+  clusterName: ncp-local
+  endpoints:
+    inCluster:
+      icmsURL: http://api.sis.svc.cluster.local:8080
+`
+	if err := MatchYAMLSubtree(path, "", subsetExpected, MatchSubset); err != nil {
+		t.Fatalf("subset whole-file: %v", err)
+	}
+
+	exactSubtree := `icmsURL: http://api.sis.svc.cluster.local:8080
+revalURL: http://reval.nvcf.svc.cluster.local:8080
+`
+	if err := MatchYAMLSubtree(path, "controlPlane.endpoints.inCluster", exactSubtree, MatchExact); err != nil {
+		t.Fatalf("exact subtree: %v", err)
+	}
+
+	missingKeyExpected := `controlPlane:
+  clusterName: ncp-local
+  missingKey: nope
+`
+	if err := MatchYAMLSubtree(path, "", missingKeyExpected, MatchSubset); err == nil {
+		t.Fatal("expected error for missing key in actual")
+	}
+
+	exactWithExtraExpected := `icmsURL: http://api.sis.svc.cluster.local:8080
+`
+	if err := MatchYAMLSubtree(path, "controlPlane.endpoints.inCluster", exactWithExtraExpected, MatchExact); err == nil {
+		t.Fatal("expected error for extra key in actual under exact mode")
+	}
+}
+
+func TestMatchYAMLSubtreeInterpolatesExpected(t *testing.T) {
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env.yaml")
+	writeFile(t, path, "global:\n  image:\n    repository: test-org/foo\n")
+
+	expected := `global:
+  image:
+    repository: ${SAMPLE_NGC_ORG}/foo
+`
+	if err := MatchYAMLSubtree(path, "", expected, MatchSubset); err != nil {
+		t.Fatalf("interpolated match: %v", err)
+	}
+}
+
+func TestMatchYAMLDocumentSubsetInterpolatesExpected(t *testing.T) {
+	t.Setenv("BDD_TEST_GATEWAY", "gateway.example.invalid")
+	actual := `apiVersion: v1
+kind: ConfigMap
+data:
+  API_URL: http://gateway.example.invalid
+  EXTRA: preserved
+`
+	expected := `data:
+  API_URL: http://${BDD_TEST_GATEWAY}
+`
+	if err := MatchYAMLDocument(actual, expected, MatchSubset); err != nil {
+		t.Fatalf("document subset: %v", err)
+	}
+}
+
+func TestMatchYAMLDocumentHelmValuesSubset(t *testing.T) {
+	t.Setenv("BDD_TMP_COLLECTOR_ENABLED", "true")
+	actual := `selfManaged:
+  otelCollector:
+    enabled: true
+    imageTag: 0.157.9
+`
+	expected := `selfManaged:
+  otelCollector:
+    enabled: ${BDD_TMP_COLLECTOR_ENABLED}
+`
+	if err := MatchYAMLDocument(actual, expected, MatchSubset); err != nil {
+		t.Fatalf("Helm values subset: %v", err)
+	}
+}
+
+func TestMatchYAMLDocumentMismatchDoesNotExposeValues(t *testing.T) {
+	actual := `data:
+  token: actual-secret-value
+`
+	expected := `data:
+  token: expected-secret-value
+`
+	err := MatchYAMLDocument(actual, expected, MatchSubset)
+	if err == nil {
+		t.Fatal("expected mismatch")
+	}
+	if !strings.Contains(err.Error(), "data.token") {
+		t.Fatalf("error %q does not name the mismatched path", err)
+	}
+	for _, sensitive := range []string{"actual-secret-value", "expected-secret-value"} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("error %q exposes %q", err, sensitive)
+		}
+	}
+}
+
+func TestSubstituteFileReplacesPlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.yaml")
+	writeFile(t, path, "token: PLACEHOLDER\nother: PLACEHOLDER\n")
+
+	if err := SubstituteFile(path, "PLACEHOLDER", "real-value"); err != nil {
+		t.Fatalf("substitute: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if strings.Contains(string(got), "PLACEHOLDER") {
+		t.Fatalf("placeholder still present:\n%s", got)
+	}
+	if !strings.Contains(string(got), "real-value") {
+		t.Fatalf("replacement missing:\n%s", got)
+	}
+}
+
+func TestSubstituteFileBlockReplacesExactBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "global.yaml.gotmpl")
+	writeFile(t, path, "before\nold one\nold two\nafter\n")
+
+	spec := "old one\nold two\n---\nnew one\nnew two"
+	if err := SubstituteFileBlock(path, spec); err != nil {
+		t.Fatalf("substitute block: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "before\nnew one\nnew two\nafter\n" {
+		t.Fatalf("body = %q", got)
+	}
+}
+
+func TestSubstituteFileBlockRejectsMalformedSpec(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "global.yaml.gotmpl")
+	writeFile(t, path, "old\n")
+
+	err := SubstituteFileBlock(path, "old\nnew")
+	if err == nil || !strings.Contains(err.Error(), "separator") {
+		t.Fatalf("err = %v, want separator error", err)
+	}
+}
+
+func TestSubstituteFileBlockRejectsMissingOldBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "global.yaml.gotmpl")
+	writeFile(t, path, "different\n")
+
+	err := SubstituteFileBlock(path, "old\n---\nnew")
+	if err == nil || !strings.Contains(err.Error(), "not present") {
+		t.Fatalf("err = %v, want missing old block error", err)
+	}
+}
+
+// TestRenderYAMLFromKeysBuildsNestedDocument verifies that
+// RenderYAMLFromKeys produces a nested YAML structure from dotted-path
+// key/value pairs without touching the filesystem.
+func TestRenderYAMLFromKeysBuildsNestedDocument(t *testing.T) {
+	keys := [][2]string{
+		{"llmRequestRouter.fullnameOverride", "llm-request-router-region-b"},
+		{"llmRequestRouter.replicaCount", "2"},
+		{"llmRequestRouter.workload.kind", "StatefulSet"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	out := string(body)
+	for _, want := range []string{
+		"fullnameOverride: llm-request-router-region-b",
+		"replicaCount: \"2\"",
+		"kind: StatefulSet",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderYAMLFromKeysPreservesBoolsAndCollections verifies that
+// booleans and collection literals are decoded to native YAML types
+// while numbers remain as quoted strings.
+func TestRenderYAMLFromKeysPreservesBoolsAndCollections(t *testing.T) {
+	keys := [][2]string{
+		{"router.enabled", "true"},
+		{"router.pki.enabled", "false"},
+		{"router.replicaCount", "2"},
+		{"router.discovery.remoteWatchUrls", "[]"},
+		{"router.name", "region-b"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := string(body)
+
+	for _, want := range []string{
+		"enabled: true",
+		"enabled: false",
+		"remoteWatchUrls: []",
+		"name: region-b",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		`enabled: "true"`,
+		`enabled: "false"`,
+		`remoteWatchUrls: "[]"`,
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("value emitted as quoted string %q:\n%s", unwanted, out)
+		}
+	}
+	// Numbers stay as quoted strings; Helm coerces them in templates.
+	if !strings.Contains(out, `replicaCount: "2"`) {
+		t.Fatalf("replicaCount should remain a quoted string:\n%s", out)
+	}
+}
+
+// TestRenderYAMLFromKeysRejectsInvalidPath confirms that a malformed
+// dotted path surfaces as an error instead of a partial document.
+func TestRenderYAMLFromKeysRejectsInvalidPath(t *testing.T) {
+	keys := [][2]string{
+		{"router.name", "region-b"},
+		{"router..enabled", "true"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err == nil || !strings.Contains(err.Error(), "empty segment") {
+		t.Fatalf("err = %v, want invalid-path error", err)
+	}
+	if body != nil {
+		t.Fatalf("body should be nil on error, got:\n%s", body)
+	}
+}
+
+// TestRenderYAMLFromKeysInterpolatesValues confirms that ${VAR}
+// references in value cells are expanded before serialization.
+func TestRenderYAMLFromKeysInterpolatesValues(t *testing.T) {
+	t.Setenv("BDD_TEST_HOST", "region-b.example.invalid")
+
+	keys := [][2]string{
+		{"service.host", "${BDD_TEST_HOST}"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(string(body), "host: region-b.example.invalid") {
+		t.Fatalf("interpolation failed:\n%s", body)
+	}
+}
+
+func TestParsePathInvalidShapes(t *testing.T) {
+	bads := []string{
+		"a..b",
+		"a[1",
+		"a[]",
+		"a[abc]",
+		"a]b",
+	}
+	for _, p := range bads {
+		t.Run(p, func(t *testing.T) {
+			if _, err := parsePath(p); err == nil {
+				t.Fatalf("expected error for %q", p)
+			}
+		})
+	}
+}
+
+func TestSetYAMLKeyReplacesSubtreeWithTypedYAML(t *testing.T) {
+	t.Setenv("BDD_TEST_FUNCTION_ID", "fn-1")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env.yaml")
+	writeFile(t, path, "global:\n  domain: localhost\naddons:\n  vanityGateway:\n    enabled: true\n    mappingConfig:\n      v2config:\n        openai:\n          host: old.localhost\n")
+
+	err := SetYAMLKey(path, "addons.vanityGateway.mappingConfig.v2config.openai", `host: openai.localhost
+chatCompletions:
+  primary:
+    functionID: ${BDD_TEST_FUNCTION_ID}
+    shadows:
+      - modelName: shadow
+        percentage: 50
+        samplingMethod: [promptCacheKey, firstMessageHash]
+`)
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	for key, want := range map[string]string{
+		"global.domain":                "localhost",
+		"addons.vanityGateway.enabled": "true",
+		"addons.vanityGateway.mappingConfig.v2config.openai.host":                               "openai.localhost",
+		"addons.vanityGateway.mappingConfig.v2config.openai.chatCompletions.primary.functionID": "fn-1",
+	} {
+		got, found, err := ReadYAMLKey(path, key)
+		if err != nil || !found || got != want {
+			t.Fatalf("%s = %q (found %v, err %v), want %q", key, got, found, err, want)
+		}
+	}
+	data, _ := os.ReadFile(path)
+	for _, want := range []string{"percentage: 50\n", "- promptCacheKey\n"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("typed value %q missing:\n%s", want, data)
+		}
+	}
+}
+
+func TestSetYAMLKeyCreatesMissingParentsAndRejectsBadInput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env.yaml")
+	writeFile(t, path, "global: scalar\n")
+	if err := SetYAMLKey(path, "addons.vanityGateway.mappingConfig", "v2config: {}\n"); err != nil {
+		t.Fatalf("missing parents: %v", err)
+	}
+	if _, found, _ := ReadYAMLKey(path, "addons.vanityGateway.mappingConfig.v2config"); !found {
+		t.Fatal("subtree not created")
+	}
+	if err := SetYAMLKey(path, "global.child", "a: 1\n"); err == nil {
+		t.Fatal("expected error when a scalar blocks descent")
+	}
+	if err := SetYAMLKey(path, "addons.bad", "a: [1\n"); err == nil {
+		t.Fatal("expected error for invalid YAML")
+	}
+	if err := SetYAMLKey(path, "", "a: 1\n"); err == nil {
+		t.Fatal("expected error for an empty key")
+	}
+}

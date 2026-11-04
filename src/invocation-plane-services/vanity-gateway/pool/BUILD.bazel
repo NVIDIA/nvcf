@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "pool",
+    srcs = ["byteslice.go"],
+    importpath = "ai-api-gateway-service/pool",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":pool",
+    visibility = ["//visibility:public"],
+)

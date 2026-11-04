@@ -423,6 +423,12 @@ message RateLimitPolicyResponse {
         // per nca id rates
         // If exists, PerNcaIdConfig is preferred over the "global" rate limit config above
         repeated PerNcaIdConfigs perNcaIdConfigs = 3;
+
+        // Per-user rate. When set, this single rate is enforced individually against
+        // every unique caller (clientAuthSubject) in addition to the NCA-tier limit
+        // (both tiers must allow). Intended for traffic authenticated with an
+        // invocation delegation token (InvocationToken).
+        optional string perUserRate = 4;
     }
     RateLimitConfig config = 1;
 }

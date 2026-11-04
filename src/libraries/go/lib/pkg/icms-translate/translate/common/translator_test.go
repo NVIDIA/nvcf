@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// TestAddNVIDIAGPUNoScheduleToleration verifies that the GPU toleration is added only when absent.
 func TestAddNVIDIAGPUNoScheduleToleration(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -86,6 +87,22 @@ func TestAddNVIDIAGPUNoScheduleToleration(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMutateUtilsContainer verifies the worker-utils metrics port and health probes.
+func TestMutateUtilsContainer(t *testing.T) {
+	container := corev1.Container{}
+
+	MutateUtilsContainer(&container)
+
+	assert.Equal(t, []corev1.ContainerPort{{
+		Name:          WorkerMetricsPortName,
+		ContainerPort: UtilsMetricsPort,
+		Protocol:      corev1.ProtocolTCP,
+	}}, container.Ports)
+	assert.NotNil(t, container.StartupProbe)
+	assert.NotNil(t, container.ReadinessProbe)
+	assert.NotNil(t, container.LivenessProbe)
 }
 
 func TestMergeTolerations(t *testing.T) {
@@ -373,4 +390,25 @@ func TestNewCommonMetadata(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewWorkerInitContainerSecurityContext(t *testing.T) {
+	ctx := NewWorkerInitContainerSecurityContext()
+	assert.Equal(t, WorkerInitUID, *ctx.RunAsUser)
+	assert.Equal(t, WorkerInitUID, *ctx.RunAsGroup)
+	assert.True(t, *ctx.RunAsNonRoot)
+	assert.False(t, *ctx.AllowPrivilegeEscalation)
+	assert.Equal(t, []corev1.Capability{"ALL"}, ctx.Capabilities.Drop)
+}
+
+func TestEnsureWorkerInitFSGroup(t *testing.T) {
+	spec := &corev1.PodSpec{}
+	EnsureWorkerInitFSGroup(spec)
+	assert.Equal(t, WorkerInitUID, *spec.SecurityContext.FSGroup)
+	assert.Equal(t, corev1.FSGroupChangeOnRootMismatch, *spec.SecurityContext.FSGroupChangePolicy)
+
+	otherGroup := int64(2000)
+	spec.SecurityContext.FSGroup = &otherGroup
+	EnsureWorkerInitFSGroup(spec)
+	assert.Equal(t, otherGroup, *spec.SecurityContext.FSGroup)
 }

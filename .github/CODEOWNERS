@@ -1,1 +1,61 @@
-*                  @NVIDIA/nvcf-dev
+# CODEOWNERS for the NVCF monorepo.
+# Order matters: the last matching pattern wins.
+# Some subgroup teams may be created after this file lands; keep the intended
+# ownership routing here.
+
+# Default fallback for paths not otherwise matched.
+* @dsx-ai-factory/nvcf-dev
+
+# This CODEOWNERS file.
+/.github/CODEOWNERS @dsx-ai-factory/nvcf-admin
+
+# CI, automation, and developer tooling.
+/.github/workflows/ @dsx-ai-factory/nvcf-ci-dev
+/ci/ @dsx-ai-factory/nvcf-ci-dev
+/tools/ @dsx-ai-factory/nvcf-ci-dev
+/tools/byoo/** @dsx-ai-factory/nvcf-compute-plane-dev
+
+# Documentation.
+/docs/ @dsx-ai-factory/nvcf-docs-dev
+
+# Infrastructure foundations.
+/deploy/helm/cassandra/ @dsx-ai-factory/nvcf-infra-dev
+/deploy/helm/nats/ @dsx-ai-factory/nvcf-infra-dev
+/deploy/helm/openbao/ @dsx-ai-factory/nvcf-infra-dev
+/infra/ @dsx-ai-factory/nvcf-infra-dev
+/migrations/cassandra/ @dsx-ai-factory/nvcf-infra-dev
+/migrations/openbao/ @dsx-ai-factory/nvcf-infra-dev
+
+# Control-plane services and charts.
+# Includes the NVCF API, rate limiter, invocation service, gRPC proxy, event
+# ledger, deployment stages, NVCT API, vanity gateway, autoscaler, Helm ReVal,
+# LLM gateway, LLM request router, SIS, and Stargate.
+/src/control-plane-services/ @dsx-ai-factory/nvcf-control-plane-dev
+/src/uis/ @dsx-ai-factory/nvcf-control-plane-dev
+/src/invocation-plane-services/ @dsx-ai-factory/nvcf-control-plane-dev
+/src/libraries/rust/stargate/ @dsx-ai-factory/nvcf-control-plane-dev
+/deploy/helm/admin-token-issuer-proxy/ @dsx-ai-factory/nvcf-control-plane-dev
+/deploy/helm/api-keys-colocated/ @dsx-ai-factory/nvcf-control-plane-dev
+/deploy/helm/function-autoscaler/ @dsx-ai-factory/nvcf-control-plane-dev
+/deploy/helm/gateway-routes/ @dsx-ai-factory/nvcf-control-plane-dev
+/deploy/helm/grpc-proxy/ @dsx-ai-factory/nvcf-control-plane-dev
+/deploy/helm/helm-reval/ @dsx-ai-factory/nvcf-control-plane-dev
+/deploy/helm/http-invocation/ @dsx-ai-factory/nvcf-control-plane-dev
+/deploy/helm/llm-api-gateway/ @dsx-ai-factory/nvcf-control-plane-dev
+/deploy/helm/llm-request-router/ @dsx-ai-factory/nvcf-control-plane-dev
+/deploy/helm/nats-auth-callout/ @dsx-ai-factory/nvcf-control-plane-dev
+/deploy/helm/ratelimiter/ @dsx-ai-factory/nvcf-control-plane-dev
+/migrations/cassandra/keyspaces/api_keys_api/ @dsx-ai-factory/nvcf-control-plane-dev
+/migrations/cassandra/keyspaces/ess_api/ @dsx-ai-factory/nvcf-control-plane-dev
+/migrations/cassandra/keyspaces/event_ledger/ @dsx-ai-factory/nvcf-control-plane-dev
+/migrations/cassandra/keyspaces/nvcf_api/ @dsx-ai-factory/nvcf-control-plane-dev
+/migrations/cassandra/keyspaces/sis_api/ @dsx-ai-factory/nvcf-control-plane-dev
+
+# Compute-plane services and charts.
+# Includes NVCA, BYOO, Dynamo operator integration, and future Nsight operator
+# integration.
+/src/compute-plane-services/ @dsx-ai-factory/nvcf-compute-plane-dev
+/deploy/helm/container-cache/ @dsx-ai-factory/nvcf-compute-plane-dev
+/deploy/helm/nvca-operator/ @dsx-ai-factory/nvcf-compute-plane-dev
+/deploy/helm/nvcf-unbound/ @dsx-ai-factory/nvcf-compute-plane-dev
+/deploy/stacks/nvcf-compute-plane/ @dsx-ai-factory/nvcf-compute-plane-dev

@@ -15,9 +15,10 @@
  * limitations under the License.
  */
 
-use chrono::{DateTime, Utc};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use tonic::transport::{Channel, ClientTlsConfig};
 use uuid::Uuid;
 
 pub mod errors;
@@ -25,6 +26,22 @@ pub mod nvcf_client;
 pub mod oauth2_client;
 
 pub use errors::NvcfApiError;
+
+/// Build a gRPC channel that connects lazily (on first use) and adds TLS for
+/// `https` endpoints. Shared by every gRPC client this service maintains.
+pub fn lazy_grpc_channel(endpoint: &str) -> anyhow::Result<Channel> {
+    let channel =
+        Channel::from_shared(endpoint.to_string()).context("invalid gRPC endpoint URL")?;
+    if endpoint.starts_with("https") {
+        let tls = ClientTlsConfig::new().with_native_roots();
+        Ok(channel
+            .tls_config(tls)
+            .context("failed to configure TLS")?
+            .connect_lazy())
+    } else {
+        Ok(channel.connect_lazy())
+    }
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum FunctionStatus {
@@ -45,13 +62,6 @@ impl fmt::Display for FunctionStatus {
             FunctionStatus::DELETED => write!(f, "DELETED"),
         }
     }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct AutoscalerRequest {
-    pub required_number_of_instances: i32,
-    pub predicted_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

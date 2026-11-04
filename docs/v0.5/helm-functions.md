@@ -41,7 +41,7 @@ All Pod specs in your helm chart will be updated with pull secrets at runtime, s
 
 **Example Creation via API**
 
-Please see our [sample helm chart used](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/function_samples/helmchart_samples/inference_test_sample) in this example for reference.
+Please see our [sample helm chart used](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/helmchart-samples/inference-test-sample) in this example for reference.
 
 Below is an example function creation API call creating a helm-based function:
 
@@ -72,7 +72,7 @@ For gRPC-based functions, set `"inferenceURL" : "/gRPC"`. This signals to Cloud 
 To create a multi-node helm deployment, you need to use the following format for the `instanceType`:
 `<CSP>.GPU.<GPU_NAME>_<number of gpus per node>x[.x<number of nodes>]`. For example, `DGXC.GPU.L40S_1x` is a single L40S instance while `ON-PREM.GPU.B200_8x.x2` is two full nodes of 8-way B200.
 
-A sample helm chart for a multi-node deployment can be found [in the multi-node helm example](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/function_samples/helmchart_samples/multi_node_helm_function_test/).
+A sample helm chart for a multi-node deployment can be found [in the multi-node helm example](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/helmchart-samples/multi-node-helm-function-test/).
 
 ## Limitations
 

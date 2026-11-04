@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "xor",
+    srcs = ["xor.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/xor",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":xor",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "xor_test",
+    srcs = ["xor_test.go"],
+    embed = [":xor"],
+)

@@ -90,9 +90,11 @@ fi
 tool_bin_dir="$(mktemp -d)"
 trap 'rm -rf "${tool_bin_dir}"' EXIT
 
-for install_target in "${installs[@]}"; do
-    GOWORK="${effective_gowork}" GOBIN="${tool_bin_dir}" go install "${install_target}"
-done
+if [[ "${#installs[@]}" -gt 0 ]]; then
+    for install_target in "${installs[@]}"; do
+        GOWORK="${effective_gowork}" GOBIN="${tool_bin_dir}" go install "${install_target}"
+    done
+fi
 
 cd "${module_dir}"
 PATH="${tool_bin_dir}:${PATH}" GOWORK="${effective_gowork}" bash -o pipefail -c "${command_string}"

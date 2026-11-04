@@ -1,0 +1,222 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Fan-out of model weights with nvstor-peer: one origin node has the
+# weights; every replica copies them to its own NVMe over the RDMA rails, then
+# serves its copy to the next replicas. No node serves more than
+# --max-fetchers (4, the default) copies at once, so with N replicas the copy
+# is a tree of depth about log5(N) instead of N fetchers on one NIC
+# (docs/peer-copy.md, "Fan-out").
+#
+#   nvstor-peer-origin  serves /var/lib/nvstor/models read-only.
+#   nvstor-peer          headless Service over every pod that is Ready to
+#                        serve: the origin once it listens, and each replica
+#                        once its copy is complete and served. Only Ready pods
+#                        are in its DNS answer (publishNotReadyAddresses is
+#                        false), so a replica never fetches from one that is
+#                        still copying.
+#   vllm-peer            the replicas. In each pod, the "peer" native sidecar
+#                        fetches MODEL from every address the Service name
+#                        resolves to (in its own shuffled order), moves on from
+#                        a busy (BUSY) or dead source, backs off while all are
+#                        busy, and then serves its copy (--then-serve). Its
+#                        startup probe passes only when the copy is complete
+#                        and being served, so vllm starts after that and the
+#                        pod joins the Service at the same time.
+#
+# The binary runs from the node (chroot /host), like source-pod.yaml, against
+# the node's rdma-core libraries:
+#   deploy/nfs-rdma/build-aarch64.sh nvstor-peer
+#   deploy/nfs-rdma/install-binary.sh target/aarch64-unknown-linux-gnu/release/nvstor-peer NODE...
+#   kubectl create secret generic nvstor-peer --from-literal=secret="$(openssl rand -hex 32)"
+#
+# Edit before applying:
+#   nvstor-peer-origin spec.nodeName   the node that has the weights
+#   MODEL                               directory under /var/lib/nvstor/models
+#                                       (same value in both pod specs)
+#   vllm-peer replicas, image and vLLM arguments
+#
+# The bootstrap (TCP, ports 9890 + rail) goes over the pod network to the
+# address the Service resolves to; the data moves over the rail VFs, whose
+# GIDs the source sends in the bootstrap. Anyone with the secret can read the
+# whole export; NetworkPolicy below limits who can reach the bootstrap ports.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvstor-peer
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector: {nvstor-peer/serves: "true"}
+  ports:
+  - {name: bootstrap, port: 9890}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nvstor-peer-origin
+  labels: {app: nvstor-peer-origin, nvstor-peer/serves: "true"}
+  annotations:
+    k8s.v1.cni.cncf.io/networks: "network-operator/sriov-net,network-operator/sriov-net,network-operator/sriov-net,network-operator/sriov-net"
+spec:
+  nodeName: "<source-node>"
+  restartPolicy: Always
+  tolerations: [{operator: Exists}]
+  containers:
+  - name: serve
+    image: nvcr.io/nvidia/cuda:13.0.0-base-ubuntu22.04
+    imagePullPolicy: IfNotPresent
+    env:
+    - {name: NVSTOR_BIN, value: /var/lib/nvstor/bin/nvstor-peer}
+    - {name: ROOT, value: /var/lib/nvstor/models}
+    - {name: READY, value: /var/lib/nvstor/state/peer-origin.ready}
+    - name: NVSTOR_PEER_SECRET
+      valueFrom: {secretKeyRef: {name: nvstor-peer, key: secret}}
+    - {name: RUST_LOG, value: info}
+    command:
+    - bash
+    - -c
+    - |
+      set -euf
+      [ -x "/host$NVSTOR_BIN" ] || { echo "missing $NVSTOR_BIN on the node (run install-binary.sh)" >&2; exit 1; }
+      exec chroot /host "$NVSTOR_BIN" serve --root "$ROOT" --max-fetchers 4 --ready-file "$READY"
+    readinessProbe:
+      exec: {command: ["sh", "-c", "test -f /host$READY"]}
+      periodSeconds: 2
+    # RDMA verbs on the pod's rail VFs and memory registration; the binary
+    # and its libraries come from the node through chroot.
+    securityContext: {privileged: true}
+    resources:
+      requests: {nvidia.com/mlnxnics: "4"}
+      limits: {nvidia.com/mlnxnics: "4"}
+    volumeMounts:
+    - {name: host, mountPath: /host, readOnly: true}
+    - {name: state, mountPath: /host/var/lib/nvstor/state}
+  volumes:
+  - name: host
+    hostPath: {path: /}
+  - name: state
+    hostPath: {path: /var/lib/nvstor/state, type: DirectoryOrCreate}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-peer
+spec:
+  replicas: 8
+  selector:
+    matchLabels: {app: vllm-peer}
+  template:
+    metadata:
+      labels: {app: vllm-peer, nvstor-peer/serves: "true"}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: "network-operator/sriov-net,network-operator/sriov-net,network-operator/sriov-net,network-operator/sriov-net"
+    spec:
+      # One copy per node: the copy lives on the node's NVMe, and a second
+      # fetch into the same directory is refused (its lock).
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - {key: nvstor-peer/serves, operator: In, values: ["true"]}
+            topologyKey: kubernetes.io/hostname
+      tolerations: [{operator: Exists}]
+      initContainers:
+      - name: peer
+        image: nvcr.io/nvidia/cuda:13.0.0-base-ubuntu22.04
+        imagePullPolicy: IfNotPresent
+        restartPolicy: Always
+        env:
+        - {name: NVSTOR_BIN, value: /var/lib/nvstor/bin/nvstor-peer}
+        - {name: MODEL, value: llama-70b}
+        - {name: DEST, value: /var/lib/nvstor/models/llama-70b}
+        - name: NAMESPACE
+          valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+        - name: POD_NAME
+          valueFrom: {fieldRef: {fieldPath: metadata.name}}
+        - name: NVSTOR_PEER_SECRET
+          valueFrom: {secretKeyRef: {name: nvstor-peer, key: secret}}
+        - {name: RUST_LOG, value: info}
+        command:
+        - bash
+        - -c
+        - |
+          set -euf
+          [ -x "/host$NVSTOR_BIN" ] || { echo "missing $NVSTOR_BIN on the node (run install-binary.sh)" >&2; exit 1; }
+          # Under chroot /host the resolver would read the node's
+          # resolv.conf, which does not know cluster DNS: put the pod's in
+          # its place, in this container's mount namespace only.
+          mount --bind /etc/resolv.conf /host/etc/resolv.conf
+          # One name, every Ready server (origin and finished replicas).
+          # The ready file is a reserved name in DEST: never served, never
+          # copied, removed when the fetch starts.
+          exec chroot /host "$NVSTOR_BIN" fetch \
+            --source "nvstor-peer.$NAMESPACE.svc.cluster.local:9890" \
+            --prefix "$MODEL" --dest "$DEST" --client-name "$POD_NAME" \
+            --wait-s 3600 --ready-file "$DEST/.nvstor-peer-ready" \
+            --then-serve --max-fetchers 4
+        # Up to an hour to get a source and copy (720 x 5 s).
+        startupProbe:
+          exec: {command: ["sh", "-c", "test -f /host$DEST/.nvstor-peer-ready"]}
+          periodSeconds: 5
+          failureThreshold: 720
+        readinessProbe:
+          exec: {command: ["sh", "-c", "test -f /host$DEST/.nvstor-peer-ready"]}
+          periodSeconds: 5
+        securityContext: {privileged: true}
+        volumeMounts:
+        - {name: host, mountPath: /host, readOnly: true}
+        - {name: models, mountPath: /host/var/lib/nvstor/models}
+      containers:
+      - name: vllm
+        image: vllm/vllm-openai:v0.31.0
+        imagePullPolicy: IfNotPresent
+        command: ["vllm", "serve", "/models/llama-70b"]
+        args: ["--tensor-parallel-size", "4"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL]}
+        resources:
+          requests: {nvidia.com/gpu: "4", nvidia.com/mlnxnics: "4"}
+          limits: {nvidia.com/gpu: "4", nvidia.com/mlnxnics: "4"}
+        volumeMounts:
+        - {name: models, mountPath: /models, readOnly: true}
+        - {name: dshm, mountPath: /dev/shm}
+      volumes:
+      - name: host
+        hostPath: {path: /}
+      - name: models
+        hostPath: {path: /var/lib/nvstor/models, type: DirectoryOrCreate}
+      - name: dshm
+        emptyDir: {medium: Memory, sizeLimit: 64Gi}
+---
+# Pod network: the bootstrap ports only from nvstor-peer pods. NetworkPolicy
+# does not filter the SR-IOV rail networks; there, the secret is the access
+# control (the bootstrap refuses a connector without it before any QP).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nvstor-peer
+spec:
+  podSelector:
+    matchLabels: {nvstor-peer/serves: "true"}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels: {app: vllm-peer}
+    ports:
+    - {protocol: TCP, port: 9890, endPort: 9897}

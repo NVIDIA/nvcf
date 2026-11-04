@@ -4,7 +4,22 @@ _output/
 .vscode/
 .scannerwork/
 .worktrees/
+.understand-anything/
+docs/dev/
 
 # Test items
 nvca-operator-dev-local.tgz
 clusterdump-*
+
+# Bazel-generated outputs (symlinks; gitignored across all Phase B upstreams)
+/bazel-*
+.bazel-cache/
+.tls/
+
+# Locally built command binaries. `go build -o <name> ./cmd/<name>` at the
+# subtree root drops a ~60MB artifact next to the source, which is easy to
+# sweep into a commit with `git add -A`.
+/cluster-validator
+/nvca
+/nvca-operator
+/webhook-server

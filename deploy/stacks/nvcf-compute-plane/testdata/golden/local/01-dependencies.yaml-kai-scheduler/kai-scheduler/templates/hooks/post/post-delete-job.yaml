@@ -1,0 +1,44 @@
+---
+# Source: kai-scheduler/templates/hooks/post/post-delete-job.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: post-delete-cleanup
+  namespace: kai-scheduler
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-delete-policy": hook-succeeded
+    argocd.argoproj.io/hook: PostDelete
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: post-delete-cleanup
+    spec:
+      serviceAccountName: post-delete-cleanup
+      imagePullSecrets:
+        - name: nvcr-pull-secret
+      restartPolicy: Never
+      containers:
+        - name: deleter
+          image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            runAsNonRoot: true
+            runAsUser: 10000
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Deleting KAI operator-managed deployments..."
+              kubectl -n kai-scheduler delete deployment --selector=app.kubernetes.io/managed-by=kai-operator --ignore-not-found=true
+              echo "Deleting kai-config..."
+              kubectl delete Config kai-config --ignore-not-found
+              echo "Cleanup complete."

@@ -1,0 +1,129 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#Spring Config
+spring:
+  jmx:
+    enabled: false
+  autoconfigure:
+    exclude: org.springframework.boot.webmvc.autoconfigure.error.ErrorMvcAutoConfiguration
+  cloud:
+    discovery:
+      enabled: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Full OAuth2 issuer URI Spring Security validates inbound caller JWTs
+          # against. Operators set this directly via env. No hostname suffix is
+          # templated by this image — the OSS schema is provider-agnostic.
+          issuer-uri: ${AUTH_TOKEN_ISSUER:}
+          jwk-set-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/.well-known/jwks.json
+          jws-algorithms: ES256
+  web:
+    error:
+      whitelabel:
+        enabled: false
+
+logging:
+  level:
+    root: INFO
+    com.nvidia.notary: INFO
+
+management:
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: "*"
+    jmx:
+      exposure:
+        exclude: '*'
+      domain: localhost
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        readiness:
+          include:
+            - readinessState
+        liveness:
+          include:
+            - livenessState
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+    vault:
+      enabled: false
+  metrics:
+    enable:
+      all: true
+    tags:
+      env: ${spring.application.env}
+      micro_service: ${spring.application.name}
+      service_version: ${spring.application.version}
+      host_id: ${spring.application.host.id}
+      host_dc: ${spring.application.host.dc}
+    distribution:
+      percentiles-histogram:
+        "[http.server.requests]": true
+      slo:
+        "[http.server.requests]": "5ms,10ms,25ms,50ms,75ms,100ms,200ms,300ms,400ms,500ms,750ms,1s,2s,3s,4s,5s,10s,15s,20s,30s"
+  observations:
+    annotations:
+      enabled: true
+    enable:
+      spring.security: false
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  server:
+    port: 8181
+
+server:
+  port: 8080
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain,application/javascript,text/css
+  forward-headers-strategy: framework
+  tomcat:
+    basedir: /tmp/tomcat
+    accesslog:
+      enabled: true
+      pattern: '%{X-Forwarded-For}i %l %u %t "%r" %s %b "%{User-Agent}i" "%{Referer}i" %D'
+      buffered: false
+
+notary:
+  issuer-url: ${ASSERTION_ISSUER_URL}
+  signing-scope: ${AUTH_TOKEN_SCOPE:notary-sign}
+  private-jwks: ${kv.private-key-jwks.keys}
+  signing-kid: ${kv.signing-key.kid}
+  signing-algorithm: ${kv.signing-key.alg}
+  max-assertions-request-size: ${MAX_REQUEST_BODY_SIZE_BYTES:4096}
+  # Audiences the caller's JWT must carry in its `aud` claim. At least one entry must
+  # match for the token to be accepted. Set literal values via env (indexed list
+  # binding: `NOTARY_REQUIRED_AUDIENCES_0=...`, `..._1=...`, ...) or via
+  # a profile YAML override. Empty list disables the audience check — the issuer
+  # check alone is sufficient (NCP uses this).
+  required-audiences: []
+
+springdoc:
+  api-docs:
+    enabled: false

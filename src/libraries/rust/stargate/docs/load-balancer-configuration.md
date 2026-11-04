@@ -1,0 +1,750 @@
+# Load Balancer Configuration
+
+Stargate selects one load-balancing algorithm for each model. A request can
+select another preconfigured algorithm through a trusted header.
+
+This page defines the `lb-config.json` schema and the behavior of
+`power-of-n`, `wait-and-widen`, `pulsar`, and `pulsar-wait-and-widen`.
+Deployment systems own the file mount and the `--lb-config-path` argument.
+
+## Load the configuration
+
+Start Stargate with an optional JSON file:
+
+```text
+--lb-config-path=/config/lb-config.json
+```
+
+When the argument is absent, Stargate uses `power-of-n` for every model and
+accepts a routing-method override when it is in the allowlist of built-in
+algorithms, each with its default settings. When the argument is present, the
+file defines the allowlist.
+Stargate reads and validates the file during startup. A missing file, invalid
+JSON, unknown top-level field, unsupported algorithm field, or invalid
+algorithm factory configuration prevents startup. Stargate does not reload
+the file after startup.
+
+## Schema
+
+The top-level object has three fields:
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `default` | algorithm name | `power-of-n` | Algorithm for models without an entry in `models`. |
+| `request_algorithms` | object | `{}` | Algorithms that `x-routing-method` may select for every model. |
+| `models` | object | `{}` | Exact model ID to algorithm configuration. |
+
+Valid algorithm names, with the aliases Stargate also accepts for backward
+compatibility:
+
+| Algorithm | Accepted aliases |
+| --- | --- |
+| `power-of-n` | `powerOfN`, `powerOf2`, `power-of-two` |
+| `wait-and-widen` | `groq-multiregion` |
+| `round-robin` | none |
+| `random` | none |
+| `pulsar` | none |
+| `pulsar-wait-and-widen` | `pulsar-multiregion` |
+
+Aliases work in `default`, `models`, `request_algorithms`, detailed algorithm
+objects, and routing-method overrides. Use the canonical names for new
+configurations.
+
+An entry in `models` or `request_algorithms` can be an algorithm name:
+
+```json
+{
+  "default": "power-of-n",
+  "models": {
+    "model-a": "wait-and-widen"
+  }
+}
+```
+
+Use a detailed object to set algorithm fields:
+
+```json
+{
+  "default": "power-of-n",
+  "models": {
+    "model-a": {
+      "algorithm": "wait-and-widen",
+      "require_cache_affinity_key": true
+    }
+  }
+}
+```
+
+Detailed objects support these common fields:
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `algorithm` | algorithm name | required | Algorithm created for this object. |
+| `require_cache_affinity_key` | boolean | `false` | Reject the request with HTTP `400` when `x-cache-affinity-key` is absent or blank. |
+| `require_input_tokens` | boolean | `false` | Declares that the algorithm needs input tokens. The HTTP proxy already requires `x-input-tokens` for every inference request. |
+| `max_input_work_seconds` | number | unset | Reject with HTTP `503` when `(request input tokens + queued input tokens) / aggregate last mean input TPS` across algorithm-eligible candidates exceeds this value or valid capacity is unavailable. |
+
+Stargate does not range-check `max_input_work_seconds`. Use a positive value
+for a useful upper bound. A nonpositive value can reject every request with
+input or queued work.
+
+Pulsar admission excludes candidates already attempted, candidates without
+valid input TPS, and candidates that fail enabled KV feasibility checks. The
+KV checks require request input tokens and candidate KV capacity statistics,
+and reject candidates without enough free KV tokens. Other algorithms exclude
+only candidates already attempted. For those algorithms, a candidate with
+invalid input TPS contributes queued work but no service rate.
+
+Detailed objects directly under `models` also support `request_algorithms`.
+These model-specific overrides replace the same algorithm from the top-level
+map and inherit other top-level entries. Do not nest `request_algorithms`
+inside an override entry. Stargate parses but discards that nested map when it
+constructs the router.
+
+Each `request_algorithms` key must match the algorithm in its value. For
+example, the key `pulsar` can map to `"pulsar"` or to a detailed object whose
+`algorithm` is `pulsar`.
+
+Unknown top-level and detailed fields are rejected. Algorithm-specific fields
+are rejected when used with another algorithm.
+
+## Selection guidance
+
+Choose based on the routing goal and available backend statistics:
+
+| Goal | Algorithm | Required backend signals |
+| --- | --- | --- |
+| Compare a small random sample using TTFT or another load signal. | `power-of-n` | Signals required by the configured comparator. |
+| Minimize estimated time to first token across heterogeneous or remote clusters while controlling which TTFT bands are eligible. | `wait-and-widen` | Forwarded health RTT and model statistics. Valid `last_mean_input_tps` is needed when queued or request input work is nonzero. |
+| Keep the same prefix on a stable, capacity-weighted cluster. | `pulsar` | Positive finite `max_input_tps` for every participating cluster by default. |
+| Keep Pulsar affinity when possible, then widen through the Pulsar ranking when the primary is full or cannot meet queue policy. | `pulsar-wait-and-widen` | Pulsar capacity plus the RTT and queue statistics used by `wait-and-widen`. |
+
+Use `round-robin` for deterministic cycling and `random` for uniform random
+selection when routing should not depend on backend load statistics.
+
+## `power-of-n`
+
+`power-of-n` uniformly samples distinct eligible clusters and selects the
+cluster with the lowest configured comparator score. The default comparator is
+`ttft`. It breaks equal scores randomly. Retried clusters are excluded
+before sampling.
+
+The default sample count is `2`. A larger sample can improve routing decisions
+in a heterogeneous pool, but it compares more clusters on every request. Valid
+values are `1` through `64`. If fewer eligible clusters exist, the algorithm
+compares every eligible cluster once.
+
+```json
+{
+  "default": "power-of-n",
+  "models": {
+    "model-a": {
+      "algorithm": "power-of-n",
+      "sample_count": 4,
+      "comparator": "num-requests-queued"
+    }
+  }
+}
+```
+
+## `wait-and-widen`
+
+`wait-and-widen` estimates time to first token (TTFT) as:
+
+```text
+forwarded health RTT + queue delay + request prefill time
+```
+
+Queue delay is zero when the reported engine concurrency limit is positive and
+the active request count is below that limit. Active requests include prefill,
+decode, and pending routing reservations. A reservation ends when Stargate
+receives a registration update from the selected backend at or after the
+reservation's soft expiry (the backend's health-check RTT, bounded by the
+minimum and maximum TTL flags, after Stargate sends the request), or when the
+backend is removed. See
+[Runtime stats interface](runtime-stats-interface.md#registration-updates). The
+new request's own prefill time still contributes to TTFT.
+
+At or above the limit, or when the limit is unknown, queue delay uses the
+backend's priority-aware queue estimate when present. Otherwise it divides
+queued input tokens by `last_mean_input_tps`. Prefill time divides
+`x-input-tokens` by the same throughput signal.
+
+Pylon applies the same free-slot rule to local queue admission, excluding the
+incoming request's own reservation. Engine stats pings can advertise a model's
+`max_engine_concurrency`. Pylon's `--max-engine-concurrency N` supplies a fallback
+when the engine has not reported a limit, such as when no stats endpoint exists.
+A positive engine report takes precedence; a zero report restores the fallback.
+Without either source, Pylon advertises zero, meaning unknown. See
+[Runtime stats interface](runtime-stats-interface.md#concurrency-fallback).
+Raw queued-token counts and
+priority work estimates are retained even while effective queue delay is zero,
+so they remain available when pending assignments fill the last slot. This rule
+also applies to the queue component of other Stargate comparators and the
+expected queue header sent to Pylon.
+
+The algorithm groups close TTFT values into buckets. It samples `n`
+candidates from unlocked buckets and chooses the candidate with the lowest
+configured comparator score. The default comparator is `ttft`. A
+later bucket becomes available after the request has waited for a fraction of
+the TTFT gap. When unlocked buckets have no capacity and a later bucket does,
+Stargate waits for that bucket to unlock. `x-max-wait-ms` is not required. The
+wait is capped at 60 seconds from request arrival, or at `x-max-wait-ms` when
+the header sets a shorter limit. After the cap, Stargate stops waiting and
+returns HTTP `503` if no candidate is selectable.
+
+When `cache_affinity_backend_selection_count` is enabled and the request has
+`x-cache-affinity-key`, a consistent hash ring first limits selection to a
+stable subset. Normal TTFT selection runs within that subset. The seed, routing
+key, model ID, affinity key, cluster ID, and virtual-node index contribute to
+the hash. Retry exclusions remove failed members from selection without
+replacing them in the affinity group. A cold successor therefore participates
+only in global selection and does not receive the affinity discount.
+
+`cache_affinity_wait_ms` sets X, the minimum time from request arrival before
+global buckets become eligible. Until X, requests can select only from the
+affinity group. If no affine candidate is usable, the proxy waits and rechecks
+capacity. After X, the first global TTFT bucket opens. Global buckets include
+all candidates, including the original affinity group, at full prefill cost.
+Retry exclusions and queue-admission checks still apply. Later global buckets
+use only elapsed time after X. An available affine candidate remains preferred
+through the initial affinity selection on each routing attempt.
+
+```text
+Each routing attempt
+        |
+        v
+Check affine set A, B -------- selectable ------> dispatch
+        |
+   no selection
+        |
+        +--- elapsed < X ----------------------> wait, then retry from top
+        |
+        +--- elapsed >= X ---> check global set A, B, C, D
+                                      |
+                                      +--- selectable ---> dispatch
+                                      +--- no selection -> retry if budget remains
+```
+
+X defaults to `0`. Neither `x-request-slo-ms` nor `x-max-wait-ms` is required
+for a configured affinity wait. The SLO header controls queue-admission
+interpolation; it does not shorten X. An explicit `x-max-wait-ms` can end the
+routing wait before X, with HTTP `503` if no affine candidate is available.
+
+`cache_affinity_input_tokens_scale` multiplies only the current request's
+prefill input during affinity selection. It defaults to `1.0` and accepts
+values from `0.0` through `1.0`. Global selection uses full prefill cost for
+every candidate, including affine candidates. The scale does not change queued
+work, routing reservations, or the expected queue header sent to Pylon. A scale
+of `0.0` does not make invalid input throughput usable for nonzero request input.
+
+Example with a 200 ms affinity wait and a 10 percent prefill estimate:
+
+```json
+{
+  "default": "power-of-n",
+  "models": {
+    "model-a": {
+      "algorithm": "wait-and-widen",
+      "require_cache_affinity_key": true,
+      "cache_affinity_backend_selection_count": 2,
+      "cache_affinity_wait_ms": 200,
+      "cache_affinity_input_tokens_scale": 0.1
+    }
+  }
+}
+```
+
+## `pulsar`
+
+`pulsar` creates a stable weighted rendezvous ranking from the seed, routing
+key, model ID, cache affinity key, and cluster ID. The weight is the cluster's
+positive finite `max_input_tps` by default. Pylon retains this maximum for the
+model generation. Lower live throughput does not reduce the weight or change
+the base ranking. A new maximum, membership change, or generation replacement
+can change the ranking.
+
+Both Pulsar variants accept `rendezvous_weight`:
+
+| Value | Behavior |
+|---|---|
+| `max-input-tps` | Default. Use the generation maximum. Missing or invalid maximum data makes the cluster ineligible; there is no fallback to the mean. |
+| `last-mean-input-tps` | Explicit legacy mode. Use the last valid mean, which can change during traffic. |
+
+Queue and prefill estimates continue to use `last_mean_input_tps` in either mode.
+See [multi-backend clusters](multi-backend-clusters.md) for how a shared-engine
+cluster aggregates the maximum.
+
+Upgrade all Pylons and any registration relays, including
+`stargate-k8s-router`, before enabling maximum-based Stargates. Older relays
+decode and re-encode registrations without preserving the new field. Older
+Pylons omit it and make that cluster ineligible in the new
+default mode. Use explicit `last-mean-input-tps` during a mixed-version rollout
+if Pylons cannot be upgraded first.
+
+`rendezvous_weight` is a field of a detailed algorithm configuration object.
+The top-level `default`, an algorithm name in `models` or `request_algorithms`,
+and the built-in defaults always use `max-input-tps`. For a mixed-version
+rollout, give each Pulsar entry in `models` and `request_algorithms` a detailed
+object that sets `last-mean-input-tps`. If `default` is `pulsar` or
+`pulsar-wait-and-widen`, also list every Pulsar-routed model under `models`, or
+move `default` to another algorithm.
+
+Retries walk the same ranking after excluding failed clusters. When
+`consider_kv_free_tokens` is enabled, a ranked candidate is skipped when it
+does not report KV-cache metrics or has fewer free tokens than
+`x-input-tokens`.
+
+Minimal configuration:
+
+```json
+{
+  "default": "power-of-n",
+  "models": {
+    "model-a": {
+      "algorithm": "pulsar",
+      "seed": "model-a-v1",
+      "require_cache_affinity_key": true
+    }
+  }
+}
+```
+
+## `pulsar-wait-and-widen`
+
+`pulsar-wait-and-widen` is `wait-and-widen` with the Pulsar ranking as the
+source of affinity. Every request goes through the affinity phase below, even
+when its rank-1 cluster is eligible.
+
+The affinity group is the top `cache_affinity_backend_selection_count` clusters
+of the Pulsar ranking. The count defaults to `1`, the primary, and `0` also means `1`. WaitAndWiden
+selection runs within the group, and `cache_affinity_input_tokens_scale`
+discounts the request prefill there. Until `cache_affinity_wait_ms` (X) has
+elapsed, the proxy waits and rechecks the group instead of falling back.
+
+After X, every attempt still checks the affinity group first, as above. If the
+group cannot serve, the open set grows through the ranking one band per
+`band_widen_interval_ms` (S): ranks 1 through k+2 at X, k+6 at X+S, k+14 at
+X+2S, and so on until it covers every ranked cluster. Here k is the affinity
+group size. The ranking contains only clusters with a valid Pulsar weight, and
+Pulsar feasibility checks still filter it. WaitAndWiden selection runs over the
+open set at full prefill cost, and bucket unlocks count from X. If no open
+candidate is selectable, the proxy waits for the next band or bucket. It does
+not skip ahead, even when the unopened clusters are also full, so a saturated
+pool waits out the band schedule or the request's maximum wait. S defaults to
+X. With S set to `0`, every ranked cluster opens at X. That resembles
+`wait-and-widen` global fallback, except that open-set selection uses
+`fallback_max_queued` and only ranked, feasible clusters are candidates. X
+and S both default to `0`, so a configuration that sets neither opens every
+ranked cluster as soon as the affinity group cannot serve.
+
+As in `wait-and-widen`, a retry-excluded group member is not replaced, so the
+request still waits until X. A group member skipped by
+`consider_kv_free_tokens` also waits until X.
+
+```text
+elapsed < X          rank 1..k              (affinity group, discounted prefill)
+X <= elapsed < X+S   rank 1..k+2
+X+S <= ...  < X+2S   rank 1..k+6
+...                  every ranked cluster
+```
+
+Minimal configuration:
+
+```json
+{
+  "default": "power-of-n",
+  "models": {
+    "model-a": {
+      "algorithm": "pulsar-wait-and-widen",
+      "seed": "model-a-v1",
+      "require_cache_affinity_key": true,
+      "max_queue_time_floor_ms": 500,
+      "max_queue_time_ceil_ms": 2000,
+      "cache_affinity_wait_ms": 300,
+      "band_widen_interval_ms": 100
+    }
+  }
+}
+```
+
+### Upgrade from the eligible-primary shortcut
+
+Earlier releases sent a request straight to an eligible rank-1 cluster, with
+no load check, when neither `max_queue_time_floor_ms` nor
+`max_queue_time_ceil_ms` was set. That shortcut is removed. A configuration
+without queue-SLO fields that keeps the defaults (`max_queued: 0`, `cache_affinity_wait_ms: 0`) now overflows as
+soon as its rank-1 cluster has no free engine slot. Before upgrading, review
+`pulsar-wait-and-widen` configurations without queue-SLO fields:
+
+- For bounded stickiness, raise `max_queued` for the affinity group and set
+  `cache_affinity_wait_ms`.
+- For unlimited stickiness, use `pulsar`.
+
+## Session-aware routing
+
+`wait-and-widen` and `pulsar-wait-and-widen` can tell the first request of a
+session from its follow-up requests. Set `last_cluster_affinity` to `true` on
+the algorithm configuration to enable this. The field defaults to `false`.
+Stargate rejects it at startup for every other algorithm, and routing
+expressions do not accept it.
+
+A session is one `x-routing-key`, `x-model`, and `x-cache-affinity-key` tuple.
+Stargate keeps no per-session state. The trusted gateway remembers the
+`x-stargate-cluster-id` of the session's last 2xx response and sends it on the
+next request as `x-stargate-last-cluster-id`. See the
+[API gateway contract](api-gateway-contract.md) for the gateway rules.
+
+When the gateway derives `x-cache-affinity-key` from the request payload, the
+key changes every turn. The gateway still carries the hint across turns by
+keying its own store by conversation prefix, so a later turn can arrive as
+`returning` with a different `x-cache-affinity-key`. Stargate derives the
+affinity order from the new key and then promotes the hinted cluster.
+
+This section uses these terms:
+
+- Affinity order: the ordered cluster list derived from the affinity key.
+  `wait-and-widen` uses the clusters the hash ring selects, in ring-walk order.
+  `pulsar-wait-and-widen` uses the full Pulsar ranking.
+- Affinity group: the first k clusters of the affinity order, where k is
+  `cache_affinity_backend_selection_count`.
+- X: `cache_affinity_wait_ms`.
+- s: `cache_affinity_input_tokens_scale`.
+
+### Session classification
+
+When `last_cluster_affinity` is `true`, Stargate classifies each request once,
+on its first routing decision. Routing waits and retries keep that
+classification.
+
+| Condition | Session state |
+| --- | --- |
+| No affinity group: `x-cache-affinity-key` is absent, or `wait-and-widen` has no k | Not applicable. Existing behavior; the header is ignored. |
+| Header absent, blank, or not valid UTF-8 | `new` |
+| Header names a cluster that is not a current candidate | `stale`, routed as `new` |
+| Header names a current candidate | `returning` |
+
+A current candidate is any routable cluster for the routing key and model,
+before retry exclusions. An invalid header value never returns HTTP `400`.
+In `pulsar-wait-and-widen`, a hint that names a candidate with no valid Pulsar
+weight, and so no place in the ranking, is classified `returning` but cannot
+be promoted. The request routes with the original ranking and the configured
+X and s.
+
+The flag belongs to one algorithm configuration. When `x-routing-method`
+selects a configuration without it, the header has no effect.
+
+### Selection rules
+
+For `new` and `stale` sessions, both algorithms treat X as `0` and s as `1.0`
+for the request. A new session has no KV cache to wait for, so it goes to the
+best-ranked cluster that is selectable now instead of holding for rank 1. The
+affinity order, k, TTFT buckets, queue admission, `band_widen_interval_ms`, and
+`fallback_max_queued` apply as configured. When `band_widen_interval_ms` is
+unset, it defaults to the effective X of `0`, so every ranked cluster opens as
+soon as the affinity group cannot serve.
+
+For `returning` sessions, both algorithms:
+
+1. Move the last cluster to position 1 of the affinity order. Every other
+   cluster keeps its relative order.
+2. Take the affinity group from the reordered order. The group keeps size k.
+   If the last cluster was outside the original group, the original group's
+   last member drops out.
+3. Apply X, s, and every other setting as configured.
+
+`pulsar-wait-and-widen` cuts its widening bands from the reordered ranking.
+`wait-and-widen` global selection is unchanged, because it already covers
+every cluster.
+
+Retry exclusion and KV free-token checks apply to the last cluster as they do
+to any other candidate. An excluded or KV-infeasible last cluster behaves like
+an ineligible rank-1 cluster. With k = 1, the request waits until X and then
+widens. With a larger group, the other group members can still serve the
+request during X. The promotion is per request: a later request for the same
+key without the header uses the original affinity order.
+
+Example for `pulsar-wait-and-widen` with k = 1, ranking A through E, and last
+cluster D:
+
+```text
+original ranking         A  B  C  D  E
+reordered ranking        D  A  B  C  E
+elapsed < X              D              (affinity group, discounted prefill)
+X <= elapsed < X+S       D  A  B
+X+S <= elapsed           D  A  B  C  E
+```
+
+This keeps a session that overflowed on the cluster that holds its KV cache,
+instead of moving it back to rank 1 when rank 1 frees up.
+
+### Rollout order
+
+1. Deploy Stargate with `last_cluster_affinity` off. It consumes and ignores
+   `x-stargate-last-cluster-id`.
+2. Deploy the gateway with `STARGATE_LAST_CLUSTER_ENABLED=true`.
+3. Turn on `last_cluster_affinity` per model.
+
+Do not turn on `last_cluster_affinity` before the gateway sends the header.
+Otherwise every request is classified `new` and loses its affinity wait and
+prefill discount.
+
+## Algorithm fields
+
+`power-of-n` and `wait-and-widen` support this field:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `comparator` | string | `ttft` | Signal used to choose among sampled candidates. See the supported values below. |
+
+Supported comparator values are:
+
+| Value | Score |
+| --- | --- |
+| `ttft` | Forwarded health RTT plus priority-aware queue delay plus request prefill time. |
+| `queue-time` | Priority-aware queue delay. Uses queued input tokens divided by `last_mean_input_tps` when no published priority estimate is available. |
+| `input-work-seconds` | Queued input tokens plus request input tokens, divided by `last_mean_input_tps`. |
+| `utilization` | Running queries divided by `max_engine_concurrency`, using `1` as the denominator when the reported maximum is `0`. |
+| `num-requests-queued` | Reported `queue_size`, including pending local routing reservations applied to the snapshot. |
+
+Comparators use the latest eligible routing snapshot without a second age
+filter. Registration stream timeout and cleanup determine snapshot eligibility.
+A nonpositive or non-finite `last_mean_input_tps` is unavailable capacity: zero
+work scores zero, while nonzero work scores infinity. Equal scores use the
+algorithm's existing tie behavior.
+
+`pulsar-wait-and-widen` does not support `comparator`. An explicit comparator in
+that algorithm's detailed configuration prevents startup.
+
+`power-of-n` supports this field:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `sample_count` | unsigned integer | `2` | Number of distinct eligible clusters sampled. Must be from `1` through `64`. Values above the eligible cluster count compare the complete eligible pool. |
+
+`wait-and-widen` supports these cache-affinity fields:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `cache_affinity_virtual_nodes` | unsigned integer | `150` | Virtual nodes per cluster. `0` is normalized to `1`. |
+| `cache_affinity_backend_selection_count` | unsigned integer | unset | Enables the affinity subset. `0` disables it. Values above the candidate count select all candidates. |
+| `cache_affinity_wait_ms` | unsigned integer | `0` | Minimum elapsed time before global fallback, or before ranking-band fallback in `pulsar-wait-and-widen`. Fallback bucket widening starts at this time. |
+| `cache_affinity_input_tokens_scale` | number | `1.0` | Request-prefill multiplier during affinity selection, from `0.0` through `1.0`. Does not discount queued work or global selection. |
+
+`pulsar-wait-and-widen` configuration accepts `cache_affinity_virtual_nodes`
+but ignores it, because the Pulsar ranking supplies affinity. Routing
+expressions reject it for that algorithm. The algorithm uses
+`cache_affinity_backend_selection_count` as the affinity group size, defaulting
+to `1`. Because the group always exists, `cache_affinity_wait_ms` and
+`cache_affinity_input_tokens_scale` apply whenever the affinity group is
+checked, even when the selection count is unset. In `wait-and-widen`, they
+apply only when the selection count is set.
+
+`wait-and-widen` and `pulsar-wait-and-widen` support these wait-and-widen fields:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `seed` | string | empty | Changes WaitAndWiden affinity hashing or Pulsar wait-and-widen ranking. Keep it stable across replicas that should make the same choice. |
+| `max_queue_time_floor_ms` | unsigned integer | unset | Queue-SLO lower bound. Has an effect only when `max_queue_time_ceil_ms` is also set. |
+| `max_queue_time_ceil_ms` | unsigned integer | unset | Queue-SLO upper bound. Has an effect only when `max_queue_time_floor_ms` is also set. |
+| `ttft_bucket_size_ms` | unsigned integer | `20` | Maximum TTFT difference within one bucket. |
+| `next_bucket_unlock_factor` | number | `0.25` | Fraction of the TTFT gap to wait before the next bucket unlocks. |
+| `n` | unsigned integer | `2` | Number of unlocked candidates sampled. `0` is normalized to `1`. |
+| `max_queued` | unsigned integer | `0` | Additional queued requests allowed above `max_engine_concurrency`. A reported concurrency of `0` disables this capacity check. |
+| `ignore_queue_time` | boolean | `false` | Removes queue delay from TTFT bucket formation. Queue-SLO filtering and the configured comparator are unchanged. |
+| `ignore_input_processing_time` | boolean | `false` | Removes request prefill time from TTFT bucket formation. The configured comparator is unchanged. |
+| `last_cluster_affinity` | boolean | `false` | Classifies requests as new or returning sessions from `x-stargate-last-cluster-id`. See [Session-aware routing](#session-aware-routing). |
+
+Stargate does not range-check `next_bucket_unlock_factor`. Values from `0` to
+`1` unlock a later bucket between no wait and the full TTFT gap. Values outside
+that range are accepted and can cause immediate or longer waits.
+
+When both queue bounds are set, the allowed queue time interpolates from floor
+to ceiling based on elapsed request time divided by `x-request-slo-ms`. Without
+a positive request SLO, the ceiling applies. Stargate does not reorder the
+bounds, so set the floor less than or equal to the ceiling.
+
+`pulsar` supports:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `seed` | string | empty | Changes the rendezvous ranking. Keep it stable across replicas. |
+| `consider_kv_free_tokens` | boolean | `false` | Requires KV-cache values to be reported and skips candidates with fewer free tokens than the request input-token estimate. |
+
+`pulsar-wait-and-widen` supports the shared wait-and-widen fields in the table
+above, the cache-affinity fields described earlier, `consider_kv_free_tokens`,
+and:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `band_widen_interval_ms` | unsigned integer | `cache_affinity_wait_ms` | Time between ranking-band openings after the affinity wait. `0` opens every cluster at the end of the wait. Rejected for `wait-and-widen`. |
+| `fallback_max_queued` | unsigned integer | `0` | `max_queued` for open-set selection after the affinity wait. The open set includes the affinity group, whose own check before it uses `max_queued`. At `0`, overflow goes only to clusters whose reported stats show a free engine slot, so it does not deliberately queue behind another key's primary work. A cluster that reports no `max_engine_concurrency` counts as free. Raise it only when overflow queueing is acceptable. Rejected for `wait-and-widen`. |
+
+It rejects `comparator`.
+
+## Request algorithm overrides
+
+Preconfigure every algorithm that a request may select:
+
+```json
+{
+  "default": "power-of-n",
+  "request_algorithms": {
+    "wait-and-widen": "wait-and-widen",
+    "pulsar": {
+      "algorithm": "pulsar",
+      "seed": "request-routing-v1",
+      "require_cache_affinity_key": true
+    },
+    "pulsar-wait-and-widen": {
+      "algorithm": "pulsar-wait-and-widen",
+      "seed": "request-routing-v1",
+      "require_cache_affinity_key": true
+    }
+  }
+}
+```
+
+The trusted gateway can then set:
+
+```text
+x-routing-method: pulsar
+```
+
+Method-only header values are trimmed, converted to lowercase, and normalized from
+underscores to hyphens. For example, `pulsar_wait_and_widen` selects
+`pulsar-wait-and-widen`.
+
+An absent header uses the configured model algorithm. A blank, invalid UTF-8,
+unknown, or known but unconfigured value returns HTTP `400`. A model-specific
+`request_algorithms` entry wins over the same top-level entry. The model's
+configured algorithm is always available as an override without a
+`request_algorithms` entry.
+
+Treat routing headers as trusted internal metadata. A gateway should derive or
+validate them instead of forwarding public caller values.
+
+### Routing expressions
+
+Append parameters to a configured method to override its fields for a request:
+
+```text
+x-routing-method: pulsar;seed=stable-a;consider_kv_free_tokens=true
+```
+
+Parameter names are the configuration fields above and must apply to the
+selected algorithm, except `last_cluster_affinity`, which only the
+configuration file sets. Omitted fields keep their configured values. The value
+is an RFC 8941 Item with Parameters, at most 1024 bytes and 32 parameters, with
+every parameter written as `key=value` and no commas. Quote a number that needs
+more than three fractional digits, such as `next_bucket_unlock_factor="0.0625"`.
+An expression may set `cache_affinity_virtual_nodes` to at most 1024.
+
+An invalid header returns HTTP `400` before backend selection, with
+`x-stargate-error-code: <class>` and body
+`{"error":"<message>","code":"<class>"}`. The message names the rejected
+parameter or value.
+
+Each routing key and model keeps the configurations and load balancers for its
+two most recent expressions, compared by bytes, so values that alternate while
+an update propagates reuse them. A third expression replaces the older one.
+Entries expire after 15 idle minutes, and each router process keeps at most
+16384.
+
+## Load-balancer request headers
+
+These proxy headers affect load-balancer behavior:
+
+| Header | Requirement | Meaning |
+| --- | --- | --- |
+| `x-model` | required | Exact model ID used for model configuration lookup. |
+| `x-routing-key` | optional | Authenticated routing scope. It participates in affinity hashes. |
+| `x-routing-method` | optional | Preconfigured request algorithm, optionally with expression parameters. |
+| `x-cache-affinity-key` | optional or config-required | Opaque stable prefix or session identity. Blank means absent. |
+| `x-input-tokens` | required `u64` | Input-token estimate used by TTFT, admission, and optional KV feasibility. |
+| `x-priority` | optional `u32`, default `0` | Chooses the nearest published queue estimate at or below this priority. |
+| `x-request-slo-ms` | optional `u64` | Interpolates queue bounds. Does not set or shorten the affinity wait. |
+| `x-max-wait-ms` | optional `u64` | Routing wait limit from request arrival, capped at 60 seconds. Can expire before global buckets open. |
+| `x-stargate-last-cluster-id` | optional | Cluster that served the session's last 2xx response. Used only by algorithms with `last_cluster_affinity`. Blank or invalid UTF-8 means absent. |
+
+Invalid required or numeric values return HTTP `400`. `x-routing-method` and
+`x-stargate-last-cluster-id` are consumed by Stargate and are not forwarded
+upstream. See the
+[API gateway contract](api-gateway-contract.md) for the complete proxy header
+contract.
+
+## Fallback and proxy retry boundary
+
+Algorithm fallback is part of load-balancer selection:
+
+- WaitAndWiden global fallback starts at X and includes affine candidates at
+  full prefill cost. Later global buckets use elapsed
+  time after X; affine candidates remain preferred. Without an affinity group,
+  later buckets use elapsed request time and the existing explicit retry budget.
+- Pulsar fallback walks the stable ranking after exclusions or optional KV
+  filtering.
+- Pulsar wait-and-widen fallback opens one more ranking band per widen interval
+  after the affinity wait and runs WaitAndWiden selection over every open
+  candidate.
+
+Proxy retries can exclude a backend or cluster and run selection again. See
+[Multi-backend cluster routing](multi-backend-clusters.md#retries) for
+exclusion behavior and the [API gateway contract](api-gateway-contract.md#retry-rules)
+for status, replay, and retry-budget rules.
+
+## Metrics
+
+Stargate records algorithm and fallback choices, proxy attempts and retries,
+admission rejections, upstream latency, and active backend counts. The prefix
+is configurable with `--metrics-prefix`. See the
+[NVCF request-router metrics reference](../../../../../docs/observability/metrics/llm-request-router/metrics.md)
+for metric names, labels, and descriptions.
+
+The proxy request span records the effective comparator in `routing.comparator`.
+WaitAndWiden records affinity-phase selections with `rank_depth` 1 and global
+fallback with a higher rank. Selecting an affine backend through global buckets
+counts as fallback; selecting it through the initial affinity phase does not.
+The existing fallback selection series therefore records global escalation;
+deployments that previously saw only primary selections can see new fallback
+counts. Metric names and label sets are unchanged.
+
+With `last_cluster_affinity`, classified requests also record
+`stargate_routing_session_selections_total`, the `routing.session_state` span
+attribute, and a `debug` log line with the state and whether the last cluster
+was promoted. For a promoted `pulsar-wait-and-widen` request, the rank in
+`stargate_routing_selections_total` is relative to the reordered ranking.
+
+## Validation checklist
+
+1. Parse the JSON before deployment.
+2. Keep seeds identical across replicas that should make equivalent affinity
+   choices.
+3. Confirm pylons publish valid capacity, queue, and optional KV-cache fields
+   required by the selected algorithm.
+4. Send a request without `x-routing-method` and confirm the configured model
+   algorithm in logs or `stargate_routing_selections_total`.
+5. Send an allowlisted override and confirm the effective algorithm.
+6. Send an unconfigured override and confirm HTTP `400`.
+7. Exercise an expected fallback and inspect selection, attempt, retry, and
+   exhaustion counters.
+8. With `last_cluster_affinity`, send requests with and without
+   `x-stargate-last-cluster-id` and confirm the session states in
+   `stargate_routing_session_selections_total`.
+
+## Implementation sources
+
+- `crates/stargate/src/load_balancer/config.rs`
+- `routing_methods.json`: algorithm names, aliases, and routing-expression
+  parameters. Tests compare it with the code, this page, the NVCF routing
+  docs, `benches/`, and the routing simulator configs. NVCF function API tests
+  check that the API's `routingMethod` format check accepts every name, alias,
+  and parameter it lists.
+- `crates/stargate/src/load_balancer/factory.rs`
+- `crates/stargate/src/load_balancer/router.rs`
+- `crates/stargate/src/load_balancer/wait_and_widen.rs`
+- `crates/stargate/src/load_balancer/pulsar.rs`
+- `crates/stargate/src/load_balancer/pulsar_wait_and_widen.rs`
+- `crates/stargate/src/load_balancer/session.rs`
+- `crates/stargate/src/http_proxy/`
+- `crates/stargate/src/metrics.rs`
+- `benches/`

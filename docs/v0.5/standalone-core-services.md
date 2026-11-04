@@ -28,7 +28,7 @@ API Keys provides authentication token management for all NVCF API interactions.
 
 ### Configuration
 
-Create `api-keys-values.yaml` ([download template](samples/configs/standalone/api-keys-values.yaml)):
+Create `api-keys-values.yaml` ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/api-keys-values.yaml)):
 
 <Accordion title="api-keys-values.yaml">
 ```yaml title="api-keys-values.yaml"
@@ -80,7 +80,7 @@ The Spot Instance Service (SIS) handles cluster registration and GPU resource ma
 
 ### Configuration
 
-Create `sis-values.yaml` ([download template](samples/configs/standalone/sis-values.yaml)):
+Create `sis-values.yaml` ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/sis-values.yaml)):
 
 <Accordion title="sis-values.yaml">
 ```yaml title="sis-values.yaml"
@@ -130,7 +130,7 @@ The ESS (Enterprise Secrets Service) API distributes secrets to NVCF services vi
 
 ### Configuration
 
-Create `ess-api-values.yaml` ([download template](samples/configs/standalone/ess-api-values.yaml)):
+Create `ess-api-values.yaml` ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/ess-api-values.yaml)):
 
 <Accordion title="ess-api-values.yaml">
 ```yaml title="ess-api-values.yaml"
@@ -184,7 +184,7 @@ communicates with ESS during initialization.
 
 ### Configuration
 
-Create `nvcf-api-values.yaml` ([download template](samples/configs/standalone/nvcf-api-values.yaml)):
+Create `nvcf-api-values.yaml` ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/nvcf-api-values.yaml)):
 
 <Accordion title="nvcf-api-values.yaml">
 ```yaml title="nvcf-api-values.yaml"
@@ -324,7 +324,7 @@ The Invocation Service handles function invocation requests and routes them to w
 
 ### Configuration
 
-Create `invocation-service-values.yaml` ([download template](samples/configs/standalone/invocation-service-values.yaml)):
+Create `invocation-service-values.yaml` ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/invocation-service-values.yaml)):
 
 <Accordion title="invocation-service-values.yaml">
 ```yaml title="invocation-service-values.yaml"
@@ -374,7 +374,7 @@ The gRPC Proxy enables streaming workloads over gRPC connections.
 
 ### Configuration
 
-Create `grpc-proxy-values.yaml` ([download template](samples/configs/standalone/grpc-proxy-values.yaml)):
+Create `grpc-proxy-values.yaml` ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/grpc-proxy-values.yaml)):
 
 <Accordion title="grpc-proxy-values.yaml">
 ```yaml title="grpc-proxy-values.yaml"
@@ -424,7 +424,7 @@ The Notary Service handles request signing and validation for secure inter-servi
 
 ### Configuration
 
-Create `notary-service-values.yaml` ([download template](samples/configs/standalone/notary-service-values.yaml)):
+Create `notary-service-values.yaml` ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/notary-service-values.yaml)):
 
 <Accordion title="notary-service-values.yaml">
 ```yaml title="notary-service-values.yaml"
@@ -475,7 +475,7 @@ installed in the `nvcf` namespace with the `helm-reval` chart.
 
 ### Configuration
 
-Create `reval-values.yaml` ([download template](samples/configs/standalone/reval-values.yaml)):
+Create `reval-values.yaml` ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/reval-values.yaml)):
 
 <Accordion title="reval-values.yaml">
 ```yaml title="reval-values.yaml"
@@ -528,7 +528,7 @@ requiring pre-existing credentials. It is used for initial setup and emergency a
 
 ### Configuration
 
-Create `admin-issuer-proxy-values.yaml` ([download template](samples/configs/standalone/admin-issuer-proxy-values.yaml)):
+Create `admin-issuer-proxy-values.yaml` ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/admin-issuer-proxy-values.yaml)):
 
 <Accordion title="admin-issuer-proxy-values.yaml">
 ```yaml title="admin-issuer-proxy-values.yaml"

@@ -1,0 +1,46 @@
+NvSnap
+Copyright 2026 NVIDIA Corporation
+
+This product includes software developed by NVIDIA Corporation.
+
+================================================================================
+Forked / vendored third-party components
+================================================================================
+
+This project depends on the following third-party software components, each
+maintained as a separate fork with nvsnap-specific patches. Their original
+licenses apply.
+
+----
+CRIU (Checkpoint/Restore In Userspace)
+  Upstream: https://github.com/checkpoint-restore/criu
+  NvSnap fork: maintained by the NvSnap project (branch criu-dev)
+  License: GPL-2.0 (for the userspace tool); LGPL-2.1 (for the libcriu/libsoccr
+           libraries); see the upstream LICENSE files for the authoritative
+           per-file licensing.
+
+----
+NVIDIA cuda-checkpoint
+  Upstream: distributed with NVIDIA CUDA Toolkit
+  Used as a binary dependency for GPU state checkpoint/restore.
+  License: subject to the NVIDIA CUDA Toolkit license.
+
+================================================================================
+Container images
+================================================================================
+
+This project's container images are built from upstream base images. The
+relevant licenses for those base images apply to the resulting container layers:
+
+- ubuntu:22.04                  - https://ubuntu.com/legal/intellectual-property-policy
+- golang:1.26.10-bookworm        - https://go.dev/LICENSE
+- gcr.io/distroless/static       - https://github.com/GoogleContainerTools/distroless
+
+================================================================================
+Go module dependencies
+================================================================================
+
+See `go.mod` and `go.sum` for the full transitive dependency list and pinned
+versions. License attribution for each Go module is preserved in its vendor
+directory (if vendored) or available via `go list -m -json all` against the
+module proxy.

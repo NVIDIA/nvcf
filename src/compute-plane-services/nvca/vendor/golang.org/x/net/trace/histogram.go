@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2015 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -73,10 +70,7 @@ func log2(i int64) int {
 }
 
 func getBucket(i int64) (index int) {
-	index = log2(i) - 1
-	if index < 0 {
-		index = 0
-	}
+	index = max(log2(i)-1, 0)
 	if index >= bucketCount {
 		index = bucketCount - 1
 	}

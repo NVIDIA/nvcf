@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2022-2025 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -53,11 +50,11 @@ const (
 	// apiConsumerCreateT is used to create consumers.
 	apiConsumerCreateT = "CONSUMER.CREATE.%s.%s"
 
-	// apiConsumerCreateT is used to create consumers.
+	// apiConsumerCreateWithFilterSubjectT is used to create consumers with a filter subject.
 	// it accepts stream name, consumer name and filter subject
 	apiConsumerCreateWithFilterSubjectT = "CONSUMER.CREATE.%s.%s.%s"
 
-	// apiConsumerInfoT is used to create consumers.
+	// apiConsumerInfoT is used to retrieve consumer information.
 	apiConsumerInfoT = "CONSUMER.INFO.%s.%s"
 
 	// apiRequestNextT is the prefix for the request next message(s) for a consumer in worker/pull mode.
@@ -99,7 +96,7 @@ const (
 	// apiMsgGetT is the endpoint to get a message.
 	apiMsgGetT = "STREAM.MSG.GET.%s"
 
-	// apiMsgGetT is the endpoint to perform a direct get of a message.
+	// apiDirectMsgGetT is the endpoint to perform a direct get of a message.
 	apiDirectMsgGetT = "DIRECT.GET.%s"
 
 	// apiDirectMsgGetLastBySubjectT is the endpoint to perform a direct get of a message by subject.

@@ -53,6 +53,7 @@ var ignoreValueOfKeys = []string{
 // removed entirely before comparison.
 var ignoreMetricsPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^http_.*`),
+	regexp.MustCompile(`^kube_configmap_created$`),
 	regexp.MustCompile(`^kube_pod_container_status_waiting_reason$`),
 	regexp.MustCompile(`^kube_pod_container_status_terminated_reason$`),
 }

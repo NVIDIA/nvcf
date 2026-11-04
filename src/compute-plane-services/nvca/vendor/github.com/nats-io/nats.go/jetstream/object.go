@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2023-2025 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -678,8 +675,17 @@ func (obs *obs) Put(ctx context.Context, meta ObjectMeta, r io.Reader) (*ObjectI
 		return perr
 	}
 
+	opts := []JetStreamOpt{
+		WithPublishAsyncErrHandler(func(js JetStream, _ *nats.Msg, err error) { setErr(err) }),
+	}
+
+	// if context deadline is not set, use default JetStream timeout (per publish)
+	if _, ok := ctx.Deadline(); !ok {
+		opts = append(opts, WithPublishAsyncTimeout(obs.js.opts.DefaultTimeout))
+	}
+
 	// Create our own JS context to handle errors etc.
-	pubJS, err := New(obs.js.conn, WithPublishAsyncErrHandler(func(js JetStream, _ *nats.Msg, err error) { setErr(err) }))
+	pubJS, err := New(obs.js.conn, opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -20,11 +20,11 @@ package nvca
 import (
 	"context"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 	v1 "k8s.io/api/core/v1"
 
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 // ICMSRequestHelper is an interface for managing ICMS requests in compute backends.
@@ -50,6 +50,11 @@ type ICMSRequestHelper interface {
 	// ComputeCleanupCacheReferences cleanUp underlying cache references
 	ComputeCleanupCacheReferences(ctx context.Context, references []string) error
 
+	// RetryFailedModelCacheCleanup repeats the cleanup of a failed model cache setup for a creation
+	// request whose workers all exist. It does nothing unless the request recorded a caching fallback.
+	// Errors prevent status synchronization from removing the request before cleanup can finish.
+	RetryFailedModelCacheCleanup(ctx context.Context, req *nvcav2beta1.ICMSRequest) error
+
 	// AllInstancesTerminatedAndReported returns if all NVCF worker instances for backend are terminated and reported to ICMS
 	AllInstancesTerminatedAndReported(ctx context.Context, req *nvcav2beta1.ICMSRequest) bool
 
@@ -58,9 +63,6 @@ type ICMSRequestHelper interface {
 
 	// PurgeInstanceID purges a specific instance ID and updates the terminated instances map
 	PurgeInstanceID(ctx context.Context, req *nvcav2beta1.ICMSRequest, terminatedInstances map[string]nvcav2beta1.InstanceStatus, instanceID string) bool
-
-	// GetROSUpdatesForRequest returns the consolidate payload of List<RolloverServiceUpdateInfo> to be posted to ROS
-	GetROSUpdatesForRequest(ctx context.Context, req *nvcav2beta1.ICMSRequest) ([]types.ROSUpdateInfo, error)
 }
 
 type K8sArtifactHelper interface {
@@ -71,7 +73,7 @@ type K8sArtifactHelper interface {
 	GetICMSRequestUpdatesForCreatePodRequest(ctx context.Context,
 		st nvcav2beta1.InstanceStatus, req *nvcav2beta1.ICMSRequest) (types.ICMSRequestUpdateInfo, error)
 
-	// CreatePodArtifact creates a PodArtifact as specfied by the inputs podArt
+	// CreatePodArtifact creates a PodArtifact as specified by the inputs podArt
 	CreatePodArtifact(ctx context.Context, podArt function.LaunchArtifact, mf mutateFunc) error
 
 	// GetErroredPodLogs returns the pod logs of the failed instance container or the static error message for Utils / Init if one exists

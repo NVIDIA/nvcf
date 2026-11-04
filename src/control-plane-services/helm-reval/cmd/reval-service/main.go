@@ -16,20 +16,23 @@
 package main
 
 import (
+	"cmp"
 	"context"
 
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/cmd/reval/cli"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/logging"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/cmd/reval/cli"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/logging"
+	golibversion "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 )
 
+// Fall back to "unknown" for unstamped builds, matching the go-lib /info handler.
 var (
-	Version   = "dev"
-	GitCommit = "dev"
+	Version   = cmp.Or(golibversion.Version, "unknown")
+	GitCommit = cmp.Or(golibversion.GitHash, "unknown")
 )
 
 func main() {

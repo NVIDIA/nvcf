@@ -36,10 +36,12 @@ func TestNewFluentbitConfigMap(t *testing.T) {
 
 	require.NotNil(t, cm)
 	assert.Equal(t, cmName, cm.Name)
+	// The tail input uses built-in multiline parsers, so no parsers file is shipped.
+	assert.Len(t, cm.Data, 1)
 	assert.Contains(t, cm.Data, fluentbitConfigCMKey)
-	assert.Contains(t, cm.Data, fluentbitParsersConfigKey)
 
 	config := cm.Data[fluentbitConfigCMKey]
+	assert.NotContains(t, config, "Parsers_File")
 	assert.Contains(t, config, "[SERVICE]")
 	assert.Contains(t, config, "[INPUT]")
 	assert.Contains(t, config, "[FILTER]")
@@ -53,12 +55,6 @@ func TestNewFluentbitConfigMap(t *testing.T) {
 	assert.Contains(t, config, "logs_uri /v1/logs")
 	assert.Contains(t, config, "Host  localhost")
 	assert.Contains(t, config, "Port  14358", "Should use HTTP port 14358, not gRPC port 14357")
-
-	// Check parsers config
-	parsers := cm.Data[fluentbitParsersConfigKey]
-	assert.Contains(t, parsers, "[PARSER]")
-	assert.Contains(t, parsers, "Name        docker")
-	assert.Contains(t, parsers, "Name        cri")
 }
 
 func TestNewFluentbitContainer(t *testing.T) {
@@ -503,7 +499,7 @@ func TestFluentbitConfigContainsInferenceAndTaskContainers(t *testing.T) {
 
 	// Verify the tail input is configured
 	assert.Contains(t, config, "Name              tail")
-	assert.Contains(t, config, "Parser            docker")
+	assert.Contains(t, config, "multiline.parser  docker, cri")
 
 	// Verify polling mode is used (not inotify) to prevent "too many open files"
 	assert.Contains(t, config, "Inotify_Watcher   false")
@@ -540,7 +536,7 @@ func TestFluentbitConfigForHelmWorkload(t *testing.T) {
 
 	// Verify basic configuration
 	assert.Contains(t, config, "Name              tail")
-	assert.Contains(t, config, "Parser            docker")
+	assert.Contains(t, config, "multiline.parser  docker, cri")
 	assert.Contains(t, config, "Inotify_Watcher   false")
 
 	// Verify kubernetes filter is NOT present (design decision: no K8s API access required)
@@ -549,4 +545,58 @@ func TestFluentbitConfigForHelmWorkload(t *testing.T) {
 	// Verify modify filter adds basic metadata
 	assert.Contains(t, config, "Name    modify")
 	assert.Contains(t, config, "Add     service.name ${POD_NAME}")
+}
+
+// fluentbitSection returns the keys of the first [name] section in a rendered
+// Fluent Bit classic config, lowercased, mapped to their values.
+func fluentbitSection(t *testing.T, config string, name string) map[string]string {
+	t.Helper()
+	header := "[" + name + "]"
+	keys := map[string]string{}
+	inSection := false
+	for _, line := range strings.Split(config, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			if inSection {
+				break
+			}
+			inSection = line == header
+			continue
+		}
+		if !inSection || line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, _ := strings.Cut(line, " ")
+		key = strings.ToLower(key)
+		_, dup := keys[key]
+		require.False(t, dup, "duplicate key %q in %s", key, header)
+		keys[key] = strings.TrimSpace(value)
+	}
+	require.NotEmpty(t, keys, "section %s not found", header)
+	return keys
+}
+
+func TestFluentbitTailInputParsesContainerRuntimeLogs(t *testing.T) {
+	for _, workloadType := range []string{WorkloadTypeContainer, WorkloadTypeHelm} {
+		t.Run(workloadType, func(t *testing.T) {
+			cm := NewFluentbitConfigMap("test-cm", "test-pod", workloadType)
+			input := fluentbitSection(t, cm.Data[fluentbitConfigCMKey], "INPUT")
+
+			assert.Equal(t, "tail", input["name"])
+
+			// Built-in multiline parsers handle Docker JSON and CRI logs and join partial records.
+			assert.Equal(t, "docker, cri", input["multiline.parser"])
+			// Fluent Bit requires the old parser options to be unset when multiline.parser is used.
+			for _, key := range []string{"parser", "parser_firstline", "multiline", "multiline_flush", "docker_mode"} {
+				assert.NotContains(t, input, key)
+			}
+
+			// Lines written before the sidecar starts are read; DB offsets prevent duplicates on restart.
+			assert.Equal(t, "On", input["read_from_head"])
+			assert.Equal(t, fluentbitDBPath+"/flb_kube.db", input["db"])
+			assert.Equal(t, "true", input["db.locking"])
+
+			assert.Equal(t, "false", input["inotify_watcher"])
+		})
+	}
 }

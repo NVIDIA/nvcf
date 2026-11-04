@@ -35,6 +35,7 @@ const (
 	MiniServiceConditionCacheSuccessful   = "CacheSuccessful"
 	MiniServiceConditionInstallSuccessful = "InstallSuccessful"
 	MiniServiceConditionObjectsHealthy    = "ObjectsHealthy"
+	MiniServiceConditionWorkersHealthy    = "WorkersHealthy"
 	MiniServiceConditionCleanupSuccessful = "CleanupSuccessful"
 )
 
@@ -51,8 +52,10 @@ const (
 	MiniServiceStatusReasonObjectsFailed = "ObjectsFailed"
 	// When some objects failed to deploy with backoff.
 	MiniServiceStatusReasonObjectsFailedWithinBackoffTimeout = "ObjectsFailedWithinBackoffTimeout"
-	// When some pods are degraded.
-	MiniServiceStatusReasonDegradedWorkerPods = "DegradedWorkerPods"
+	// When some workload pods are degraded.
+	MiniServiceStatusReasonDegradedWorkload = "DegradedWorkload"
+	// When some worker pods are degraded.
+	MiniServiceStatusReasonDegradedWorker = "DegradedWorker"
 	// When some objects were pending for too long.
 	MiniServiceStatusReasonPendingTimeout = "ObjectsTimedOutPending"
 	// Waiting on objects to be ready.
@@ -67,7 +70,8 @@ var MiniServiceStatusBadReasons = map[string]bool{
 	MiniServiceStatusReasonCachingFailed:          true,
 	MiniServiceStatusReasonReValResultInvalid:     true,
 	MiniServiceStatusReasonObjectsFailed:          true,
-	MiniServiceStatusReasonDegradedWorkerPods:     true,
+	MiniServiceStatusReasonDegradedWorkload:       true,
+	MiniServiceStatusReasonDegradedWorker:         true,
 	MiniServiceStatusReasonPendingTimeout:         true,
 	MiniServiceStatusReasonObjectStatusErrors:     true,
 	MiniServiceStatusReasonUnexpectedInstallError: true,

@@ -1,0 +1,15 @@
+# CI-only values for helm lint/template validation.
+global:
+  security:
+    allowInsecureImages: true
+openbao:
+  global:
+    imagePullSecrets: []
+  server:
+    image:
+      registry: example.com
+      repository: nvcf/nvcf-openbao
+  migrations:
+    image:
+      registry: example.com
+      repository: nvcf/nvcf-openbao-migrations

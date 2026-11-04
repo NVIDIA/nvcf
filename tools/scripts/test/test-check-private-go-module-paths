@@ -17,7 +17,7 @@ imports:
   - path: native-lib
     authoritative_source: native
   - path: upstream-service
-    repo: https://github.com/NVIDIA/example/upstream-service.git
+    repo: https://internal.example.com/example/upstream-service.git
     commit: deadbeef
     authoritative_source: upstream
 EOF
@@ -39,12 +39,12 @@ EOF
 cat > "$repo/upstream-service/main.go" <<'EOF'
 package main
 
-import _ "github.com/NVIDIA/example/private-dep"
+import _ "internal.example.com/example/private-dep"
 EOF
 
 output="$workdir/output.txt"
 
-if ! REPO_ROOT="$repo" "$script_path" >"$output" 2>&1; then
+if ! PRIVATE_GO_MODULE_HOST_PATTERN='internal\.example\.com/' REPO_ROOT="$repo" "$script_path" >"$output" 2>&1; then
     echo "expected checker to ignore upstream roots"
     cat "$output"
     exit 1
@@ -53,14 +53,14 @@ fi
 cat > "$repo/native-lib/lib.go" <<'EOF'
 package nativelib
 
-import _ "github.com/NVIDIA/example/private-dep"
+import _ "internal.example.com/example/private-dep"
 
 func Name() string {
 	return "native"
 }
 EOF
 
-if REPO_ROOT="$repo" "$script_path" >"$output" 2>&1; then
+if PRIVATE_GO_MODULE_HOST_PATTERN='internal\.example\.com/' REPO_ROOT="$repo" "$script_path" >"$output" 2>&1; then
     echo "expected checker to fail for native roots with private imports"
     cat "$output"
     exit 1

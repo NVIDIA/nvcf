@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+namespaceOverride: observability
+
+resources:
+  requests:
+    memory: 64Mi
+    cpu: 100m
+  limits:
+    memory: 128Mi
+    cpu: 500m
+
+prometheus:
+  monitor:
+    enabled: true
+    additionalLabels:
+      cluster: ncp-local
+    metricRelabelings:
+      # Add cluster label to all metrics scraped from kube-state-metrics
+      - sourceLabels: []
+        targetLabel: cluster
+        replacement: ncp-local

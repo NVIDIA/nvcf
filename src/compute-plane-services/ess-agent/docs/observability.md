@@ -22,7 +22,7 @@ Consul Template can print verbose debugging output. To set the log level for
 Consul Template, use the `-log-level` flag:
 
 ```shell
-$ consul-template -log-level info ...
+consul-template -log-level info ...
 ```
 
 Or set it via the `CONSUL_TEMPLATE_LOG_LEVEL` environment variable.
@@ -36,7 +36,7 @@ Or set it via the `CONSUL_TEMPLATE_LOG_LEVEL` environment variable.
 You can also specify the level as debug:
 
 ```shell
-$ consul-template -log-level debug ...
+consul-template -log-level debug ...
 ```
 
 ```text

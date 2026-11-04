@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package difflib is a partial port of Python difflib module.
 //
 // It provides tools to compare sequences of strings and generate textual diffs.

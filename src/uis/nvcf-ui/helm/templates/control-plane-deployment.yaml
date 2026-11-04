@@ -1,0 +1,115 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nvcf-ui.controlPlane.fullname" . }}
+  labels:
+    {{- include "nvcf-ui.controlPlane.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nvcf-ui.controlPlane.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Roll the pods when the components config changes so the monitor
+        # re-reads it (Loadcomponents runs once at startup).
+        checksum/components: {{ include (print $.Template.BasePath "/control-plane-components-configmap.yaml") . | sha256sum | quote }}
+        {{- with .Values.nvcfUi.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "nvcf-ui.controlPlane.labels" . | nindent 8 }}
+        {{- with .Values.nvcfUi.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.nvcfUi.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "nvcf-ui.controlPlane.serviceAccountName" . }}
+      {{- with .Values.nvcfUi.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: control-plane
+          {{- with .Values.nvcfUi.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.nvcfUi.image.repository }}:{{ .Values.nvcfUi.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.nvcfUi.image.pullPolicy }}
+          # Run the control-plane monitor binary (overrides the image ENTRYPOINT,
+          # which is the server binary).
+          command:
+            - /app/control-plane
+          env:
+            # The monitor writes its health ConfigMap into the namespace it runs
+            # in; NAMESPACE is read by configMapNamespace().
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # File the monitor reads its components config from; provided by the
+            # components ConfigMap mounted at /etc/backend below.
+            - name: COMPONENTS_PATH
+              value: /etc/backend/components.yaml
+            {{- with .Values.nvcfUi.controlPlane.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # exec probes (no HTTP server): the kubelet re-runs the binary in
+          # -liveness mode, which checks the monitor's heartbeat file is fresh.
+          # The exec command is hardcoded; timing comes from values.
+          livenessProbe:
+            exec:
+              command:
+                - /app/control-plane
+                - -liveness
+            {{- toYaml .Values.nvcfUi.controlPlane.livenessProbe | nindent 12 }}
+          readinessProbe:
+            exec:
+              command:
+                - /app/control-plane
+                - -liveness
+            {{- toYaml .Values.nvcfUi.controlPlane.readinessProbe | nindent 12 }}
+          {{- with .Values.nvcfUi.controlPlane.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: components
+              mountPath: /etc/backend
+              readOnly: true
+      volumes:
+        - name: components
+          configMap:
+            name: {{ include "nvcf-ui.controlPlane.fullname" . }}-components
+      {{- with .Values.nvcfUi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nvcfUi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nvcfUi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

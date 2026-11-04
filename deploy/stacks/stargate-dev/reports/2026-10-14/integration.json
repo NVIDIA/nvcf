@@ -1,0 +1,93 @@
+{
+  "placements": [
+    {
+      "nodes": 1,
+      "readyDeployments": 3,
+      "candidateImages": true,
+      "cluster": "a-hub"
+    },
+    {
+      "nodes": 1,
+      "readyDeployments": 2,
+      "candidateImages": true,
+      "cluster": "a-m1"
+    },
+    {
+      "nodes": 1,
+      "readyDeployments": 2,
+      "candidateImages": true,
+      "cluster": "a-m2"
+    },
+    {
+      "nodes": 1,
+      "readyDeployments": 3,
+      "candidateImages": true,
+      "cluster": "b-hub"
+    },
+    {
+      "nodes": 1,
+      "readyDeployments": 2,
+      "candidateImages": true,
+      "cluster": "b-m1"
+    },
+    {
+      "nodes": 1,
+      "readyDeployments": 2,
+      "candidateImages": true,
+      "cluster": "b-m2"
+    }
+  ],
+  "streaming": [
+    {
+      "region": "local-a",
+      "backendIdsServed": [
+        "a-m1-backend-0",
+        "a-m1-backend-1",
+        "a-m2-backend-0",
+        "a-m2-backend-1",
+        "b-m1-backend-0",
+        "b-m1-backend-1",
+        "b-m2-backend-0",
+        "b-m2-backend-1"
+      ],
+      "policies": [
+        {
+          "algorithm": "wait-and-widen",
+          "streamingSuccesses": 48,
+          "failures": 0
+        },
+        {
+          "algorithm": "power-of-n",
+          "streamingSuccesses": 48,
+          "failures": 0
+        }
+      ]
+    },
+    {
+      "region": "local-b",
+      "backendIdsServed": [
+        "a-m1-backend-0",
+        "a-m1-backend-1",
+        "a-m2-backend-0",
+        "a-m2-backend-1",
+        "b-m1-backend-0",
+        "b-m1-backend-1",
+        "b-m2-backend-0",
+        "b-m2-backend-1"
+      ],
+      "policies": [
+        {
+          "algorithm": "wait-and-widen",
+          "streamingSuccesses": 48,
+          "failures": 0
+        },
+        {
+          "algorithm": "power-of-n",
+          "streamingSuccesses": 48,
+          "failures": 0
+        }
+      ]
+    }
+  ],
+  "sparkImageDigest": "sha256:81e865ee1dba3442ad1801a8d17117c9e3bed6cb77d2f2af649d3fc6cd638d8d"
+}

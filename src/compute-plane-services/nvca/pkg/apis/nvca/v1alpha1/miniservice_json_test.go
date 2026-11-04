@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/internal/compat"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/internal/compat"
 )
 
 func TestMiniServiceSpecUnmarshalCanonicalRequestName(t *testing.T) {
@@ -91,4 +91,21 @@ func TestMiniServiceSpecMarshalUsesCanonicalRequestName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(data), compat.ICMSRequestNameKey)
 	assert.NotContains(t, string(data), compat.LegacyRequestNameKey())
+}
+
+func TestMiniServiceSpecRoundTripsWorkloadConfig(t *testing.T) {
+	want := MiniServiceSpec{
+		Namespace:       "ns-a",
+		ICMSRequestName: "req-a",
+		WorkloadConfig: &WorkloadConfig{
+			FeatureFlags: map[string]bool{"StatusByWorkerReadiness": true},
+		},
+	}
+
+	data, err := json.Marshal(want)
+	require.NoError(t, err)
+
+	var got MiniServiceSpec
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, want.WorkloadConfig, got.WorkloadConfig)
 }

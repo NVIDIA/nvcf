@@ -26,7 +26,7 @@ use crate::{
     request_id::RequestId,
     secrets::secret_provider::SecretFileWatcher,
 };
-use anyhow::anyhow;
+use anyhow::{anyhow, Context as _};
 use async_nats::{
     connection::State,
     jetstream::{
@@ -44,16 +44,18 @@ use async_nats::{
     AuthError, Client, ConnectOptions, Event, HeaderMap, RequestErrorKind, SubscribeError,
 };
 use bytes::Bytes;
-use futures::{FutureExt, StreamExt, TryFutureExt};
+use futures::{FutureExt, StreamExt};
+use http::HeaderValue;
 use oauth2::Scope;
 use opentelemetry::propagation::Injector;
 use prost::Message;
 use rand;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::pin::pin;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use sync_wrapper;
 use tracing::{Level, Span};
 use uom::si::information;
@@ -68,6 +70,7 @@ pub struct NatsService {
     client: Client,
     jetstream: Context,
     nats_properties: NatsProperties,
+    invocation_region_headers: HashMap<String, HeaderValue>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -189,7 +192,72 @@ impl Default for NatsProperties {
 #[derive(Debug)]
 pub struct ExistingInvocationDetails {
     pub worker_result_tracking: WorkerResultTracking,
+    pub polling_owner: PollingRequestOwnership,
     pub region: String,
+}
+
+const POLLING_OWNER_HEADER: &str = "Nvcf-Http-Invocation-Owner";
+
+/// Distinguish legacy records from malformed metadata during the staged rollout.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PollingRequestOwnership {
+    Missing,
+    Recorded(PollingRequestOwner),
+    Invalid,
+}
+
+impl PollingRequestOwnership {
+    /// Decode ownership without treating invalid metadata as a legacy record.
+    fn from_headers(headers: &HeaderMap) -> Self {
+        if headers.get(POLLING_OWNER_HEADER).is_none() {
+            return Self::Missing;
+        }
+        PollingRequestOwner::from_headers(headers)
+            .map(Self::Recorded)
+            .unwrap_or(Self::Invalid)
+    }
+
+    /// Return a recorded owner; legacy records must never adopt the polling caller.
+    pub fn owner(&self) -> Option<&PollingRequestOwner> {
+        match self {
+            Self::Recorded(owner) => Some(owner),
+            Self::Missing | Self::Invalid => None,
+        }
+    }
+}
+
+/// Caller identity stored outside the shared request-tracking protobuf payload.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PollingRequestOwner {
+    pub nca_id: String,
+    pub subject: String,
+}
+
+impl PollingRequestOwner {
+    /// Encode identity as one header, escaping characters that could split headers.
+    fn to_headers(&self) -> anyhow::Result<HeaderMap> {
+        anyhow::ensure!(
+            !self.nca_id.is_empty() && !self.subject.is_empty(),
+            "polling request owner must include tenant and subject"
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            POLLING_OWNER_HEADER,
+            serde_json::to_string(self)?.parse::<async_nats::HeaderValue>()?,
+        );
+        Ok(headers)
+    }
+
+    /// Reject incomplete, duplicate, or malformed ownership metadata.
+    fn from_headers(headers: &HeaderMap) -> Option<Self> {
+        let mut values = headers.get_all(POLLING_OWNER_HEADER);
+        let value = values.next()?;
+        if values.next().is_some() {
+            return None;
+        }
+        let owner: Self = serde_json::from_str(value.as_str()).ok()?;
+        (!owner.nca_id.is_empty() && !owner.subject.is_empty()).then_some(owner)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -199,12 +267,23 @@ pub enum WorkerPollingResponse {
 }
 
 impl NatsService {
+    pub(crate) fn invocation_region_header(&self) -> &HeaderValue {
+        self.invocation_region_header_for_region(&self.nats_properties.region)
+    }
+
+    pub(crate) fn invocation_region_header_for_region(&self, region: &str) -> &HeaderValue {
+        self.invocation_region_headers
+            .get(region)
+            .expect("request mapping region must be configured")
+    }
+
     pub async fn new(
         nats_properties: &NatsProperties,
         oauth2_token_endpoint: &str,
         secrets_provider: Option<Arc<SecretFileWatcher>>,
         grpc_config: &crate::settings::GrpcClientConfig,
     ) -> anyhow::Result<Self> {
+        let invocation_region_headers = Self::invocation_region_headers(nats_properties)?;
         tracing::info!("connecting to nats {}", nats_properties.nats_address);
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
@@ -263,6 +342,7 @@ impl NatsService {
             client: client.clone(),
             jetstream,
             nats_properties: nats_properties.clone(),
+            invocation_region_headers,
         };
         // NATS will time out instead of returning a 404 if the stream does not exist and we do a direct get.
         // create the stream eagerly to prevent timeouts.
@@ -273,6 +353,19 @@ impl NatsService {
                 record_nats_error_total();
             })?;
         Ok(nats_service)
+    }
+
+    fn invocation_region_headers(
+        nats_properties: &NatsProperties,
+    ) -> anyhow::Result<HashMap<String, HeaderValue>> {
+        std::iter::once(&nats_properties.region)
+            .chain(nats_properties.other_regions.iter())
+            .map(|region| {
+                HeaderValue::from_str(region)
+                    .with_context(|| format!("invalid configured invocation region: {region:?}"))
+                    .map(|header| (region.clone(), header))
+            })
+            .collect()
     }
 
     fn create_auth_callback(
@@ -454,6 +547,30 @@ impl NatsService {
             record_nats_error_total();
         })?;
         Ok(())
+    }
+
+    /// Fire-and-forget cancel broadcast to every worker for this function
+    /// version. Missed messages are tolerated; the JetStream keepalive
+    /// path is the backstop.
+    #[tracing::instrument(level = Level::DEBUG, skip(self), err)]
+    pub async fn publish_cancel(
+        &self,
+        request_id: RequestId,
+        function_version_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let subject = Self::cancel_subject(function_version_id);
+        self.client
+            .publish(subject, request_id.to_string().into_bytes().into())
+            .await
+            .inspect_err(|_err| {
+                record_nats_error_total();
+            })?;
+        Ok(())
+    }
+
+    /// nvcf.cancel.${function_version_id}
+    pub(crate) fn cancel_subject(function_version_id: Uuid) -> String {
+        format!("nvcf.cancel.{}", function_version_id)
     }
 
     // Helper function to classify errors for retry behaviour
@@ -738,43 +855,33 @@ impl NatsService {
         )
     }
 
-    #[tracing::instrument(level = Level::TRACE, skip(self), err)]
+    /// Persist tracking and its authenticated owner in one NATS message.
+    #[tracing::instrument(level = Level::TRACE, skip(self, tracking, owner), err)]
     pub async fn record_polling_request(
         &self,
         region: Option<&str>,
         request_id: RequestId,
-        function_id: Uuid,
-        function_version_id: Uuid,
-        request_time: SystemTime,
+        tracking: &WorkerResultTracking,
+        owner: &PollingRequestOwner,
     ) -> anyhow::Result<()> {
         let region = region.unwrap_or(&self.nats_properties.region);
+        // Keep invocation-service metadata outside the shared protobuf payload.
+        let headers = owner.to_headers()?;
         let pub_ack = self
-            .publish_to_request_mapping(
-                region,
-                request_id,
-                function_id,
-                function_version_id,
-                request_time,
-            )
+            .publish_to_request_mapping(region, request_id, tracking, &headers)
             .await?;
         match pub_ack.await {
             Err(err) if err.kind() == PublishErrorKind::StreamNotFound => {
                 // create stream and try again
                 self.create_request_tracking_stream().await?;
-                self.publish_to_request_mapping(
-                    region,
-                    request_id,
-                    function_id,
-                    function_version_id,
-                    request_time,
-                )
-                .await?
-                .await
-                .inspect_err(|_err| {
-                    // track the error if it fails to wait for the actual publish acknowledgment from NATS.
-                    // use inspect_err here as cargo clippy suggested
-                    record_nats_error_total();
-                })?;
+                self.publish_to_request_mapping(region, request_id, tracking, &headers)
+                    .await?
+                    .await
+                    .inspect_err(|_err| {
+                        // track the error if it fails to wait for the actual publish acknowledgment from NATS.
+                        // use inspect_err here as cargo clippy suggested
+                        record_nats_error_total();
+                    })?;
                 Ok(())
             }
             Err(err) => {
@@ -785,26 +892,23 @@ impl NatsService {
         }
     }
 
-    #[tracing::instrument(level = Level::TRACE, skip(self), err)]
+    /// Publish the shared payload with invocation-service ownership headers.
+    #[tracing::instrument(level = Level::TRACE, skip(self, tracking, headers), err)]
     async fn publish_to_request_mapping(
         &self,
         region: &str,
         request_id: RequestId,
-        function_id: Uuid,
-        function_version_id: Uuid,
-        request_time: SystemTime,
+        tracking: &WorkerResultTracking,
+        headers: &HeaderMap,
     ) -> Result<PublishAckFuture, PublishError> {
-        let payload = WorkerResultTracking {
-            function_id: function_id.to_string(),
-            function_version_id: function_version_id.to_string(),
-            request_time: Some(request_time.into()),
-        }
-        .encode_to_vec()
-        .into();
+        let payload = tracking.encode_to_vec().into();
         let subject = format!("requestToFunctionVersion.{}.{}", region, request_id);
-        self.jetstream.publish(subject, payload).await
+        self.jetstream
+            .publish_with_headers(subject, headers.clone(), payload)
+            .await
     }
 
+    /// Find the tracking record and its ownership metadata in any configured region.
     #[tracing::instrument(level = Level::TRACE, skip(self), err)]
     pub async fn get_request_mapping(
         &self,
@@ -813,25 +917,14 @@ impl NatsService {
         let own_region_mapping = self
             .get_request_mapping_by_region(request_id, &self.nats_properties.region)
             .await?;
-        if let Some(worker_result_tracking) = own_region_mapping {
-            return Ok(Some(ExistingInvocationDetails {
-                worker_result_tracking,
-                region: self.nats_properties.region.clone(),
-            }));
+        if own_region_mapping.is_some() {
+            return Ok(own_region_mapping);
         }
         tracing::trace!("did not find request in current region");
         let other_regions_lookup =
             futures::stream::iter(self.nats_properties.other_regions.clone().into_iter())
                 .flat_map_unordered(None, move |region| {
                     self.get_request_mapping_by_region(request_id, region.clone())
-                        .map_ok(|worker_result_tracking| {
-                            worker_result_tracking.map(|worker_result_tracking| {
-                                ExistingInvocationDetails {
-                                    worker_result_tracking,
-                                    region,
-                                }
-                            })
-                        })
                         .boxed()
                         .into_stream()
                 })
@@ -840,12 +933,13 @@ impl NatsService {
         Ok(other_region_mapping)
     }
 
+    /// Read payload and ownership from the same persisted regional message.
     #[tracing::instrument(level = Level::TRACE, skip(self), err)]
     async fn get_request_mapping_by_region(
         &self,
         request_id: RequestId,
         region: impl AsRef<str> + Debug,
-    ) -> anyhow::Result<Option<WorkerResultTracking>> {
+    ) -> anyhow::Result<Option<ExistingInvocationDetails>> {
         let region = region.as_ref();
         let subject = format!("requestToFunctionVersion.{}.{}", region, request_id);
         // TODO handle creation if missing with self.create_request_tracking_stream()
@@ -867,7 +961,11 @@ impl NatsService {
                 }
             }
         };
-        Ok(Some(WorkerResultTracking::decode(message.payload.clone())?))
+        Ok(Some(ExistingInvocationDetails {
+            worker_result_tracking: WorkerResultTracking::decode(message.payload)?,
+            polling_owner: PollingRequestOwnership::from_headers(&message.headers),
+            region: region.into(),
+        }))
     }
 
     #[tracing::instrument(level = Level::TRACE, skip(self), err)]
@@ -949,6 +1047,73 @@ mod tests {
     use tempfile::NamedTempFile;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn polling_owner_header_round_trips_without_header_injection() {
+        let owner = PollingRequestOwner {
+            nca_id: "tenant".into(),
+            subject: "subject\r\nother: value".into(),
+        };
+        let headers = owner.to_headers().unwrap();
+        let value = headers.get(POLLING_OWNER_HEADER).unwrap().as_str();
+        assert!(!value.contains(['\r', '\n']));
+        assert_eq!(
+            PollingRequestOwnership::from_headers(&headers),
+            PollingRequestOwnership::Recorded(owner)
+        );
+    }
+
+    #[test]
+    fn polling_owner_rejects_missing_malformed_or_ambiguous_metadata() {
+        assert_eq!(
+            PollingRequestOwnership::from_headers(&HeaderMap::new()),
+            PollingRequestOwnership::Missing
+        );
+        for value in [
+            "invalid-json",
+            r#"{"nca_id":"tenant"}"#,
+            r#"{"nca_id":"","subject":"caller"}"#,
+            r#"{"nca_id":"tenant","subject":""}"#,
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(POLLING_OWNER_HEADER, value);
+            assert_eq!(
+                PollingRequestOwnership::from_headers(&headers),
+                PollingRequestOwnership::Invalid
+            );
+        }
+        let owner = PollingRequestOwner {
+            nca_id: "tenant".into(),
+            subject: "caller".into(),
+        };
+        let mut headers = owner.to_headers().unwrap();
+        let value = headers.get(POLLING_OWNER_HEADER).unwrap().clone();
+        headers.append(POLLING_OWNER_HEADER, value);
+        assert_eq!(
+            PollingRequestOwnership::from_headers(&headers),
+            PollingRequestOwnership::Invalid
+        );
+        assert!(PollingRequestOwner {
+            nca_id: "tenant".into(),
+            subject: String::new()
+        }
+        .to_headers()
+        .is_err());
+    }
+
+    #[test]
+    fn invocation_region_headers_reject_invalid_config() {
+        let nats_properties = NatsProperties {
+            region: "invalid\nregion".into(),
+            ..Default::default()
+        };
+
+        let error = NatsService::invocation_region_headers(&nats_properties).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("invalid configured invocation region"));
+    }
 
     #[derive(Serialize)]
     struct TokenResponse {

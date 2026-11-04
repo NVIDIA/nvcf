@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+  annotations:
+    vault.hashicorp.com/agent-inject: 'true'
+    vault.hashicorp.com/agent-init-first: 'true'
+    vault.hashicorp.com/agent-configmap: 'nginx-vault-config'
+    vault.hashicorp.com/service: http://openbao-server.vault-system.svc.cluster.local:8200
+spec:
+  serviceAccountName: nvcf-api
+  volumes:
+    - name: token
+      projected:
+        sources:
+        - serviceAccountToken:
+            path: token
+            expirationSeconds: 3600
+            audience: http://openbao-server.vault-system.svc.cluster.local:8200
+  containers:
+    - name: nginx
+      image: nginx:latest
+      volumeMounts:
+        - name: token
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-configmap
+data:
+  config-init.hcl: |
+    "auto_auth" = {
+      "method" = {
+        "mount_path" = "auth/jwt"
+        "config" = {
+          "role" = "nginx"
+          "path" = "/run/secrets/kubernetes.io/serviceaccount/token"
+          "remove_jwt_after_reading" = false
+        }
+        "type" = "jwt"
+      }
+      "sink" = {
+        "config" = {
+          "path" = "/home/vault/.vault-token"
+        }
+        "type" = "file"
+      }
+    }
+
+    "exit_after_auth" = true
+
+    "template" = {
+      "source"      = "/vault/configs/config.ctmpl"
+      "destination" = "/vault/secrets/test"
+      "exec" = {
+        "command" = "cat /vault/secrets/test"
+      }
+    }
+
+    "pid_file" = "/home/vault/.pid"
+
+  config.hcl: |
+    "auto_auth" = {
+      "method" = {
+        "mount_path" = "auth/jwt"
+        "config" = {
+          "role" = "nginx"
+          "path" = "/run/secrets/kubernetes.io/serviceaccount/token"
+          "remove_jwt_after_reading" = false
+        }
+        "type" = "jwt"
+      }
+
+      "sink" = {
+        "config" = {
+          "path" = "/home/vault/.vault-token"
+        }
+        "type" = "file"
+      }
+    }
+
+    "template" = {
+      "source"      = "/vault/configs/config.ctmpl"
+      "destination" = "/vault/secrets/test"
+      "exec" = {
+        "command" = "cat /vault/secrets/test"
+      }
+    }
+
+    "pid_file" = "/home/vault/.pid"
+
+  config.ctmpl: |
+    {{ with secret "services/nginx/kv/test" }}
+    { "foo": "{{ .Data.data.foo }}" }
+    {{ end }}

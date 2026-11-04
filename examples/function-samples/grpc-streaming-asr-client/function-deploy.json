@@ -1,0 +1,11 @@
+{
+  "deploymentSpecifications": [
+    {
+      "instanceType": "<instance-type>",
+      "backend": "<backend>",
+      "gpu": "<gpu>",
+      "maxInstances": 1,
+      "minInstances": 1
+    }
+  ]
+}

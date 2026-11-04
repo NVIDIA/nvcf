@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "queue",
+    srcs = ["priority_queue.go"],
+    importpath = "github.com/hashicorp/vault/sdk/queue",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_mitchellh_copystructure//:copystructure"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":queue",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "queue_test",
+    srcs = ["priority_queue_test.go"],
+    embed = [":queue"],
+)

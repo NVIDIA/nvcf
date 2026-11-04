@@ -24,7 +24,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/sirupsen/logrus"
 	admissionv1 "k8s.io/api/admission/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -41,8 +41,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/miniservice"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/miniservice"
 )
 
 type helmMiniServiceValWebhookHandler struct {
@@ -72,7 +72,7 @@ func (v *helmMiniServiceValWebhookHandler) Handle(ctx context.Context, req admis
 		"gvk": gvk,
 	}).Debug("Validating request")
 
-	if !miniservice.HelmChartInstanceServiceAccountNameRegexp.MatchString(req.UserInfo.Username) {
+	if !miniservice.InstanceServiceAccountNameRegexp.MatchString(req.UserInfo.Username) {
 		log.WithField("user", req.UserInfo.Username).
 			Debug("Skipping validation of non-ICMS instance user request")
 		return admission.Allowed("non-ICMS instance user request skipped")

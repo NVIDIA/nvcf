@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="460" viewBox="0 0 1280 460" role="img" aria-labelledby="title desc">
+  <title id="title">NVCF HTTP invocation path</title>
+  <desc id="desc">Client traffic flows through an optional Vanity or custom edge, the public HTTP invocation endpoint, Invocation Service, NATS and worker request path, the worker sidecar, and the customer HTTP function.</desc>
+  <defs>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --svg-bg: #f7f9f7;
+        --svg-panel: #ffffff;
+        --svg-panel-muted: #eef3ef;
+        --svg-border: #c8d0d6;
+        --svg-text: #1f2520;
+        --svg-muted: #53605a;
+        --svg-line: #53605a;
+        --nvidia-green: #76b900;
+        --svg-blue: #1565c0;
+        --svg-red: #c62828;
+        --svg-amber: #f9a825;
+        --svg-icon-on-accent: #ffffff;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --svg-bg: #101512;
+          --svg-panel: #18201b;
+          --svg-panel-muted: #202a24;
+          --svg-border: #50605a;
+          --svg-text: #f3f7f2;
+          --svg-muted: #b9c8b7;
+          --svg-line: #cbd8c9;
+          --nvidia-green: #8bd80f;
+          --svg-blue: #6eb6ff;
+          --svg-red: #ff8a80;
+          --svg-amber: #ffd166;
+        }
+      }
+
+      .bg { fill: var(--svg-bg); }
+      .panel { fill: var(--svg-panel); stroke: var(--svg-border); stroke-width: 2; }
+      .panel-muted { fill: var(--svg-panel-muted); stroke: var(--svg-border); stroke-width: 2; }
+      .optional { fill: var(--svg-panel); stroke: var(--svg-amber); stroke-width: 2; stroke-dasharray: 8 6; }
+      .service { fill: var(--svg-panel); stroke: var(--nvidia-green); stroke-width: 3; }
+      .compute { fill: var(--svg-panel-muted); stroke: var(--svg-blue); stroke-width: 2; }
+      .title { fill: var(--svg-text); font: 700 26px Arial, sans-serif; }
+      .label { fill: var(--svg-text); font: 700 17px Arial, sans-serif; }
+      .small { fill: var(--svg-muted); font: 14px Arial, sans-serif; }
+      .line { stroke: var(--svg-line); stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .arrowhead { fill: var(--svg-line); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="460" />
+  <text class="title" x="48" y="48">HTTP Invocation Path</text>
+  <text class="small" x="48" y="78">Standard HTTP function traffic is queued to the selected worker path and returned through Invocation Service.</text>
+
+  <rect class="panel" x="40" y="155" width="140" height="88" rx="8" />
+  <text class="label" x="110" y="192" text-anchor="middle">Client</text>
+  <text class="small" x="110" y="218" text-anchor="middle">HTTP request</text>
+
+  <rect class="optional" x="220" y="155" width="168" height="88" rx="8" />
+  <text class="label" x="304" y="185" text-anchor="middle">Optional Vanity</text>
+  <text class="small" x="304" y="211" text-anchor="middle">or custom edge</text>
+  <text class="small" x="304" y="232" text-anchor="middle">front door</text>
+
+  <rect class="panel-muted" x="428" y="155" width="196" height="88" rx="8" />
+  <text class="label" x="526" y="185" text-anchor="middle">Public HTTP</text>
+  <text class="small" x="526" y="211" text-anchor="middle">invocation endpoint</text>
+  <text class="small" x="526" y="232" text-anchor="middle">*.invocation.&lt;domain&gt;</text>
+
+  <rect class="service" x="664" y="145" width="206" height="108" rx="8" />
+  <text class="label" x="767" y="177" text-anchor="middle">Invocation Service</text>
+  <text class="small" x="767" y="204" text-anchor="middle">auth, request encode</text>
+  <text class="small" x="767" y="226" text-anchor="middle">response stream</text>
+
+  <rect class="service" x="920" y="155" width="178" height="88" rx="8" />
+  <text class="label" x="1009" y="185" text-anchor="middle">NATS / Worker</text>
+  <text class="label" x="1009" y="207" text-anchor="middle">Request Path</text>
+  <text class="small" x="1009" y="232" text-anchor="middle">queue and delivery</text>
+
+  <rect class="compute" x="745" y="320" width="208" height="88" rx="8" />
+  <text class="label" x="849" y="351" text-anchor="middle">Worker Sidecar</text>
+  <text class="small" x="849" y="377" text-anchor="middle">decode, attach, relay</text>
+
+  <rect class="compute" x="1004" y="320" width="224" height="88" rx="8" />
+  <text class="label" x="1116" y="351" text-anchor="middle">Customer HTTP</text>
+  <text class="label" x="1116" y="373" text-anchor="middle">Function</text>
+  <text class="small" x="1116" y="398" text-anchor="middle">container endpoint</text>
+
+  <line class="line" x1="180" y1="199" x2="220" y2="199" />
+  <line class="line" x1="388" y1="199" x2="428" y2="199" />
+  <line class="line" x1="624" y1="199" x2="664" y2="199" />
+  <line class="line" x1="870" y1="199" x2="920" y2="199" />
+  <path class="line" d="M 1009 243 L 1009 280 L 849 280 L 849 320" />
+  <line class="line" x1="953" y1="364" x2="1004" y2="364" />
+</svg>

@@ -1,0 +1,8 @@
+NVCF Rate Limiter has been deployed.
+
+Service can be accessed via:
+  gRPC: {{ include "nvcf-ratelimiter.fullname" . }}.{{ include "nvcf-ratelimiter.namespace" . }}.svc.cluster.local:7777
+  HTTP Health: {{ include "nvcf-ratelimiter.fullname" . }}.{{ include "nvcf-ratelimiter.namespace" . }}.svc.cluster.local:8080
+  Metrics: {{ include "nvcf-ratelimiter.fullname" . }}.{{ include "nvcf-ratelimiter.namespace" . }}.svc.cluster.local:7776
+
+For more information about NVCF Rate Limiter, please refer to the documentation. 

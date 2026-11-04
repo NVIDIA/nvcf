@@ -69,7 +69,7 @@ API_KEYS_OWNER_ID: "svc@nvcf-api.local"
 # Development API endpoints (if direct mode is used)
 NVCF_BASE_HTTP_URL: "https://api-dev.nvcf.nvidia.com"
 NVCF_BASE_GRPC_URL: "grpc-dev.nvcf.nvidia.com:443"
-NVCF_INVOKE: "https://invoke-dev.nvcf.nvidia.com"
+NVCF_INVOKE_URL: "https://invocation-dev.nvcf.nvidia.com"
 
 # Note: Tokens are managed automatically by the CLI
 # Run 'nvcf-cli --config dev.yaml init' to generate admin token

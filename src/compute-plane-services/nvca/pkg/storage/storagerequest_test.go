@@ -22,23 +22,23 @@ import (
 	"os"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task"
-	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task"
+	nvcaconfig "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
-	nvcav1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
-	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	nvcav1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	featureflagmock "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	nvcatypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 func TestNewModelCacheStorageRequest(t *testing.T) {
@@ -289,7 +289,14 @@ func TestNewModelCacheStorageRequest(t *testing.T) {
 			if tt.expError != "" {
 				assert.EqualError(t, err, tt.expError)
 			} else {
+				// The cache-handle label is stamped at creation so the
+				// controller fan-out can map writer-job/PV events back to the SR.
+				if tt.expected.Labels == nil {
+					tt.expected.Labels = map[string]string{}
+				}
+				tt.expected.Labels[modelCacheHandleLabelKey] = tt.expected.Spec.ModelCache.CacheHandle
 				assert.Equal(t, tt.expected, actual)
+				assert.Equal(t, actual.Spec.ModelCache.CacheHandle, actual.Labels[modelCacheHandleLabelKey])
 			}
 		})
 	}
@@ -668,6 +675,60 @@ func TestGetStorageRequestErrorLog(t *testing.T) {
 				},
 			},
 			expectedError: fmt.Sprintf("%s driver must be installed when %s feature flag is enabled. Please contact your cluster administrator to install the driver.", SMBCSIDriverName, featureflag.HelmSharedStorage.Key),
+		},
+		{
+			name: "failed phase with rejected shared-storage object",
+			storageReq: &nvcav2beta1.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-storage"},
+				Status: nvcav2beta1.StorageRequestStatus{
+					Phase: nvcav2beta1.StorageFailed,
+					Conditions: []metav1.Condition{
+						{
+							Type:    ConditionTypeSharedStorageResourcesCreated,
+							Status:  metav1.ConditionFalse,
+							Reason:  ConditionReasonAdmissionRejected,
+							Message: "failed to create shared-storage object nvcf-smb-server: Pod is invalid: requests 500m above limit 100m",
+						},
+					},
+				},
+			},
+			expectedError: "failed to create shared-storage object nvcf-smb-server: Pod is invalid: requests 500m above limit 100m",
+		},
+		{
+			name: "failed phase with SMB server pod not starting",
+			storageReq: &nvcav2beta1.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-storage"},
+				Status: nvcav2beta1.StorageRequestStatus{
+					Phase: nvcav2beta1.StorageFailed,
+					Conditions: []metav1.Condition{
+						{
+							Type:    ConditionTypeSMBServerReady,
+							Status:  metav1.ConditionFalse,
+							Reason:  ConditionReasonUnschedulable,
+							Message: "pod nvcf-smb-server cannot be scheduled: 0/3 nodes are available: 3 Insufficient cpu.",
+						},
+					},
+				},
+			},
+			expectedError: "pod nvcf-smb-server cannot be scheduled: 0/3 nodes are available: 3 Insufficient cpu.",
+		},
+		{
+			name: "in-progress phase with SMB server pod not starting reports nothing yet",
+			storageReq: &nvcav2beta1.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-storage"},
+				Status: nvcav2beta1.StorageRequestStatus{
+					Phase: nvcav2beta1.StorageInitRunning,
+					Conditions: []metav1.Condition{
+						{
+							Type:    ConditionTypeSMBServerReady,
+							Status:  metav1.ConditionFalse,
+							Reason:  ConditionReasonImagePullFailed,
+							Message: "container \"smb-server\" cannot pull image",
+						},
+					},
+				},
+			},
+			expectedError: "",
 		},
 		{
 			name: "failed phase without SMB CSI driver condition",

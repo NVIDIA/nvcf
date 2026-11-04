@@ -1,0 +1,5 @@
+.idea
+.env
+
+# Bazel local symlinks (output, execroot, testlogs).
+/bazel-*

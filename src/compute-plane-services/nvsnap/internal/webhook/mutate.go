@@ -1,0 +1,1318 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+// Package webhook implements the customer-facing surface for transparent
+// rootfs-only restore: a mutating admission webhook that injects cache
+// volumes + mounts into pods marked with the nvsnap.io/restore-from
+// annotation. See docs/ARCHITECTURE.md §2.
+//
+// This file is the pure-logic Mutator (pod in → JSON Patch ops out). The
+// HTTPS / cert / AdmissionReview transport layer lives separately so the
+// mutation rules are unit-testable without a running server.
+package webhook
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel/attribute"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
+
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
+)
+
+// RestoreFromAnnotation is the customer-facing opt-in. Value forms:
+//
+//	"auto"           webhook computes the hash from the pod spec
+//	"<hash>"         pin to a specific full sha256 hex (rollback / debug)
+//	"<short-hash>"   12-hex-char prefix; resolved by the backend
+const RestoreFromAnnotation = "nvsnap.io/restore-from"
+
+// InjectLabel on a pod (or, via the registration's namespaceSelector, on
+// its namespace) set to InjectDisabled opts the pod out of every nvsnap
+// mutation. The MutatingWebhookConfiguration filters on it so labelled
+// pods are never sent here; Mutate checks it again so a stale
+// registration still admits them unchanged.
+const InjectLabel = "nvsnap.io/inject"
+
+// InjectDisabled is the InjectLabel value that opts a pod out.
+const InjectDisabled = "false"
+
+// TargetNodeAnnotation overrides the auto-pin to manifest.CapturedOnNodes.
+// When set, the webhook injects nodeAffinity to this single node instead.
+// Used for cross-node restore demos (showcases tier-2/tier-3 cascade fetch)
+// and any case where the operator wants control over scheduling rather than
+// letting nvsnap pin to the capture-source node.
+//
+// If the named node does not actually have the capture cached, the agent's
+// EnsureCaptureLocal cascade kicks in: tier-2 peer fetch from a node in
+// CapturedOnNodes, falling back to tier-3 blobstore.
+const TargetNodeAnnotation = "nvsnap.io/target-node"
+
+// CaptureLabel is the opt-in marker for capture-side injection. cachedir
+// capture (the /opt/nvsnap emptyDir + cache-env redirect) is only injected
+// into pods carrying nvsnap.io/capture: "true" — the SAME label the rootfs
+// capture watcher gates on (rootfsonly.DefaultCaptureLabel). Without it the
+// webhook would inject into every cold pod in scope, including unrelated
+// system/infra pods (e.g. helm-chart NVCF miniservice pods), which both
+// pollutes those pods and can wedge controllers that re-apply the pod spec
+// (volume-order change → forbidden pod update). Opt-in keeps nvsnap generic:
+// no orchestrator-specific knowledge — whoever deploys (a human, Helm, or
+// NVCA, which knows container-function vs helm/miniservice) sets the label
+// only on workloads it wants captured. Default (no label) = no injection.
+const CaptureLabel = "nvsnap.io/capture"
+
+// PatchOp is one entry in a JSON Patch (RFC 6902) document.
+//
+// K8s admission webhooks return base64(JSON([]PatchOp)) in
+// AdmissionResponse.Patch + PatchType=JSONPatch. Encoding lives in the
+// HTTP layer.
+type PatchOp struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value any    `json:"value,omitempty"`
+}
+
+// mergeableArrayRe matches the per-container appendable arrays whose
+// bootstrap (`add <array> []`) the inject and restore builders each
+// compute independently from the original pod.
+var mergeableArrayRe = regexp.MustCompile(`^/spec/containers/\d+/(volumeMounts|env)$`)
+
+// isMergeableArray reports whether path addresses one of the pod arrays
+// that multiple builders may bootstrap (so the plan must be normalized).
+func isMergeableArray(path string) bool {
+	return path == "/spec/volumes" || path == "/spec/initContainers" || mergeableArrayRe.MatchString(path)
+}
+
+// sliceElems returns the elements of a slice value of any element type:
+// patchers write typed slices ([]corev1.EnvVar, []corev1.Volume), and a
+// second whole-array add of the same path must become appends, not replace
+// the first (the gpushare variables were lost to the debug variables on a
+// container with no env of its own).
+func sliceElems(v any) ([]any, bool) {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Slice {
+		return nil, false
+	}
+	out := make([]any, rv.Len())
+	for i := range out {
+		out[i] = rv.Index(i).Interface()
+	}
+	return out, true
+}
+
+// patchElementKey is what makes two elements of array arr the same
+// element. A volume, an env var or an init container is one per name. A
+// volume mount is the whole mount: one volume can be mounted at several
+// paths (cachedir's subdirectories), and two builders' mounts of one name
+// must not be merged into whichever came first, dropping the other's
+// path, subPath, subPathExpr or read-only flag. Mounts that clash on a
+// path are left for the API to refuse.
+func patchElementKey(arr string, v any) string {
+	if strings.HasSuffix(arr, "/volumeMounts") {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+	return patchElementName(v)
+}
+
+// patchElementName pulls the "name" field out of a patch value (volume,
+// volumeMount, initContainer, env). JSON round-trip so it works for both
+// map[string]any and typed corev1 values (restore builders).
+// Returns "" when there's no name (then the element can't be deduped).
+func patchElementName(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	var named struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(b, &named) != nil {
+		return ""
+	}
+	return named.Name
+}
+
+// mergePatchPlan reconciles the concatenation of inject + restore
+// patches so they don't clobber each other (nvsnap#93). Both sides build
+// array bootstraps from the ORIGINAL pod, so a pod with empty spec.volumes
+// (or empty main-container volumeMounts/env) gets TWO `add <array> [..]`
+// ops — and under JSON Patch the second REPLACES the first, dropping the
+// injected volume/mount. The same arrays can also receive a
+// duplicate element (two nvsnap-lib volumes).
+//
+// Normalization, preserving order:
+//   - the FIRST bootstrap `add <array> [..]` for a mergeable array is kept
+//     (its own elements deduped by name);
+//   - any LATER bootstrap of the same array is rewritten into per-element
+//     `add <array>/- <elem>` appends;
+//   - `add <array>/- <elem>` ops are dropped when an element of that name
+//     was already emitted for the array.
+//
+// Non-mergeable paths (command, args, securityContext, annotations, …) and
+// non-add ops pass through untouched.
+// isMetadataMap reports whether path is one of the pod metadata maps a
+// metaPatcher bootstraps.
+func isMetadataMap(path string) bool {
+	return path == "/metadata/labels" || path == "/metadata/annotations"
+}
+
+func mergePatchPlan(patches []PatchOp) []PatchOp {
+	bootstrapped := map[string]bool{}    // array path -> already has a bootstrap add
+	seen := map[string]map[string]bool{} // array path -> element names emitted
+	markSeen := func(arr, name string) {
+		if name == "" {
+			return
+		}
+		if seen[arr] == nil {
+			seen[arr] = map[string]bool{}
+		}
+		seen[arr][name] = true
+	}
+	out := make([]PatchOp, 0, len(patches))
+	for _, p := range patches {
+		if p.Op != "add" {
+			out = append(out, p)
+			continue
+		}
+		// Metadata maps: a patcher bootstraps /metadata/labels or
+		// /metadata/annotations with an empty map when the pod has none.
+		// Several patchers take part in one admission (model volume, cache
+		// set, election), and a second bootstrap would replace the map and
+		// drop every key the first one set (a Deployment pod with no
+		// annotations lost nvsnap.io/model-uri, OCI FSS 2026-10-02). Keep
+		// the first bootstrap only.
+		if isMetadataMap(p.Path) {
+			if m, ok := p.Value.(map[string]string); ok && len(m) == 0 {
+				if bootstrapped[p.Path] {
+					continue
+				}
+				bootstrapped[p.Path] = true
+			}
+			out = append(out, p)
+			continue
+		}
+		// Element-append form: /spec/volumes/- etc.
+		if base := strings.TrimSuffix(p.Path, "/-"); base != p.Path && isMergeableArray(base) {
+			name := patchElementKey(base, p.Value)
+			if name != "" && seen[base][name] {
+				continue // duplicate element (e.g. a second nvsnap-lib) — drop
+			}
+			markSeen(base, name)
+			out = append(out, p)
+			continue
+		}
+		// Whole-array bootstrap form: /spec/volumes with a slice value.
+		if isMergeableArray(p.Path) {
+			elems, ok := sliceElems(p.Value)
+			if !ok {
+				out = append(out, p) // not the bootstrap shape we manage
+				continue
+			}
+			if !bootstrapped[p.Path] {
+				bootstrapped[p.Path] = true
+				kept := make([]any, 0, len(elems))
+				for _, e := range elems {
+					name := patchElementKey(p.Path, e)
+					if name != "" && seen[p.Path][name] {
+						continue
+					}
+					markSeen(p.Path, name)
+					kept = append(kept, e)
+				}
+				out = append(out, PatchOp{Op: "add", Path: p.Path, Value: kept})
+				continue
+			}
+			// Array already exists — append each fresh element instead of
+			// replacing the array.
+			for _, e := range elems {
+				name := patchElementKey(p.Path, e)
+				if name != "" && seen[p.Path][name] {
+					continue
+				}
+				markSeen(p.Path, name)
+				out = append(out, PatchOp{Op: "add", Path: p.Path + "/-", Value: e})
+			}
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// Mutator decides what to inject into a pod based on its
+// nvsnap.io/restore-from annotation.
+//
+// Concurrency: safe; the underlying Backend must be safe for concurrent
+// Stat/Mount calls (Local is, GPD-ROX in #99 will be).
+type Mutator struct {
+	// Backend is the L1/L3 storage backend (rootfs hostPath + peer
+	// cascade). Required. Must satisfy checkpointstore.Backend (Store
+	// + Mounter).
+	Backend checkpointstore.Backend
+
+	// L2Backend is the optional per-capture PVC backend (nvsnap#63).
+	// When set, Mutate calls its Mount() first; on success the
+	// pod gets a PVC volumeMount instead of the L1 hostPath +
+	// nodeAffinity. On ErrNotFound (rox-<hash> not Bound yet, or no
+	// L2 promote for this hash) the mutator falls through to the
+	// L1 path.
+	L2Backend checkpointstore.Backend
+
+	// L2MountPath is where the rox-<hash> PVC mounts inside the
+	// restored pod's main container. The restore reads from
+	// $CHECKPOINT_PATH, which the mutator points at this directory.
+	// Default "/nvsnap-checkpoint".
+	L2MountPath string
+
+	// CacheDir enables "cachedir" mode (the ember cache-reuse path) when
+	// non-empty (e.g. "/opt/nvsnap"). On capture pods the webhook injects
+	// the cache/model env vars + an emptyDir here; on restore pods whose
+	// manifest.CaptureMethod=="cachedir" it mounts the rox read-only here
+	// directly (no overlayfs) + the prewarm shim. MUST match the agent's
+	// --pod-cache-dir. Empty = standard rootfs/criu paths only.
+	CacheDir string
+
+	// CacheEnvFile is the path to a mounted ConfigMap file holding the
+	// cachedir env template (NAME=value lines, {root}/{cache}/{model}
+	// placeholders). Read on CAPTURE inject only — lets ops add/remove
+	// cache env vars without an agent rebuild. Empty or unreadable →
+	// built-in default template (fail-safe). Restore never reads it; it
+	// replays the env stamped into the manifest at capture. Wired from
+	// the agent's --cachedir-env-file flag (a mounted ConfigMap).
+	CacheEnvFile string
+
+	// StorageProfile is the profile resolved for the L2 StorageClass
+	// (nil when L2 is off or nothing matched). The cachedir restore takes
+	// its page-cache prewarm policy from here: whether to add the
+	// nvsnap-prewarm init container and how many readers it runs. A pod's
+	// own NVSNAP_PREWARM=0/1 overrides the profile either way.
+	StorageProfile *checkpointstore.StorageProfile
+
+	// Elector, when set, turns on the one-downloader-per-hash election
+	// for model workloads that carry no nvsnap.io/restore-from: the
+	// webhook composes the hash, restores when a promoted capture exists,
+	// otherwise elects a leader to capture and gates the followers'
+	// scheduling until the promote binds. nil keeps the label-driven
+	// capture and explicit-hash restore paths only. See election.go.
+	Elector election.Elector
+	// ArchScope establishes the GPU architecture an elected pod will run
+	// on; the election needs it, and is off without it.
+	ArchScope election.ArchScope
+
+	// ModelVolume, when set, turns on the write-once model volume for
+	// Helm-function pods (docs/design/helm-shared-model-volume.md):
+	// the download lands in a per-identity shared volume, one writer,
+	// readers wait for the completion marker. Takes precedence over the
+	// gate-and-promote election above. Groups resolves identity for
+	// group members that name no model (LWS workers); may be nil.
+	// ModelWaitDeadline bounds a reader's wait before it downloads itself.
+	ModelVolume *modelvolume.Provisioner
+	// CacheVolume shares compile caches between Helm pods on block storage
+	// (KindCache provisioner); nil disables.
+	CacheVolume       *modelvolume.Provisioner
+	Groups            modelid.GroupResolver
+	ModelWaitDeadline time.Duration
+	// ModelHostRoot is the host directory where hostPath-mode readers get
+	// their landing and the agent binds completed model volumes:
+	// <root>/<identity key>.
+	ModelHostRoot string
+	// ViewMinter exposes a primary volume in the admitted pod's namespace:
+	// the read-only view readers mount, and on storage shared while
+	// written the read-write view the download Job writes through. nil
+	// leaves readers pending for the agent to serve.
+	ViewMinter ViewMinter
+
+	// L2WaitImage is the nvsnap-l2-wait init-container image ref
+	// (nvsnap#147). When non-empty, tryL2Mount prepends a
+	// nvsnap-l2-wait init container that polls nvsnap-server's
+	// /pvc-state endpoint until the L2 promote reaches a terminal
+	// state. Without it the rox PVC reference would be in the pod
+	// spec but kubelet would try to mount it before the agent's
+	// snap+clone finished — racing the WaitForFirstConsumer
+	// binder. Empty disables the inject (back-compat for clusters
+	// where nvsnap-l2-wait isn't deployed yet); pods will Pending
+	// until the rox PVC binds, which works on already-promoted
+	// hashes but stalls on in-flight ones.
+	L2WaitImage string
+
+	// AgentPlacement is the agent DaemonSet's node placement; the download
+	// Job runs within it.
+	AgentPlacement AgentPlacement
+
+	// DynamoNamespace is the fixed Dynamo namespace the webhook gives
+	// every Dynamo component whose etcd and NATS are its instance's own
+	// (dynamo.go). Empty leaves the operator's.
+	DynamoNamespace string
+	// DynamoLeaseTTL, in seconds, is the etcd lease TTL (ETCD_LEASE_TTL)
+	// those components get unless they set one; 0 leaves Dynamo's default.
+	DynamoLeaseTTL int
+	// CaptureLivenessBudget, in seconds, is the silence the liveness
+	// probes of a pod a capture may freeze are widened to tolerate, so the
+	// freeze does not get the pod restarted (liveness.go); 0 leaves probes
+	// as they are.
+	CaptureLivenessBudget int
+	// CaptureCandidate reports whether a pod without GPUs may be frozen by
+	// a capture: a companion of an instance opted into capture. A GPU pod
+	// is a candidate whenever it is set. Nil (captures do not freeze
+	// processes: the capture method is not CRIU) widens no probe.
+	CaptureCandidate func(ctx context.Context, pod *corev1.Pod) bool
+
+	// CRIUCompanionAdmits reports whether a pod without GPUs may be admitted
+	// as a companion of a group restore: not while a GPU rank of its
+	// namespace already runs. Nil admits.
+	CRIUCompanionAdmits func(ctx context.Context, pod *corev1.Pod) (bool, string)
+	// CRIUCompanionSlot claims for pod one of slots, the slots of identical
+	// companions of group g, that no other placeholder of its instance
+	// holds; two pods admitted together never get the same one. Nil
+	// leaves identical companions to start cold.
+	CRIUCompanionSlot func(ctx context.Context, pod *corev1.Pod, g CRIUGroup, slots []int) (int, error)
+
+	// NvSnapServerURL is the in-cluster URL the nvsnap-l2-wait init
+	// container POSTs to. Typically
+	// http://nvsnap-server.<ns>.svc.cluster.local:8080. Empty
+	// disables the L2 wait inject (paired with empty L2WaitImage).
+	NvSnapServerURL string
+
+	// L2WaitTimeout caps the nvsnap-l2-wait deadline. Empty defaults
+	// to the binary's own 15 min default. Operators bump this for
+	// very large checkpoints (~200 GiB+ on the slow default
+	// snapshot class — not the hdml-images one).
+	L2WaitTimeout string
+
+	// HostBundleRoot is the on-host directory where the nvsnap-agent
+	// DaemonSet stages the restore bundle. Function pods mount
+	// {root}/nvsnap + {root}/nvsnap-lib via hostPath. Empty → default
+	// "/var/lib/nvsnap/bundle" (DefaultHostBundleRoot in
+	// bundle_mount.go).
+	//
+	// Changing this path requires coordinated edits in:
+	//   - the agent DaemonSet's host-bundle hostPath volume
+	//   - the DaemonSet's nvsnap-bundle-stage initContainer env vars
+	//   - this field
+	// Operators don't get a Helm knob, by design: a single
+	// config value can't safely span all three.
+	HostBundleRoot string
+	// BundleID is the node bundle version the agent staged
+	// (<root>/current-bundle); pods mount <root>/versions/<BundleID>.
+	// Empty mounts the legacy <root>/nvsnap.
+	BundleID string
+
+	// GPUShareHostRoot is the node directory holding per-pod gpushare chunk
+	// stores (gpushare.go). Empty = DefaultGPUShareHostRoot.
+	GPUShareHostRoot string
+
+	// Composer translates a pod spec to a checkpointstore.HashInput when
+	// the annotation value is "auto". Required for "auto" handling; if
+	// nil and the annotation is "auto", Mutate fails open (returns nil,
+	// nil) so a misconfigured webhook doesn't break admission.
+	Composer *rootfsonly.HashInputComposer
+
+	// MainContainer is the index of the container the cache is injected
+	// into. Most nvsnap workloads are single-container (0).
+	MainContainer int
+
+	// CheckpointHostRoot is the node directory holding CRIU checkpoints;
+	// a CRIU restore pod mounts it at /checkpoints.
+	CheckpointHostRoot string
+	// CRIURestoreBlocked reports a checkpoint that failed to restore; its
+	// pods start fresh instead. Nil: none is blocked.
+	CRIURestoreBlocked func(ctx context.Context, checkpointID string) bool
+	// GPUShareByDefault puts every GPU pod under the gpushare library
+	// unless it is annotated nvsnap.io/gpushare: "false" (CRIU clusters).
+	GPUShareByDefault bool
+	// CRIUCapture is set when the cluster captures with CRIU (agent
+	// captureMethod criu): a restore brings the whole process back, so the
+	// cachedir capture and its compile-cache set do not run, and GPU pods
+	// carry the identity an instance capture keys on (criu_identity.go).
+	CRIUCapture bool
+	// Kube reads what admission needs beyond the pod: the replicas of the
+	// StatefulSet that owns it. Nil: such a pod counts as a group of one.
+	Kube kubernetes.Interface
+	// CRIUGroups returns the complete group capture recorded under a
+	// configuration key (criu_group.go). Nil: multi-pod instances are not
+	// restored with CRIU.
+	CRIUGroups func(ctx context.Context, namespace, cacheURI string) (CRIUGroup, bool)
+	// CRIUScope returns the tenant scope of a namespace, the value a CRIU
+	// capture records under checkpointstore.CRIUScopeMetaKey. Nil: the
+	// scope is the namespace itself.
+	CRIUScope func(ctx context.Context, namespace string) (string, error)
+
+	// CRIUGroupAdmits reports whether pod's instance of several ranks can
+	// restore as a group, and why not: a group restore needs every rank to
+	// arrive as a placeholder together. Not asked for a single pod. nil
+	// admits.
+	CRIUGroupAdmits func(ctx context.Context, pod *corev1.Pod) (bool, string)
+	// DebugEnv sets debug variables on the GPU containers of matching
+	// pods (debug_env.go).
+	DebugEnv []DebugEnv
+
+	// EnsureLocal makes the capture's bytes available to the local
+	// Backend BEFORE Backend.Mount is called. Without this, a webhook
+	// call that lands on a node which doesn't have the capture cached
+	// locally will fail Mount and the pod cold-starts. The agent wires
+	// its own *agent.Agent.EnsureCaptureLocal here; on lookup miss it
+	// peer-fetches from any node in Manifest.CapturedOnNodes before
+	// returning. Nil is allowed — the Mutator skips the call and the
+	// admission either succeeds (local hit) or fails open (Mount error).
+	EnsureLocal func(ctx context.Context, hash string) error
+
+	// Log is the structured logger; nil disables logging.
+	Log logrus.FieldLogger
+
+	// OverlayPreparer hands the webhook a per-restore-pod writable
+	// OverlayFS union layered on top of any captured volume — both
+	// rootfs-extract subpaths (nvsnap#194) AND hostPath/emptyDir
+	// user-data volumes (nvsnap#88). Without it, those injections still
+	// work but the resulting bind-mount is read-only — workloads that
+	// write into the captured tree crash with EROFS. When set, the
+	// webhook calls PrepareOverlay synchronously during admission, then
+	// substitutes the merged overlay path into the patched volume so
+	// kubelet's eventual bind picks up the union. Defined as an
+	// interface (rather than *agent.OverlayManager) to keep the webhook
+	// package free of an agent import.
+	OverlayPreparer OverlayPreparer
+
+	// RestorePrepStrategy chooses how restore-side OverlayFS mounts
+	// are prepared (nvsnap#202).
+	//
+	//   "inline" (default): webhook calls PrepareOverlay
+	//     synchronously during admission. Simple but blows the K8s
+	//     mutating-webhook timeout budget for workloads with many
+	//     extract paths (DeepSeek-V4-Flash produced 355 mounts ~70 s).
+	//   "init-container": webhook emits a nvsnap-mount-prep init
+	//     container into the restored pod plus hostPath volumes
+	//     pointing at the deterministic merged paths. The init
+	//     container POSTs the prep request to the agent's
+	//     /v1/restore/prep, polls until ready, then exits. Mount
+	//     work happens in pod lifecycle (minutes-long budget) instead
+	//     of admission (seconds-long budget). Failure modes surface
+	//     in kubectl describe pod, not silently.
+	//
+	// Wired through Helm: nvsnap.webhook.restorePrepStrategy.
+	RestorePrepStrategy string
+
+	// MountPrepInitImage is the image ref for the nvsnap-mount-prep
+	// init container the init-container strategy injects. Required
+	// when RestorePrepStrategy is "init-container"; ignored
+	// otherwise. Typically matches the nvsnap-agent version so the
+	// init binary and agent API are in lockstep.
+	MountPrepInitImage string
+
+	// AgentHostPort is the agent's HTTP listen port (default 8081).
+	// The nvsnap-mount-prep init container reads it from NVSNAP_AGENT_URL
+	// = http://<host-ip>:<AgentHostPort>; host-ip is plumbed via
+	// downward API in the patched pod spec.
+	AgentHostPort int
+
+	// AgentBaseURL overrides how the injected init container addresses the
+	// agent (GH #490). Empty keeps the hostPort form,
+	// http://$(NVSNAP_HOST_IP):<AgentHostPort>, which requires the API to be
+	// bound to every node's IP. Under pod networking the chart sets this to
+	// the internalTrafficPolicy:Local Service instead, which reaches the
+	// agent on the caller's own node without any node-wide listener.
+	AgentBaseURL string
+}
+
+// OverlayPreparer is implemented by *agent.Agent via PrepareOverlay.
+// The webhook calls it during pod admission for each captured volume
+// (rootfs-extract subpath OR hostPath/emptyDir user-data volume); the
+// returned path is the merged OverlayFS mountpoint to bind into the
+// pod, in place of the lower captured tree.
+//
+// targetNode is the node where the captured tree lives and where the
+// restored pod will be scheduled (via nodeAffinity). When the
+// admitting agent is on a different node, the implementation routes
+// the prepare call via peer HTTP to the target node's agent so the
+// overlay is mounted where kubelet will actually bind it. Empty
+// targetNode = local prep on the admitting agent (single-node test
+// path).
+type OverlayPreparer interface {
+	PrepareOverlay(podUID, captureHash string, vol checkpointstore.VolumeMeta, targetNode string) (string, error)
+
+	// MountpointFor returns the merged-overlay hostPath path WITHOUT
+	// doing any mount work. Used by the init-container strategy
+	// (nvsnap#202) so the webhook can emit pod-spec hostPath
+	// volumes referencing paths the nvsnap-mount-prep init container
+	// will later make ready. Pure function of (overlayRoot, podUID,
+	// vol.MountPath) — never returns an error for valid inputs in
+	// the production *agent.Agent implementation.
+	MountpointFor(podUID string, vol checkpointstore.VolumeMeta) (string, error)
+}
+
+// Mutate returns the patch ops to apply to pod, or nil patches when the
+// pod should be admitted unchanged.
+//
+// Fail-open philosophy: any internal error returns (nil, err) — the HTTP
+// layer logs and admits the pod unchanged. The customer's pod must
+// always be admittable; the webhook is an *optimization*, never a gate.
+//
+// Returns nil patches (no error) when:
+//   - annotation absent or empty
+//   - annotation is "auto" but Composer is nil (misconfig — fail open)
+//   - resolved hash has no matching capture in the backend (cold start path)
+func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error) {
+	if pod == nil {
+		return nil, nil
+	}
+	if m.Backend == nil {
+		return nil, errors.New("webhook: Mutator.Backend is nil")
+	}
+	if pod.Labels[InjectLabel] == InjectDisabled {
+		m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).
+			Info("nvsnap.io/inject=false; admitting pod unchanged")
+		return nil, nil
+	}
+	// No placement for a pod that mounts a volume it does not declare
+	// (tools_mount.go): only a volume the webhook adds could make that
+	// mount valid. Unchanged, the API refuses it.
+	if why := undeclaredMount(pod); why != "" {
+		m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).WithField("reason", why).
+			Warn("the pod mounts a volume it does not declare; admitting it unchanged")
+		return nil, nil
+	}
+
+	ctx, span := tracing.Tracer().Start(ctx, "webhook.mutate")
+	defer span.End()
+	if pod.Namespace != "" {
+		span.SetAttributes(attribute.String("nvsnap.pod", pod.Namespace+"/"+pod.Name))
+	}
+
+	// Patches accumulated by the model-volume and cachedir branches below,
+	// merged ahead of the restore-from patches.
+	var injectPatches []PatchOp
+	// The identity of the spec as received, before any patch below.
+	injectPatches = append(injectPatches, m.admittedConfigPatches(pod)...)
+	// gpushare placement is independent of every other decision below and
+	// rides along with whichever patches they return.
+	injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
+	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
+	injectPatches = append(injectPatches, m.dynamoNamespacePatches(ctx, pod)...)
+	injectPatches = append(injectPatches, m.livenessBudgetPatches(ctx, pod)...)
+	injectPatches = append(injectPatches, m.companionToolsPatches(ctx, pod)...)
+	injectPatches = append(injectPatches, m.criuIdentityPatches(ctx, pod)...)
+
+	raw, ok := pod.Annotations[RestoreFromAnnotation]
+	if !ok || raw == "" {
+		// One downloader per hash for chart-shaped workloads. Handles the
+		// pod fully (restore, leader or follower) or declines with nil so
+		// the label-driven capture inject below keeps its behaviour. An
+		// error is logged and admits the pod unchanged: the election is
+		// an optimisation, never a gate.
+		// A rank of an instance whose group capture exists becomes its
+		// restore placeholder; that carries the model volume too.
+		if gp := m.criuGroupRestorePatches(ctx, pod); gp != nil {
+			return gp, nil
+		}
+		if vp, err := m.modelVolumePatches(ctx, pod); err != nil {
+			m.logger().WithError(err).WithField("pod", election.PodIdentity(pod)).
+				Warn("model volume decision failed; admitting pod unchanged")
+		} else if vp != nil {
+			return mergePatchPlan(append(injectPatches, vp...)), nil
+		}
+		if ep, err := m.electionPatches(ctx, pod); err != nil {
+			m.logger().WithError(err).WithField("pod", election.PodIdentity(pod)).
+				Warn("election failed; admitting pod unchanged")
+		} else if ep != nil {
+			return mergePatchPlan(append(injectPatches, ep...)), nil
+		}
+		// No restore-from — this is a CAPTURE/cold pod. In cachedir mode,
+		// inject the cache/model env vars + the /opt/nvsnap emptyDir so the
+		// engine funnels its caches there and the agent captures that dir.
+		// No-op when cachedir mode is off. (Restore pods get the rox mount
+		// + env from the cachedir restore path below, not this.)
+		injectPatches = append(injectPatches, m.cacheDirCapturePatches(pod)...)
+		// Return whatever model-volume + cachedir-capture produced (may be
+		// nil, which is fine — pod admitted unchanged).
+		if len(injectPatches) > 0 {
+			m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).
+				WithField("patches", len(injectPatches)).
+				Info("inject only")
+			return mergePatchPlan(injectPatches), nil
+		}
+		return nil, nil
+	}
+
+	span.SetAttributes(attribute.Bool("nvsnap.restore", true))
+	resolveCtx, resolveSpan := tracing.Tracer().Start(ctx, "webhook.resolve_hash")
+	hash, err := m.resolveHash(resolveCtx, pod, raw)
+	if err != nil {
+		resolveSpan.RecordError(err)
+		resolveSpan.End()
+		return nil, fmt.Errorf("resolve hash: %w", err)
+	}
+	resolveSpan.End()
+	if hash == "" {
+		return nil, nil
+	}
+	span.SetAttributes(attribute.String("nvsnap.hash", hash))
+
+	// A CRIU capture: the pod becomes the placeholder the agent restores
+	// the captured process into.
+	plog := m.logger().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "hash": checkpointstore.ShortHash(hash)})
+	if id, cman := m.criuRestoreFor(ctx, pod, hash, plog); id != "" {
+		cp, err := m.criuRestorePatches(pod, id, cman)
+		if err != nil {
+			plog.WithError(err).Warn("CRIU restore: cannot prepare the pod; cold start")
+			return mergePatchPlan(injectPatches), nil
+		}
+		plog.WithField("checkpoint", id).Info("CRIU restore: pod admitted as the restore placeholder")
+		// Not injectPatches: a gpushare restore mounts the checkpoint's
+		// chunk store, not the pod's own empty one.
+		return mergePatchPlan(withPIDReserve(pod, cp)), nil
+	}
+
+	// Resolve the manifest so the L2 dispatch can branch on the capture
+	// TYPE, not merely on "does a rox PVC exist". A rootfs capture
+	// promoted to an L2 PVC is a filesystem tree, NOT a CRIU dump —
+	// routing it through the CRIU branch would hang the restore waiting
+	// for inventory.img. See docs/ARCHITECTURE.md §2.
+	//
+	// ErrNotFound is tolerated here, NOT fatal: a CRIU capture lives only
+	// on the L2 PVC, so the L1/ConfigMap Backend may legitimately not have
+	// a manifest. In that case we can't read the type — preserve the
+	// historical behavior (treat as CRIU) and only cold-admit after the L2
+	// path also misses.
+	manifest, statErr := m.Backend.Stat(ctx, hash)
+	if statErr != nil && !errors.Is(statErr, checkpointstore.ErrNotFound) {
+		return nil, fmt.Errorf("backend stat: %w", statErr)
+	}
+	haveManifest := statErr == nil
+	// Dispatch on the AUTHORITATIVE capture method stamped at capture
+	// time (v0.0.56). Fall back to the shape heuristic only for
+	// pre-v0.0.56 manifests with no CaptureMethod set.
+	rootfs := haveManifest && (manifest.CaptureMethod == "rootfs" ||
+		(manifest.CaptureMethod == "" && manifestIsRootfs(manifest)))
+	// cachedir: the rox is a single cache+model tree; mount it RO at
+	// m.CacheDir directly (no overlay) + prewarm shim (ember path).
+	cachedir := haveManifest && manifest.CaptureMethod == "cachedir"
+
+	// L2 per-capture rox PVC fast path — the fan-out hero. The rox PVC is
+	// ReadOnlyMany so the SAME PVC mounts into N restore pods across N
+	// nodes, with NO node pin and no per-node copy. Two capture types,
+	// two restore mechanisms off the same PVC:
+	//   - CRIU dump: restored by the agent into a placeholder pod from the
+	//     node-local checkpoint dir; no L2 inject (see default branch).
+	//   - rootfs: the engine WRITES into its warmed cache/model dirs, so
+	//     wrap the rox in a per-pod OverlayFS (rox RO lower + emptyDir
+	//     upper) — fan-out AND writable. See rootfs_l2_overlay.go.
+	// Either falls through to the L1 host-overlay path (buildPatches,
+	// pinned to the capture node) on ErrNotFound (rox not Bound).
+	if m.L2Backend != nil {
+		var patches []PatchOp
+		var l2err error
+		path := "l2-pvc-criu"
+		switch {
+		case cachedir:
+			path = "l2-pvc-cachedir"
+			patches, l2err = m.tryL2CacheDir(ctx, pod, hash, manifest)
+		case rootfs:
+			path = "l2-pvc-rootfs-overlay"
+			patches, l2err = m.tryL2RootfsOverlay(ctx, pod, hash, manifest)
+		default:
+			// CRIU dump: there is no in-pod consumer for the rox PVC any
+			// more (the go-criu restore-entrypoint is retired). criu-v2
+			// images restore through the agent and the placeholder pod
+			// (L1 below), so skip the L2 inject for this capture type.
+			path = "l2-pvc-criu-skipped"
+			m.logger().WithField("hash", checkpointstore.ShortHash(hash)).
+				Debug("CRIU capture: L2 rox PVC not injected; agent restores criu-v2 via placeholder")
+		}
+		if l2err == nil && patches != nil {
+			patches = mergePatchPlan(append(injectPatches, patches...))
+			m.logger().WithFields(logrus.Fields{
+				"hash":    checkpointstore.ShortHash(hash),
+				"pod":     pod.Namespace + "/" + pod.Name,
+				"patches": len(patches),
+				"path":    path,
+			}).Info("L2 PVC mount injected")
+			return patches, nil
+		}
+		// ErrNotFound (rox not Bound) → fall through to L1 below. Other
+		// errors logged.
+		if l2err != nil && !errors.Is(l2err, checkpointstore.ErrNotFound) {
+			m.logger().WithError(l2err).WithField("hash", checkpointstore.ShortHash(hash)).
+				Debug("L2 mount failed; falling back to L1 hostPath path")
+		}
+	}
+
+	// L1 path needs the manifest. If L1 doesn't have it (CRIU-only-on-L2
+	// that also missed the L2 branch, or a truly absent capture), cold-start.
+	if !haveManifest {
+		m.logger().WithField("hash", checkpointstore.ShortHash(hash)).
+			Info("no capture for hash; admitting pod unchanged (cold start)")
+		return nil, nil
+	}
+
+	// Note: we do NOT peer-fetch the capture bytes here. The webhook
+	// answers AdmissionReview within a 5s timeout, far too short to
+	// move a 100GB+ rootfs across nodes. Instead the Mutator emits a
+	// nodeAffinity patch (below, via nodeAffinityPatches) pinning the
+	// scheduled pod to a node in Manifest.CapturedOnNodes — where the
+	// bytes already live. Kubelet on that node resolves the injected
+	// hostPath volumeMounts against its own local /var/lib/nvsnap/cache.
+	// EnsureLocal remains a hook on Mutator for "any GPU node" flows
+	// where the scheduler may pick a node without the data and an
+	// async init container needs to pull it before main starts — that
+	// path is not exercised by today's CapturedOnNodes-pinned demo.
+	if m.EnsureLocal != nil {
+		if errEL := m.EnsureLocal(ctx, hash); errEL != nil {
+			return nil, fmt.Errorf("ensure-local cascade: %w", errEL)
+		}
+	}
+
+	if m.MainContainer < 0 || m.MainContainer >= len(pod.Spec.Containers) {
+		return nil, fmt.Errorf("MainContainer index %d out of range (have %d containers)",
+			m.MainContainer, len(pod.Spec.Containers))
+	}
+
+	patches, err := m.buildPatches(ctx, pod, hash, manifest)
+	if err != nil {
+		return nil, err
+	}
+	// Prepend any inject patches so they're applied first by the
+	// API server (in-order JSON Patch application). Restore mount
+	// patches reference indices that the inject may also touch
+	// (initContainers list, env list); doing inject-then-restore keeps
+	// path math straightforward.
+	patches = mergePatchPlan(append(injectPatches, patches...))
+	if len(patches) > 0 {
+		m.logger().WithFields(logrus.Fields{
+			"hash":           checkpointstore.ShortHash(hash),
+			"pod":            pod.Namespace + "/" + pod.Name,
+			"patches":        len(patches),
+			"inject_patches": len(injectPatches),
+		}).Info("rootfs-only mutation applied")
+	}
+	return patches, nil
+}
+
+// resolveHash maps the annotation value to a full hash:
+//   - "auto" → compose HashInput from pod, hash it
+//   - "<full-or-short>" → canonicalize to the full sha256 via Backend.Stat
+//     so all downstream callers (nvsnap-mount-prep, overlay paths, agent
+//     /v1/captures endpoints, peer cascade) see the same form.
+//     Concretely: the on-disk capture cache uses the full 64-char hash
+//     (internal/checkpointstore/local.go), but the CM NAME uses the
+//     short 32-char hash (DNS-1123 length limit). If we pass a short
+//     hash to the init container, it builds <cache_dir>/<short>/...
+//     which never exists — and the customer's restore fails with
+//     "lowerDir ...: no such file or directory" (observed 2026-06-08
+//     on whisper rootfs restore). Stat returns the canonical Manifest
+//     whose Hash field is always the full form, regardless of input.
+func (m *Mutator) resolveHash(ctx context.Context, pod *corev1.Pod, raw string) (string, error) {
+	var seed string
+	switch raw {
+	case "auto":
+		if m.Composer == nil {
+			m.logger().Warn("annotation is 'auto' but Composer is nil; failing open")
+			return "", nil
+		}
+		seed = checkpointstore.ComputeHash(m.Composer.Compose(pod, m.MainContainer))
+	default:
+		seed = raw
+	}
+	// Try to canonicalize to the full sha256 via Backend.Stat. On
+	// success the caller gets manifest.Hash (always full) and passes it
+	// downstream — nvsnap-mount-prep then finds the cache at
+	// <cache_dir>/<full_hash>/... instead of <short>/... which doesn't
+	// exist (observed 2026-06-08 on whisper rootfs restore).
+	//
+	// On ErrNotFound we return `seed` unchanged so the cold-start path
+	// downstream still gets to inject the restore-bundle (nvsnap-tools +
+	// nvsnap-lib hostPath, command rewrite, securityContext). Those
+	// patches must apply regardless of capture presence — the pod waits
+	// for the cascade to populate the cache. The next Stat call at the
+	// rootfs-mount branch will then re-confirm ErrNotFound and admit
+	// the pod unchanged for the rootfs path while restore-bundle
+	// patches still fire.
+	if manifest, err := m.Backend.Stat(ctx, seed); err == nil {
+		return manifest.Hash, nil
+	} else if !errors.Is(err, checkpointstore.ErrNotFound) {
+		return "", err
+	}
+	return seed, nil
+}
+
+// buildPatches constructs the JSON Patch ops to transparently restore a
+// captured workload into a customer pod, with two streams of inputs:
+//
+//  1. manifest.Volumes  — captured user-data volumes (hostPath / emptyDir).
+//     The customer already has these volumes declared; we mount the
+//     captured copy at the same MountPath, shadowing whatever was there.
+//
+//  2. manifest.RootfsExtractPaths — engine cache subpaths discovered
+//     inside the rootfs upperdir at capture time (HF cache, Triton
+//     cache, NIM workspace, etc.). Customer's pod yaml does NOT declare
+//     these; the webhook adds the volume + readOnly mount itself,
+//     shadowing the rootfs view of the path so the engine reads our
+//     cached version.
+//
+// Whole-rootfs entries (Type="rootfs") are skipped — rootfs upperdir
+// injection requires init-container tar-x + entrypoint wrapping; the
+// catalog-driven RootfsExtractPaths flow covers the cacheable subset
+// without modifying the customer's container.
+//
+// Customer-mount conflict policy: if the customer's main container
+// already has a volumeMount at our target MountPath, skip our injection
+// for that path. Customer intent always wins. The capture is then a
+// no-op for that path, which is safe (cold-start fallback).
+//
+// Path-existence handling: K8s API server tolerates `add` to a missing
+// array path by creating it. To keep behavior deterministic across
+// admission engines, we still bootstrap empty slices when missing.
+func (m *Mutator) buildPatches(
+	ctx context.Context, pod *corev1.Pod, hash string, manifest checkpointstore.Manifest,
+) ([]PatchOp, error) {
+	var patches []PatchOp
+
+	if m.MainContainer >= len(pod.Spec.Containers) {
+		return nil, fmt.Errorf("MainContainer index %d out of range", m.MainContainer)
+	}
+	main := pod.Spec.Containers[m.MainContainer]
+
+	// Build the set of MountPaths the customer's main container already
+	// uses. Our injections must NOT collide — customer intent wins.
+	customerMountPaths := make(map[string]struct{}, len(main.VolumeMounts))
+	for _, vm := range main.VolumeMounts {
+		customerMountPaths[vm.MountPath] = struct{}{}
+	}
+
+	// Bootstrap missing slices so subsequent `add /-` ops are unambiguous.
+	if pod.Spec.Volumes == nil {
+		patches = append(patches, PatchOp{Op: "add", Path: "/spec/volumes", Value: []any{}})
+	}
+	if main.VolumeMounts == nil {
+		patches = append(patches, PatchOp{
+			Op:    "add",
+			Path:  fmt.Sprintf("/spec/containers/%d/volumeMounts", m.MainContainer),
+			Value: []any{},
+		})
+	}
+
+	// addedVolumes dedupes spec.volumes entries by Volume.Name. K8s
+	// kubelet pod-worker treats each spec.volumes entry independently, but
+	// CSI plugins mount once per (PV, pod). When two extract paths share
+	// the same backing PVC (GPD-ROX backend: every mount on hash H goes
+	// through the same reader PVC), emitting two spec.volumes with the
+	// same name confuses pod-worker — kubelet creates ONE mount dir, then
+	// loops "unmounted volumes=[<name>]" forever. Dedupe by name; emit
+	// the volumeMount (with its subPath) every time.
+	addedVolumes := map[string]struct{}{}
+
+	emitMount := func(vm checkpointstore.VolumeMeta) error {
+		// Conflict check: customer already mounts something here? Skip.
+		if _, conflict := customerMountPaths[vm.MountPath]; conflict {
+			m.logger().WithFields(logrus.Fields{
+				"hash":       checkpointstore.ShortHash(hash),
+				"mountPath":  vm.MountPath,
+				"volumeName": vm.Name,
+				"volumeType": vm.Type,
+			}).Info("skip injection: customer pod already has volumeMount at this path")
+			return nil
+		}
+		pm, err := m.Backend.Mount(ctx, hash, vm)
+		if err != nil {
+			return fmt.Errorf("backend mount %s (%s): %w", vm.Name, vm.MountPath, err)
+		}
+		if _, dupe := addedVolumes[pm.Volume.Name]; !dupe {
+			patches = append(patches, PatchOp{Op: "add", Path: "/spec/volumes/-", Value: pm.Volume})
+			addedVolumes[pm.Volume.Name] = struct{}{}
+		}
+		patches = append(patches, PatchOp{
+			Op:    "add",
+			Path:  fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer),
+			Value: pm.VolumeMount,
+		})
+		patches = appendInits(pod, patches, pm.InitContainers...)
+		// Track what we just added so a duplicate (e.g. extract path
+		// matching a user-data path) doesn't double-mount.
+		customerMountPaths[vm.MountPath] = struct{}{}
+		return nil
+	}
+
+	// pod.UID is NOT populated in mutating admission webhooks for
+	// CREATE (despite some K8s docs suggesting otherwise — empirically
+	// confirmed 2026-06-05 on GCP-H100-a). Fall back to ns/name as
+	// the overlay key; the pod-delete watcher uses the same mapping.
+	overlayKey := overlayKeyFor(pod)
+
+	// targetNode is the node where the captured tree lives. The pod
+	// will be nodeAffinity-pinned to the same list via step 3, so
+	// kubelet binds there — the overlay MUST live there too. Empty
+	// list (e.g. shared-storage backends) falls back to local prep.
+	overlayTargetNode := ""
+	if len(manifest.CapturedOnNodes) > 0 {
+		overlayTargetNode = manifest.CapturedOnNodes[0]
+	}
+
+	// Strategy selection: "init-container" defers mount work to the
+	// nvsnap-mount-prep init container in the restored pod (nvsnap#202).
+	// "inline" (default) does the mount work synchronously here.
+	// init-container is only viable when all four prereqs are met;
+	// missing any falls back to inline so the webhook stays correct
+	// for partial-rollout clusters.
+	useInitContainer := m.RestorePrepStrategy == "init-container" &&
+		m.OverlayPreparer != nil && overlayKey != "" && m.MountPrepInitImage != ""
+	// Mounts collected during the section-1/2 loops; passed to the
+	// init container as a JSON env var so it knows what to prep.
+	var initMounts []checkpointstore.VolumeMeta
+
+	// tryOverlayMount attempts to wrap a captured volume in a per-pod
+	// OverlayFS union and emit a writable bind. Returns true when the
+	// overlay was successfully injected. Returns false (without erroring)
+	// when there's no OverlayPreparer wired, the overlay key is empty,
+	// or the prepare call fails — caller falls back to RO emitMount.
+	tryOverlayMount := func(vm checkpointstore.VolumeMeta) bool {
+		if m.OverlayPreparer == nil || overlayKey == "" {
+			return false
+		}
+		if _, conflict := customerMountPaths[vm.MountPath]; conflict {
+			m.logger().WithFields(logrus.Fields{
+				"hash":      checkpointstore.ShortHash(hash),
+				"mountPath": vm.MountPath,
+			}).Info("skip overlay injection: customer pod already mounts this path")
+			return true // treated as handled; caller skips
+		}
+		// init-container path: predict the merged mountpoint with
+		// MountpointFor (pure function), emit the hostPath volume
+		// referencing it, queue the vm for the init container's
+		// prep request. NO mount work in admission.
+		if useInitContainer {
+			mp, err := m.OverlayPreparer.MountpointFor(overlayKey, vm)
+			if err != nil {
+				m.logger().WithError(err).WithFields(logrus.Fields{
+					"hash":       checkpointstore.ShortHash(hash),
+					"overlayKey": overlayKey,
+					"volumeType": vm.Type,
+					"mountPath":  vm.MountPath,
+				}).Warn("MountpointFor failed; falling back to RO bind for this path")
+				return false
+			}
+			m.emitOverlayMount(&patches, addedVolumes, vm, mp)
+			initMounts = append(initMounts, vm)
+			return true
+		}
+		// Inline path: do the mount syscall now. See RestorePrepStrategy
+		// for why this is the not-default path going forward.
+		mp, err := m.OverlayPreparer.PrepareOverlay(overlayKey, hash, vm, overlayTargetNode)
+		if err != nil {
+			m.logger().WithError(err).WithFields(logrus.Fields{
+				"hash":       checkpointstore.ShortHash(hash),
+				"overlayKey": overlayKey,
+				"volumeType": vm.Type,
+				"mountPath":  vm.MountPath,
+			}).Warn("overlay prepare failed; falling back to RO bind for this path")
+			return false
+		}
+		m.logger().WithFields(logrus.Fields{
+			"overlayKey": overlayKey,
+			"volumeType": vm.Type,
+			"mountPath":  vm.MountPath,
+			"mountpoint": mp,
+		}).Info("nvsnap#88: overlay prepared, injecting writable bind")
+		m.emitOverlayMount(&patches, addedVolumes, vm, mp)
+		return true
+	}
+
+	// 1. Captured user-data volumes (hostPath / emptyDir). Whole-rootfs
+	//    entries are skipped here. nvsnap#88: try OverlayFS wrap first
+	//    so workloads that write into a captured hostPath cache (e.g.
+	//    HF Transformers writing refs/main into the model cache) don't
+	//    crash with EROFS. Falls back to the original RO bind when no
+	//    OverlayPreparer is wired or the prepare call fails.
+	for _, vm := range manifest.Volumes {
+		if vm.Type == "rootfs" {
+			continue
+		}
+		if tryOverlayMount(vm) {
+			continue
+		}
+		if err := emitMount(vm); err != nil {
+			return nil, err
+		}
+	}
+
+	// 2. Rootfs extract paths (engine cache subpaths). Each becomes a
+	//    synthetic VolumeMeta keyed by the absolute MountPath; the
+	//    Backend resolves to tree/rootfs/<path>. Same OverlayFS treatment
+	//    as section 1 — see nvsnap#194 for the original motivation.
+	// Coalesce extract paths sharing a parent (e.g. /root/.tilelang/cache/<hash>)
+	// into one mount at the parent so runtime os.rename calls across siblings
+	// stay on the same overlay (EXDEV avoidance — see extract_coalesce.go).
+	for _, p := range coalesceExtractCacheRoots(manifest.RootfsExtractPaths) {
+		vm := checkpointstore.VolumeMeta{
+			Name:      "rootfs-extract-" + p.Category,
+			MountPath: p.Path,
+			Type:      "rootfs-extract",
+			SizeBytes: p.SizeBytes,
+			FileCount: p.FileCount,
+		}
+		if tryOverlayMount(vm) {
+			continue
+		}
+		if err := emitMount(vm); err != nil {
+			return nil, err
+		}
+	}
+
+	// 2b. Init-container mount-prep (nvsnap#202). When the
+	//     init-container strategy was used, emit ONE nvsnap-mount-prep
+	//     init container that POSTs the collected initMounts to the
+	//     agent's /v1/restore/prep, polls until ready, exits. The
+	//     hostPath volumes the loops above emitted reference the
+	//     deterministic merged path the init container will set up.
+	//     If initMounts is empty (nothing to prep), the init container
+	//     would be a no-op so we just skip emitting it.
+	if useInitContainer && len(initMounts) > 0 {
+		if err := m.emitMountPrepInitContainer(
+			pod, &patches,
+			overlayKey, hash, overlayTargetNode, initMounts,
+		); err != nil {
+			return nil, fmt.Errorf("emit nvsnap-mount-prep init container: %w", err)
+		}
+		m.logger().WithFields(logrus.Fields{
+			"hash":       checkpointstore.ShortHash(hash),
+			"overlayKey": overlayKey,
+			"mounts":     len(initMounts),
+		}).Info("nvsnap#202: nvsnap-mount-prep init container injected")
+	}
+
+	// 3. Pin FRESH pod to a node where the cache data lives (only
+	//    relevant for per-node-storage backends like Local; for
+	//    shared-storage backends manifest.CapturedOnNodes is empty
+	//    and this is a no-op).
+	//
+	//    nvsnap.io/target-node overrides the auto-pin: when set, the
+	//    pod is pinned to that single node instead, and the agent's
+	//    EnsureCaptureLocal cascade fetches the bytes if they aren't
+	//    already cached locally.
+	affinityNodes := manifest.CapturedOnNodes
+	if target := pod.Annotations[TargetNodeAnnotation]; target != "" {
+		affinityNodes = []string{target}
+	}
+	patches = append(patches, m.nodeAffinityPatches(pod, affinityNodes)...)
+
+	// 4. securityContext: runAsUser=0 for rootfs warm restore.
+	//    The captured tree is root-owned, and the engine WRITES into its
+	//    warmed cache/model dirs at startup through the per-pod OverlayFS
+	//    (NIM/Riva rewrites the NGC filemap metadata, extracts engines).
+	//    NVCA admits function pods with a hardened securityContext
+	//    (capabilities drop ALL, no runAsUser), so the image's default
+	//    non-root user can't write into the root-owned overlay and the
+	//    engine aborts with "Permission denied (os error 13)"
+	//    (whisper-large-v3, GCP-H100-a 2026-06-11). runAsUser=0 fixes
+	//    that. We do NOT set privileged (see the privileged=false note
+	//    below). Gated to rootfs captures only.
+	if manifest.CaptureMethod == "rootfs" || manifestIsRootfs(manifest) {
+		// privileged=false: the host overlay is mounted by the agent and
+		// bind-mounted in via hostPath, so the main container only needs
+		// runAsUser=0 to write. privileged here would expose all host
+		// /dev/nvidiaN nodes and break single-GPU isolation (see
+		// securityContextPatches doc).
+		patches = append(patches, securityContextPatches(m.MainContainer, main.SecurityContext, false, rootfsWriteCaps)...)
+	}
+
+	return patches, nil
+}
+
+// nodeAffinityPatches produces JSON Patch ops that ensure the FRESH pod
+// only schedules on a node that holds the cache data. For backends where
+// the cache is on per-node hostPath, scheduling elsewhere would result
+// in an empty mount.
+//
+// Strategy: append a NodeSelectorTerm to
+//
+//	pod.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms
+//
+// matching kubernetes.io/hostname IN <nodes>. The whole nodeAffinity
+// stanza is built up step by step depending on what already exists, so
+// we don't clobber customer-set affinity.
+//
+// nodes empty → no patches. Existing customer affinity is preserved
+// (we ADD a term; multiple terms within nodeSelectorTerms OR together,
+// so customer's other constraints still match).
+func (m *Mutator) nodeAffinityPatches(pod *corev1.Pod, nodes []string) []PatchOp {
+	if len(nodes) == 0 {
+		return nil
+	}
+	values := make([]any, 0, len(nodes))
+	for _, n := range nodes {
+		if n == "" {
+			continue
+		}
+		values = append(values, n)
+	}
+	if len(values) == 0 {
+		return nil
+	}
+
+	nvsnapTerm := map[string]any{
+		"matchExpressions": []any{
+			map[string]any{
+				"key":      "kubernetes.io/hostname",
+				"operator": "In",
+				"values":   values,
+			},
+		},
+	}
+
+	var patches []PatchOp
+	switch {
+	case pod.Spec.Affinity == nil:
+		patches = append(patches, PatchOp{
+			Op:   "add",
+			Path: "/spec/affinity",
+			Value: map[string]any{
+				"nodeAffinity": map[string]any{
+					"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+						"nodeSelectorTerms": []any{nvsnapTerm},
+					},
+				},
+			},
+		})
+	case pod.Spec.Affinity.NodeAffinity == nil:
+		patches = append(patches, PatchOp{
+			Op:   "add",
+			Path: "/spec/affinity/nodeAffinity",
+			Value: map[string]any{
+				"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+					"nodeSelectorTerms": []any{nvsnapTerm},
+				},
+			},
+		})
+	case pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil:
+		patches = append(patches, PatchOp{
+			Op:   "add",
+			Path: "/spec/affinity/nodeAffinity/requiredDuringSchedulingIgnoredDuringExecution",
+			Value: map[string]any{
+				"nodeSelectorTerms": []any{nvsnapTerm},
+			},
+		})
+	default:
+		// Append to existing nodeSelectorTerms. Each term must match
+		// independently for the pod to be schedulable; appending OUR
+		// term to the list unions with existing terms (OR semantics
+		// across nodeSelectorTerms is K8s standard, so customer's
+		// existing terms are preserved as alternatives).
+		patches = append(patches, PatchOp{
+			Op:    "add",
+			Path:  "/spec/affinity/nodeAffinity/requiredDuringSchedulingIgnoredDuringExecution/nodeSelectorTerms/-",
+			Value: nvsnapTerm,
+		})
+	}
+	return patches
+}
+
+// emitOverlayMount synthesises the volumes/volumeMounts patches for a
+// RootfsExtractPath that's already been prepared as an OverlayFS union
+// on the host (nvsnap#194). The merged mountpoint is bound directly
+// (no init container, no backend resolution), readOnly=false so the
+// pod can write into the cache at runtime.
+func (m *Mutator) emitOverlayMount(
+	patches *[]PatchOp,
+	addedVolumes map[string]struct{},
+	vm checkpointstore.VolumeMeta,
+	mountpoint string,
+) {
+	// DirectoryOrCreate (not Directory): in init-container strategy
+	// the merged dir doesn't exist at admission time — the agent's
+	// async prep job creates and mounts it after the init container
+	// POSTs. Kubelet runs the hostPath type check during volume
+	// setup, before any container starts, so a strict Directory check
+	// would fail with "is not a directory" and stall the pod.
+	// DirectoryOrCreate lets kubelet make an empty dir as a
+	// placeholder; the agent's later Mount() overlays on top, and the
+	// main container's bind picks up the overlay at container start.
+	// Safe for inline mode too: the agent's Prepare() already
+	// MkdirAll'd the path, so kubelet finds it existing.
+	hostPathType := corev1.HostPathDirectoryOrCreate
+	vol := corev1.Volume{
+		Name: vm.Name,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: mountpoint,
+				Type: &hostPathType,
+			},
+		},
+	}
+	vMount := corev1.VolumeMount{
+		Name:      vm.Name,
+		MountPath: vm.MountPath,
+		ReadOnly:  false,
+	}
+	if _, dupe := addedVolumes[vol.Name]; !dupe {
+		*patches = append(*patches, PatchOp{Op: "add", Path: "/spec/volumes/-", Value: vol})
+		addedVolumes[vol.Name] = struct{}{}
+	}
+	*patches = append(*patches, PatchOp{
+		Op:    "add",
+		Path:  fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer),
+		Value: vMount,
+	})
+}
+
+// overlayKeyFor returns a stable per-restore-pod identifier suitable for
+// keying the OverlayManager's per-pod scratch tree. Mutating admission
+// webhooks for CREATE don't get pod.UID populated, so we fall back to
+// ns/name. Filesystem-safe (underscore separator) since the manager
+// uses it as a directory name.
+func overlayKeyFor(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	if uid := string(pod.UID); uid != "" {
+		return uid
+	}
+	if pod.Name == "" || pod.Namespace == "" {
+		return ""
+	}
+	return pod.Namespace + "_" + pod.Name
+}
+
+func (m *Mutator) logger() logrus.FieldLogger {
+	if m.Log != nil {
+		return m.Log
+	}
+	return logrus.NewEntry(logrus.New()).WithField("subsys", "webhook.mutate")
+}
+
+// ViewMinter exposes a primary volume in a namespace as a static view PV
+// pre-bound to a claim there (checkpointstore.SharedVolumePromoter
+// implements it): read-only for readers, read-write for a download Job.
+type ViewMinter interface {
+	MintReadOnlyFromPV(ctx context.Context, primaryPV, roPVName, roClaim, ns, labelKey string) error
+	MintReadOnlyFromPVLabels(ctx context.Context, primaryPV, roPVName, roClaim, ns string, labels map[string]string) error
+	MintViewFromPVLabels(ctx context.Context, primaryPV, pvName, claim, ns string, labels map[string]string, readOnly bool) error
+}

@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ ! -f "${SCRIPT_DIR}/log.sh" ]; then
-    echo "Error: log.sh not found in ${SCRIPT_DIR}"
+UTILS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "${UTILS_SCRIPT_DIR}/log.sh" ]; then
+    echo "Error: log.sh not found in ${UTILS_SCRIPT_DIR}"
     exit 1
 fi
-source "${SCRIPT_DIR}/log.sh"
+source "${UTILS_SCRIPT_DIR}/log.sh"
 
 get_root_token() {
     local namespace=$1

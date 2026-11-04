@@ -19,10 +19,15 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"nvcf-cli/internal/selfhosted"
 )
 
 // resetUninstallFlags restores uninstall flag vars to their zero values between
@@ -124,4 +129,37 @@ func TestUninstall_HelpListsAllFlags(t *testing.T) {
 			selfHostedUninstallCmd.Flags().Lookup(flagName),
 			"missing flag %q on uninstall command", flagName)
 	}
+}
+
+func TestUninstall_ControlPlanePassesHelm4CompatToDestroy(t *testing.T) {
+	resetUninstallFlags(t)
+
+	_, stack := makeDownStacks(t)
+	helmfileLog := installFakeHelmfile(t)
+
+	prevStack := selfHostedControlPlaneStack
+	t.Cleanup(func() { selfHostedControlPlaneStack = prevStack })
+	selfHostedControlPlaneStack = stack
+
+	prevRuntimeResolver := resolveSelfHostedHelmRuntimeMode
+	t.Cleanup(func() { resolveSelfHostedHelmRuntimeMode = prevRuntimeResolver })
+	resolveSelfHostedHelmRuntimeMode = func(context.Context) (selfhosted.HelmRuntimeMode, error) {
+		return selfhosted.HelmRuntimeHelm4Compat, nil
+	}
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "uninstall",
+		"--control-plane",
+		"--control-plane-stack", stack,
+	})
+
+	require.NoError(t, rootCmd.Execute())
+
+	body, err := os.ReadFile(helmfileLog)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), filepath.Join(stack, "helmfile.d")+"/")
+	assert.Contains(t, string(body), "--sequential-helmfiles")
 }

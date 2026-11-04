@@ -20,10 +20,10 @@ package mscontroller
 import (
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task"
-	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task"
+	nvcaconfig "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -31,13 +31,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
-	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	featureflagmock "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
+	nvcatypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 func TestBuildMiniserviceMetadata_Function(t *testing.T) {
@@ -175,7 +175,7 @@ func TestBuildMiniserviceMetadata_KAISchedulerEnabled(t *testing.T) {
 
 	assert.Equal(t, kaischeduler.SchedulerName, meta.SchedulerName)
 	if assert.Contains(t, meta.PodLabels, kaischeduler.SchedulerQueueLabel) {
-		assert.Equal(t, kaischeduler.GetQName(), meta.PodLabels[kaischeduler.SchedulerQueueLabel])
+		assert.Equal(t, kaischeduler.DefaultQueue, meta.PodLabels[kaischeduler.SchedulerQueueLabel])
 	}
 }
 
@@ -462,6 +462,9 @@ func TestBuildMiniserviceMetadata_RoundtripWithConfigMap(t *testing.T) {
 		ImagePullSecrets:   pullSecrets,
 		GeneralLabels:      generalLabels,
 		GeneralAnnotations: generalAnnotations,
+		OTelCollectorEnvVars: []corev1.EnvVar{
+			{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
+		},
 	})
 	require.NoError(t, err)
 
@@ -484,4 +487,5 @@ func TestBuildMiniserviceMetadata_RoundtripWithConfigMap(t *testing.T) {
 	assert.Equal(t, meta.SchedulerName, got.SchedulerName)
 	assert.Nil(t, got.TerminationGracePeriodSeconds)
 	assert.Equal(t, meta.EnvVars, got.EnvVars)
+	assert.Equal(t, meta.OTelCollectorEnvVars, got.OTelCollectorEnvVars)
 }
