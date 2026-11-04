@@ -121,6 +121,9 @@ done
 render_chart_values openbao-server "$work_dir/openbao-off.yaml" "$deps" || fail "render openbao (ha none)"
 grep -A3 "disruptionBudget:" "$work_dir/openbao-off.yaml" | grep -q "enabled: false" ||
   fail "openbao: server.ha.disruptionBudget must stay disabled when highAvailability.mode=none"
+if awk '/^  injector:/{p=1;next} /^  [a-zA-Z]/{p=0} p' "$work_dir/openbao-off.yaml" | grep -q "podAntiAffinity:"; then
+  fail "openbao: injector HA anti-affinity leaked while highAvailability.mode=none"
+fi
 
 echo "== highAvailability preferred: stateless / quorum sizing =="
 write_env <<'EOF'
@@ -195,6 +198,13 @@ grep -q "key: component" <<<"$openbao_block" ||
   fail "openbao: anti-affinity must also match component=server"
 grep -Eq '^ *component: "?server"?$' <<<"$openbao_block" ||
   fail "openbao: zone spread must also match component=server"
+injector_block="$(awk '/^  injector:/{p=1;next} /^  [a-zA-Z]/{p=0} p' "$work_dir/openbao-on.yaml")"
+grep -q "preferredDuringSchedulingIgnoredDuringExecution:" <<<"$injector_block" ||
+  fail "openbao: injector must use preferred anti-affinity when highAvailability.mode=preferred"
+grep -q "key: component" <<<"$injector_block" ||
+  fail "openbao: injector anti-affinity must select the component label"
+grep -Eq '^ *- "?webhook"?$' <<<"$injector_block" ||
+  fail "openbao: injector anti-affinity must match component=webhook"
 
 render_chart_values nats "$work_dir/nats-on.yaml" "$deps" || fail "render nats (preferred)"
 grep -A5 "cluster:" "$work_dir/nats-on.yaml" | grep -E "replicas:[[:space:]]*3" >/dev/null ||
@@ -632,6 +642,13 @@ grep -q "whenUnsatisfiable: DoNotSchedule" <<<"$openbao_enforced" ||
   fail "openbao: expected hard zone spread when highAvailability.mode=enforced"
 grep -Eq '^ *component: "?server"?$' <<<"$openbao_enforced" ||
   fail "openbao: hard zone spread must select the server Pods only"
+injector_enforced="$(awk '/^  injector:/{p=1;next} /^  [a-zA-Z]/{p=0} p' "$work_dir/openbao-enforced.yaml")"
+grep -q "requiredDuringSchedulingIgnoredDuringExecution:" <<<"$injector_enforced" ||
+  fail "openbao: injector must use required anti-affinity when highAvailability.mode=enforced"
+grep -q "key: component" <<<"$injector_enforced" ||
+  fail "openbao: hard injector anti-affinity must select the component label"
+grep -Eq '^ *- "?webhook"?$' <<<"$injector_enforced" ||
+  fail "openbao: hard injector anti-affinity must match component=webhook"
 
 echo "== highAvailability sizing is a floor, not a replacement =="
 write_env <<'EOF'
