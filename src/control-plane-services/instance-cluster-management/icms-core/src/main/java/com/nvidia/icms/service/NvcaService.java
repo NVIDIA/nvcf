@@ -44,7 +44,8 @@ public class NvcaService {
     public void validateNvcaClusterRegistration(
             @NotNull NvcaRegistrationRequest nvcaRegistrationRequest,
             @NotNull String clusterId) {
-        nvcaClusterRegistrationService.validateNvcaClusterRegistration(nvcaRegistrationRequest, clusterId);
+        nvcaClusterRegistrationService.validateNvcaClusterRegistration(nvcaRegistrationRequest,
+                                                                       clusterId);
     }
 
     public NvcaAccessCreds renewAccessCredentials(@NotNull String clusterId) {

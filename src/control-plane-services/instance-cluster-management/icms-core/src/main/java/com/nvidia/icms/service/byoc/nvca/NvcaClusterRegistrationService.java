@@ -319,10 +319,14 @@ public class NvcaClusterRegistrationService {
             @NotNull NvcaRegistrationRequest nvcaRegistrationRequest,
             @NotNull String clusterId) {
 
-        log.info("Received cluster registration validation request from {} cluster: status {}, gpuCount {}",
-                 clusterId,
-                 nvcaRegistrationRequest.getStatus(),
-                 nvcaRegistrationRequest.getGpus() == null ? 0 : nvcaRegistrationRequest.getGpus().size());
+        log.info(
+                "Received cluster registration validation request from {} cluster: status {}, "
+                        + "gpuCount {}",
+                clusterId,
+                nvcaRegistrationRequest.getStatus(),
+                nvcaRegistrationRequest.getGpus() == null
+                        ? 0
+                        : nvcaRegistrationRequest.getGpus().size());
 
         planRegistration(nvcaRegistrationRequest, clusterId);
     }
@@ -837,7 +841,8 @@ public class NvcaClusterRegistrationService {
             log.error(
                     "Active instances exists for cluster-id {} with {} instanceTypes hence avoiding GPUs reconfiguration, active instances - {}",
                     clusterId, removedInstanceTypeNames, activeInstanceIds);
-            throw new IcmsActiveInstancesConflictException(errMsg, removedInstanceTypeNames, activeInstanceIds);
+            throw new IcmsActiveInstancesConflictException(
+                    errMsg, removedInstanceTypeNames, activeInstanceIds);
         }
     }
 
