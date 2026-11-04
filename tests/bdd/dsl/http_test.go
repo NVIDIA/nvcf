@@ -115,6 +115,24 @@ func TestJSONFieldAtLeast(t *testing.T) {
 	}
 }
 
+func TestJSONFieldLessThan(t *testing.T) {
+	cases := []struct {
+		path    string
+		max     float64
+		wantErr bool
+	}{
+		{"summary.by_event.InstanceReady", 3, false},
+		{"summary.by_event.InstanceReady", 2, true},
+		{"namespace", 3, true},
+		{"missing", 3, true},
+	}
+	for _, tc := range cases {
+		if err := JSONFieldLessThan(ledgerEvents, tc.path, tc.max); (err != nil) != tc.wantErr {
+			t.Fatalf("%s < %v: err = %v, want error %v", tc.path, tc.max, err, tc.wantErr)
+		}
+	}
+}
+
 func TestCLIStatePathMirrorsCLI(t *testing.T) {
 	got := CLIStatePath("/home/u", "/repo/tests/bdd/fixtures/nvcf-cli-local.yaml")
 	if got != "/home/u/.nvcf-cli.nvcf-cli-local.state" {
