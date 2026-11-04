@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "testsupport",
     srcs = ["worker_lifecycle.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/internal/testsupport",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/internal/testsupport",
     visibility = ["//src/compute-plane-services/worker-utils:__subpackages__"],
 )
 

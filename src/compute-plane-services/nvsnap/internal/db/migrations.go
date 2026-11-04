@@ -192,8 +192,7 @@ var migrations = []string{
 	//
 	// Restore-side polls /api/v1/checkpoints/lookup?hash=<hash> and
 	// reads pvc_promote_state to decide L1 → L2-bound → L2-poll-wait →
-	// L3-peer → L4-blob (see docs/L2-PVC-CRIU-DESIGN.md §"Restore-side
-	// resolver"). The index on pvc_promote_state makes the orphan-GC
+	// L3-peer → L4-blob (see docs/ARCHITECTURE.md §6). The index on pvc_promote_state makes the orphan-GC
 	// sweep (find rows stuck in writing/snapshotting past a deadline)
 	// a single-pass query.
 	`ALTER TABLE checkpoints ADD COLUMN pvc_name TEXT NOT NULL DEFAULT '';
@@ -237,7 +236,7 @@ var migrations = []string{
 // runMigrations applies any pending migrations.
 func (d *DB) runMigrations() error {
 	// Create version tracking table
-	if _, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (
+	if _, err := d.w.Exec(`CREATE TABLE IF NOT EXISTS schema_version (
 		version INTEGER PRIMARY KEY
 	)`); err != nil {
 		return fmt.Errorf("create schema_version: %w", err)
@@ -250,10 +249,10 @@ func (d *DB) runMigrations() error {
 	}
 
 	for i := currentVersion; i < len(migrations); i++ {
-		if _, err := d.db.Exec(migrations[i]); err != nil {
+		if _, err := d.w.Exec(migrations[i]); err != nil {
 			return fmt.Errorf("migration %d: %w", i+1, err)
 		}
-		if _, err := d.db.Exec("INSERT INTO schema_version (version) VALUES (?)", i+1); err != nil {
+		if _, err := d.w.Exec("INSERT INTO schema_version (version) VALUES (?)", i+1); err != nil {
 			return fmt.Errorf("record migration %d: %w", i+1, err)
 		}
 	}

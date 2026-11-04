@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // resolveWithinRoot validates a caller-supplied relative path against a
@@ -99,27 +100,44 @@ func validPathSegment(kind, s string) error {
 	return nil
 }
 
-// pathVarGuard validates the route variables that name a directory before
-// any handler runs.
+// pathVarGuard validates the route variables that name a directory, a file
+// or a selector before any handler runs.
 //
 // Applied as router middleware rather than at each call site: the agent has
-// a dozen {id}/{hash}/{pod-uid} routes today, and a per-handler check is one
+// a dozen routes with such variables, and a per-handler check is one
 // forgotten line away from reopening the hole on the next route added. Here
-// a new route is covered by construction.
+// a new route is covered by construction, as long as its variables are
+// named here: every variable of a route the agent serves is.
 func pathVarGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for _, k := range []string{"id", "hash", "pod-uid"} {
-			v, ok := mux.Vars(r)[k]
-			if !ok {
-				continue
-			}
-			if err := validPathSegment(k, v); err != nil {
+		for k, v := range mux.Vars(r) {
+			if err := validRouteVar(k, v); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// validRouteVar checks one route variable by its name. Namespace and pod
+// names are checked against Kubernetes' own rules (a pod name may run to
+// 253 characters, past validPathSegment's), which leave out "..", "/" and
+// every selector operator; everything else must be a benign path segment.
+func validRouteVar(k, v string) error {
+	var errs []string
+	switch k {
+	case "namespace":
+		errs = validation.IsDNS1123Label(v)
+	case "pod":
+		errs = validation.IsDNS1123Subdomain(v)
+	default:
+		return validPathSegment(k, v)
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s %q is not a valid name: %s", k, v, strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // joinWithinRoot is the write-side counterpart to resolveWithinRoot: it

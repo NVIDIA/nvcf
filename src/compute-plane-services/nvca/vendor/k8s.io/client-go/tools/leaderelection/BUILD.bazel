@@ -8,7 +8,7 @@ go_library(
         "leasecandidate.go",
         "metrics.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/leaderelection",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/leaderelection",
     importpath = "k8s.io/client-go/tools/leaderelection",
     visibility = ["//visibility:public"],
     deps = [

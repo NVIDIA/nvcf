@@ -37,8 +37,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/agent"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/agent"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/db"
 )
 
 const (

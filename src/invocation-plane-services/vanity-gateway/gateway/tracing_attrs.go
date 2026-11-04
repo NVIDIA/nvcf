@@ -41,10 +41,16 @@ const (
 	traceAttrShadowSamplingMethods     attribute.Key = "shadow.sampling_methods"
 	traceAttrShadowTargetModel         attribute.Key = "shadow.target_model"
 	traceAttrShadowTargetModels        attribute.Key = "shadow.target_models"
+	traceAttrUpstreamKind              attribute.Key = "upstream.kind"
 
 	traceAttrValueEndpointAnthropic  = "anthropic"
 	traceAttrValueEndpointOpenAI     = "openai"
 	traceAttrValueEndpointLLMGateway = "llm_gateway"
+	traceAttrValueEndpointDecisions  = "decisions"
+	traceAttrValueEndpointSystemOne  = "systemone"
+
+	traceAttrValueUpstreamLLMGateway = "llm_gateway"
+	traceAttrValueUpstreamDirect     = "direct"
 
 	shadowDroppedReasonBodyReadError    = "body_read_error"
 	shadowDroppedReasonBodyRewriteError = "body_rewrite_error"

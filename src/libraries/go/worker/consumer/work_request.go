@@ -23,7 +23,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
 )
 
 type WorkRequest struct {

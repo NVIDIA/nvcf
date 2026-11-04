@@ -38,9 +38,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/bombsimon/logrusr/v4"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	nvcaconfig "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -57,9 +57,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kata"
-	whmetrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/webhook/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kata"
+	whmetrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/webhook/metrics"
 )
 
 func generateTestCertificates(t *testing.T) (caCert, caKey, cert, key []byte) {

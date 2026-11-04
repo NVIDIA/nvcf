@@ -18,12 +18,12 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/must"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/must"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 // Only fields used for routing and admission are bound. Content blocks and

@@ -8,7 +8,7 @@ go_library(
         "file.go",
         "null.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/awslabs/amazon-ecr-credential-helper/ecr-login/cache",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/awslabs/amazon-ecr-credential-helper/ecr-login/cache",
     importpath = "github.com/awslabs/amazon-ecr-credential-helper/ecr-login/cache",
     visibility = ["//visibility:public"],
     deps = [

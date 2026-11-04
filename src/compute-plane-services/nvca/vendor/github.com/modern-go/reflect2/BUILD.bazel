@@ -34,7 +34,7 @@ go_library(
         "unsafe_struct.go",
         "unsafe_type.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/modern-go/reflect2",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/modern-go/reflect2",
     importpath = "github.com/modern-go/reflect2",
     visibility = ["//visibility:public"],
 )

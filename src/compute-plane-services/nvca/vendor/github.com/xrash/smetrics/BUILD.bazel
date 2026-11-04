@@ -11,7 +11,7 @@ go_library(
         "ukkonen.go",
         "wagner-fischer.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/xrash/smetrics",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/xrash/smetrics",
     importpath = "github.com/xrash/smetrics",
     visibility = ["//visibility:public"],
 )

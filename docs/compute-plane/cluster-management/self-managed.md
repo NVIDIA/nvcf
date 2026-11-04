@@ -253,6 +253,12 @@ plane is in a different cluster than the control plane; leave it empty when
 they share a cluster, since the collector then defaults to the in-cluster
 Event Ledger Service.
 
+The collector image is optional and must be present in the registry configured
+by `global.image` before it is enabled. See
+[Enable and Operate Event Ledger](../../self-managed/event-ledger.md#enable-the-compute-plane-collector)
+for image configuration, colocated and split-cluster examples, verification,
+and troubleshooting.
+
 <Warning>
 The `KAIScheduler` feature flag is optional. Enable it only if the
 [KAI Scheduler](./kai-scheduler.md) is installed on the GPU cluster. The flag has no effect,

@@ -28,7 +28,7 @@ import (
 	"github.com/containerd/containerd/namespaces"
 	"github.com/sirupsen/logrus"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/runtime"
 )
 
 const defaultNamespace = "k8s.io"

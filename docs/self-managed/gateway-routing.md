@@ -609,9 +609,10 @@ These routes attach to the Gateway you prepared in [Gateway quickstart](./gatewa
 | API Keys | `api-keys.<domain>` | 80 | Token generation and API key management |
 | NVCF API | `api.<domain>` | 80 | Function management (create, deploy, delete) |
 | Invocation | `invocation.<domain>`, `*.invocation.<domain>` | 80 | Function invocation (wildcard for dynamic routing) |
-| LLM Invocation | `llm.invocation.<domain>` | 80 | OpenAI-compatible LLM invocation routes such as `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings` |
+| LLM Invocation | `llm.invocation.<domain>` | 80 | LLM invocation routes such as `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, and the beta `/v1/decisions` and `/v1/systemone` |
 | Vanity Gateway | `vanity.<domain>` | 80 | Optional vanity host/path routing to `vanity-gateway.nvcf:8080`, only in stack packages that include the addon |
 | NVCF UI | `nvcf-ui.<domain>` | 80 | Optional nvcf-ui host/path routing to `nvcf-ui.nvcf-ui:8300`, only in stack packages that include the addon |
+| Event Ledger | `events.<domain>` | 80 | Optional routing to `event-ledger.nvcf:8080`, created when the Event Ledger addon is enabled. See [Enable and Operate Event Ledger](./event-ledger.md) |
 | gRPC | N/A (TCP routing, no hostname matching) | 10081 | gRPC function invocations |
 | gRPC worker callback | N/A (TCP routing, no hostname matching) | 10086 | HTTP/1 CONNECT callback from workers to grpc-proxy when the beta `grpcWorker` route is enabled |
 | NATS | N/A (TCP routing, no hostname matching) | 4222 | NVCA messaging when the NATS route is enabled |

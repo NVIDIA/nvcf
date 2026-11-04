@@ -18,7 +18,7 @@ limitations under the License.
 package metering
 
 import (
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
 	"regexp"
 	"testing"
 

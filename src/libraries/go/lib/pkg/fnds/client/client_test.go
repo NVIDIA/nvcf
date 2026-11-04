@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	types "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types"
+	types "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types"
 )
 
 type mockTokenFetcher struct {

@@ -24,11 +24,11 @@ import (
 	echo "github.com/labstack/echo/v4"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 type Handlers struct {
@@ -42,6 +42,7 @@ type Handlers struct {
 
 type observabilityMetrics struct {
 	messagesUsage               otelmetric.Int64Counter
+	decisionUsage               otelmetric.Int64Counter
 	llmTokens                   otelmetric.Int64Counter
 	providerTime                otelmetric.Float64Histogram
 	streamFirstToken            otelmetric.Float64Histogram
@@ -52,6 +53,7 @@ type observabilityMetrics struct {
 func newObservabilityMetrics() observabilityMetrics {
 	return observabilityMetrics{
 		messagesUsage:               telemetry.MessagesUsage(),
+		decisionUsage:               telemetry.DecisionUsage(),
 		llmTokens:                   telemetry.LLMTokens(),
 		providerTime:                telemetry.ProviderTime(),
 		streamFirstToken:            telemetry.StreamFirstToken(),

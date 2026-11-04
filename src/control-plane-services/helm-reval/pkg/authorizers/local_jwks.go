@@ -25,7 +25,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/jwtparse"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/reval/jwtparse"
 )
 
 var localInstrumentation = "reval.authorizers.local"

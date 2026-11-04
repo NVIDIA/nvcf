@@ -88,7 +88,7 @@ verify_binary() {
   fi
 
   path=$(awk '$1 == "path" { print $2 }' "$metadata")
-  if [ "$path" != "github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt/cmd/vault-plugin-secrets-jwt" ]; then
+  if [ "$path" != "github.com/dsx-ai-factory/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt/cmd/vault-plugin-secrets-jwt" ]; then
     echo "$binary has unexpected module path: $path" >&2
     exit 1
   fi

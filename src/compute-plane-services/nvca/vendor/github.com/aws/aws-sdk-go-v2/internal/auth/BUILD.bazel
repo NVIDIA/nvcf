@@ -6,7 +6,7 @@ go_library(
         "auth.go",
         "scheme.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/auth",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/auth",
     importpath = "github.com/aws/aws-sdk-go-v2/internal/auth",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
     deps = [

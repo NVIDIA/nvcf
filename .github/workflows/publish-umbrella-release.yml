@@ -61,7 +61,7 @@ jobs:
           "$RUNNER_TEMP/docs-version-sync" umbrella manifest --manifest "$manifest"
           while IFS=$'\t' read -r tag asset; do
             curl --fail --location --retry 3 \
-              "https://github.com/NVIDIA/nvcf/releases/download/$tag/$asset" \
+              "https://github.com/dsx-ai-factory/nvcf/releases/download/$tag/$asset" \
               -o "$inventories/$asset"
           done < <(jq -r '.stacks[] | [.source_tag, .inventory_asset] | @tsv' "$manifest")
           previous=()

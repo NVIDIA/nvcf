@@ -33,6 +33,8 @@ CASSANDRA_COMPILE_DEPS = [
 
 CASSANDRA_TEST_DEPS = [
     ":nv_boot_starter_cassandra",
+    "@nv_third_party_deps//:org_bouncycastle_bcpkix_jdk18on",
+    "@nv_third_party_deps//:org_bouncycastle_bcprov_jdk18on",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_actuator_test",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_data_cassandra_test",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",

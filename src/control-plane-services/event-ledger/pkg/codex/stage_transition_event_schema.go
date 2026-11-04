@@ -28,8 +28,8 @@ import (
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.uber.org/zap"
 
-	types "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/constants"
+	types "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common/core/types"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/pkg/constants"
 )
 
 const stageTransitionEventSchema = `{

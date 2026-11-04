@@ -495,6 +495,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("SAMPLE_HELM_TASK_CHART", "https://charts.example.test/task-helmchart-test.tgz")
 	t.Setenv("SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES", "https://charts.example.test/task-helmchart-test-missing-resources.tgz")
 	t.Setenv("SAMPLE_LLM_ECHO_IMAGE", "nvcr.io/test-org/test-team/openai-compatible-echo:test")
+	t.Setenv("SAMPLE_LLM_DECISIONS_IMAGE", "nvcr.io/test-org/test-team/openai-compatible-decisions:test")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	runner := newFakeRunner(map[string]harness.Result{
@@ -571,8 +572,10 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 	seedFunctionAPIKey(t, home)
 
-	vanityShadow := newVanityShadowFake("", &llmRoutingHTTPFake{seen: map[string]bool{}})
+	decisionRoutes := newDecisionRoutesFake("", &llmRoutingHTTPFake{seen: map[string]bool{}})
+	vanityShadow := newVanityShadowFake("", decisionRoutes)
 	vanityShadow.attach(runner)
+	decisionRoutes.attach(runner, suite.Config.RepoRoot)
 	suite.HTTP = vanityShadow
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile.feature")
@@ -689,10 +692,16 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"--function-type LLM") {
 		t.Fatal("LLM field-fidelity function was not created from SAMPLE_LLM_ECHO_IMAGE")
 	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-llm-decision-routes",
+		"--image nvcr.io/test-org/test-team/openai-compatible-decisions:test",
+		"--function-type LLM") {
+		t.Fatal("decision route function was not created from SAMPLE_LLM_DECISIONS_IMAGE")
+	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function delete --deployment-only") {
 		t.Fatal("function deployment cleanup was never invoked")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 8)
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 11)
 	for _, key := range []string{"shadow-warmup", "promptCacheKey", "firstMessageHash", "continuation", "failing-shadow"} {
 		if !vanityShadow.seen[key] {
 			t.Errorf("vanity shadow scenario never exercised %s", key)
@@ -3078,7 +3087,26 @@ func TestSingleClusterHelmfile(t *testing.T) {
 	if os.Getenv(sampleLLMEchoImageEnv) == "" {
 		t.Setenv(sampleLLMEchoImageEnv, "nvcr.io/"+os.Getenv("SAMPLE_NGC_ORG")+"/"+os.Getenv("SAMPLE_NGC_TEAM")+"/"+sampleLLMEchoDefaultImage)
 	}
-	runLiveFeature(t, "single-cluster-helmfile.feature")
+	tags := singleClusterHelmfileTags()
+	if tags != "" {
+		t.Logf("%s is not set, so the @llm-decision-routes scenarios are skipped", sampleLLMDecisionsImageEnv)
+	}
+	runLiveFeatureTags(t, "single-cluster-helmfile.feature", tags)
+}
+
+// sampleLLMDecisionsImageEnv selects the OpenAI-compatible sample the decision
+// route scenarios deploy. The scenarios are opt-in: they also need gateway,
+// Stargate, Pylon and Vanity Gateway builds that serve the routes, so they run
+// only when an operator sets this variable.
+const sampleLLMDecisionsImageEnv = "SAMPLE_LLM_DECISIONS_IMAGE"
+
+// singleClusterHelmfileTags excludes the decision route scenarios unless
+// SAMPLE_LLM_DECISIONS_IMAGE is set.
+func singleClusterHelmfileTags() string {
+	if os.Getenv(sampleLLMDecisionsImageEnv) == "" {
+		return "~@llm-decision-routes"
+	}
+	return ""
 }
 
 // sampleLLMEchoImageEnv selects the OpenAI-compatible sample the LLM
@@ -3551,6 +3579,7 @@ func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, heade
 // collector is enabled. The scenario must still pick the SIS context.
 const (
 	fakeNVCAContext = "cluster_id=c1,instance_id=i1,resource_id=r1"
+	fakePodContext  = "cluster_id=c1,deployment_id=d1,instance_id=i1"
 	fakeSISContext  = "deployment_id=d1,gpu_specification_id=g1,instance_id=i1"
 )
 
@@ -3563,6 +3592,7 @@ func (f *eventLedgerHTTPFake) contextEvents() map[string][]fakeEvent {
 	}
 	return map[string][]fakeEvent{
 		fakeNVCAContext: {{"ICMSRequest.InstanceStatusUpdate.running", "nvca"}},
+		fakePodContext:  {{"Pod.Scheduled", "nvca"}},
 		fakeSISContext:  sis,
 	}
 }
@@ -3576,7 +3606,7 @@ func (f *eventLedgerHTTPFake) stats(namespace, eventFilter string) harness.HTTPR
 	byEvent := map[string]int{}
 	if namespace == "version-1" {
 		events := f.contextEvents()
-		for _, ctx := range []string{fakeNVCAContext, fakeSISContext} {
+		for _, ctx := range []string{fakeNVCAContext, fakePodContext, fakeSISContext} {
 			latest := events[ctx][len(events[ctx])-1].name
 			if eventFilter != "" && !strings.Contains(","+eventFilter+",", ","+latest+",") {
 				continue
@@ -3609,11 +3639,91 @@ func (f *eventLedgerHTTPFake) events(namespace string, params url.Values) harnes
 	events := []event{}
 	if namespace == "version-1" {
 		for _, e := range f.contextEvents()[eventContext] {
-			events = append(events, event{e.name, e.source, map[string]any{"attributes": map[string]string{"functionid": "function-1", "function_id": "function-1"}}})
+			attributes := map[string]string{"functionid": "function-1", "function_id": "function-1"}
+			if e.source == "nvca" {
+				attributes["k8s.event.reason"] = "InstanceStatusUpdate"
+			}
+			events = append(events, event{e.name, e.source, map[string]any{"attributes": attributes}})
 		}
 	}
 	body, _ := json.Marshal(map[string]any{"namespace": namespace, "context": eventContext, "events": events})
 	return harness.HTTPResponse{Status: 200, Body: string(body)}
+}
+
+const eventLedgerEmptyVersionID = "00000000-0000-4000-8000-00000000e1de"
+
+// eventLedgerCLIResponder models nvcf-cli output without reducing JSON-mode
+// checks to plain-text substring fixtures. It covers input errors, empty
+// results, and the NVCA contexts used by the live CLI scenario.
+func eventLedgerCLIResponder(command string) (harness.Result, bool) {
+	failure := func(message string) (harness.Result, bool) {
+		return harness.Result{ExitCode: 1, Stderr: "Error: " + message + "\n"}, true
+	}
+	isStats := strings.Contains(command, " stats get")
+	isEvents := strings.Contains(command, " stages events list")
+	if !isStats && !isEvents {
+		return harness.Result{}, false
+	}
+	switch {
+	case strings.Contains(command, "not-a-uuid"):
+		return failure(`invalid function version ID "not-a-uuid": must be a UUID`)
+	case strings.Contains(command, "--attribute-key") && !strings.Contains(command, "--attribute-value"):
+		return failure("--attribute-key and --attribute-value must be used together")
+	case isStats && strings.HasSuffix(command, "stats get"):
+		return failure("--function-version-id is required")
+	case strings.Contains(command, "nvcf-cli-local-no-key.yaml"):
+		return failure("no Event Ledger API key configured, run 'nvcf-cli api-key generate --for event-ledger'")
+	}
+
+	isJSON := strings.Contains(command, " --json")
+	isEmpty := strings.Contains(command, eventLedgerEmptyVersionID)
+	if isEvents {
+		if isEmpty {
+			if isJSON {
+				return harness.Result{Stdout: `{"namespace":"` + eventLedgerEmptyVersionID +
+					`","context":"deployment_id=bdd-deployment,gpu_specification_id=bdd-gpu,` +
+					`cluster_id=bdd-cluster,instance_id=bdd-instance,resource_id=bdd-resource","events":[]}`}, true
+			}
+			return harness.Result{Stdout: "Function version: " + eventLedgerEmptyVersionID + "\nContext: \nNo events found.\n"}, true
+		}
+		for _, required := range []string{
+			"--function-version-id version-1",
+			"--cluster-id c1",
+			"--instance-id i1",
+			"--resource-id r1",
+			"--json",
+		} {
+			if !strings.Contains(command, required) {
+				return harness.Result{Stdout: `{"namespace":"version-1","context":"","events":[]}`}, true
+			}
+		}
+		return harness.Result{Stdout: "{\n" +
+			`  "namespace": "version-1",` + "\n" +
+			`  "context": "` + fakeNVCAContext + `",` + "\n" +
+			`  "events": [{` + "\n" +
+			`    "event_name": "ICMSRequest.InstanceStatusUpdate.running",` + "\n" +
+			`    "source": "nvca",` + "\n" +
+			`    "details": {"attributes":{"function_id":"function-1","k8s.event.reason":"InstanceStatusUpdate"}}` + "\n" +
+			"  }]\n}"}, true
+	}
+
+	if isEmpty {
+		if isJSON {
+			return harness.Result{Stdout: `{"namespace":"` + eventLedgerEmptyVersionID + `","summary":{"total_contexts":0,"by_event":{}},"contexts":[]}`}, true
+		}
+		return harness.Result{Stdout: "Function version: " + eventLedgerEmptyVersionID + "\nContexts: 0\n"}, true
+	}
+	if strings.Contains(command, "ICMSRequest.InstanceStatusUpdate.running") {
+		return harness.Result{Stdout: `{"namespace":"version-1",` +
+			`"summary":{"total_contexts":1,"by_event":{"ICMSRequest.InstanceStatusUpdate.running":1}},` +
+			`"contexts":[{"context":"` + fakeNVCAContext +
+			`","event_name":"ICMSRequest.InstanceStatusUpdate.running"}]}`}, true
+	}
+	return harness.Result{Stdout: `{"namespace":"version-1",` +
+		`"summary":{"total_contexts":3,"by_event":{"ICMSRequest.InstanceStatusUpdate.running":1,"Pod.Scheduled":1,"InstanceReady":1}},` +
+		`"contexts":[{"context":"` + fakeNVCAContext + `","event_name":"ICMSRequest.InstanceStatusUpdate.running"},` +
+		`{"context":"` + fakePodContext + `","event_name":"Pod.Scheduled"},` +
+		`{"context":"` + fakeSISContext + `","event_name":"InstanceReady"}]}`}, true
 }
 
 func eventLedgerHelmListJSON() string {
@@ -3740,7 +3850,34 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "  ICMS_FNDS_MESSAGES_ENABLED: \"true\"\n  ICMS_FNDS_MESSAGES_V3_ENABLED: \"true\"\n",
 		},
+		"kubectl get nvcfbackend/ncp-local --namespace nvca-operator --context k3d-ncp-local -o yaml": {
+			ExitCode: 0,
+			Stdout:   "spec:\n  otelCollector:\n    enabled: true\n",
+		},
 	})
+	baseRespond := runner.respond
+	runner.respond = func(command string) (harness.Result, bool) {
+		if result, ok := eventLedgerCLIResponder(command); ok {
+			return result, true
+		}
+		switch {
+		case strings.Contains(command, `initContainers[?(@.name=="nvca-otel-collector")]`):
+			return harness.Result{ExitCode: 0, Stdout: "NVCA_OTEL_COLLECTOR_FNDS_ENDPOINT=" +
+				"http://event-ledger.nvcf.svc.cluster.local:8080/v3/ledger/k8s-events\n" +
+				"NVCA_OTEL_COLLECTOR_BEARER_TOKEN_FILE=/var/run/secrets/tokens/token\n" +
+				"NVCA_OTEL_COLLECTOR_AUTHENTICATOR=bearertokenauth\n"}, true
+		case strings.Contains(command, fakeNVCAContext) && strings.Contains(command, `tr "," "&"`):
+			return harness.Result{ExitCode: 0, Stdout: "cluster_id=c1&instance_id=i1&resource_id=r1\n"}, true
+		case strings.Contains(command, fakeNVCAContext) && strings.Contains(command, `s/^cluster_id=//p`):
+			return harness.Result{ExitCode: 0, Stdout: "c1\n"}, true
+		case strings.Contains(command, fakeNVCAContext) && strings.Contains(command, `s/^instance_id=//p`):
+			return harness.Result{ExitCode: 0, Stdout: "i1\n"}, true
+		case strings.Contains(command, fakeNVCAContext) && strings.Contains(command, `s/^resource_id=//p`):
+			return harness.Result{ExitCode: 0, Stdout: "r1\n"}, true
+		default:
+			return baseRespond(command)
+		}
+	}
 	runner.onRun = func(command string) error {
 		if strings.Contains(command, " function delete --deployment-only") {
 			destroyed = true
@@ -3790,6 +3927,29 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if !commandRanThatContains(runs, " function delete --deployment-only") {
 		t.Fatal("function undeploy command was never invoked")
+	}
+	for _, command := range []string{
+		" api-key generate --for event-ledger ",
+		"nvcf-cli-local-no-key.yaml stats get",
+		"stats get --function-version-id not-a-uuid",
+		"stats get --function-version-id " + eventLedgerEmptyVersionID,
+		"stages events list --function-version-id " + eventLedgerEmptyVersionID,
+		"stats get --function-version-id version-1 --json",
+		" stats get --event-filter ICMSRequest.InstanceStatusUpdate.running --json",
+	} {
+		if !commandRanThatContains(runs, command) {
+			t.Fatalf("Event Ledger CLI command was never invoked: %s", command)
+		}
+	}
+	if !commandRanThatContainsAll(runs,
+		" stages events list ",
+		"--function-version-id version-1",
+		"--cluster-id c1",
+		"--instance-id i1",
+		"--resource-id r1",
+		"--json",
+	) {
+		t.Fatal("Event Ledger CLI event read did not use the complete NVCA context")
 	}
 	for _, secret := range []string{"admin-jwt", "nvapi-test", "nvapi-write"} {
 		if commandRanThatContains(runs, secret) {
@@ -4027,6 +4187,8 @@ func TestLLMRoutingFeaturesRejectIncompleteAndMisroutedResponses(t *testing.T) {
 		if !found {
 			t.Fatal("missing LLM scenario")
 		}
+		// The decision route scenarios have their own wiring test.
+		scenario, _, _ = strings.Cut(scenario, "\n    # Beta decision routes")
 		brokenModes := []string{"", "chat-stream", "responses", "classic", "pexec", "unlisted", "long-nonstream", "long-stream", "long-nonstream-too-fast", "long-stream-too-fast"}
 		exercised := []string{"chat-stream", "responses", "classic", "pexec", "unlisted", "long-nonstream", "long-stream"}
 		// Field fidelity runs only in the single-cluster feature.
@@ -4117,6 +4279,9 @@ func (f *vanityShadowFake) Do(ctx context.Context, method, rawURL string, header
 		return harness.HTTPResponse{}, err
 	}
 	if u.Host != "vanity-openai.localhost:8080" {
+		return f.inner.Do(ctx, method, rawURL, headers, body)
+	}
+	if isDecisionRoutePath(u.Path) {
 		return f.inner.Do(ctx, method, rawURL, headers, body)
 	}
 	if method != "POST" || headers["Authorization"] != "Bearer wiring-function-api-key" || headers["Content-Type"] != "application/json" {

@@ -2,8 +2,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "treecopy",
-    srcs = ["copier.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/treecopy",
+    srcs = [
+        "copier.go",
+        "faithful.go",
+    ],
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/treecopy",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
         "//src/compute-plane-services/nvsnap/internal/tracing",
@@ -18,6 +21,7 @@ go_test(
     srcs = [
         "copier_bench_test.go",
         "copier_test.go",
+        "faithful_test.go",
     ],
     embed = [":treecopy"],
     deps = ["@org_golang_x_sys//unix"],

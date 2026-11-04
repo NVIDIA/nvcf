@@ -28,11 +28,11 @@ import (
 
 	zlog "github.com/rs/zerolog/log"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/server"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/server"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const defaultGatewayShutdownTimeout = 5 * time.Second

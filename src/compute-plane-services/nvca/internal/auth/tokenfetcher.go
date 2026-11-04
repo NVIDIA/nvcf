@@ -23,12 +23,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	cmnoauth "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth"
-	cmnsecret "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	cmnoauth "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/oauth"
+	cmnsecret "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/secret"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
 )
 
 const (

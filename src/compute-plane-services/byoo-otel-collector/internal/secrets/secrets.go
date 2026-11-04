@@ -27,8 +27,8 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/internal/metrics"
 )
 
 const (

@@ -28,9 +28,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
-	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
-	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	pdpv1 "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
+	nverrors "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 )

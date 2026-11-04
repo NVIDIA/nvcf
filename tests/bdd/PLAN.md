@@ -132,8 +132,10 @@ and the target contexts stay visible as table rows.
 | `When I run command:` (docstring) | Multi-line form for commands that don't fit on one line. Same recording semantics. |
 | `When I successfully run command {string}` | Single-line command that must exit 0. Preserves the command result for later output assertions and records the resolved command in the successful-command cache. |
 | `When I successfully run command:` (docstring) | Multi-line form for commands that must exit 0. Uses the same result recording, interpolation, logging, and cache semantics as the single-line form. |
+| `When I poll command for up to {int} seconds until output contains {string}:` (docstring) | Repeats the visible command until an exit-zero result contains the expected text. Preserves the matching result for later assertions and JSON-field export. |
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
+| `When I export command output JSON field {string} to environment variable {string}` | Reads a dot-path field from the previous exit-zero command's JSON stdout and exports its non-empty value through the env Ledger. |
 | `When I export the function selected by NVCF CLI to environment variables {string} and {string}` | Runs one `nvcf-cli status --json` for the selected config and exports the selected function ID and version ID under the two named env vars, in that order. Fails when no function is selected or either ID is empty. Both names stay visible in Gherkin. Snapshotted by the env Ledger; restored at suite teardown. |
 
 #### Registration observability command adapters
@@ -170,6 +172,7 @@ original order. Repeated options and empty values are preserved.
 | `When I successfully create function {string} from image {string} with CLI options:` | Runs `function create --name <name> --image <image>` followed by the option rows. |
 | `When I successfully create function {string} from Helm chart {string} with CLI options:` | Runs `function create --name <name> --helm-chart <chart>` followed by the option rows. |
 | `When I successfully deploy the function selected by NVCF CLI with options:` | Runs `function deploy create` followed by the option rows. Function selection remains owned by CLI state. |
+| `When I successfully generate an Event Ledger API key with CLI options:` | Runs `api-key generate --for event-ledger` followed by the option rows and suppresses secret-bearing stdout. The CLI saves and later uses its own Event Ledger key. |
 | `When I successfully generate a function API key with CLI options:` | Runs `api-key generate --for function` followed by the option rows and suppresses secret-bearing stdout. |
 | `When I successfully invoke the function selected by NVCF CLI over HTTP with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke` with the exact request body, timeout, and poll duration. |
 | `When I successfully invoke the function selected by NVCF CLI over plaintext gRPC service {string} method {string} with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke --grpc --grpc-plaintext` with the visible service, method, request, timeout, and poll duration. |
@@ -198,11 +201,13 @@ These steps use the in-process HTTP client (`harness.HTTPClient`), not the comma
 | `When I poll {string} {string} for up to {int} seconds until the HTTP response body contains {string}` | Repeats the request every 5 seconds until the body contains the text or the deadline passes. Used for eventually consistent reads. |
 | `Then the HTTP status should be {int}` | Last response status. The failure message includes a truncated body with API keys (`nvapi-...`) and JWTs masked. HTTP failure messages mask them everywhere they print a body or an expected value. |
 | `Then the HTTP status should be {int} or {int}` | Last response status equals either value. |
+| `Then the HTTP response header {string} should equal {string}` | Compares the first value of a response header, matched case-insensitively by name, with the interpolated text. Fails when the header is absent. Used to check a passthrough keeps a backend header such as `Retry-After`. |
 | `Then the HTTP response body should contain {string}` | Substring match. The interpolated value must be non-empty. |
 | `Then the HTTP response body should not contain {string}` | Negative substring match. The interpolated value must be non-empty. |
 | `Then the HTTP response JSON field {string} should equal {string}` | Dotted path (object keys, array indexes) compared as text. A path continues into a string that holds a JSON object or array, such as a request an echo sample returns as its reply. |
 | `Then the HTTP response JSON field {string} should be absent` | Passes only when the last key is missing from an object that exists at the parent path, so a misspelled parent fails. |
 | `Then the HTTP response JSON field {string} should be at least {int}` | Dotted path parsed as a number and compared to a minimum. |
+| `Then the HTTP response JSON field {string} should be less than {int}` | Dotted path parsed as a number that must be below the bound. Used to show a text-only request meters fewer tokens than one image. |
 | `When I export the HTTP response JSON field {string} to environment variable {string}` | Exports the field under the named env var. Fails when the field is missing or empty. Snapshotted by the env Ledger; restored at suite teardown. The value is never echoed. |
 
 ### Scenario teardown (Given / When)

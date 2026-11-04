@@ -21,7 +21,6 @@ import com.datastax.oss.driver.api.core.CqlSession;
 import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.nvidia.apikeys.converters.KeyOwnerVoBuilder;
 import com.nvidia.apikeys.config.exceptions.CassandraException;
-import com.nvidia.apikeys.config.exceptions.CassandraUnavailableException;
 import com.nvidia.apikeys.persistance.models.KeyByOwnerAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyModel;
 import com.nvidia.apikeys.persistance.repositories.KeyByOwnerAndServiceRepository;
@@ -31,6 +30,7 @@ import com.nvidia.apikeys.vo.KeyOwnerType;
 import com.nvidia.apikeys.vo.KeyOwnerVo;
 import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.apikeys.vo.SavedKeyVo;
+import com.nvidia.boot.exceptions.ServiceUnavailableException;
 import com.nvidia.boot.exceptions.UnprocessableEntityException;
 import java.time.Clock;
 import java.util.List;
@@ -187,13 +187,15 @@ public class KeysDao {
     /**
      * Writes the rows of a logged batch one by one after the batch failed. The batch outcome is
      * unknown: a timed-out batch may still be replayed from the batchlog. The rows use the batch
-     * timestamp, so writing them again leaves the same state as the batch.
+     * timestamp, so writing them again leaves the same state as the batch. A failure here does not
+     * advertise Retry-After: a client that retries a create generates a different key, while the
+     * first one may already be stored.
      */
     private void writeDirectly(Runnable write) {
         try {
             write.run();
         } catch (TransientDataAccessException | DataAccessResourceFailureException e) {
-            throw new CassandraUnavailableException(
+            throw ServiceUnavailableException.withoutRetryAfter(
                     "Key storage is temporarily unavailable, the outcome of the write is unknown", e);
         }
     }

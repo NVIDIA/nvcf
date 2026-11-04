@@ -31,7 +31,7 @@ import (
 	"regexp"
 	"strings"
 
-	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
+	credhelper "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -52,7 +52,7 @@ import (
 	orasauth "oras.land/oras-go/v2/registry/remote/auth"
 	orascredentials "oras.land/oras-go/v2/registry/remote/credentials"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/metrics"
 )
 
 func (h *Handler) runHelmTemplate(

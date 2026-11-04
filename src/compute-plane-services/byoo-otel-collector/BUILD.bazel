@@ -5,7 +5,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@gazelle//:def.bzl", "gazelle")
 load("//rules/oci:defs.bzl", "go_oci_image")
 
-# gazelle:prefix github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector
+# gazelle:prefix github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector
 # gazelle:proto disable_global
 # gazelle:go_naming_convention import_alias
 

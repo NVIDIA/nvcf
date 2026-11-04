@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/data_access"
 )
 
 // fakeDB is a non-nil inner handler. Calling any of its methods panics, which

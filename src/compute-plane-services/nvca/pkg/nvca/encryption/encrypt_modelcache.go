@@ -24,15 +24,15 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
-	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	nvcametrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
 )
 
 const KEY_BYTES = 32

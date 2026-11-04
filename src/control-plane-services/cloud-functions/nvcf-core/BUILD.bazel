@@ -235,6 +235,7 @@ NVCF_CORE_TEST_DEPS = [
     "@nv_third_party_deps//:org_springframework_spring_context",
     "@nv_third_party_deps//:org_springframework_spring_core",
     "@nv_third_party_deps//:org_springframework_spring_test",
+    "@nv_third_party_deps//:org_springframework_spring_tx",
     "@nv_third_party_deps//:org_springframework_spring_web",
     "@nv_third_party_deps//:org_springframework_spring_webflux",
     "@nv_third_party_deps//:org_springframework_spring_webmvc",

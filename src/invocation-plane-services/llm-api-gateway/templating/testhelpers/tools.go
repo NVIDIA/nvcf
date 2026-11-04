@@ -18,8 +18,8 @@ limitations under the License.
 package testhelpers
 
 import (
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/templating/tools"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/templating/tools"
 )
 
 func NewWeatherInfoTool() tools.Tool {

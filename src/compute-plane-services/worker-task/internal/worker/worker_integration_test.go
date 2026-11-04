@@ -35,12 +35,12 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/configs"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/progress"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/types"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/nvct"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/configs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/progress"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/types"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/nvct"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/test/testutils"
 )
 
 // Run/Setup are always called with withHttpServer == false so no HTTP server

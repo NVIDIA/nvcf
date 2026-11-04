@@ -10,7 +10,7 @@ go_library(
         "resolver.go",
         "storage.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/content",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/content",
     importpath = "oras.land/oras-go/v2/content",
     visibility = ["//visibility:public"],
     deps = [

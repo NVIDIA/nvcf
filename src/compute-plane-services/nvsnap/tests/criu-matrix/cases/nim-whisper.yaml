@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# NIM Whisper large v3 (as the container function bench-whisper-large-v3). The image is amd64 only.
+kind: Deployment
+launch: exec
+engine: command
+command: $SERVER_START_SCRIPT_PATH
+image: nvcr.io/nim/nvidia/whisper-large-v3:1.5.1
+healthPath: /v1/health/ready
+extraEnv:
+  - {name: NIM_TAGS_SELECTOR, value: name=whisper-large-v3}
+function:
+  inferenceUrl: /v1/audio/transcriptions
+  healthUri: /v1/health/ready
+  secrets: [NGC_API_KEY]
+  arch: [amd64]

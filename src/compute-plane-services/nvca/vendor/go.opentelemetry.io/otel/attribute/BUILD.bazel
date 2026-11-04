@@ -15,7 +15,7 @@ go_library(
         "type_string.go",
         "value.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
     importpath = "go.opentelemetry.io/otel/attribute",
     visibility = ["//visibility:public"],
     deps = [

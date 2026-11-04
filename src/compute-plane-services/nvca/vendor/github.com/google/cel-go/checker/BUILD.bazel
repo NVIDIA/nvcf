@@ -14,7 +14,7 @@ go_library(
         "scopes.go",
         "types.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/checker",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/checker",
     importpath = "github.com/google/cel-go/checker",
     visibility = ["//visibility:public"],
     deps = [

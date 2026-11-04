@@ -23,7 +23,7 @@ import (
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/common"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/common"
 )
 
 func SetupBootstrapLogger(serviceName string, serviceVersion string) (*otelzap.Logger, func()) {

@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "controller",
     srcs = ["controller.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/controller",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/controller",
     importpath = "sigs.k8s.io/controller-runtime/pkg/internal/controller",
     visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
     deps = [

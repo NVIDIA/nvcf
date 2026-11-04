@@ -21,14 +21,14 @@ import (
 	"context"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/encryption"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/encryption"
 )
 
 const ncaId = "D_zpC1AKku19vaqWc9UUDQQdee0ljIfFCWuxf7TCukE"

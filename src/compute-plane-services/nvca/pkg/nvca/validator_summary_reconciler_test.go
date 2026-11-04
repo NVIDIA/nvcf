@@ -33,8 +33,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
 )
 
 func newTestMetrics(t *testing.T) (*metrics.Metrics, *prometheus.Registry) {

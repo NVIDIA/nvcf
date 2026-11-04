@@ -17,9 +17,11 @@ limitations under the License.
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +34,7 @@ import (
 	"slices"
 
 	"github.com/jellydator/ttlcache/v3"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,9 +58,9 @@ const (
 
 type mockInvoker invocation.Result
 
-func (m *mockInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error) {
+func (m *mockInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuthSet func(invocation.WorkerAuth)) (invocation.Result, context.CancelFunc, error) {
 	result := (invocation.Result)(*m)
-	onWorkerAuthSet(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId)
+	onWorkerAuthSet(invocation.WorkerAuth{Token: result.WorkerAuthorizationToken, RequestId: result.RequestId, FunctionId: testFunctionId, FunctionVersionId: testFunctionVersionId})
 	return result, func() {}, nil
 }
 
@@ -91,7 +94,7 @@ func TestStreamDirector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to connect to local grpc server %s", err)
 	}
-	err = director.RegisterWorker(proxyResponse.RequestId, proxyResponse.WorkerAuthorizationToken, testFunctionId, testFunctionVersionId, dial)
+	err = director.RegisterWorker(t.Context(), proxyResponse.WorkerAuthorizationToken, workerAuthInfo{requestId: proxyResponse.RequestId, functionId: testFunctionId, functionVersionId: testFunctionVersionId}, dial)
 	if err != nil {
 		t.Fatalf("failed to register worker %s", err)
 	}
@@ -318,7 +321,7 @@ func TestRequestIdHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to connect to local http server %s", err)
 	}
-	err = director.RegisterWorker(proxyResponse.RequestId, proxyResponse.WorkerAuthorizationToken, testFunctionId, testFunctionVersionId, dial)
+	err = director.RegisterWorker(t.Context(), proxyResponse.WorkerAuthorizationToken, workerAuthInfo{requestId: proxyResponse.RequestId, functionId: testFunctionId, functionVersionId: testFunctionVersionId}, dial)
 	if err != nil {
 		t.Fatalf("failed to register worker %s", err)
 	}
@@ -380,7 +383,7 @@ func TestRequestIdCookie(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to connect to local http server %s", err)
 	}
-	err = director.RegisterWorker(proxyResponse.RequestId, proxyResponse.WorkerAuthorizationToken, testFunctionId, testFunctionVersionId, dial)
+	err = director.RegisterWorker(t.Context(), proxyResponse.WorkerAuthorizationToken, workerAuthInfo{requestId: proxyResponse.RequestId, functionId: testFunctionId, functionVersionId: testFunctionVersionId}, dial)
 	if err != nil {
 		t.Fatalf("failed to register worker %s", err)
 	}
@@ -747,7 +750,7 @@ func TestStreamDirectorWebSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to connect to local WebSocket server %s", err)
 	}
-	err = director.RegisterWorker(proxyResponse.RequestId, proxyResponse.WorkerAuthorizationToken, testFunctionId, testFunctionVersionId, dial)
+	err = director.RegisterWorker(t.Context(), proxyResponse.WorkerAuthorizationToken, workerAuthInfo{requestId: proxyResponse.RequestId, functionId: testFunctionId, functionVersionId: testFunctionVersionId}, dial)
 	if err != nil {
 		t.Fatalf("failed to register worker %s", err)
 	}
@@ -1369,7 +1372,7 @@ type mockFailingInvoker struct {
 	failureErr error
 }
 
-func (m *mockFailingInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error) {
+func (m *mockFailingInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuthSet func(invocation.WorkerAuth)) (invocation.Result, context.CancelFunc, error) {
 	if m.shouldFail {
 		return invocation.Result{}, func() {}, m.failureErr
 	}
@@ -1378,7 +1381,7 @@ func (m *mockFailingInvoker) InvokeStatefulFunction(_ context.Context, _ net.Con
 		RequestId:                uuid.New(),
 		WorkerAuthorizationToken: "test-token",
 	}
-	onWorkerAuthSet(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId)
+	onWorkerAuthSet(invocation.WorkerAuth{Token: result.WorkerAuthorizationToken, RequestId: result.RequestId, FunctionId: testFunctionId, FunctionVersionId: testFunctionVersionId})
 	return result, func() {}, nil
 }
 
@@ -1583,7 +1586,7 @@ func TestStreamDirector_ErrorHandling(t *testing.T) {
 		var mu sync.Mutex
 
 		// Create an invoker that succeeds on first call but returns a connection that gets closed
-		retryInvoker := FunctionInvokerFunc(func(ctx context.Context, conn net.Conn, auth, functionId, functionVersionId string, requestId *uuid.UUID, onWorkerAuth func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error) {
+		retryInvoker := FunctionInvokerFunc(func(ctx context.Context, conn net.Conn, auth, functionId, functionVersionId string, requestId *uuid.UUID, onWorkerAuth func(invocation.WorkerAuth)) (invocation.Result, context.CancelFunc, error) {
 			mu.Lock()
 			callCount++
 			currentCall := callCount
@@ -1595,7 +1598,7 @@ func TestStreamDirector_ErrorHandling(t *testing.T) {
 					RequestId:                uuid.New(),
 					WorkerAuthorizationToken: "first-token",
 				}
-				onWorkerAuth(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId)
+				onWorkerAuth(invocation.WorkerAuth{Token: result.WorkerAuthorizationToken, RequestId: result.RequestId, FunctionId: testFunctionId, FunctionVersionId: testFunctionVersionId})
 				return result, func() {}, nil
 			}
 
@@ -1604,7 +1607,7 @@ func TestStreamDirector_ErrorHandling(t *testing.T) {
 				RequestId:                uuid.New(),
 				WorkerAuthorizationToken: "retry-token",
 			}
-			onWorkerAuth(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId)
+			onWorkerAuth(invocation.WorkerAuth{Token: result.WorkerAuthorizationToken, RequestId: result.RequestId, FunctionId: testFunctionId, FunctionVersionId: testFunctionVersionId})
 			return result, func() {}, nil
 		})
 
@@ -1672,9 +1675,9 @@ func TestStreamDirector_ErrorHandling(t *testing.T) {
 }
 
 // FunctionInvokerFunc is a function type that implements the FunctionInvoker interface
-type FunctionInvokerFunc func(context.Context, net.Conn, string, string, string, *uuid.UUID, func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error)
+type FunctionInvokerFunc func(context.Context, net.Conn, string, string, string, *uuid.UUID, func(invocation.WorkerAuth)) (invocation.Result, context.CancelFunc, error)
 
-func (f FunctionInvokerFunc) InvokeStatefulFunction(ctx context.Context, conn net.Conn, auth, functionId, functionVersionId string, requestId *uuid.UUID, onWorkerAuth func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error) {
+func (f FunctionInvokerFunc) InvokeStatefulFunction(ctx context.Context, conn net.Conn, auth, functionId, functionVersionId string, requestId *uuid.UUID, onWorkerAuth func(invocation.WorkerAuth)) (invocation.Result, context.CancelFunc, error) {
 	return f(ctx, conn, auth, functionId, functionVersionId, requestId, onWorkerAuth)
 }
 
@@ -1865,6 +1868,7 @@ func TestConnectResultsArePreInitialised(t *testing.T) {
 		metrics.ConnectMissingRequestID, metrics.ConnectInvalidRequestID,
 		metrics.ConnectTokenExpired, metrics.ConnectTokenUnknown,
 		metrics.ConnectRequestIDMismatch, metrics.ConnectHijackFailed,
+		metrics.ConnectRegisterFailed,
 	}
 	for _, r := range emitted {
 		if !slices.Contains(metrics.ConnectResults, r) {
@@ -1875,5 +1879,63 @@ func TestConnectResultsArePreInitialised(t *testing.T) {
 		if !slices.Contains(emitted, r) {
 			t.Errorf("metrics.ConnectResults contains %q which is never emitted", r)
 		}
+	}
+}
+
+func TestRegisterWorkerRejectsDuringShutdown(t *testing.T) {
+	proxyResponse := &invocation.Result{RequestId: uuid.New(), WorkerAuthorizationToken: "123abc"}
+	director := NewStreamDirector((*mockInvoker)(proxyResponse))
+	if err := director.Close(); err != nil {
+		t.Fatalf("failed to close director %s", err)
+	}
+
+	workerLink, workerEnd := net.Pipe()
+	err := director.RegisterWorker(t.Context(), proxyResponse.WorkerAuthorizationToken, workerAuthInfo{requestId: proxyResponse.RequestId, functionId: testFunctionId, functionVersionId: testFunctionVersionId}, workerLink)
+	if !errors.Is(err, errShuttingDown) {
+		t.Fatalf("expected errShuttingDown, got %v", err)
+	}
+	if n := director.workers.Len(); n != 0 {
+		t.Fatalf("expected no worker connections after shutdown, got %d", n)
+	}
+	// The tunnel is closed, so the worker sees its connection end.
+	_ = workerEnd.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := workerEnd.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected the worker's connection to be closed, got %v", err)
+	}
+}
+
+func TestHijackHandlerCountsShutdownRejection(t *testing.T) {
+	requestId := uuid.New()
+	director := NewStreamDirector((*mockInvoker)(&invocation.Result{RequestId: requestId, WorkerAuthorizationToken: "123abc"}))
+	if err := director.Close(); err != nil {
+		t.Fatalf("failed to close director %s", err)
+	}
+	director.workerAuth.Set("123abc", workerAuthInfo{
+		requestId: requestId, functionId: testFunctionId, functionVersionId: testFunctionVersionId, mintedAt: time.Now(),
+	}, ttlcache.DefaultTTL)
+	server := httptest.NewServer(http.HandlerFunc(director.HijackHandler))
+	defer server.Close()
+
+	counter := metrics.WorkerConnectTotal.WithLabelValues(metrics.ConnectRegisterFailed)
+	before := testutil.ToFloat64(counter)
+
+	conn, err := net.Dial("tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("failed to dial proxy %s", err)
+	}
+	defer conn.Close()
+	_, _ = fmt.Fprintf(conn, "CONNECT /v1/proxy HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer 123abc\r\nX-Request-ID: %s\r\n\r\n", requestId)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	reader := bufio.NewReader(conn)
+	if _, err := http.ReadResponse(reader, nil); err != nil {
+		t.Fatalf("failed to read CONNECT response %s", err)
+	}
+	// The tunnel is closed once registration fails, and the handler has
+	// returned, so the deferred counter update has run.
+	if _, err := reader.ReadByte(); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected the worker's connection to be closed, got %v", err)
+	}
+	if got := testutil.ToFloat64(counter) - before; got != 1 {
+		t.Fatalf("expected one %s CONNECT, got %v", metrics.ConnectRegisterFailed, got)
 	}
 }

@@ -13,7 +13,7 @@ go_library(
         "time.go",
         "util.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/signer/internal/v4",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/signer/internal/v4",
     importpath = "github.com/aws/aws-sdk-go-v2/aws/signer/internal/v4",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/signer:__subpackages__"],
     deps = [

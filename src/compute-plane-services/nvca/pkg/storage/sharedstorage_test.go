@@ -24,9 +24,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	translatecommon "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/bombsimon/logrusr/v4"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	translatecommon "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -44,9 +44,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
-	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	nvcav1new "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	featureflagmock "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
 )
 
 func newTestMetrics() *metrics.Metrics {

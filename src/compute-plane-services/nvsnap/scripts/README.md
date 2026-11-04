@@ -10,7 +10,7 @@ Two entry points:
 | Script | Answers | Writes |
 |---|---|---|
 | `test-e2e.sh <workload>` | does capture/restore work for this workload | pass/fail + step timings to stdout |
-| `test-bench.sh <workload>` | how long does cold vs warm vs restore take | a row in `docs/PDF-BENCH-RESULTS.md` |
+| `test-bench.sh <workload>` | how long does cold vs warm vs restore take | a row in `docs/results/PDF-BENCH-RESULTS.md` |
 
 Use `test-e2e.sh` to check correctness, `test-bench.sh` to produce numbers.
 
@@ -44,15 +44,21 @@ them. On success they clean up.
 
 ## Capture paths
 
-Which path runs is decided by GPU count, not by the manifest:
+`test-e2e.sh` picks the path in this order (`scripts/test-e2e.sh`, after the
+node pre-flight):
 
-- 1 GPU -> `criu-v2`: CRIU + cuda-checkpoint of the live process, GPU state
-  included.
-- 2+ GPUs -> `cachedir`: capture the pod's cache mount (model weights,
-  compiled kernels). No process state. Multi-GPU CRIU does not work.
+- `CAPTURE_PATH` in the environment (`criu-v2` or `rootfs`) wins.
+- A source manifest annotated `nvsnap.io/gpushare: "true"` -> `criu-v2` at any
+  GPU count: CRIU of the live process, GPU memory saved through gpushare.
+- 2+ GPUs requested by the first container -> `rootfs`: capture the pod's
+  cache mount (model weights, compiled kernels), no process state.
+- Otherwise (1 GPU) -> `criu-v2`.
 
-Override with `CAPTURE_PATH=criu-v2` or `CAPTURE_PATH=rootfs` when you need the
-other one.
+A `criu-v2` run asks the agent for CRIU explicitly (`capturePath`, through
+`scripts/checkpoint.sh`), which the agent honours whatever the cluster's
+capture method; it refuses a workload CRIU cannot capture (a Riva or Triton
+NIM), and the script stops with a hint (`internal/agent/nim_backend.go`
+`resolveCheckpointRedirect`).
 
 The `nvsnap.io/path` annotation in a workload manifest documents the intent; it
 does not select the path. The agent's `--pod-cache-dir` flag is what decides
@@ -148,4 +154,6 @@ hash and re-captures everything automatically.
    scripts substitute it.
 3. Add a `case` arm in both scripts with the pod names, port, model, and
    inference payloads.
-4. Annotate `nvsnap.io/gpus` accurately -- it selects the capture path.
+4. Set the first container's `nvidia.com/gpu` request accurately, and annotate
+   `nvsnap.io/gpushare: "true"` for a multi-GPU CRIU case: the scripts pick
+   the capture path from them.

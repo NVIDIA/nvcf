@@ -32,7 +32,7 @@ import (
 
 	kaischedulingv2 "github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2"
 
-	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcatypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 func TestNewRunAIQueueHealthCheck(t *testing.T) {

@@ -71,6 +71,10 @@ public abstract class BootReactiveExceptionHandler extends ResponseEntityExcepti
                 new UnauthorizedException(ex.getMessage(), ex.getCause()), exchange);
     }
 
+    /**
+     * The detail is fixed: an unmapped exception's message can carry internals such as a CQL
+     * statement. The exception itself is still recorded.
+     */
     @ExceptionHandler(Exception.class)
     protected Mono<ResponseEntity<Object>> handleExceptionCatchAll(
             Exception ex, ServerWebExchange exchange) {
@@ -78,6 +82,6 @@ public abstract class BootReactiveExceptionHandler extends ResponseEntityExcepti
                 new ErrorResponseException(HttpStatus.INTERNAL_SERVER_ERROR,
                                            ProblemDetail.forStatusAndDetail(
                                                    HttpStatus.INTERNAL_SERVER_ERROR,
-                                                   ex.getMessage()), ex), exchange);
+                                                   "Internal server error"), ex), exchange);
     }
 }

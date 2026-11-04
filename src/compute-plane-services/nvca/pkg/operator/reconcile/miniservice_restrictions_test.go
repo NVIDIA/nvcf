@@ -21,7 +21,7 @@ import (
 	"context"
 	"testing"
 
-	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	nvcaconfig "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,8 +31,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 
-	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/kubeclients"
+	nvidiaiov1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/kubeclients"
 )
 
 func testBoolPtr(b bool) *bool {

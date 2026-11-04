@@ -22,16 +22,16 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/interfaces"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/registrations"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/codex"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common/core/types"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/data_access"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/interfaces"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/registrations"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/pkg/codex"
 )
 
 type Connections struct {
@@ -76,6 +76,7 @@ type Server struct {
 	statsConfig             config.StatsConfig
 	statsEventNames         map[string]struct{}
 	filteredStatsEventNames map[string]struct{}
+	accountColumnsEnabled   bool
 }
 
 func NewServer(conns Connections, logger *otelzap.Logger, publisher interfaces.EventPublisher, version string, httpConfig *config.HTTPClientConfig, paginationConfig config.PaginationConfig, statsConfig config.StatsConfig) *Server {
@@ -100,7 +101,15 @@ func NewServer(conns Connections, logger *otelzap.Logger, publisher interfaces.E
 		statsConfig,
 		statsEventNames,
 		filteredStatsEventNames,
+		false,
 	}
+}
+
+// WithAccountColumns sets whether v3 writes store nca_id and function_id in
+// their own columns. It is off by default.
+func (s *Server) WithAccountColumns(enabled bool) *Server {
+	s.accountColumnsEnabled = enabled
+	return s
 }
 
 func (s *Server) WriteStageTransitionEvent(traceCtx context.Context, ste types.StageTransitionEvent) error {

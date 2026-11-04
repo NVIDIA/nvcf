@@ -18,6 +18,7 @@
 package com.nvidia.apikeys.config.exceptions;
 
 import com.nvidia.boot.exceptions.BootResponseException;
+import com.nvidia.boot.exceptions.ServiceUnavailableException;
 import com.nvidia.boot.exceptions.handlers.BootMvcExceptionHandler;
 import io.opentelemetry.api.trace.Span;
 import jakarta.annotation.Nonnull;
@@ -63,7 +64,7 @@ public class MvcExceptionHandler extends BootMvcExceptionHandler {
             DataAccessException ex,
             WebRequest request) throws Exception {
         return super.handleException(
-                new CassandraUnavailableException("Key storage is temporarily unavailable", ex),
+                new ServiceUnavailableException("Key storage is temporarily unavailable", ex),
                 request);
     }
 

@@ -40,23 +40,25 @@ import (
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
 	logsv1 "go.opentelemetry.io/proto/otlp/logs/v1"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/middleware"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/codex"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/testutils"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common/core/types"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/data_access"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/pkg/codex"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/pkg/testutils"
 )
 
 // statsUpsertCall records an UpsertStatsV3 / UpsertFilteredStatsV3 invocation for assertions.
 type statsUpsertCall struct {
-	namespace string
-	context   string
-	eventName string
-	timestamp time.Time
+	namespace  string
+	context    string
+	eventName  string
+	timestamp  time.Time
+	ncaID      string
+	functionID string
 }
 
 // Mock DBHandlerV2 for V3 tests
@@ -74,6 +76,7 @@ type mockDBHandlerV3 struct {
 	getStatsCalls            int
 	getFilteredStatsCalls    int
 	storedStatsEvents        []data_access.EventV3UpsertRecord
+	storedBulkRecords        []data_access.EventV3UpsertRecord
 	upsertEventCalls         int
 	bulkUpsertEventsCalls    int
 	bulkUpsertStatsCalls     int
@@ -96,12 +99,12 @@ func (m *mockDBHandlerV3) UpsertEventV3(ctx context.Context, namespace, eventCon
 }
 
 func (m *mockDBHandlerV3) UpsertStatsV3(ctx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error {
-	m.upsertStatsCalls = append(m.upsertStatsCalls, statsUpsertCall{namespace, eventContext, eventName, timestamp})
+	m.upsertStatsCalls = append(m.upsertStatsCalls, statsUpsertCall{namespace, eventContext, eventName, timestamp, "", ""})
 	return nil
 }
 
-func (m *mockDBHandlerV3) UpsertFilteredStatsV3(ctx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error {
-	m.upsertFilteredStatsCalls = append(m.upsertFilteredStatsCalls, statsUpsertCall{namespace, eventContext, eventName, timestamp})
+func (m *mockDBHandlerV3) UpsertFilteredStatsV3(ctx context.Context, namespace, eventContext, eventName string, timestamp time.Time, ncaID, functionID string) error {
+	m.upsertFilteredStatsCalls = append(m.upsertFilteredStatsCalls, statsUpsertCall{namespace, eventContext, eventName, timestamp, ncaID, functionID})
 	return nil
 }
 
@@ -110,6 +113,7 @@ func (m *mockDBHandlerV3) BulkUpsertEventsV3(ctx context.Context, events []data_
 	if m.bulkUpsertEventsErr != nil {
 		return m.bulkUpsertEventsErr
 	}
+	m.storedBulkRecords = append(m.storedBulkRecords, events...)
 	for _, e := range events {
 		m.storedEvents = append(m.storedEvents, struct {
 			namespace string
@@ -217,6 +221,14 @@ func (m *mockDBHandlerV3) ReadDeploymentDeploymentStats(context.Context, uuid.UU
 func (m *mockDBHandlerV3) ListDeploymentInstancesPaginated(ctx context.Context, functionVersionId, deploymentId uuid.UUID, paginationParams data_access.PaginationParams) (data_access.PaginatedInstancesResponse, error) {
 	return data_access.PaginatedInstancesResponse{}, nil
 }
+func (m *mockDBHandlerV3) GetAccountEventsV3(ctx context.Context, namespace, eventContext, ncaID, functionID string) ([]data_access.EventV3Record, error) {
+	return []data_access.EventV3Record{}, nil
+}
+
+func (m *mockDBHandlerV3) GetAccountStatsV3(ctx context.Context, namespace, ncaID, functionID string) ([]data_access.StatsV3Record, error) {
+	return []data_access.StatsV3Record{}, nil
+}
+
 func (m *mockDBHandlerV3) Close() error {
 	return nil
 }

@@ -38,8 +38,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const (

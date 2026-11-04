@@ -273,6 +273,7 @@ Key behaviors:
 | `images.server` | `<your-registry>/<your-org>/nvcf-container-cache:v1.1.33` | Cache proxy image |
 | `images.exporter` | `<your-registry>/<your-org>/nginx-prometheus-exporter:1.0` | Metrics exporter |
 | `images.certificates` | `<your-registry>/<your-org>/nvcf-proxy-tls-certs:1.2.2` | TLS cert bundle |
+| `images.init` | `""` (uses `images.certificates`) | Init image that fixes cache volume ownership; needs bash, chown, chmod, find |
 | `images.secrets` | `[nvidia-ngcuser-pull-secret]` | Image pull secrets |
 
 ### Cache Behavior
@@ -353,7 +354,10 @@ Vault signs a short-lived intermediate for it:
 3. The vault-agent sidecar repeats the same request on start and then again at
    about 80 percent of the certificate's lifetime. Each time it rewrites
    `ssl-bundle.crt` and calls the nginx `/reload` endpoint on port 13129.
-   No pod restart is involved.
+   No pod restart is involved. Vault Agent runs that hook only when the
+   rendered template output changes, so the template renders the issued
+   certificate's serial and expiration; without that line every render is
+   identical and the hook never fires.
 4. nginx reads `ssl-bundle.crt` from disk every time it mints a leaf
    certificate, so new connections are signed with the new intermediate as
    soon as the file changes. Minted leaves are cached in shared memory for one

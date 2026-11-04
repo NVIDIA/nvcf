@@ -46,7 +46,7 @@ go_library(
         "stream_int.go",
         "stream_str.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/json-iterator/go",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/json-iterator/go",
     importpath = "github.com/json-iterator/go",
     visibility = ["//visibility:public"],
     deps = [

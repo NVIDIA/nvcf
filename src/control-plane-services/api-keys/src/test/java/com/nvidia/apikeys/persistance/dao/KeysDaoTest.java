@@ -39,15 +39,16 @@ import static org.mockito.Mockito.when;
 
 import com.datastax.oss.driver.api.core.CqlSession;
 import com.nvidia.apikeys.config.exceptions.CassandraException;
-import com.nvidia.apikeys.config.exceptions.CassandraUnavailableException;
 import com.nvidia.apikeys.persistance.models.KeyModel;
 import com.nvidia.apikeys.persistance.repositories.KeyByOwnerAndServiceRepository;
 import com.nvidia.apikeys.persistance.repositories.KeyRepository;
 import com.nvidia.apikeys.vo.SavedKeyVo;
+import com.nvidia.boot.exceptions.ServiceUnavailableException;
 import java.time.Clock;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Answers;
 import org.mockito.InOrder;
@@ -156,9 +157,10 @@ class KeysDaoTest {
                                           any(InsertOptions.class)))
                 .thenThrow(writeTimeout("SIMPLE"));
 
-        assertThrowsExceptionWithDetails(
-                CassandraUnavailableException.class, () -> dao.save(KEY_VO_1, KEY_OWNER_VO_1),
+        var ex = assertThrowsExceptionWithDetails(
+                ServiceUnavailableException.class, () -> dao.save(KEY_VO_1, KEY_OWNER_VO_1),
                 "Key storage is temporarily unavailable, the outcome of the write is unknown");
+        assertThat(ex.getHeaders().containsHeader(HttpHeaders.RETRY_AFTER)).isFalse();
         verify(cassandraTemplateMock, never()).insert(eq(modelMock), any(InsertOptions.class));
     }
 
@@ -216,10 +218,11 @@ class KeysDaoTest {
         when(cassandraTemplateMock.delete(eq(expectedDeletedKeyModel), any(DeleteOptions.class)))
                 .thenThrow(writeTimeout("SIMPLE"));
 
-        assertThrowsExceptionWithDetails(
-                CassandraUnavailableException.class,
+        var ex = assertThrowsExceptionWithDetails(
+                ServiceUnavailableException.class,
                 () -> dao.deleteKey(KEY_BY_OWNER_AND_SERVICE_VO_1),
                 "Key storage is temporarily unavailable, the outcome of the write is unknown");
+        assertThat(ex.getHeaders().containsHeader(HttpHeaders.RETRY_AFTER)).isFalse();
     }
 
     private void mockBatch() {

@@ -23,12 +23,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/service"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/backend"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/config"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/service"
 
-	_ "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend/debug"
-	_ "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend/objectstore"
+	_ "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/backend/debug"
+	_ "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/backend/objectstore"
 )
 
 func main() {

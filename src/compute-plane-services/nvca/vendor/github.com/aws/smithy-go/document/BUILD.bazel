@@ -7,7 +7,7 @@ go_library(
         "document.go",
         "errors.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/document",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/document",
     importpath = "github.com/aws/smithy-go/document",
     visibility = ["//visibility:public"],
 )

@@ -6,7 +6,7 @@ go_library(
         "certwatcher.go",
         "doc.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/certwatcher",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/certwatcher",
     importpath = "sigs.k8s.io/controller-runtime/pkg/certwatcher",
     visibility = ["//visibility:public"],
     deps = [

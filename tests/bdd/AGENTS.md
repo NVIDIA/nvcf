@@ -20,7 +20,8 @@ meaningful target, value, context, and timeout visible while hiding only
 command or output-format mechanics. Keep `When I run command` plus an
 assertion as the escape hatch for uncommon or command-specific behavior.
 
-Function and task lifecycle steps are a narrow command-adapter exception. They
+Function and task lifecycle steps, plus API key generation for their backing
+services and Event Ledger, are a narrow command-adapter exception. They
 store only the selected `nvcf-cli` config, pass visible arguments to one CLI
 command, and preserve the real command result. They do not store function or
 task identity, apply defaults, parse or normalize product values, or enforce
@@ -69,6 +70,16 @@ logic into `dsl/`.
   OpenAI-compatible sample that replies with the request it received when
   `x_load_tester_echo` is true. Do not point it at the `:local` sample, which
   returns a fixed reply other scenarios assert.
+- The decision route scenarios (`@llm-decision-routes`) use
+  `SAMPLE_LLM_DECISIONS_IMAGE`, an in-repo sample image that serves
+  `/v1/decisions` and `/v1/systemone` with a header echo and the `mock_error`
+  query controls. The scenarios are opt-in: `TestSingleClusterHelmfile`
+  excludes `@llm-decision-routes` unless the variable is set, and
+  `TestDecisionRouteScenariosSkipWithoutDecisionsImage` covers that. Do not
+  default it in `godog_test.go`. The scenarios sit after the field-fidelity
+  scenario under a `# Beta decision routes` comment, which `TestLLMRoutingFeaturesRejectIncompleteAndMisroutedResponses`
+  uses to stop its slice; their wiring test is
+  `TestDecisionRouteScenariosRejectBrokenGateways`.
 - The BYOO feature reads its task sample from `SAMPLE_BYOO_TASK_IMAGE` and its
   function sample from `SAMPLE_BYOO_FUNCTION_IMAGE`. Tag every BYOO
   scenario that installs, upgrades, or removes a release with `@stack-change`

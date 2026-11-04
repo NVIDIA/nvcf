@@ -27,8 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kata"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kata"
 )
 
 const enforcementsAnnotation = "nvca.nvcf.nvidia.io/enforcements"

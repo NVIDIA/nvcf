@@ -1,10 +1,10 @@
-module github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout
+module github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout
 
 go 1.26.10
 
 require (
 	github.com/MicahParks/keyfunc/v3 v3.4.0
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
 	github.com/gin-contrib/zap v1.1.5
 	github.com/gin-gonic/gin v1.10.1
 	github.com/go-viper/mapstructure/v2 v2.5.0
@@ -115,3 +115,5 @@ require (
 )
 
 replace google.golang.org/grpc => google.golang.org/grpc v1.79.3
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib

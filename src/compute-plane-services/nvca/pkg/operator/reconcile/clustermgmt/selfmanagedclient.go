@@ -22,8 +22,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
-	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvidiaiov1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvcaoptypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
 // SelfManagedClient wraps ConfigMapClient adding the self-managed mapper

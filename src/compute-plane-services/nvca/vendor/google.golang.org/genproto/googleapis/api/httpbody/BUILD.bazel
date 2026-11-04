@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "httpbody",
     srcs = ["httpbody.pb.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/api/httpbody",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/api/httpbody",
     importpath = "google.golang.org/genproto/googleapis/api/httpbody",
     visibility = ["//visibility:public"],
     deps = [

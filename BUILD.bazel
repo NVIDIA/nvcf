@@ -118,6 +118,9 @@ filegroup(
 # gazelle:exclude src/compute-plane-services/image-credential-helper
 # gazelle:exclude src/compute-plane-services/nvca
 # gazelle:exclude src/compute-plane-services/nvcf-unbound
+# nvstor is Rust with hand-written BUILD files; its csi.proto is compiled by
+# Cargo (tonic-build), so Gazelle must not generate Go proto rules for it.
+# gazelle:exclude src/compute-plane-services/nvstor
 # gazelle:exclude src/compute-plane-services/worker-init
 # gazelle:exclude src/compute-plane-services/worker-llm-credentials
 # gazelle:exclude src/compute-plane-services/worker-task
@@ -134,5 +137,5 @@ filegroup(
 #   bazel run //:gazelle -- update-repos     - sync go.mod deps into MODULE.bazel
 gazelle(
     name = "gazelle",
-    prefix = "github.com/NVIDIA/nvcf",
+    prefix = "github.com/dsx-ai-factory/nvcf",
 )

@@ -22,10 +22,10 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 	"go.uber.org/zap"
 
-	eventledgertypes "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
+	eventledgertypes "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common/core/types"
 )
 
 func writeErrorResponse(w http.ResponseWriter, status int, problem eventledgertypes.ProblemDetails) error {

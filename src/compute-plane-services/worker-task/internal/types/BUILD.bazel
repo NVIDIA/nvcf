@@ -6,7 +6,7 @@ go_library(
         "errors.go",
         "resultstrategy.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/types",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/types",
     visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
 )
 

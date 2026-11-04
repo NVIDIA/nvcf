@@ -6,7 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "context",
     srcs = ["context.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/context",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/context",
     visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )
 

@@ -28,9 +28,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
-	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	golibversion "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
@@ -40,19 +40,19 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/api/service"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/credentials"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/interfaces"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/nvca"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/tracing"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/publisher"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/publisher/cloudevents"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/registrations"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/cmd/api/service"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/credentials"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/data_access"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/interfaces"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/middleware"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/nvca"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/policy"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/publisher"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/publisher/cloudevents"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/registrations"
 )
 
 // registerUnauthenticatedRoutes registers routes that must be reachable before
@@ -155,7 +155,7 @@ func runService(cfg config.Config) error {
 	}
 	defer publisher.Stop()
 
-	server := service.NewServer(conns, logger, publisher, cfg.Telemetry.ServiceVersion, &cfg.HTTP, cfg.Pagination, cfg.Stats)
+	server := service.NewServer(conns, logger, publisher, cfg.Telemetry.ServiceVersion, &cfg.HTTP, cfg.Pagination, cfg.Stats).WithAccountColumns(cfg.V3.AccountColumnsEnabled)
 	router := mux.NewRouter()
 	router.Use(middleware.EnableCORS)
 	router.Use(middleware.BodyLimitMiddleware(10 * 1024 * 1024)) // 10MB limit
@@ -482,6 +482,14 @@ func runService(cfg config.Config) error {
 	// V3 Events endpoint - retrieve all events for a specific namespace and context (context via query params)
 	authRouter.Handle("/v3/ledger/namespace/{namespace}/events",
 		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.ReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetEventsV3)),
+	).Methods("GET", "OPTIONS")
+
+	// Account-scoped V3 reads for KAS. The account in the path is trusted.
+	authRouter.Handle("/v3/ledger/accounts/{ncaId}/functions/{functionId}/versions/{functionVersionId}/events",
+		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.AdminReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetAccountEventsV3)),
+	).Methods("GET", "OPTIONS")
+	authRouter.Handle("/v3/ledger/accounts/{ncaId}/functions/{functionId}/versions/{functionVersionId}/stats",
+		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.AdminReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetAccountStatsV3)),
 	).Methods("GET", "OPTIONS")
 
 	// Cross Account Endpoints for KAS (V2)

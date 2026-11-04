@@ -33,7 +33,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
 )
 
 type DoWorkFunc func(ctx context.Context, nc *nats.Conn) error

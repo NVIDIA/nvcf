@@ -35,7 +35,7 @@ import (
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 )
 
 func TestGrpcServer_RunTerminationCallback_Idempotent(t *testing.T) {

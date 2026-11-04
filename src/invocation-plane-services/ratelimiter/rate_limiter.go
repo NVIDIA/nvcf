@@ -58,9 +58,9 @@ import (
 	v1reflectiongrpc "google.golang.org/grpc/reflection/grpc_reflection_v1"
 	"google.golang.org/grpc/status"
 
-	nvauth "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	nvauth "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 
 	"ratelimiter/credentials"
 	nvcfpb "ratelimiter/nvcf/pb"

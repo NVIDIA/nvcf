@@ -13,7 +13,7 @@ go_library(
         "podcertificaterequestspec.go",
         "podcertificaterequeststatus.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/certificates/v1beta1",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/certificates/v1beta1",
     importpath = "k8s.io/client-go/applyconfigurations/certificates/v1beta1",
     visibility = ["//visibility:public"],
     deps = [

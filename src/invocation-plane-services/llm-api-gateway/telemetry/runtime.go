@@ -42,7 +42,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 
-	nvtracing "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	nvtracing "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 )
 
 type RuntimeConfig struct {

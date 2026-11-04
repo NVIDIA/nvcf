@@ -28,7 +28,7 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/test/testutils"
 )
 
 // ------------------------------------------------------------------------

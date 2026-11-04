@@ -17,6 +17,11 @@ spring:
     contact-points: ${CASSANDRA_CONTACT_POINTS:cassandra.cassandra-system.svc.cluster.local}
     keyspace-name: nvcf_api
     local-datacenter: ${CASSANDRA_DATACENTER:ncp}
+    advanced:
+      retry-policy:
+        # Also retry range-read (index lookup) timeouts on the next host. Override with
+        # SPRING_CASSANDRA_ADVANCED_RETRY_POLICY_CLASS to go back to NextHostRetryPolicy.
+        class: com.nvidia.boot.cassandra.retry.RangeReadRetryPolicy
     username: cassandra
     password: cassandra
   security:
@@ -132,6 +137,11 @@ nvcf:
   api-keys:
     base-url: http://api-keys.api-keys.svc.cluster.local:8080
     # base-url: http://api-keys.nvcf.svc.cluster.local:8080 -- Use when self-hosted stack is ready
+    static:
+      token: ${kv.tokens.api-keys}
+  # This evaluation is served by the same api-keys evaluations gateway; without this, the
+  # OAuth2 fallback picks up api-keys' client-id/token-uri above, which are "unused" here.
+  service-account:
     static:
       token: ${kv.tokens.api-keys}
   registries:

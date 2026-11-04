@@ -16,6 +16,7 @@
 mod engine_driver;
 mod kv_cache;
 mod openai;
+mod sha256;
 mod stats_stream;
 // mock-dynamo is an integration fixture, so its runtime image intentionally
 // exposes deterministic controls used by deployed behavior tests.
@@ -27,6 +28,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
 use clap::Parser;
 use tokio::net::TcpListener;
@@ -569,6 +571,7 @@ async fn main() -> Result<()> {
         .route("/v1/models", get(openai::list_models))
         .route("/v1/responses", post(openai::responses))
         .route("/v1/embeddings", post(openai::embeddings))
+        .merge(decision_routes())
         .route("/pylon/v1/stats/stream", get(stats_stream::stats_stream))
         .route("/kv-cache/stats", get(openai::kv_cache_stats))
         .route(
@@ -589,8 +592,25 @@ async fn main() -> Result<()> {
     info!("send POST to http://{actual_http_addr}/v1/chat/completions");
     info!("send POST to http://{actual_http_addr}/v1/responses");
     info!("send POST to http://{actual_http_addr}/v1/embeddings");
+    info!("send POST to http://{actual_http_addr}/v1/decisions");
+    info!("send POST to http://{actual_http_addr}/v1/systemone");
 
     Ok(axum::serve(listener, app).await?)
+}
+
+/// Decision requests can carry base64 images, so these routes accept bodies
+/// well above axum's 2 MB default.
+fn decision_routes() -> Router<AppState> {
+    const MAX_DECISION_BODY_BYTES: usize = 16 << 20;
+    Router::new()
+        .route(
+            "/v1/decisions",
+            post(openai::decisions).layer(DefaultBodyLimit::max(MAX_DECISION_BODY_BYTES)),
+        )
+        .route(
+            "/v1/systemone",
+            post(openai::systemone).layer(DefaultBodyLimit::max(MAX_DECISION_BODY_BYTES)),
+        )
 }
 
 #[cfg(test)]
