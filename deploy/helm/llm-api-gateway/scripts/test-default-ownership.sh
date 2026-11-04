@@ -124,14 +124,14 @@ test "$(read_config "$override_manifest" NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES)" =
   fail "maxRequestBodyBytes 9223372036854775807 in a values file must render unchanged"
 
 # An unset value, as left by helm upgrade --reuse-values from an older chart,
-# omits the env var so the gateway's own 50 MiB default applies.
+# still renders the 50 MiB default because older images have none.
 helm template llm-api-gateway "$chart_dir" \
   --namespace nvcf \
   --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
   --set llmApiGateway.config.maxRequestBodyBytes=null \
   >"$override_manifest"
-test "$(yq ea -r 'select(.kind == "ConfigMap" and .data.PORT != null) | .data | has("NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES")' "$override_manifest")" = false ||
-  fail "an unset maxRequestBodyBytes must omit NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES"
+test "$(read_config "$override_manifest" NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES)" = 52428800 ||
+  fail "an unset maxRequestBodyBytes must render the 50 MiB default"
 
 if ! helm template llm-api-gateway "$chart_dir" \
   --namespace nvcf \
