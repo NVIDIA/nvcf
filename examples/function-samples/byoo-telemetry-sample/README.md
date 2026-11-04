@@ -7,7 +7,7 @@ The function listens on port 8000:
 - `GET /health` returns `{"status":"OK"}`. Health checks do not emit telemetry.
 - `POST /echo` takes `{"message":"..."}` and returns the message with the request trace ID. Every call, including rejected ones, exports one span, one log record, and a cumulative snapshot of two metrics: `byoo_sample_requests_total` and `byoo_sample_request_duration_seconds`, labeled by route and status code. A W3C `traceparent` header is honored, and the `NVCF-REQID` header is recorded as `nvcf.request_id`.
 
-The sample sends OTLP/HTTP with JSON payloads and uses only the Go standard library. It reads the per-signal `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT` and `_PROTOCOL` variables that BYOO injects, and falls back to `OTEL_EXPORTER_OTLP_ENDPOINT` (with `/v1/<signal>` appended) for local runs. A signal with no endpoint, or with protocol `grpc`, is disabled with a warning, so register the telemetry with protocol `HTTP`.
+The sample sends OTLP/HTTP with JSON payloads and uses only the Go standard library. It reads the per-signal `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT` and `_PROTOCOL` variables that BYOO injects, and falls back to `OTEL_EXPORTER_OTLP_ENDPOINT` (with `/v1/<signal>` appended) for local runs. A signal with no endpoint, or with protocol `grpc`, is disabled with a warning, so register the telemetry with protocol `HTTP`. For that registration BYOO injects the OTLP spec value `http/protobuf`; the sample accepts it and still sends JSON payloads.
 
 ## Layout
 
@@ -43,7 +43,7 @@ docker run -d --name byoo-sink --network byoo-local -p 8888:8888 \
   otel/opentelemetry-collector-contrib:0.129.1 --config=/conf/config.yaml
 docker run -d --name byoo-sample --network byoo-local -p 8000:8000 \
   -e OTEL_EXPORTER_OTLP_ENDPOINT=http://byoo-sink:4318 \
-  -e OTEL_EXPORTER_OTLP_PROTOCOL=http \
+  -e OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
   byoo-telemetry-sample
 ```
 
