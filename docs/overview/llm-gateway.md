@@ -91,8 +91,8 @@ gateway does not wrap it in a second NVCF envelope.
 | `/v1/responses` | Supports native Responses API requests. Streaming clients receive server-sent events (SSE). Non-streaming clients receive the terminal Responses JSON object. |
 | `/v1/embeddings` | Supports embeddings requests with string or string array input. |
 | `/v1/messages` | Preserves native Anthropic Messages JSON responses and server-sent events, including tool and thinking content blocks. |
-| `/v1/decisions` | Beta. Forwards OpenAI Decisions requests unchanged except for the model value, and returns responses unchanged. Not streamed. |
-| `/v1/systemone` | Beta. Forwards TypeSafe System One requests unchanged except for the model value, and returns responses unchanged. Not streamed. |
+| `/v1/decisions` | Beta. Forwards OpenAI Decisions requests unchanged except for the model value, and returns responses unchanged. Meant for non-streaming responses. |
+| `/v1/systemone` | Beta. Forwards TypeSafe System One requests unchanged except for the model value, and returns responses unchanged. Meant for non-streaming responses. |
 
 `llmConfig.routingMethod` is a routing algorithm name, optionally followed by
 tuning parameters, such as `pulsar;seed=stable-a;consider_kv_free_tokens=true`.
@@ -271,7 +271,10 @@ instead of generated text. Two beta routes pass these requests through:
 The gateway reads only `model` and replaces its value with the backend model
 name. The body is forwarded unchanged except for the model value. The gateway
 does not translate between the two formats, so the backend must implement each
-route that it declares. Responses are not streamed: `stream` is ignored.
+route that it declares. The routes are meant for non-streaming responses: the
+gateway does not read `stream` and does not ask for an event stream. Whether a
+backend streams depends on the request it receives, which is forwarded as
+described above.
 
 ```bash
 curl -sS -X POST "http://${GATEWAY_ADDR}/v1/decisions" \
