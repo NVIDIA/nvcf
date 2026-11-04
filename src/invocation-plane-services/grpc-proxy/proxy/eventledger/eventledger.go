@@ -53,10 +53,11 @@ type Publisher struct {
 
 	// mu orders every wg.Add before Close's wg.Wait: a Publish that loses the
 	// race to Close sees closed and drops its event instead of racing the Wait.
-	mu       sync.RWMutex
-	closed   bool
-	inflight chan struct{}
-	wg       sync.WaitGroup
+	mu        sync.RWMutex
+	closed    bool
+	closeOnce sync.Once
+	inflight  chan struct{}
+	wg        sync.WaitGroup
 }
 
 // New returns a Publisher that posts to the ledger at addr. See newTransport
@@ -145,18 +146,17 @@ func (p *Publisher) sendOnce(ctx context.Context, event cloudevents.Event) error
 }
 
 // Close waits for in-flight sends, which each end within the send timeout,
-// then releases the transport. Events published after Close are dropped.
+// then releases the transport. Every call, concurrent or repeated, returns
+// only after that is done. Events published after Close are dropped.
 func (p *Publisher) Close() {
 	if p == nil {
 		return
 	}
-	p.mu.Lock()
-	alreadyClosed := p.closed
-	p.closed = true
-	p.mu.Unlock()
-	if alreadyClosed {
-		return
-	}
-	p.wg.Wait()
-	p.transport.Close()
+	p.closeOnce.Do(func() {
+		p.mu.Lock()
+		p.closed = true
+		p.mu.Unlock()
+		p.wg.Wait()
+		p.transport.Close()
+	})
 }
