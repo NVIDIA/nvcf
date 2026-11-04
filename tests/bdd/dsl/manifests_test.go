@@ -18,11 +18,62 @@ limitations under the License.
 package dsl
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRenderedWorkloadEnvEquals(t *testing.T) {
+	const manifest = `kind: Job
+metadata:
+  name: migrations
+spec:
+  template:
+    spec:
+      containers:
+        - name: migrate
+          env:
+            - name: ALLOWED_DOMAINS
+              value: %s
+`
+	plain := fmt.Sprintf(manifest, "example.invalid")
+	for _, tc := range []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "unquoted", body: plain},
+		{name: "double quoted", body: fmt.Sprintf(manifest, `"example.invalid"`)},
+		{name: "single quoted", body: fmt.Sprintf(manifest, `'example.invalid'`)},
+		{name: "multiple documents", body: "kind: ConfigMap\n---\n" + plain},
+		{name: "wrong value", body: fmt.Sprintf(manifest, "private-unexpected-value"), wantErr: true},
+		{name: "non-string value", body: fmt.Sprintf(manifest, "true"), wantErr: true},
+		{name: "wrong workload", body: strings.ReplaceAll(plain, "name: migrations", "name: other"), wantErr: true},
+		{name: "wrong kind", body: strings.ReplaceAll(plain, "kind: Job", "kind: Deployment"), wantErr: true},
+		{name: "wrong container", body: strings.ReplaceAll(plain, "name: migrate", "name: other"), wantErr: true},
+		{name: "missing variable", body: strings.ReplaceAll(plain, "ALLOWED_DOMAINS", "OTHER"), wantErr: true},
+		{name: "duplicate resource", body: plain + "---\n" + plain, wantErr: true},
+		{name: "duplicate variable", body: plain + "            - name: ALLOWED_DOMAINS\n              value: example.invalid\n", wantErr: true},
+		{name: "reference value", body: plain + "              valueFrom:\n                secretKeyRef: {name: other, key: value}\n", wantErr: true},
+		{name: "invalid YAML", body: "kind: [invalid", wantErr: true},
+		{name: "empty render", body: "", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "render.yaml"), tc.body)
+			t.Setenv("BDD_RENDER_EXPECTED_DOMAIN", "example.invalid")
+			err := RenderedWorkloadEnvEquals(root, KubernetesResource{Kind: "Job", Name: "migrations"}, "migrate", "ALLOWED_DOMAINS", "${BDD_RENDER_EXPECTED_DOMAIN}")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error = %v, want error %t", err, tc.wantErr)
+			}
+			if err != nil && strings.Contains(err.Error(), "private-unexpected-value") {
+				t.Fatal("error exposes an environment value")
+			}
+		})
+	}
+}
 
 func TestRenderedManifestsContainResourceRejectsIssuerRefFragments(t *testing.T) {
 	root := t.TempDir()
