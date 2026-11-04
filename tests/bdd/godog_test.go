@@ -38,6 +38,7 @@ import (
 
 	"github.com/cucumber/godog"
 	"github.com/google/shlex"
+	"gopkg.in/yaml.v3"
 
 	"nvcf-bdd/dsl"
 	"nvcf-bdd/harness"
@@ -461,8 +462,109 @@ func TestMultiClusterUpFeatureFileWiresToSteps(t *testing.T) {
 	if status != 0 {
 		t.Fatalf("godog suite status = %d", status)
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "compute-plane install") {
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanThatContains(runs, "compute-plane install") {
 		t.Fatal("compute-plane install CLI command was never invoked")
+	}
+	expected := map[string][]string{
+		"k3d-ncp-local-cp":        {"cassandra-system", "nats-system", "nvcf", "api-keys", "ess", "sis", "vault-system", "nvca-operator", "cert-manager"},
+		"k3d-ncp-local-compute-1": {"nvca-operator"},
+	}
+	if err := validatePullSecretContexts(runs, expected); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func validatePullSecretContexts(commands []string, expected map[string][]string) error {
+	writes := map[string]map[string]bool{}
+	for _, command := range commands {
+		if !strings.Contains(command, "manifest-pull-secret-") {
+			continue
+		}
+		args, err := shlex.Split(command)
+		if err != nil || len(args) == 0 {
+			return fmt.Errorf("cannot parse pull-secret apply command")
+		}
+		body, err := os.ReadFile(args[len(args)-1])
+		if err != nil {
+			return fmt.Errorf("read recorded pull-secret manifest: %w", err)
+		}
+		var manifest struct {
+			Kind     string `yaml:"kind"`
+			Type     string `yaml:"type"`
+			Metadata struct {
+				Name      string `yaml:"name"`
+				Namespace string `yaml:"namespace"`
+			} `yaml:"metadata"`
+		}
+		if err := yaml.Unmarshal(body, &manifest); err != nil {
+			return fmt.Errorf("cannot decode recorded pull-secret manifest")
+		}
+		if manifest.Kind == "Namespace" {
+			continue
+		}
+		if manifest.Kind != "Secret" || manifest.Type != "kubernetes.io/dockerconfigjson" || manifest.Metadata.Name != "nvcr-pull-secret" {
+			return fmt.Errorf("recorded pull-secret apply is not the expected registry Secret")
+		}
+		if len(args) != 6 || args[0] != "kubectl" || args[1] != "--context" || args[3] != "apply" || args[4] != "-f" {
+			return fmt.Errorf("registry Secret apply must use an explicit Kubernetes context")
+		}
+		kubeContext, namespace := args[2], manifest.Metadata.Namespace
+		if !slices.Contains(expected[kubeContext], namespace) {
+			return fmt.Errorf("registry Secret applied to unexpected context %q or namespace %q", kubeContext, namespace)
+		}
+		if writes[kubeContext] == nil {
+			writes[kubeContext] = map[string]bool{}
+		}
+		writes[kubeContext][namespace] = true
+	}
+	for kubeContext, namespaces := range expected {
+		for _, namespace := range namespaces {
+			if !writes[kubeContext][namespace] {
+				return fmt.Errorf("registry Secret was not applied to context %q namespace %q", kubeContext, namespace)
+			}
+		}
+	}
+	return nil
+}
+
+func TestValidatePullSecretContexts(t *testing.T) {
+	dir := t.TempDir()
+	expected := map[string][]string{"control": {"nvcf"}, "compute": {"nvca-operator"}}
+	secret := func(namespace string) string {
+		path := filepath.Join(dir, "manifest-pull-secret-"+namespace+".yaml")
+		body := "kind: Secret\nmetadata:\n  name: nvcr-pull-secret\n  namespace: " + namespace + "\ntype: kubernetes.io/dockerconfigjson\n"
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	namespace := filepath.Join(dir, "manifest-pull-secret-namespace.yaml")
+	if err := os.WriteFile(namespace, []byte("kind: Namespace\nmetadata:\n  name: nvcf\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	apply := func(context, path string) string { return "kubectl --context " + context + " apply -f " + path }
+	controlSecret := apply("control", secret("nvcf"))
+	computeSecret := apply("compute", secret("nvca-operator"))
+	for _, tc := range []struct {
+		name     string
+		commands []string
+		wantErr  bool
+	}{
+		{name: "both secrets", commands: []string{apply("control", namespace), controlSecret, computeSecret}},
+		{name: "namespace only", commands: []string{apply("control", namespace), apply("compute", namespace)}, wantErr: true},
+		{name: "missing control secret", commands: []string{apply("control", namespace), computeSecret}, wantErr: true},
+		{name: "missing compute secret", commands: []string{controlSecret, apply("compute", namespace)}, wantErr: true},
+		{name: "ambient context", commands: []string{"kubectl apply -f " + secret("nvcf"), computeSecret}, wantErr: true},
+		{name: "wrong context", commands: []string{apply("other", secret("nvcf")), computeSecret}, wantErr: true},
+		{name: "wrong namespace", commands: []string{apply("control", secret("other")), computeSecret}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validatePullSecretContexts(tc.commands, expected)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error = %v, want error %t", err, tc.wantErr)
+			}
+		})
 	}
 }
 
