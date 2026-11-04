@@ -38,6 +38,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
+const msgChatStreamIncomplete = "upstream stream ended before completion"
+
 type UnaryResponseSender func(
 	c *GatewayContext,
 	response *models.ChatCompletionResponse,
@@ -189,10 +191,10 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 
 	for event := range wrappedStream {
 		if event.Err != nil {
-			if !errors.Is(event.Err, context.Canceled) {
-				return echo.NewHTTPError(http.StatusBadGateway, event.Err.Error())
+			if errors.Is(event.Err, context.Canceled) {
+				return nil
 			}
-			return nil
+			return failChatCompletionStream(c, event.Err)
 		}
 
 		if event.Chunk == nil {
@@ -222,6 +224,26 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 	}
 
 	return err
+}
+
+// failChatCompletionStream ends a chat stream whose upstream failed after the
+// 200 was sent. The client gets an error event instead of [DONE], which OpenAI
+// SDKs raise as an error, and the returned 502 marks the request as failed in
+// logs, metrics and traces.
+func failChatCompletionStream(c *GatewayContext, cause error) error {
+	failure := echo.NewHTTPError(http.StatusBadGateway, msgChatStreamIncomplete)
+	payload, err := json.Marshal(openAIErrorResponse{Error: openAIError{
+		Message: msgChatStreamIncomplete,
+		Type:    openAIErrorType(http.StatusBadGateway),
+	}})
+	if err != nil {
+		return failure.SetInternal(errors.Join(cause, err))
+	}
+	_, writeErr := fmt.Fprintf(c.Response(), "data: %s\n\n", payload)
+	if writeErr == nil {
+		c.Response().Flush()
+	}
+	return failure.SetInternal(errors.Join(cause, writeErr))
 }
 
 type streamFinalizationState struct {

@@ -1074,23 +1074,27 @@ func (p *StargateProvider) readStream(
 		}
 	}
 
-	if len(dataLines) > 0 {
-		_ = emit()
+	if len(dataLines) > 0 && !emit() {
+		return
 	}
 
-	if err := scanner.Err(); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			select {
-			case events <- StreamEvent{Err: ctxErr}:
-			default:
-			}
-			return
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		select {
+		case events <- StreamEvent{Err: ctxErr}:
+		default:
 		}
+		return
+	}
+	if err := scanner.Err(); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
 		events <- StreamEvent{
 			Err: fmt.Errorf("read stargate stream: %w", err),
 		}
+		return
 	}
+	// A stream cut short upstream (Pylon output timeout, worker hang) can still
+	// end in a clean EOF, so only [DONE] marks a finished response.
+	events <- StreamEvent{Err: errors.New("stargate stream ended before [DONE]")}
 }
