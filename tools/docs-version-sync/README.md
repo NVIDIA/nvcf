@@ -104,6 +104,19 @@ If the command reports an unclassified artifact, add its metadata under
 `manifest.entries` as described below and rerun the command. Do not edit a
 generated documentation block by hand.
 
+Artifacts that share a name get distinct catalog IDs: `<name>-<type>` for a
+chart and an image with the same name, and `<name>-<type>-<version>` for two
+versions of one artifact. When an update replaces an ID that a manifest entry
+uses, the entry moves to the new ID of the same name and type, repeated for
+each new version. Review moved entries. A new artifact, or a new version added
+beside an ID that is still in use, still needs its own entry.
+
+The update also checks the stack versions pinned in the self-managed source
+tag. The Pylon image tag is either a literal in `global.yaml.gotmpl` or, when
+that template builds it from the request router tag, the
+`addons.llm.requestRouter.image.tag` value in `environments/base.yaml`.
+`stack.pin_sources` lists the files that define the pins for the selected tag.
+
 ## Record a public publication
 
 The sync does not probe NVIDIA NGC or another registry. Verify publication

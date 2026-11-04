@@ -562,6 +562,142 @@ func TestCatalogArtifactsFromResolvedInventoryPreservesTypedIDs(t *testing.T) {
 	}
 }
 
+func TestBuildCatalogFromResolvedInventoryMovesManifestEntryForSameNameChartAndImage(t *testing.T) {
+	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
+	inventory := testCatalogResolvedInventory(t, source)
+	inventory.Artifacts = append(inventory.Artifacts,
+		resolvedInventoryArtifact{
+			Type:       "helm-chart",
+			Name:       "nvcf-otel-collector",
+			Repository: "https://helm.ngc.nvidia.com/nvidia/nvcf",
+			Version:    "0.3.0",
+			Reference:  "https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-otel-collector@0.3.0",
+			Sources:    []resolvedArtifactSource{{Plane: "observability", Release: "collector"}},
+		},
+		resolvedInventoryArtifact{
+			Type:       "container-image",
+			Name:       "nvcf-otel-collector",
+			Repository: "nvcr.io/nvidia/nvcf/nvcf-otel-collector",
+			Version:    "0.160.0-nv-0.4.7",
+			Reference:  "nvcr.io/nvidia/nvcf/nvcf-otel-collector:0.160.0-nv-0.4.7",
+			Sources:    []resolvedArtifactSource{{Plane: "compute-plane", Release: "nvca-operator"}},
+		},
+	)
+	sort.Slice(inventory.Artifacts, func(i, j int) bool {
+		return compareResolvedInventoryArtifacts(inventory.Artifacts[i], inventory.Artifacts[j]) < 0
+	})
+	base := testCatalog()
+	base.Artifacts = append(base.Artifacts, Artifact{Name: "nvcf-otel-collector", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "0.2.0"})
+	chartEntry := ManifestEntry{ArtifactID: "nvcf-otel-collector", Plane: ManifestPlaneObservability, Kind: ManifestKindChart, Requirement: ManifestRequired, Description: "Configures the collector."}
+	base.Manifest.Entries = append(base.Manifest.Entries, chartEntry)
+
+	catalog, err := buildCatalogFromResolvedStackInventory(inventory, stackSourceSnapshot{Release: source, Files: testCatalogPinSourceBytes()}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chart, chartFound := catalog.findArtifactByNameAndType("nvcf-otel-collector", ArtifactTypeChart)
+	image, imageFound := catalog.findArtifactByNameAndType("nvcf-otel-collector", ArtifactTypeImage)
+	if !chartFound || !imageFound || chart.catalogKey() != "nvcf-otel-collector-chart" || image.catalogKey() != "nvcf-otel-collector-image" {
+		t.Fatalf("same-name artifacts = chart %#v, image %#v; want type-qualified IDs", chart, image)
+	}
+
+	var moved []ManifestEntry
+	for _, entry := range catalog.Manifest.Entries {
+		switch entry.ArtifactID {
+		case "nvcf-otel-collector":
+			t.Fatal("manifest entry still references the retired bare-name key")
+		case "nvcf-otel-collector-chart", "nvcf-otel-collector-image":
+			moved = append(moved, entry)
+		}
+	}
+	wantEntry := chartEntry
+	wantEntry.ArtifactID = "nvcf-otel-collector-chart"
+	if len(moved) != 1 || moved[0] != wantEntry {
+		t.Fatalf("migrated manifest entries = %#v, want only %#v; the new image needs its own classification", moved, wantEntry)
+	}
+	if got := base.Manifest.Entries[len(base.Manifest.Entries)-1].ArtifactID; got != "nvcf-otel-collector" {
+		t.Fatalf("base catalog manifest entry changed to %s; --check compares against it", got)
+	}
+}
+
+func TestMigrateManifestArtifactIDs(t *testing.T) {
+	image := func(id, name, version string) Artifact {
+		return Artifact{ID: id, Name: name, Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: version}
+	}
+	tests := []struct {
+		name    string
+		base    []Artifact
+		current []Artifact
+		entries []string
+		// want lists each resulting entry as artifact_id=original entry id.
+		want []string
+	}{
+		{
+			name:    "split into versions",
+			base:    []Artifact{image("", "migrations", "0.19.5")},
+			current: []Artifact{image("migrations-image-0.23.1", "migrations", "0.23.1"), image("migrations-image-0.19.10", "migrations", "0.19.10")},
+			entries: []string{"migrations", "other"},
+			want:    []string{"migrations-image-0.19.10=migrations", "migrations-image-0.23.1=migrations", "other=other"},
+		},
+		{
+			name:    "replaced version",
+			base:    []Artifact{image("migrations-image-0.19.10", "migrations", "0.19.10"), image("migrations-image-0.23.1", "migrations", "0.23.1")},
+			current: []Artifact{image("migrations-image-0.19.10", "migrations", "0.19.10"), image("migrations-image-0.24.0", "migrations", "0.24.0")},
+			entries: []string{"migrations-image-0.19.10", "migrations-image-0.23.1"},
+			want:    []string{"migrations-image-0.19.10=migrations-image-0.19.10", "migrations-image-0.24.0=migrations-image-0.23.1"},
+		},
+		{
+			name:    "retained key leaves added version unclassified",
+			base:    []Artifact{image("", "k8s", "1.37.0")},
+			current: []Artifact{image("k8s", "k8s", "1.37.0"), image("k8s-image-1.33.1", "k8s", "1.33.1")},
+			entries: []string{"k8s"},
+			want:    []string{"k8s=k8s"},
+		},
+		{
+			name:    "ambiguous removal",
+			base:    []Artifact{image("tool-image-1", "tool", "1"), image("tool-image-2", "tool", "2")},
+			current: []Artifact{image("tool-image-3", "tool", "3"), image("tool-image-4", "tool", "4")},
+			entries: []string{"tool-image-1", "tool-image-2"},
+			want:    []string{"tool-image-1=tool-image-1", "tool-image-2=tool-image-2"},
+		},
+		{
+			name:    "classified new key is not repeated",
+			base:    []Artifact{image("", "migrations", "0.19.5")},
+			current: []Artifact{image("migrations-image-0.23.1", "migrations", "0.23.1"), image("migrations-image-0.19.10", "migrations", "0.19.10")},
+			entries: []string{"migrations", "migrations-image-0.19.10"},
+			want:    []string{"migrations-image-0.23.1=migrations", "migrations-image-0.19.10=migrations-image-0.19.10"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := &Catalog{Artifacts: test.base}
+			for _, id := range test.entries {
+				base.Manifest.Entries = append(base.Manifest.Entries, ManifestEntry{
+					ArtifactID:  id,
+					Plane:       ManifestPlaneControl,
+					Kind:        ManifestKindServiceImage,
+					Description: id,
+				})
+			}
+			catalog := &Catalog{Artifacts: test.current, Manifest: base.Manifest}
+
+			migrateManifestArtifactIDs(catalog, base)
+			var got []string
+			for _, entry := range catalog.Manifest.Entries {
+				got = append(got, entry.ArtifactID+"="+entry.Description)
+			}
+			if strings.Join(got, ",") != strings.Join(test.want, ",") {
+				t.Fatalf("manifest entries = %v, want %v", got, test.want)
+			}
+			for i, entry := range base.Manifest.Entries {
+				if entry.ArtifactID != test.entries[i] {
+					t.Fatalf("base manifest entry %d changed to %s", i, entry.ArtifactID)
+				}
+			}
+		})
+	}
+}
+
 func TestCatalogArtifactsFromResolvedInventoryPreservesPublicUpstreamRepositories(t *testing.T) {
 	inventory := resolvedStackInventory{
 		Releases: []resolvedInventoryRelease{{Plane: "compute-plane", Name: "dependencies", Required: true}},
