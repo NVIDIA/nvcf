@@ -710,21 +710,29 @@ func TestDecisionRoutesRejectNonJSONContentTypes(t *testing.T) {
 
 // A missing Content-Type is read as JSON, as on the chat completions route.
 func TestDecisionRoutesAcceptJSONOrMissingContentType(t *testing.T) {
-	for _, contentType := range []string{"", "application/json", "application/json; charset=utf-8"} {
-		for _, path := range []string{decisionsPath, systemOnePath} {
-			t.Run(path+" "+contentType, func(t *testing.T) {
-				requests := make(chan capturedRequest, 1)
-				backend := captureServer(t, requests, nil)
-				mux := openAIMux(t, decisionMappings(true, true, nil), backend.URL, "http://llm.invalid")
-				req := openAIRequest(t, path, `{"model":"`+decisionModel+`"}`)
-				if contentType != "" {
-					req.Header.Set("Content-Type", contentType)
-				}
-				rec := httptest.NewRecorder()
-				mux.ServeHTTP(rec, req)
-				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-				awaitRequest(t, requests)
-			})
+	for _, mode := range []struct {
+		name   string
+		mutate func(*config.ModelFunctionDetails)
+	}{
+		{"direct", nil},
+		{"llm gateway", llmDecision},
+	} {
+		for _, contentType := range []string{"", "application/json", "application/json; charset=utf-8"} {
+			for _, path := range []string{decisionsPath, systemOnePath} {
+				t.Run(mode.name+" "+path+" "+contentType, func(t *testing.T) {
+					requests := make(chan capturedRequest, 1)
+					backend := captureServer(t, requests, nil)
+					mux := openAIMux(t, decisionMappings(true, true, mode.mutate), backend.URL, backend.URL)
+					req := openAIRequest(t, path, `{"model":"`+decisionModel+`"}`)
+					if contentType != "" {
+						req.Header.Set("Content-Type", contentType)
+					}
+					rec := httptest.NewRecorder()
+					mux.ServeHTTP(rec, req)
+					require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+					awaitRequest(t, requests)
+				})
+			}
 		}
 	}
 }
