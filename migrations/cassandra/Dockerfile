@@ -1,5 +1,24 @@
 ARG GO_IMAGE=golang:1.27.3-alpine3.23@sha256:754d5200fc3edae76d3b6598a9a3fac7e74981ee6a5413ab955025f185753ef2
 
+# Cassandra 5.0.9 still copies an older Temurin 17 JRE. Use the patched
+# Temurin 17.0.21+9 trust store without changing Cassandra or the JVM binary.
+FROM --platform=$BUILDPLATFORM alpine:3.23@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde849b6703d63 AS patched-cacerts
+ARG TARGETARCH
+RUN apk add --no-cache curl && \
+    case "${TARGETARCH}" in \
+      amd64) jre_arch=x64; jre_sha256=9f41bf88c7900c7097444a1bdeb84146ae692bc08842490ab098063c74bf9a8a ;; \
+      arm64) jre_arch=aarch64; jre_sha256=1114f09d6174f54270c3117410b5e4022b43ebc0b43b751af08b927c55ed7bb5 ;; \
+      *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL --retry 7 --retry-all-errors -o /tmp/temurin-jre.tar.gz \
+      "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jre_${jre_arch}_linux_hotspot_17.0.21_9.tar.gz" && \
+    printf '%s  /tmp/temurin-jre.tar.gz\n' "${jre_sha256}" | sha256sum -c - && \
+    mkdir -p /tmp/temurin-jre /out && \
+    tar -xzf /tmp/temurin-jre.tar.gz -C /tmp/temurin-jre && \
+    cacerts=$(find /tmp/temurin-jre -type f -path '*/lib/security/cacerts') && \
+    test -f "${cacerts}" && \
+    cp "${cacerts}" /out/cacerts
+
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS migrate-builder
 
 ARG TARGETARCH
@@ -40,11 +59,14 @@ RUN apk add --no-cache curl && \
       printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum -c -; \
     done < /tmp/java-libraries.lock
 
-FROM cassandra:5.0.9
+FROM cassandra:5.0.9@sha256:ae4cc2e4b62a5b2a2dd1645ba827cb50c589cc7531bcffe8b8b60ac3b1adc79d
 
 ARG GIT_SHA
 
 USER root
+
+COPY --from=patched-cacerts --chmod=0644 /out/cacerts /opt/java/openjdk/lib/security/cacerts
+COPY --chmod=0644 NOTICE /usr/share/doc/cacerts-NOTICE
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
