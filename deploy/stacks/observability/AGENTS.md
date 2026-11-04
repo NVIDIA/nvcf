@@ -61,3 +61,5 @@ explicitly.
 - Preserve explicit user values when applying profile defaults.
 - Validate every new mode, dependency, and rendered monitor shape in
   `tests/profile-defaults.sh`.
+- Bump `version` and `appVersion` in a chart's `Chart.yaml` when the chart
+  changes after a stack release. `tests/chart-versions.sh` enforces this.
