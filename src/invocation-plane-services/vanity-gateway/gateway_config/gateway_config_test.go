@@ -2031,3 +2031,30 @@ func TestDecisionSectionsRejectLLMOnlyFieldsWithUsePexec(t *testing.T) {
 		})
 	}
 }
+
+func TestDecisionSectionsRejectDuplicateModelNames(t *testing.T) {
+	for _, section := range []struct{ name, json string }{
+		{"openai.decisions", `{"openai": {"host": "api.example.com", "decisions": {
+			"a": {"modelName": "dec-model", "functionID": "f1"},
+			"b": {"modelName": "dec-model", "functionID": "f2"}}}}`},
+		{"typesafeSystemOne", `{"openai": {"host": "api.example.com"}, "typesafeSystemOne": {
+			"a": {"modelName": "s1-model", "functionID": "f1"},
+			"b": {"modelName": "s1-model", "functionID": "f2"}}}`},
+	} {
+		t.Run(section.name, func(t *testing.T) {
+			var cfg GatewayConfig
+			require.NoError(t, json.Unmarshal([]byte(`{"v2config": `+section.json+`}`), &cfg))
+			require.ErrorContains(t, cfg.Validate(), section.name+`: modelName "`)
+		})
+	}
+}
+
+func TestDecisionSectionsRejectTooManyRequestsMessage(t *testing.T) {
+	for _, section := range []string{"decisions", "typesafeSystemOne"} {
+		t.Run(section, func(t *testing.T) {
+			entry := llmModel()
+			entry.TooManyRequestsMessage = "Try again later."
+			require.ErrorContains(t, llmModelConfig(section, entry).Validate(), "tooManyRequestsMessage is unsupported")
+		})
+	}
+}

@@ -195,7 +195,7 @@ v2config:
 | `customHeaders` | No | Map of static request headers to set on the upstream request. Configured values overwrite caller-provided values for the same header. Reserved routing, protocol, auth, proxy, and `NVCF-*` headers are rejected. |
 | `eol` | No | RFC3339 timestamp. Future dates add a `Deprecation` header; past dates return `410 Gone` and hide the model from `/v1/models`. |
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
-| `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. Recognizes an OpenAI error object, an RFC 7807 problem document, and a bare `{"message": "..."}`. Any other body is returned unchanged. |
+| `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. Recognizes an OpenAI error object, an RFC 7807 problem document, and a bare `{"message": "..."}`. Any other body is returned unchanged. Rejected on the decision routes. |
 | `shadows` | No | List of per-target shadow configs. It must be a list; `null` is rejected, and so is `null` for any field inside an entry. It cannot be combined with any legacy top-level shadow field. Not supported for multipart image edit or variation endpoints. |
 | `shadows[].modelName` | Yes | Target model name in the same mapping section. It cannot match the primary model or another shadow target. |
 | `shadows[].percentage` | No | Percentage of primary requests sent to this target, from `1` to `100`. Defaults to `100`. |
@@ -600,8 +600,10 @@ through on the shared API host set by `openai.host`:
 - `POST /v1/systemone` serves the TypeSafe System One format. Map models under
   `v2config.typesafeSystemOne`, a top-level sibling of `anthropicMessages`.
 
-Entries use the same fields as `openai.chatCompletions`; shadow sampling is
-limited to `random` and `perBearerKey`. A model
+Entries use the same fields as `openai.chatCompletions`, except that
+`tooManyRequestsMessage` is rejected because backend `429` bodies pass
+through unchanged, and shadow sampling is limited to `random` and
+`perBearerKey`. Each `modelName` may appear once per section. A model
 is enabled for a route only when it is listed in that route's section. A
 function that serves both formats is listed in both sections. A request for a
 model that is not listed in the section of the route it called returns `404`.
@@ -635,9 +637,11 @@ two formats, so the backend must implement each route it is configured for.
 Request bodies are forwarded unchanged except for the model value: on the LLM
 Gateway path the gateway replaces the value of `model` with the
 function-qualified name in place and keeps every other byte. Response bodies
-pass through unchanged, including backend 4xx and 5xx responses. Responses are
-not streamed: the gateway does not read `stream` and does not ask for an event
-stream. Requests must use `Content-Type: application/json`. A request without
+pass through unchanged, including backend 4xx and 5xx responses. The routes
+are meant for non-streaming responses: the gateway does not read `stream` and
+does not ask for an event stream itself. Whether a backend streams depends on
+the request it receives, which the gateway forwards as described above.
+Requests must use `Content-Type: application/json`. A request without
 a `Content-Type` header is read as JSON, as on `/v1/chat/completions`; any
 other media type returns `415`. Vendor headers such as
 `TypeSafe-Danger-Zone-Images: true` reach the backend unchanged. Request bodies

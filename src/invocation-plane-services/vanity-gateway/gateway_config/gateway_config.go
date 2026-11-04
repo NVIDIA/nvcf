@@ -653,6 +653,11 @@ func validateModelSection(sectionName string, entries map[string]ModelFunctionDe
 	if err != nil {
 		return err
 	}
+	if isDecisionSection(sectionName) {
+		if err := validateDecisionSection(sectionName, entries); err != nil {
+			return err
+		}
+	}
 
 	for modelKey, entry := range entries {
 		location := sectionName + "." + modelKey
@@ -688,6 +693,34 @@ func collectModelNames(sectionName string, entries map[string]ModelFunctionDetai
 		modelNames[entry.ModelName] = struct{}{}
 	}
 	return modelNames, nil
+}
+
+func isDecisionSection(sectionName string) bool {
+	return sectionName == decisionsSection || sectionName == typeSafeSystemOneSection
+}
+
+// validateDecisionSection rejects a modelName listed twice, because only one
+// entry would win and the winner would depend on map order, and
+// tooManyRequestsMessage, because decision routes return backend 429 bodies
+// unchanged.
+func validateDecisionSection(sectionName string, entries map[string]ModelFunctionDetails) error {
+	keys := make([]string, 0, len(entries))
+	for key := range entries {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	firstKey := make(map[string]string, len(entries))
+	for _, key := range keys {
+		entry := entries[key]
+		if previous, ok := firstKey[entry.ModelName]; ok {
+			return fmt.Errorf("%s: modelName %q is listed by both %s and %s", sectionName, entry.ModelName, previous, key)
+		}
+		firstKey[entry.ModelName] = key
+		if entry.TooManyRequestsMessage != "" {
+			return fmt.Errorf("%s.%s: tooManyRequestsMessage is unsupported on decision routes", sectionName, key)
+		}
+	}
+	return nil
 }
 
 func isMultipartOpenAISection(sectionName string) bool {
