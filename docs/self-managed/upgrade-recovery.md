@@ -1,47 +1,8 @@
 # Upgrade prerequisites and recovery
 
 Use the conditions below to select steps for your version-specific upgrade
-guide. Versions refer to individual stacks, NVCA, or the CLI, not umbrella
-releases. Manual queue recovery is not a routine upgrade step.
-
-## Profile export CLI
-
-When to use: your upgrade guide requires `control-plane profile export`,
-including [Self-Managed 0.6.2 to 1.0.1](../overview/release-notes/0.6.1-to-1.0.1-upgrade.md).
-Skip this section if your path does not export a profile.
-
-CLI 1.16.2 can fail export with HTTP 403 when LLM is disabled because it still
-queries OpenBao LLM PKI. CLI 1.16.5 fixes that lookup. Use a compatible CLI
-containing the fix; check the installed binary with `nvcf-cli version`.
-If you already have one, skip the build below. Binary availability is tracked in
-[the CLI distribution issue](https://github.com/dsx-ai-factory/nvcf/issues/2785).
-Do not change OpenBao permissions or enable the LLM add-on to bypass this error.
-
-If a corrected binary is unavailable, build the 1.16.8 source tag, which also
-contains the OpenBao response retry fixes. This requires Git and the Go
-toolchain declared by that tag. Choose a new source directory and an absolute
-output directory:
-
-```bash
-set -euo pipefail
-CLI_SOURCE="/absolute/path/to/new-nvcf-cli-source"
-CLI_BIN_DIR="/absolute/path/to/upgrade-tools"
-git clone --branch src/clis/nvcf-cli/v1.16.8 --single-branch \
-  https://github.com/dsx-ai-factory/nvcf.git "$CLI_SOURCE"
-CLI_COMMIT=$(git -C "$CLI_SOURCE" rev-parse HEAD)
-mkdir -p "$CLI_BIN_DIR"
-go build -C "$CLI_SOURCE/src/clis/nvcf-cli" \
-  -ldflags "-X main.Version=1.16.8 -X main.GitCommit=$CLI_COMMIT" \
-  -o "$CLI_BIN_DIR/nvcf-cli" .
-export NVCF_CLI="$CLI_BIN_DIR/nvcf-cli"
-"$NVCF_CLI" version
-```
-
-Keep the source commit and build output with the upgrade record. Verify the
-target export in rehearsal before scheduling maintenance. During the upgrade,
-export from the healthy installed control plane at the guide's compute-plane
-handoff. Use the explicit `--config` path and control-plane kubeconfig, then
-validate the fresh profile. Do not reuse a profile left by a failed export.
+guide. Versions refer to individual stacks or NVCA, not umbrella releases.
+Manual queue recovery is not a routine upgrade step.
 
 ## Task worker images
 
