@@ -6,47 +6,25 @@ Manual queue recovery is not a routine upgrade step.
 
 ## Task worker images
 
-When to use: every upgrade of an installation that runs tasks. Skip this
-section if tasks are not used. Check the target images even if the source
-already runs tasks successfully.
+When to use: every upgrade if you run tasks. Otherwise, skip this section.
 
-The affected defaults in Self-Managed 1.0.1 (Tasks chart 1.6.0) select
-`nvcf_worker_init:2.107.0` and `nvcf_worker_task:2.107.0`.
-These references are absent from that stack's released inventory and cannot
-be assumed available in the customer catalog.
+Task init and worker image names and registry wiring changed between
+Self-Managed 1.0.1 and 1.0.8. Mirror the target version's images to the locations
+selected by your site configuration, then verify them:
 
-Self-Managed 1.0.8 supplies explicit overrides for
-`nvcf-worker-init-oss:1.2.4` and `nvcf-worker-task-oss:1.1.6`. Its released
-inventory includes both images. For the Self-Managed 1.0.1 to 1.0.8 upgrade,
-the matching compute upgrade is Compute Plane 1.0.0 to 1.0.4. A target that renders
-the corrected, published images needs verification, not a manual pin change.
+1. Before maintenance, render the target and resolve the Tasks ConfigMap's
+   `nvct.sidecars` image references, including `NVCT_SIDECARS_HOSTNAME` and
+   `NVCT_SIDECARS_REPOSITORY`.
+1. Use the target's released inventory and the
+   [image mirroring guide](../overview/image-mirroring.md) to mirror the exact
+   init and worker images, including required architectures, to those paths.
+   Verify the compute cluster can pull them.
+1. In the upgrade rehearsal, run a new container task. Confirm it uses the
+   expected init and worker images, completes successfully, and returns results.
 
-For other paths, use the qualified stack combination in that upgrade guide;
-1.0.8 is not a required intermediate stop. Do not copy these worker pins into
-another stack without checking NVCA compatibility.
-
-Before the maintenance window:
-
-1. Render the target with its site configuration and inspect the Tasks remote
-   ConfigMap's `nvct.sidecars` entries, including placeholder expansion through
-   `NVCT_SIDECARS_HOSTNAME` and `NVCT_SIDECARS_REPOSITORY`.
-1. Compare every resolved worker image with the target's released inventory.
-   Preserve any customer mirror overrides.
-1. Verify each exact image and required architecture is accessible from the
-   registry the compute cluster uses. For example:
-
-   ```bash
-   docker buildx imagetools inspect \
-     nvcr.io/nvidia/nvcf/nvcf-worker-task-oss:1.1.6
-   ```
-
-1. In the rehearsal, create a new container task and check its actual init and
-   worker images, completion status, and results. An existing function does
-   not exercise task worker defaults.
-
-If the target still renders the legacy names, stop before maintenance and
-select a qualified correction. Do not rewrite a historical inventory to imply
-that it shipped different images.
+If the target still selects `nvcf_worker_init:2.107.0` or
+`nvcf_worker_task:2.107.0`, stop before maintenance and use a corrected stack
+combination from your upgrade guide.
 
 ## Deployments stuck after a NATS restart
 
