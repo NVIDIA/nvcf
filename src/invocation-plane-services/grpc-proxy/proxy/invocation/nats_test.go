@@ -316,7 +316,7 @@ func TestConnectOptionsReconnectAfterRepeatedAuthRejections(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = server.Close() })
 
-			options := append(connectOptions("test-service", nats.Token("token")),
+			options := append(connectOptions("test-service", nats.Token(test.FakeNatsToken)),
 				nats.ReconnectWait(10*time.Millisecond),
 				nats.ReconnectJitter(0, 0))
 			if !tc.ignoreAuthErrorAbort {

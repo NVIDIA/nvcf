@@ -36,7 +36,7 @@ func TestLivenessFailsOnlyWhenNatsIsClosed(t *testing.T) {
 	require.NoError(t, err)
 
 	nc, err := nats.Connect(server.URL,
-		nats.Token("token"),
+		nats.Token(test.FakeNatsToken),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(10*time.Millisecond),
 		nats.ReconnectJitter(0, 0))

@@ -18,11 +18,16 @@ package test
 
 import (
 	"bufio"
+	"encoding/json"
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
+
+// FakeNatsToken is the only auth token FakeNatsServer accepts.
+const FakeNatsToken = "token"
 
 // NatsAction is how FakeNatsServer answers one client connection.
 type NatsAction int
@@ -40,10 +45,14 @@ const (
 
 // FakeNatsServer speaks just enough of the NATS client protocol to accept or
 // reject a CONNECT. Connection i follows script[i]; connections past the end of
-// the script are accepted.
+// the script are accepted. A CONNECT without FakeNatsToken is always rejected.
 type FakeNatsServer struct {
 	URL      string
 	listener net.Listener
+
+	mu     sync.Mutex
+	conns  []net.Conn
+	closed bool
 }
 
 func NewFakeNatsServer(script ...NatsAction) (*FakeNatsServer, error) {
@@ -51,10 +60,14 @@ func NewFakeNatsServer(script ...NatsAction) (*FakeNatsServer, error) {
 	if err != nil {
 		return nil, err
 	}
+	s := &FakeNatsServer{URL: "nats://" + listener.Addr().String(), listener: listener}
 	go func() {
 		for i := 0; ; i++ {
 			conn, err := listener.Accept()
 			if err != nil {
+				return
+			}
+			if !s.track(conn) {
 				return
 			}
 			action := NatsAccept
@@ -64,10 +77,29 @@ func NewFakeNatsServer(script ...NatsAction) (*FakeNatsServer, error) {
 			go serveFakeNats(conn, action)
 		}
 	}()
-	return &FakeNatsServer{URL: "nats://" + listener.Addr().String(), listener: listener}, nil
+	return s, nil
 }
 
+func (s *FakeNatsServer) track(conn net.Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		_ = conn.Close()
+		return false
+	}
+	s.conns = append(s.conns, conn)
+	return true
+}
+
+// Close stops listening and drops every open client connection, so a client
+// can neither stay connected nor reconnect.
 func (s *FakeNatsServer) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	for _, conn := range s.conns {
+		_ = conn.Close()
+	}
 	return s.listener.Close()
 }
 
@@ -78,13 +110,24 @@ func serveFakeNats(conn net.Conn, action NatsAction) {
 		return
 	}
 	reader := bufio.NewReader(conn)
+	authorized := false
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			return
 		}
+		if connect, ok := strings.CutPrefix(line, "CONNECT "); ok {
+			var options struct {
+				AuthToken string `json:"auth_token"`
+			}
+			authorized = json.Unmarshal([]byte(connect), &options) == nil && options.AuthToken == FakeNatsToken
+			continue
+		}
 		if !strings.HasPrefix(line, "PING") {
 			continue
+		}
+		if !authorized {
+			action = NatsRejectAuth
 		}
 		switch action {
 		case NatsRejectAuth:
