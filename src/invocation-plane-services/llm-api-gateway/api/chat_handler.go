@@ -226,10 +226,8 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 	return err
 }
 
-// failChatCompletionStream ends a chat stream whose upstream failed after the
-// 200 was sent. The client gets an error event instead of [DONE], which OpenAI
-// SDKs raise as an error, and the returned 502 marks the request as failed in
-// logs, metrics and traces.
+// failChatCompletionStream ends a stream whose upstream failed after the 200: an error
+// event instead of [DONE] makes OpenAI SDKs raise, and the 502 marks the request failed.
 func failChatCompletionStream(c *GatewayContext, cause error) error {
 	failure := echo.NewHTTPError(http.StatusBadGateway, msgChatStreamIncomplete)
 	payload, err := json.Marshal(openAIErrorResponse{Error: openAIError{

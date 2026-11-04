@@ -31,12 +31,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const chatStreamPartialChunk = `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"company-name/model-name","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"
+
 // An upstream chat stream that stops before [DONE] (Pylon output timeout,
 // worker hang) must reach the client as a failure, never as a finished answer.
 func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 	t.Parallel()
 
-	const partial = `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"company-name/model-name","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"
+	const partial = chatStreamPartialChunk
 	// n=2: choice 1 finished, choice 0 is still decoding when the stream stops.
 	const siblingFinished = partial +
 		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"company-name/model-name","choices":[{"index":1,"delta":{"role":"assistant","content":"HEADS"},"finish_reason":"stop"}]}` + "\n\n"
@@ -86,6 +88,9 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 
 			if !tt.stream {
 				require.Equal(t, http.StatusBadGateway, rec.Code, body)
+				var errBody openAIErrorResponse
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &errBody), body)
+				require.Equal(t, "server_error", errBody.Error.Type)
 				return
 			}
 			// The client keeps its 200; logs, metrics and traces record a 502.
@@ -109,7 +114,6 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 func TestChatCompletionsStreamSendsNoErrorEventWhenClientGoesAway(t *testing.T) {
 	t.Parallel()
 
-	const chunk = `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"company-name/model-name","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -118,7 +122,7 @@ func TestChatCompletionsStreamSendsNoErrorEventWhenClientGoesAway(t *testing.T) 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.Header().Set(echo.HeaderContentType, "text/event-stream")
-		_, _ = io.WriteString(w, chunk)
+		_, _ = io.WriteString(w, chatStreamPartialChunk)
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 	}))
