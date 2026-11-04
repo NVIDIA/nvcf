@@ -29,6 +29,9 @@ FROM python:3.10-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
+# Use the refreshed OS bundle for outbound gRPC telemetry instead of grpcio's bundled roots.
+ENV GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
+
 ENV WORKER_COUNT=500
 
 WORKDIR /app

@@ -23,6 +23,9 @@ RUN CGO_ENABLED=0 go build -o /openai-compatible-sample .
 
 FROM alpine:3.20
 
+# Refresh inherited CA roots to reject the compromised emSign chains.
+RUN apk add --no-cache --upgrade 'ca-certificates-bundle>=20261020-r0'
+
 COPY --from=build /openai-compatible-sample /app/openai-compatible-sample
 RUN adduser -D -H app && chown app:app /app/openai-compatible-sample
 
