@@ -504,9 +504,13 @@ func consumeNativeResponsesSSE(
 		eventBlock.Write(line)
 		if len(line) > 0 && isSSEBlankLine(line) {
 			eventType, event, ok := decodeNativeResponsesSSEBlock(eventBlock.Bytes())
+			if !ok {
+				// An error event can carry plain text, which only the event field names.
+				eventType, _, _ = splitNativeResponsesSSEBlock(eventBlock.Bytes())
+			}
 			// An upstream error event ends the stream unrelayed: the caller reports
 			// its message in the gateway's response.failed.
-			if ok && eventType == openairesponses.EventTypeError && stream.terminal == nil {
+			if eventType == openairesponses.EventTypeError && stream.terminal == nil {
 				_, data, _ := splitNativeResponsesSSEBlock(eventBlock.Bytes())
 				stream.upstreamError = &provider.UpstreamStreamError{
 					Message: provider.UpstreamErrorMessage([]byte(data)),

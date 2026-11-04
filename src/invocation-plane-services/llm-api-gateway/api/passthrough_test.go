@@ -398,6 +398,10 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 			name: "upstream error event without message", upstreamBody: created + upstreamErrorNoMessage,
 			wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5,
 		},
+		{
+			name: "upstream error event with plain text data", upstreamBody: created + "event: error\ndata: engine failed\n\n",
+			wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5,
+		},
 	}
 
 	for _, tt := range tests {
