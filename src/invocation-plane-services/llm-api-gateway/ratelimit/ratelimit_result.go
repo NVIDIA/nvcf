@@ -52,7 +52,9 @@ func (rlr *RateLimitResult) RemainingValue() int64 {
 	}
 	// Requested can be negative (a refund); CurrentValue-Requested is then an
 	// addition that can overflow the same way leakyBucket's own newValue can.
-	return saturatingConsume(rlr.CurrentValue, rlr.Requested, rlr.RateLimit.Limit)
+	// CurrentValue is negative while a debt-allowing bucket is paying off debt;
+	// remaining never reports below zero.
+	return max(saturatingConsume(rlr.CurrentValue, rlr.Requested, 0, rlr.RateLimit.Limit), 0)
 }
 
 func (rlr *RateLimitResult) LimitValue() int64 {

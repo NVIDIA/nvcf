@@ -242,8 +242,9 @@ func TestNATSSynchronizerPublishesWireFormat(t *testing.T) {
 		Result: &RateLimitResult{
 			Requested: 42,
 			RateLimit: RateLimit{
-				Limit:  100,
-				Period: time.Minute,
+				Limit:     100,
+				Period:    time.Minute,
+				AllowDebt: true,
 			},
 		},
 		RequestID:   "req-123",
@@ -289,6 +290,9 @@ func TestNATSSynchronizerPublishesWireFormat(t *testing.T) {
 	}
 	if !event.MustConsume {
 		t.Fatal("must consume = false, want true")
+	}
+	if !event.AllowDebt {
+		t.Fatal("allow debt = false, want true")
 	}
 }
 

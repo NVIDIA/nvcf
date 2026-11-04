@@ -466,6 +466,123 @@ func (s *RateLimiterTestSuite) TestCASInitialInsertUsesNilExpected() {
 	s.Equal(int64(1), probe.CurrentValue, "insert must have persisted the consume")
 }
 
+func (s *RateLimiterTestSuite) TestMustConsumeWithDebtCarriesOverage() {
+	var (
+		rl  = RateLimit{Limit: 100, Period: time.Minute, AllowDebt: true}
+		key = "rl:test:debt"
+	)
+	limiter := s.newLimiter()
+
+	_, err := limiter.CheckLimit(s.ctx, key, rl, 150, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.False(res.Allowed())
+	s.Equal(int64(-50), res.CurrentValue)
+	s.Equal(int64(0), res.RemainingValue())
+
+	// 30s refills 50 tokens: the debt is paid off but nothing is available yet.
+	s.advance(30 * time.Second)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.False(res.Allowed())
+	s.Equal(int64(0), res.CurrentValue)
+
+	s.advance(time.Second)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.True(res.Allowed())
+}
+
+func (s *RateLimiterTestSuite) TestMustConsumeWithoutDebtStillClampsAtZero() {
+	var (
+		rl  = RateLimit{Limit: 100, Period: time.Minute}
+		key = "rl:test:nodebt"
+	)
+	limiter := s.newLimiter()
+
+	_, err := limiter.CheckLimit(s.ctx, key, rl, 150, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(0), res.CurrentValue)
+
+	s.advance(time.Second)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.True(res.Allowed())
+}
+
+func (s *RateLimiterTestSuite) TestDebtIsCappedAtOneLimit() {
+	var (
+		rl  = RateLimit{Limit: 100, Period: time.Minute, AllowDebt: true}
+		key = "rl:test:debtcap"
+	)
+	limiter := s.newLimiter()
+
+	_, err := limiter.CheckLimit(s.ctx, key, rl, 1000, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(-100), res.CurrentValue)
+
+	s.advance(time.Minute)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(0), res.CurrentValue)
+}
+
+func (s *RateLimiterTestSuite) TestRefundReducesDebt() {
+	var (
+		rl  = RateLimit{Limit: 100, Period: time.Minute, AllowDebt: true}
+		key = "rl:test:debtrefund"
+	)
+	limiter := s.newLimiter()
+
+	_, err := limiter.CheckLimit(s.ctx, key, rl, 150, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+	_, err = limiter.CheckLimit(s.ctx, key, rl, -30, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(-20), res.CurrentValue)
+}
+
+func (s *RateLimiterTestSuite) TestDebtDoesNotOverflowForMaxRate() {
+	var (
+		rl  = RateLimit{Limit: math.MaxInt64, Period: time.Minute, AllowDebt: true}
+		key = "rl:test:debtmax"
+	)
+	limiter := s.newLimiter()
+
+	for range 2 {
+		_, err := limiter.CheckLimit(s.ctx, key, rl, math.MaxInt64, false, "", true /* mustConsume */)
+		s.Require().NoError(err)
+	}
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(-math.MaxInt64), res.CurrentValue)
+
+	_, err = limiter.CheckLimit(s.ctx, key, rl, math.MinInt64, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(math.MaxInt64), res.CurrentValue)
+
+	_, err = limiter.CheckLimit(s.ctx, key, rl, math.MaxInt64, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+	_, err = limiter.CheckLimit(s.ctx, key, rl, math.MaxInt64, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+	s.advance(2 * time.Minute)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(math.MaxInt64), res.CurrentValue)
+}
+
 func TestRateLimiterTestSuite(t *testing.T) {
 	suite.Run(t, new(RateLimiterTestSuite))
 }

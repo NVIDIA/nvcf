@@ -81,6 +81,7 @@ func (s *pubSubSynchronizer) Send(ctx context.Context, rle *RateLimitEvent) erro
 			ClusterName: s.clusterName,
 			CreatedAt:   createdAt,
 			MustConsume: rle.MustConsume,
+			AllowDebt:   rle.Result.RateLimit.AllowDebt,
 		}
 	)
 

@@ -497,6 +497,96 @@ func TestNormalizeChatRequestDoesNotConsumeRequestsWhenTokenAdmissionFails(t *te
 	}
 }
 
+// Account buckets are keyed nvcf:<nca>:<dimension>; per-function buckets add a routing_key segment.
+func isAccountKey(key string) bool {
+	return strings.HasPrefix(key, "nvcf:nca-456:") && !strings.Contains(key, "routing_key:")
+}
+
+func accountLimitedRequestContext(requestID, routingKey string) *requestctx.RequestContext {
+	return &requestctx.RequestContext{
+		RequestID:  requestID,
+		OrgID:      "nca-456",
+		RoutingKey: routingKey,
+		Model:      "company-name/model-name",
+		ModelSpecs: map[string]nvcf.ModelSpec{
+			"company-name/model-name": {
+				TokenRateLimit: "1000000-M",
+			},
+		},
+		AccountInputTokenRateLimit:  "100-M",
+		AccountOutputTokenRateLimit: "100-M",
+	}
+}
+
+func accountLimitedChatRequest(routingKey string) *models.ChatCompletionRequest {
+	return &models.ChatCompletionRequest{
+		Model: routingKey + "/company-name/model-name",
+		Messages: &[]models.ChatMessage{
+			{
+				Role:    models.ChatCompletionRoleUser,
+				Content: models.SingleTextContent("hello world"),
+			},
+		},
+	}
+}
+
+func TestNormalizeChatRequestRejectsWhenAccountLimitExhausted(t *testing.T) {
+	t.Parallel()
+
+	// The function limit is loose; only the shared account bucket is empty.
+	limiter := &recordingRateLimiter{
+		currentValueFn: func(call rateLimitCall) int64 {
+			if call.testOnly && isAccountKey(call.key) {
+				return 0
+			}
+			return call.limit.Limit
+		},
+	}
+	handlers := NewHandlers(rateLimitConfig(), nil, limiter)
+
+	for _, routingKey := range []string{"fn-chat", "fn-other"} {
+		gc, _ := newRateLimitGatewayContext()
+		gc.store.Set(contextKeyRequestContext, accountLimitedRequestContext("req-"+routingKey, routingKey))
+
+		_, err := handlers.normalizeChatRequest(gc, accountLimitedChatRequest(routingKey), nil)
+		httpErr, ok := err.(*echo.HTTPError)
+		if !ok || httpErr.Code != http.StatusTooManyRequests {
+			t.Fatalf("%s: err = %v, want 429 from the account limit", routingKey, err)
+		}
+	}
+}
+
+func TestNormalizeChatRequestAllowsDebtOnlyOnAccountBucket(t *testing.T) {
+	t.Parallel()
+
+	limiter := &recordingRateLimiter{}
+	handlers := NewHandlers(rateLimitConfig(), nil, limiter)
+	gc, _ := newRateLimitGatewayContext()
+	gc.store.Set(contextKeyRequestContext, accountLimitedRequestContext("req-debt", "fn-chat"))
+
+	if _, err := handlers.normalizeChatRequest(gc, accountLimitedChatRequest("fn-chat"), nil); err != nil {
+		t.Fatalf("normalize chat request: %v", err)
+	}
+
+	var sawAccount, sawFunction bool
+	for _, call := range limiter.Calls() {
+		if isAccountKey(call.key) {
+			sawAccount = true
+			if !call.limit.AllowDebt {
+				t.Fatalf("account call %s: AllowDebt = false, want true", call.key)
+			}
+			continue
+		}
+		sawFunction = true
+		if call.limit.AllowDebt {
+			t.Fatalf("non-account call %s: AllowDebt = true, want false", call.key)
+		}
+	}
+	if !sawAccount || !sawFunction {
+		t.Fatalf("saw account=%t function=%t, want both", sawAccount, sawFunction)
+	}
+}
+
 func TestNormalizeChatRequestCommitsEstimatedPromptTokens(t *testing.T) {
 	t.Parallel()
 

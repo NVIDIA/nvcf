@@ -163,6 +163,7 @@ func (r AccountLimitResolver) ResolveLimits(
 			SubjectKey:            "nvcf:" + reqCtx.OrgID,
 			SubjectRepr:           "account `" + reqCtx.OrgID + "`",
 			Level:                 ratelimit.LevelOrg,
+			AllowDebt:             true,
 			InputTokensPerSecond:  parsedInputTokenLimits.tokensPerSecond,
 			InputTokensPerMinute:  parsedInputTokenLimits.tokensPerMinute,
 			InputTokensPerHour:    parsedInputTokenLimits.tokensPerHour,

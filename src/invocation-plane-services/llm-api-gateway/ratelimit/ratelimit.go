@@ -67,6 +67,9 @@ var ErrCASExhausted = errors.New("rate limit bucket CAS retries exhausted")
 type RateLimit struct {
 	Limit  int64
 	Period time.Duration
+	// AllowDebt lets a must-consume charge take the bucket below zero (down to -Limit),
+	// so usage only known after the fact, like actual output tokens, is not dropped.
+	AllowDebt bool
 }
 
 func (l RateLimit) String() string {
@@ -133,7 +136,7 @@ func (rl *rateLimiter) checkLimit(
 		Str("requestID", requestID).
 		Msg("checking rate limit")
 
-	currentValue, err := rl.leakyBucket(ctx, key, l.Limit, l.Period, tokensRequested, testOnly, mustConsume)
+	currentValue, err := rl.leakyBucket(ctx, key, l.Limit, l.Period, tokensRequested, testOnly, mustConsume, l.AllowDebt)
 	if err != nil {
 		if rl.failOpen {
 			log := log.Sample(zerolog.Often)
@@ -203,6 +206,7 @@ func (rl *rateLimiter) leakyBucket(
 	tokensRequested int64,
 	testOnly bool,
 	mustConsume bool,
+	allowDebt bool,
 ) (int64, error) {
 	var mode limiterMode
 	switch {
@@ -239,10 +243,11 @@ func (rl *rateLimiter) leakyBucket(
 		if periodMs > 0 {
 			refill = mulDivInt64(elapsed, rate, periodMs)
 		}
-		// value <= rate always holds, so compare before adding rather than
+		// value is in [-rate, rate], so compare before adding rather than
 		// clamping after - value+refill can overflow for a long-idle bucket.
+		// Debt is at most one period's worth, so two periods always refill fully.
 		var currentValue int64
-		if refill > rate-value {
+		if (periodMs > 0 && elapsed >= 2*periodMs) || refill > saturatingSub(rate, value) {
 			currentValue = rate
 		} else {
 			currentValue = value + refill
@@ -256,7 +261,11 @@ func (rl *rateLimiter) leakyBucket(
 			return currentValue, true, nil
 		}
 
-		newValue := saturatingConsume(currentValue, tokensRequested, rate)
+		var floor int64
+		if allowDebt && mode == limiterModeMustConsume {
+			floor = -rate
+		}
+		newValue := saturatingConsume(currentValue, tokensRequested, floor, rate)
 
 		var expected *bucketState
 		if exists {
@@ -277,25 +286,37 @@ func (rl *rateLimiter) leakyBucket(
 	})
 }
 
-// saturatingConsume computes current-requested, clamped to [0, rate].
+// saturatingConsume computes current-requested, clamped to [floor, rate].
 // requested can be negative (a refund), which turns this into an addition;
 // splitting by sign avoids overflowing either direction. current must
-// already be in [0, rate].
-func saturatingConsume(current, requested, rate int64) int64 {
+// already be in [-rate, rate] and floor in [-rate, 0].
+func saturatingConsume(current, requested, floor, rate int64) int64 {
 	switch {
 	case requested >= 0:
-		if requested > current {
-			return 0
+		if requested > saturatingSub(current, floor) {
+			return floor
 		}
 		return current - requested
 	case requested == math.MinInt64:
 		return rate // negating MinInt64 itself would overflow
 	default:
 		refund := -requested
-		if refund > rate-current {
+		if refund > saturatingSub(rate, current) {
 			return rate
 		}
 		return current + refund
+	}
+}
+
+// saturatingSub computes a-b, clamped to the int64 range.
+func saturatingSub(a, b int64) int64 {
+	switch {
+	case b < 0 && a > math.MaxInt64+b:
+		return math.MaxInt64
+	case b > 0 && a < math.MinInt64+b:
+		return math.MinInt64
+	default:
+		return a - b
 	}
 }
 

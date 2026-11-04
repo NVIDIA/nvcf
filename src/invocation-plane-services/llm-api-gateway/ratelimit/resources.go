@@ -97,6 +97,8 @@ type ResourceLimit struct {
 	SubjectKey  string
 	SubjectRepr string
 	Level       LimitLevel
+	// AllowDebt carries post-response overage into the next period instead of dropping it.
+	AllowDebt bool
 
 	RequestsPerMinute     int64
 	RequestsPerDay        int64
@@ -373,8 +375,9 @@ func doResourceLimit(
 				ectx,
 				keyForDimension(resourceLimit, dimension),
 				RateLimit{
-					Limit:  limit,
-					Period: period,
+					Limit:     limit,
+					Period:    period,
+					AllowDebt: resourceLimit.AllowDebt,
 				},
 				units,
 				testOnly,
