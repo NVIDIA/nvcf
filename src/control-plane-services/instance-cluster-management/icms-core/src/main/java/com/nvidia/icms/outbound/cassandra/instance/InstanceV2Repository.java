@@ -195,24 +195,6 @@ public class InstanceV2Repository {
         instanceV2Repo.update(entity);
     }
 
-    @Observed
-    public void updateCreationBucket(
-            String instanceId,
-            Instant creationBucket,
-            long writeTimestamp) {
-        try {
-            instanceV2Repo.updateCreationBucket(
-                    instanceId, creationBucket, writeTimestamp);
-        } catch (Exception exception) {
-            log.error("Failed to update creation bucket for instance {}, error: {}",
-                    instanceId, exception.getMessage(), exception);
-            throw new IcmsInternalServerException(
-                    String.format("Failed to update instance creation bucket, error: %s",
-                            exception.getMessage()), exception);
-        }
-    }
-
-
     // Find instances by instance ID
     @Observed
     public Optional<InstanceV2Entity> findInstanceById(@Nullable String instanceId) {
@@ -460,13 +442,25 @@ public class InstanceV2Repository {
 
         List<String> allInstanceIds = new ArrayList<>();
 
+        boolean creationBucketReadsEnabled =
+                icmsConfigurationProperties.isCreationBucketReadsEnabled();
+
         while (currentDate.isBefore(periodDateEnd)) {
-            List<InstanceByDayEntity> instancesByDay = instanceByDayRepo.findAllByKeyTruncatedTsByDay(currentDate);
-            instancesByDay.forEach(r -> {
-                if (!r.isMarkedAsDeleted()) {
-                    allInstanceIds.add(r.getKey().getInstanceId());
-                }
-            });
+            if (creationBucketReadsEnabled) {
+                // Deleted instances are removed from the instances table,
+                // so there are no tombstones to filter out.
+                instanceV2Repo.findInstanceIdsByCreationBucket(currentDate)
+                        .forEach(row -> allInstanceIds.add(
+                                row.getString(InstanceV2Entity.COLUMN_INSTANCE_ID)));
+            } else {
+                List<InstanceByDayEntity> instancesByDay =
+                        instanceByDayRepo.findAllByKeyTruncatedTsByDay(currentDate);
+                instancesByDay.forEach(r -> {
+                    if (!r.isMarkedAsDeleted()) {
+                        allInstanceIds.add(r.getKey().getInstanceId());
+                    }
+                });
+            }
             currentDate = currentDate.plus(1, ChronoUnit.DAYS);
         }
 

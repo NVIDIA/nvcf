@@ -25,6 +25,9 @@ alias(
 
 go_test(
     name = "renderer_test",
-    srcs = ["renderer_test.go"],
+    srcs = [
+        "ownership_linux_test.go",
+        "renderer_test.go",
+    ],
     embed = [":renderer"],
 )

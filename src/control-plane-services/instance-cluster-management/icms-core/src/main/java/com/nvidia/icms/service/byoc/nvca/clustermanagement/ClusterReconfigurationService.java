@@ -19,9 +19,9 @@ package com.nvidia.icms.service.byoc.nvca.clustermanagement;
 import static com.nvidia.icms.inbound.rest.model.byoc.ClusterCapabilitiesEnum.DYNAMIC_GPU_DISCOVERY;
 import static com.nvidia.icms.outbound.cassandra.byoc.NvcaConverter.getGpusV5;
 import static com.nvidia.icms.outbound.cassandra.byoc.NvcaConverter.toGpusV4;
-import static com.nvidia.icms.service.byoc.ClusterRegistrationService.validateAuthorizedNcaIdsForNewCluster;
-import static com.nvidia.icms.service.byoc.ClusterRegistrationService.validateNcaId;
-import static com.nvidia.icms.service.byoc.ClusterRegistrationService.validateNcaIdDoNotBelongsToAuthorizedNcaIds;
+import static com.nvidia.icms.service.byoc.ClusterValidation.validateAuthorizedNcaIdsForNewCluster;
+import static com.nvidia.icms.service.byoc.ClusterValidation.validateNcaId;
+import static com.nvidia.icms.service.byoc.ClusterValidation.validateNcaIdDoNotBelongsToAuthorizedNcaIds;
 import static com.nvidia.icms.service.byoc.nvca.NvcaClusterRegistrationService.getNewlyAddedGpus;
 import static com.nvidia.icms.service.byoc.nvca.NvcaClusterRegistrationService.getRemovedGpuNames;
 import static com.nvidia.icms.service.byoc.nvca.NvcaClusterRegistrationService.getRemovedInstanceTypeName;
@@ -228,8 +228,7 @@ public class ClusterReconfigurationService {
         // Save advanced BYOC cluster configuration maps if provided
         updateClusterConfigurationMap(existingClusterEntity.getClusterId(), clusterUpdateRequest);
 
-        nvcaClusterRepository.updateClusterConfiguration(newClusterEntity,
-                                                         entityBefore.getAuthorizedNcaIds());
+        nvcaClusterRepository.updateClusterConfiguration(newClusterEntity);
 
         // Send audit and telemetry events
         sendClusterReconfigurationAuditAndTelemetryEvent(auditProps,

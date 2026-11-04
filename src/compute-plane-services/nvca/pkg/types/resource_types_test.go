@@ -1913,3 +1913,91 @@ func (m *mockNodeLister) Get(val string) (*corev1.Node, error) {
 	args := m.Called(val)
 	return args.Get(0).(*corev1.Node), args.Error(1)
 }
+
+func TestBackendGPUsInstanceTypesRemovedByOverhead(t *testing.T) {
+	dynamicGPU := func(cpu string, gpuCount, nodeCount uint64) BackendGPU {
+		return BackendGPU{
+			Name: "A100",
+			InstanceTypes: []InstanceType{{
+				Name:            "ON-PREM.GPU.A100",
+				FullName:        "NVIDIA-A100-SXM4-40GB",
+				CPU:             resource.MustParse(cpu),
+				SystemMemory:    resource.MustParse("64Gi"),
+				GPUCount:        gpuCount,
+				GPUMemoryPerGPU: resource.MustParse("40Gi"),
+				Storage:         resource.MustParse("512Gi"),
+				NodeCount:       nodeCount,
+			}},
+		}
+	}
+
+	cases := []struct {
+		name                    string
+		backendGPUs             BackendGPUs
+		allowMultiNodeWorkloads bool
+		infraOverhead           corev1.ResourceList
+		wantNames               []string
+		wantCPUs                []string
+	}{
+		{
+			name:        "no overhead",
+			backendGPUs: BackendGPUs{dynamicGPU("8", 2, 1)},
+		},
+		{
+			name:          "overhead fits every instance type",
+			backendGPUs:   BackendGPUs{dynamicGPU("8", 2, 1)},
+			infraOverhead: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("3999m")},
+		},
+		{
+			name:          "overhead equal to the smallest instance type CPU removes it",
+			backendGPUs:   BackendGPUs{dynamicGPU("8", 2, 1)},
+			infraOverhead: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4")},
+			wantNames:     []string{"ON-PREM.GPU.A100_1x"},
+			wantCPUs:      []string{"4"},
+		},
+		{
+			name:          "overhead larger than every instance type removes all",
+			backendGPUs:   BackendGPUs{dynamicGPU("8", 2, 1)},
+			infraOverhead: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8001m")},
+			wantNames:     []string{"ON-PREM.GPU.A100_1x", "ON-PREM.GPU.A100_2x"},
+			wantCPUs:      []string{"4", "8"},
+		},
+		{
+			name:          "memory overhead",
+			backendGPUs:   BackendGPUs{dynamicGPU("8", 1, 1)},
+			infraOverhead: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Gi")},
+			wantNames:     []string{"ON-PREM.GPU.A100_1x"},
+			wantCPUs:      []string{"8"},
+		},
+		{
+			name:                    "multi-node instance types keep room the single node lacks",
+			backendGPUs:             BackendGPUs{dynamicGPU("2", 1, 2)},
+			allowMultiNodeWorkloads: true,
+			infraOverhead:           corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+			wantNames:               []string{"ON-PREM.GPU.A100_1x"},
+			wantCPUs:                []string{"2"},
+		},
+		{
+			name: "static instance types are registered without overhead",
+			backendGPUs: func() BackendGPUs {
+				g := dynamicGPU("8", 1, 1)
+				g.Static = true
+				return BackendGPUs{g}
+			}(),
+			infraOverhead: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100")},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			removed := tc.backendGPUs.InstanceTypesRemovedByOverhead(tc.allowMultiNodeWorkloads, tc.infraOverhead)
+			var names, cpus []string
+			for _, it := range removed {
+				names = append(names, it.Name)
+				cpus = append(cpus, it.CPU)
+			}
+			assert.Equal(t, tc.wantNames, names)
+			assert.Equal(t, tc.wantCPUs, cpus)
+		})
+	}
+}

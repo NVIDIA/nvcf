@@ -16,6 +16,7 @@
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,6 +44,9 @@ use super::{Args, OutputTokenCalibrationMode};
 
 type TaskExit = std::result::Result<(), JoinError>;
 
+const DEFAULT_STARTUP_HEALTH_WAIT: Duration = Duration::from_secs(60);
+const INFERENCE_READY_TIMEOUT_ENV: &str = "INFERENCE_READY_TIMEOUT";
+
 pub(super) async fn run(args: Args) -> Result<()> {
     let plan = PylonStartupPlan::from_args(&args)?;
     let _telemetry_guard = stargate_telemetry::init_telemetry(
@@ -51,7 +55,20 @@ pub(super) async fn run(args: Args) -> Result<()> {
         "pylon_upstream_http_request",
         None,
     )?;
-    let runtime = start_pylon_runtime(&args, &plan).await?;
+    if let Some(value) = &plan.ignored_inference_ready_timeout {
+        warn!(
+            value = %value,
+            default = ?DEFAULT_STARTUP_HEALTH_WAIT,
+            "ignoring invalid {INFERENCE_READY_TIMEOUT_ENV}; using the default upstream health wait"
+        );
+    }
+    let signal = wait_for_termination_signal();
+    tokio::pin!(signal);
+    let Some(runtime) =
+        start_unless_signalled(start_pylon_runtime(&args, &plan), signal.as_mut()).await?
+    else {
+        return Ok(());
+    };
 
     log_startup_complete(
         &args.stargate_address,
@@ -61,9 +78,24 @@ pub(super) async fn run(args: Args) -> Result<()> {
         &runtime.initial_model_ids,
     );
     info!("pylon running");
-    runtime
-        .run_until_shutdown(wait_for_termination_signal())
-        .await
+    runtime.run_until_shutdown(signal).await
+}
+
+async fn start_unless_signalled<T, S>(
+    startup: impl Future<Output = Result<T>>,
+    signal: Pin<&mut S>,
+) -> Result<Option<T>>
+where
+    S: Future<Output = std::io::Result<&'static str>>,
+{
+    tokio::select! {
+        result = startup => result.map(Some),
+        result = signal => {
+            let signal = result.context("failed to receive pylon termination signal")?;
+            info!(signal, "received shutdown signal during startup");
+            Ok(None)
+        }
+    }
 }
 
 fn log_startup_complete(
@@ -116,6 +148,7 @@ pub(crate) struct PylonStartupPlan {
     output_token_calibration: OutputTokenCalibrationMode,
     health_paths: UpstreamHealthPaths,
     startup_health_wait: Duration,
+    ignored_inference_ready_timeout: Option<String>,
     metrics_addr: SocketAddr,
     auth_token_provider: Option<Arc<AuthTokenProvider>>,
     backend_tunnel: BackendTunnelStartup,
@@ -151,8 +184,18 @@ impl BackendTunnelStartup {
 
 impl PylonStartupPlan {
     pub(crate) fn from_args(args: &Args) -> Result<Self> {
+        let inference_ready_timeout = std::env::var(INFERENCE_READY_TIMEOUT_ENV).ok();
+        Self::from_args_and_inference_ready_timeout(args, inference_ready_timeout.as_deref())
+    }
+
+    fn from_args_and_inference_ready_timeout(
+        args: &Args,
+        inference_ready_timeout: Option<&str>,
+    ) -> Result<Self> {
         let model_initialization = model_initialization_from_args(args)?;
         let model_source = model_source_from_args(args)?;
+        let (startup_health_wait, ignored_inference_ready_timeout) =
+            resolve_startup_health_wait(args.upstream_health_wait_ms, inference_ready_timeout);
         Ok(Self {
             upstream: normalize_base_url(&args.upstream_http_base_url),
             cluster_id: effective_cluster_id(args),
@@ -174,7 +217,8 @@ impl PylonStartupPlan {
             force_chat_completions_include_usage: args.force_chat_completions_include_usage,
             output_token_calibration: args.output_token_calibration,
             health_paths: UpstreamHealthPaths::new(args.upstream_health_paths.clone()),
-            startup_health_wait: Duration::from_millis(args.upstream_health_wait_ms),
+            startup_health_wait,
+            ignored_inference_ready_timeout,
             metrics_addr: format!("{}:{}", args.metrics_host, args.metrics_port).parse()?,
             auth_token_provider: auth_token_provider_from_args(args),
             backend_tunnel: BackendTunnelStartup::from_args(args)?,
@@ -193,6 +237,73 @@ impl PylonStartupPlan {
             ModelSource::Discovered(_) => None,
         }
     }
+}
+
+fn resolve_startup_health_wait(
+    flag_ms: Option<u64>,
+    inference_ready_timeout: Option<&str>,
+) -> (Duration, Option<String>) {
+    if let Some(ms) = flag_ms {
+        return (Duration::from_millis(ms), None);
+    }
+    match inference_ready_timeout.filter(|value| !value.is_empty()) {
+        None => (DEFAULT_STARTUP_HEALTH_WAIT, None),
+        Some(value) => match parse_go_duration(value) {
+            Some(wait) if !wait.is_zero() => (wait, None),
+            // NVCA renders an unset WorkerStartupTimeout as "0s".
+            Some(_) => (DEFAULT_STARTUP_HEALTH_WAIT, None),
+            None => (DEFAULT_STARTUP_HEALTH_WAIT, Some(value.to_string())),
+        },
+    }
+}
+
+fn parse_go_duration(value: &str) -> Option<Duration> {
+    let value = value.strip_prefix('+').unwrap_or(value);
+    if value.is_empty() {
+        return None;
+    }
+    if value == "0" {
+        return Some(Duration::ZERO);
+    }
+    let mut rest = value;
+    let mut total_nanos: u128 = 0;
+    while !rest.is_empty() {
+        let number_len = rest
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(rest.len());
+        let (number, tail) = rest.split_at(number_len);
+        let unit_len = tail
+            .find(|c: char| c.is_ascii_digit() || c == '.')
+            .unwrap_or(tail.len());
+        let (unit, tail) = tail.split_at(unit_len);
+        let unit_nanos: u128 = match unit {
+            "ns" => 1,
+            "us" | "\u{b5}s" | "\u{3bc}s" => 1_000,
+            "ms" => 1_000_000,
+            "s" => 1_000_000_000,
+            "m" => 60_000_000_000,
+            "h" => 3_600_000_000_000,
+            _ => return None,
+        };
+        let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+        if whole.is_empty() && fraction.is_empty() {
+            return None;
+        }
+        let whole: u128 = if whole.is_empty() {
+            0
+        } else {
+            whole.parse().ok()?
+        };
+        let mut nanos = whole.checked_mul(unit_nanos)?;
+        let mut scale = unit_nanos;
+        for digit in fraction.chars() {
+            scale /= 10;
+            nanos = nanos.checked_add(u128::from(digit.to_digit(10)?) * scale)?;
+        }
+        total_nanos = total_nanos.checked_add(nanos)?;
+        rest = tail;
+    }
+    u64::try_from(total_nanos).ok().map(Duration::from_nanos)
 }
 
 fn auth_token_provider_from_args(args: &Args) -> Option<Arc<AuthTokenProvider>> {
@@ -795,7 +906,8 @@ mod tests {
         ];
         args.extend_from_slice(extra);
         let args = <Args as Parser>::try_parse_from(args).expect("args should parse");
-        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+        let plan = PylonStartupPlan::from_args_and_inference_ready_timeout(&args, None)
+            .expect("startup plan should build");
         (args, plan)
     }
 
@@ -1334,6 +1446,102 @@ mod tests {
         );
     }
 
+    fn startup_with_inference_ready_timeout(
+        extra: &[&str],
+        inference_ready_timeout: Option<&str>,
+    ) -> PylonStartupPlan {
+        let (args, _) = startup(extra);
+        PylonStartupPlan::from_args_and_inference_ready_timeout(&args, inference_ready_timeout)
+            .expect("startup plan should build")
+    }
+
+    #[test]
+    fn startup_health_wait_defaults_to_inference_ready_timeout() {
+        let plan = startup_with_inference_ready_timeout(&[], Some("2h0m0s"));
+        assert_eq!(plan.startup_health_wait, Duration::from_secs(7200));
+        assert_eq!(plan.ignored_inference_ready_timeout, None);
+
+        for value in [None, Some("0s")] {
+            let plan = startup_with_inference_ready_timeout(&[], value);
+            assert_eq!(plan.startup_health_wait, DEFAULT_STARTUP_HEALTH_WAIT);
+            assert_eq!(plan.ignored_inference_ready_timeout, None);
+        }
+    }
+
+    #[test]
+    fn explicit_upstream_health_wait_overrides_inference_ready_timeout() {
+        let plan = startup_with_inference_ready_timeout(
+            &["--upstream-health-wait-ms", "5000"],
+            Some("2h0m0s"),
+        );
+        assert_eq!(plan.startup_health_wait, Duration::from_millis(5000));
+
+        let plan =
+            startup_with_inference_ready_timeout(&["--upstream-health-wait-ms", "0"], Some("bad"));
+        assert_eq!(plan.startup_health_wait, Duration::ZERO);
+        assert_eq!(plan.ignored_inference_ready_timeout, None);
+    }
+
+    #[test]
+    fn invalid_inference_ready_timeout_falls_back_to_the_default_wait() {
+        for value in ["2 hours", "7200", "-5m"] {
+            let plan = startup_with_inference_ready_timeout(&[], Some(value));
+            assert_eq!(
+                plan.startup_health_wait, DEFAULT_STARTUP_HEALTH_WAIT,
+                "{value}"
+            );
+            assert_eq!(plan.ignored_inference_ready_timeout.as_deref(), Some(value));
+        }
+
+        let plan = startup_with_inference_ready_timeout(&[], Some(""));
+        assert_eq!(plan.startup_health_wait, DEFAULT_STARTUP_HEALTH_WAIT);
+        assert_eq!(plan.ignored_inference_ready_timeout, None);
+    }
+
+    #[test]
+    fn parse_go_duration_accepts_go_duration_strings() {
+        for (value, expected) in [
+            ("2h0m0s", Duration::from_secs(7200)),
+            ("30m0s", Duration::from_secs(1800)),
+            ("90s", Duration::from_secs(90)),
+            ("1h30m", Duration::from_secs(5400)),
+            ("500ms", Duration::from_millis(500)),
+            ("1.5h", Duration::from_secs(5400)),
+            ("1m30.25s", Duration::from_millis(90_250)),
+            (".5s", Duration::from_millis(500)),
+            ("1.5\u{b5}s", Duration::from_nanos(1500)),
+            ("2us3ns", Duration::from_nanos(2003)),
+            ("0s", Duration::ZERO),
+            ("0", Duration::ZERO),
+            ("+10m", Duration::from_secs(600)),
+            ("+0", Duration::ZERO),
+        ] {
+            assert_eq!(parse_go_duration(value), Some(expected), "{value}");
+        }
+    }
+
+    #[test]
+    fn parse_go_duration_rejects_malformed_strings() {
+        for value in [
+            "",
+            "90",
+            "h",
+            ".s",
+            "1..5s",
+            "1x",
+            "-1s",
+            "+",
+            "++1s",
+            " 1s",
+            "1s ",
+            "1 s",
+            "1d",
+            "99999999999999999999h",
+        ] {
+            assert_eq!(parse_go_duration(value), None, "{value}");
+        }
+    }
+
     #[test]
     fn direct_tunnel_config_from_plan_preserves_runtime_inputs() {
         let (args, plan) = startup(&[
@@ -1826,7 +2034,8 @@ mod tests {
                 "1000",
             ],
         );
-        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+        let plan = PylonStartupPlan::from_args_and_inference_ready_timeout(&args, None)
+            .expect("startup plan should build");
         let startup = tokio::spawn(async move { start_pylon_runtime(&args, &plan).await });
 
         assert_eq!(
@@ -1885,7 +2094,8 @@ mod tests {
                 "1000",
             ],
         );
-        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+        let plan = PylonStartupPlan::from_args_and_inference_ready_timeout(&args, None)
+            .expect("startup plan should build");
         let startup = tokio::spawn(async move { start_pylon_runtime(&args, &plan).await });
 
         assert_eq!(
@@ -1920,7 +2130,7 @@ mod tests {
             &["model-a"],
             &["--do-calibration", "--initial-input-tps", "100"],
         );
-        assert!(PylonStartupPlan::from_args(&args).is_err());
+        assert!(PylonStartupPlan::from_args_and_inference_ready_timeout(&args, None).is_err());
         control_plane.assert_no_calls();
 
         upstream.shutdown().await;
@@ -1937,7 +2147,8 @@ mod tests {
             &["model-a", "model-b"],
             &[],
         );
-        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+        let plan = PylonStartupPlan::from_args_and_inference_ready_timeout(&args, None)
+            .expect("startup plan should build");
         let runtime = start_pylon_runtime(&args, &plan)
             .await
             .expect("pylon startup should succeed");
@@ -1977,7 +2188,8 @@ mod tests {
                 "256",
             ],
         );
-        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+        let plan = PylonStartupPlan::from_args_and_inference_ready_timeout(&args, None)
+            .expect("startup plan should build");
         let startup = tokio::spawn(async move { start_pylon_runtime(&args, &plan).await });
 
         assert_eq!(
@@ -2005,6 +2217,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn termination_signal_interrupts_the_startup_health_wait() {
+        let control_plane = TestControlPlane::spawn().await;
+        let args = runtime_args(
+            "http://127.0.0.1:1",
+            control_plane.addr,
+            &["model-a"],
+            &["--do-calibration", "--upstream-health-wait-ms", "600000"],
+        );
+        let plan = PylonStartupPlan::from_args_and_inference_ready_timeout(&args, None)
+            .expect("startup plan should build");
+        let signal = async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Ok("SIGTERM")
+        };
+        tokio::pin!(signal);
+
+        let runtime = tokio::time::timeout(
+            Duration::from_secs(5),
+            start_unless_signalled(start_pylon_runtime(&args, &plan), signal.as_mut()),
+        )
+        .await
+        .expect("SIGTERM should interrupt the startup health wait")
+        .expect("SIGTERM during startup should be a clean exit");
+
+        assert!(runtime.is_none());
+        control_plane.assert_no_calls();
+        control_plane.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn startup_failure_is_returned_before_a_termination_signal() {
+        let signal = std::future::pending::<std::io::Result<&'static str>>();
+        tokio::pin!(signal);
+
+        let error = start_unless_signalled(
+            async { Err::<(), _>(anyhow::anyhow!("startup failed")) },
+            signal.as_mut(),
+        )
+        .await
+        .expect_err("startup failure should be returned");
+
+        assert_eq!(error.to_string(), "startup failed");
+    }
+
+    #[tokio::test]
     async fn initial_discovery_failure_returns_before_any_stargate_rpc() {
         let control_plane = TestControlPlane::spawn().await;
         let args = runtime_args(
@@ -2013,7 +2270,8 @@ mod tests {
             &[],
             &["--initial-input-tps", "100"],
         );
-        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+        let plan = PylonStartupPlan::from_args_and_inference_ready_timeout(&args, None)
+            .expect("startup plan should build");
 
         let error = match start_pylon_runtime(&args, &plan).await {
             Ok(runtime) => {
@@ -2042,7 +2300,8 @@ mod tests {
             &[],
             &["--initial-input-tps", "100"],
         );
-        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+        let plan = PylonStartupPlan::from_args_and_inference_ready_timeout(&args, None)
+            .expect("startup plan should build");
 
         let runtime = start_pylon_runtime(&args, &plan)
             .await
@@ -2065,7 +2324,8 @@ mod tests {
             &["model-a", "model-b"],
             &["--initial-input-tps", "123.5"],
         );
-        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+        let plan = PylonStartupPlan::from_args_and_inference_ready_timeout(&args, None)
+            .expect("startup plan should build");
         let runtime = start_pylon_runtime(&args, &plan)
             .await
             .expect("pylon startup should succeed");
@@ -2101,7 +2361,8 @@ mod tests {
                 &["--max-engine-concurrency", "25"],
             );
             args.engine_stats_stream = mode;
-            let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+            let plan = PylonStartupPlan::from_args_and_inference_ready_timeout(&args, None)
+                .expect("startup plan should build");
             let runtime = start_pylon_runtime(&args, &plan)
                 .await
                 .expect("pylon startup should succeed without engine stats");

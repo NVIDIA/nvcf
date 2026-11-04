@@ -68,7 +68,7 @@ class AuthzServiceTest {
         var introspectionResponse = jsonMapper.readValue(json,IntrospectionResponse.class);
 
         // Act
-        AuthzResponse.Result response = authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse);
+        AuthzResponse.Result response = authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse, "apikey.allow");
 
         // Assert
         assertNotNull(response);
@@ -99,7 +99,7 @@ class AuthzServiceTest {
 
         // Act
         AuthzResponse.Result response =
-                authzService.evaluatePolicy(NVCT_SERVICE_ID, introspectionResponse);
+                authzService.evaluatePolicy(NVCT_SERVICE_ID, introspectionResponse, "apikey.allow");
 
         // Assert
         assertNotNull(response);
@@ -137,7 +137,7 @@ class AuthzServiceTest {
         var introspectionResponse = jsonMapper.readValue(json, IntrospectionResponse.class);
 
         // Act
-        AuthzResponse.Result response = authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse);
+        AuthzResponse.Result response = authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse, "apikey.allow");
 
         // Assert
         assertNotNull(response);
@@ -158,7 +158,7 @@ class AuthzServiceTest {
 
         // Act & Assert
         RuntimeException exception = assertThrows(RuntimeException.class,
-                () -> authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse));
+                () -> authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse, "apikey.allow"));
         assertEquals("Found no policies in api keys authorizations", exception.getMessage());
     }
 
@@ -177,7 +177,7 @@ class AuthzServiceTest {
 
         // Act & Assert
         RuntimeException exception = assertThrows(RuntimeException.class,
-                () -> authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse));
+                () -> authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse, "apikey.allow"));
         assertEquals("Policies field is not an array", exception.getMessage());
     }
 
@@ -205,7 +205,7 @@ class AuthzServiceTest {
 
         // Act & Assert
         RuntimeException exception = assertThrows(RuntimeException.class,
-                () -> authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse));
+                () -> authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse, "apikey.allow"));
         assertEquals(
                 "Found no matching policy in api keys authorizations for audience: " + NVCF_SERVICE_ID,
                 exception.getMessage());
@@ -234,13 +234,46 @@ class AuthzServiceTest {
 
         // Act — evaluate twice with different audience ids against the same key.
         AuthzResponse.Result nvcfResult =
-                authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse);
+                authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse, "apikey.allow");
         AuthzResponse.Result nvctResult =
-                authzService.evaluatePolicy(NVCT_SERVICE_ID, introspectionResponse);
+                authzService.evaluatePolicy(NVCT_SERVICE_ID, introspectionResponse, "apikey.allow");
 
         // Assert — each audience picks its own policy.
         assertEquals("nvcf-policy", nvcfResult.getPolicy().get("policy").asString());
         assertEquals("nvct-policy", nvctResult.getPolicy().get("policy").asString());
+    }
+
+    @Test
+    void evaluatePolicy_omitsAccountTokenRateLimitForGenericRule() throws Exception {
+        var introspectionResponse = jsonMapper.readValue("""
+                {"authorizations": {"policies": [
+                    {"aud": "nvidia-cloud-functions-ncp-service-id-aketm", "policy": "test-policy"}
+                ]}}
+                """, IntrospectionResponse.class);
+
+        var response = authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse, "apikey.allow");
+
+        assertEquals(null, response.getAccountTokenRateLimit());
+    }
+
+    @Test
+    void evaluatePolicy_setsAccountTokenRateLimitForLlmAllowRule() throws Exception {
+        var introspectionResponse = jsonMapper.readValue("""
+                {"authorizations": {"policies": [
+                    {"aud": "nvidia-cloud-functions-ncp-service-id-aketm", "policy": "test-policy"}
+                ]}}
+                """, IntrospectionResponse.class);
+
+        var response = authzService.evaluatePolicy(NVCF_SERVICE_ID, introspectionResponse, "apikey.llm_allow");
+
+        assertNotNull(response.getAccountTokenRateLimit());
+    }
+
+    @Test
+    void resolveTieredRateLimit_shouldReturnPlaceholderRateLimit() {
+        var response = authzService.resolveTieredRateLimit("test-nca-id");
+
+        assertNotNull(response);
     }
 
 }

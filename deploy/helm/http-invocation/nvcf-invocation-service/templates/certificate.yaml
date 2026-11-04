@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- $workerTls := .Values.invocation.workerTls }}
+{{- $certificate := $workerTls.tls.certificate }}
+{{- if and $workerTls.enabled $certificate.enabled }}
+{{- $callbackName := include "nvcf-invocation-service.workerTlsCallbackName" . }}
+{{- $dnsNames := $certificate.dnsNames | default (list ($callbackName | default (printf "*.%s" (include "nvcf-invocation-service.serviceHost" .)))) }}
+{{- if $callbackName }}
+{{- $covered := false }}
+{{- $parent := ternary "" (splitn "." 2 $callbackName)._1 (hasPrefix "*." $callbackName) }}
+{{- range $dnsNames }}
+{{- $name := . | toString | lower }}
+{{- if or (eq $name $callbackName) (and $parent (eq $name (printf "*.%s" $parent))) }}
+{{- $covered = true }}
+{{- end }}
+{{- end }}
+{{- if not $covered }}
+{{- fail (printf "invocation.workerTls.tls.certificate.dnsNames must cover %s, the name workers verify for the callback address" $callbackName) }}
+{{- end }}
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "nvcf-invocation-service.workerTlsSecretName" . | quote }}
+  namespace: {{ include "nvcf-invocation-service.namespace" . }}
+  labels:
+    {{- include "nvcf-invocation-service.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "nvcf-invocation-service.workerTlsSecretName" . | quote }}
+  {{- with $certificate.duration }}
+  duration: {{ . | quote }}
+  {{- end }}
+  {{- with $certificate.renewBefore }}
+  renewBefore: {{ . | quote }}
+  {{- end }}
+  dnsNames:
+    {{- toYaml $dnsNames | nindent 4 }}
+  usages:
+    - server auth
+  issuerRef:
+    kind: {{ $certificate.issuerRef.kind | default "ClusterIssuer" | quote }}
+    name: {{ required "invocation.workerTls.tls.certificate.issuerRef.name is required when invocation.workerTls.tls.certificate.enabled is true" $certificate.issuerRef.name | quote }}
+    {{- with $certificate.issuerRef.group }}
+    group: {{ . | quote }}
+    {{- end }}
+{{- end }}

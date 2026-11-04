@@ -229,7 +229,7 @@ healthChecks:
   readinessProbe:
     enabled: true # Enable readiness probe
     httpGet:
-      path: "/healthz" # Health check endpoint path
+      path: "/readyz" # Readiness reflects the NATS connection state
       port: "http" # Port name or number
       scheme: "HTTP" # HTTP or HTTPS
     initialDelaySeconds: 5 # Initial delay before starting probes

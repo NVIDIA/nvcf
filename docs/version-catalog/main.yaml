@@ -981,6 +981,11 @@ release_set:
       status: qualified
 compatibility:
   - stack: control-plane
+    version: 1.1.0
+    compatible_with:
+      compute-plane: 1.0.0+
+      observability: 1.0.0+
+  - stack: control-plane
     version: 1.0.1
     compatible_with:
       compute-plane: 1.0.0+
@@ -989,6 +994,11 @@ compatibility:
     version: 1.0.0
     compatible_with:
       compute-plane: 1.0.0+
+      observability: 1.0.0+
+  - stack: compute-plane
+    version: 1.1.0
+    compatible_with:
+      control-plane: 1.1.0+
       observability: 1.0.0+
   - stack: compute-plane
     version: 1.0.0

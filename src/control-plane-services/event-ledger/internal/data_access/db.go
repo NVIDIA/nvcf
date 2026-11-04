@@ -96,12 +96,14 @@ type DBHandlerV2 interface {
 	// V3 Methods (events)
 	UpsertEventV3(traceCtx context.Context, namespace, eventContext, eventName, source string, details json.RawMessage, timestamp time.Time) error
 	UpsertStatsV3(traceCtx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error
-	UpsertFilteredStatsV3(traceCtx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error
+	UpsertFilteredStatsV3(traceCtx context.Context, namespace, eventContext, eventName string, timestamp time.Time, ncaID, functionID string) error
 	BulkUpsertEventsV3(traceCtx context.Context, events []EventV3UpsertRecord) error
 	BulkUpsertStatsV3(traceCtx context.Context, events []EventV3UpsertRecord) error
 	GetStatsV3(traceCtx context.Context, namespace string) ([]StatsV3Record, error)
 	GetFilteredStatsV3(traceCtx context.Context, namespace string) ([]StatsV3Record, error)
 	GetEventsV3(traceCtx context.Context, namespace, eventContext string) ([]EventV3Record, error)
+	GetAccountEventsV3(traceCtx context.Context, namespace, eventContext, ncaID, functionID string) ([]EventV3Record, error)
+	GetAccountStatsV3(traceCtx context.Context, namespace, ncaID, functionID string) ([]StatsV3Record, error)
 	Close() error // Include Close in V2 as well, assuming the underlying connection needs closing.
 }
 
@@ -133,6 +135,10 @@ type EventV3UpsertRecord struct {
 	Source    string
 	Details   json.RawMessage
 	Timestamp time.Time
+	// NcaID and FunctionID are optional. An empty value is not written, so a
+	// producer that does not send them cannot clear values already on the row.
+	NcaID      string
+	FunctionID string
 }
 
 // CloudEventsResilienceHandler defines the interface for CloudEvents fallback and retry operations

@@ -21,8 +21,22 @@ import (
 )
 
 func TestUmbrellaPublisherE2E(t *testing.T) {
+	testUmbrellaPublisherE2E(t, false)
+}
+
+func TestUmbrellaPublisherReleaseLocalE2E(t *testing.T) {
+	testUmbrellaPublisherE2E(t, true)
+}
+
+func testUmbrellaPublisherE2E(t *testing.T, releaseLocal bool) {
+	t.Helper()
 	fixture := umbrellaBundleFixture(t)
-	if err := runUmbrella(fixture.prepareArgs()[1:]); err != nil {
+	args := fixture.prepareArgs()
+	if releaseLocal {
+		divergeUmbrellaDevelopment(t, &fixture)
+		args = fixture.releaseLocalArgs()
+	}
+	if err := runUmbrella(args[1:]); err != nil {
 		t.Fatal(err)
 	}
 	manifest, data, err := loadUmbrellaManifest(fixture.manifestPath)
@@ -30,7 +44,7 @@ func TestUmbrellaPublisherE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest.Status = ReleaseSetQualified
-	manifest.Qualification = "https://github.com/NVIDIA/nvcf/issues/2483"
+	manifest.Qualification = "https://github.com/dsx-ai-factory/nvcf/issues/2483"
 	data, err = marshalUmbrellaManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +74,7 @@ func TestUmbrellaPublisherE2E(t *testing.T) {
 	interrupt := true
 	tagExists := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/repos/NVIDIA/nvcf")
+		path := strings.TrimPrefix(r.URL.Path, "/repos/dsx-ai-factory/nvcf")
 		send := func(v any) {
 			w.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(w).Encode(v); err != nil {
@@ -173,7 +187,7 @@ func TestUmbrellaPublisherE2E(t *testing.T) {
 		w.WriteHeader(404)
 	}))
 	defer server.Close()
-	publisher := umbrellaPublisher{client: server.Client(), api: server.URL, uploads: server.URL, repository: "NVIDIA/nvcf", token: "fixture"}
+	publisher := umbrellaPublisher{client: server.Client(), api: server.URL, uploads: server.URL, repository: "dsx-ai-factory/nvcf", token: "fixture"}
 	notes := "Reviewed fixture combination.\n"
 	if err := publisher.publish(manifest, target, notes, assets, true); err == nil {
 		t.Fatal("expected interrupted upload")

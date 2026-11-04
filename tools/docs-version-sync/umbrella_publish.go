@@ -385,7 +385,7 @@ func runUmbrellaPublish(args []string) error {
 		return fmt.Errorf("release target must contain the exact reviewed manifest")
 	}
 	if _, err := gitOutput(*root, "merge-base", "--is-ancestor", manifest.SourceCommit, *target); err != nil {
-		return fmt.Errorf("release target must descend from reviewed catalog source: %w", err)
+		return fmt.Errorf("release target must descend from reviewed source: %w", err)
 	}
 	if err := validatePublishedUmbrella(*root, manifest, assets["manifest.json"]); err != nil {
 		return err
@@ -419,6 +419,6 @@ func runUmbrellaPublish(args []string) error {
 	if token == "" {
 		return fmt.Errorf("publication requires GITHUB_TOKEN")
 	}
-	p := umbrellaPublisher{client: &http.Client{Timeout: 2 * time.Minute}, api: "https://api.github.com", uploads: "https://uploads.github.com", repository: "NVIDIA/nvcf", token: token}
+	p := umbrellaPublisher{client: &http.Client{Timeout: 2 * time.Minute}, api: "https://api.github.com", uploads: "https://uploads.github.com", repository: "dsx-ai-factory/nvcf", token: token}
 	return p.publish(manifest, *target, string(notes), assets, *promote)
 }

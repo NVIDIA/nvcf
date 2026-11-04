@@ -678,6 +678,7 @@ async fn wait_for_upstream_health(
             tracing::warn!(
                 upstream = %config.upstream_http_base_url,
                 paths = ?config.health_paths.probe_order(),
+                wait = ?config.startup_health_wait,
                 "waiting for the upstream to answer a health probe"
             );
         }

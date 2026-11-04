@@ -86,6 +86,10 @@ var defaultNVCTScopes = []string{
 	"update_secrets",
 }
 
+var defaultEventLedgerScopes = []string{
+	"fnds:getEvents",
+}
+
 // DefaultScopes returns the scopes used when an NVCF function API key is
 // generated without an explicit --scopes value.
 func DefaultScopes() []string {
@@ -96,6 +100,12 @@ func DefaultScopes() []string {
 // generated without an explicit --scopes value.
 func DefaultNVCTScopes() []string {
 	return append([]string(nil), defaultNVCTScopes...)
+}
+
+// DefaultEventLedgerScopes returns the scopes used when an Event Ledger read
+// API key is generated without an explicit --scopes value.
+func DefaultEventLedgerScopes() []string {
+	return append([]string(nil), defaultEventLedgerScopes...)
 }
 
 // NewClient creates a new API Keys service client

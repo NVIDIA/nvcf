@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# vLLM, GLM 5.1 NVFP4, expert parallel (as bench-glm).
+# TP=8 as two pods of four GPUs (GB300 nodes have four), multi-pod capture opt-in.
+kind: StatefulSet
+launch: exec
+podsPerInstance: 2
+criuCapture: true
+gpusPerPod: 4
+model: nvidia/GLM-5.1-NVFP4
+servedModelName: nvidia/GLM-5.1-NVFP4
+maxModelLen: 8192
+gpuMemoryUtilization: 0.90
+extraArgs: --trust-remote-code --enable-expert-parallel --kv-cache-dtype auto
+function:
+  inferenceUrl: /v1/chat/completions
+  secrets: [HF_TOKEN]

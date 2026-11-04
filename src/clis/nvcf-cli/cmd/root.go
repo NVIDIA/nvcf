@@ -273,6 +273,9 @@ func initConfig() {
 
 	// Host header overrides for hostname-based routing (self-hosted deployments)
 	viper.BindEnv("api_keys_host", "API_KEYS_HOST")
+	viper.BindEnv("event_ledger_url", "EVENT_LEDGER_URL")
+	viper.BindEnv("event_ledger_host", "EVENT_LEDGER_HOST")
+	viper.BindEnv("event_ledger_api_key", "EVENT_LEDGER_API_KEY")
 	viper.BindEnv("api_host", "API_HOST")
 	viper.BindEnv("invoke_host", "INVOKE_HOST")
 	viper.BindEnv("nvct_host", "NVCT_HOST")

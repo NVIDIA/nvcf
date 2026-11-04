@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+tool="${script_dir}/refresh-compute-plane-goldens"
+helper="${script_dir}/prepare-stack-pin-branch"
+work_dir="$(mktemp -d)"
+trap 'rm -rf -- "${work_dir}"' EXIT
+
+fail() { echo "test-refresh-compute-plane-goldens: $*" >&2; exit 1; }
+
+stack=deploy/stacks/nvcf-compute-plane
+golden="${stack}/testdata/golden"
+helmfile="${stack}/helmfile.d/02-nvca.yaml.gotmpl"
+
+workflows="${repo_root}/.github/workflows"
+workflow_has() {
+  local workflow=$1 line=$2
+  grep -Fq -- "${line}" "${workflows}/${workflow}" || fail "${workflow} no longer contains: ${line}"
+}
+
+# The stack's Makefile renders to and keeps its fixtures in the paths this tool
+# uses, and ends test-local with the comparison check runs.
+# shellcheck disable=SC2016 # Makefile and workflow text; $(...) and ${...} stay literal
+{
+  for line in \
+    'DIST_DIR ?= $(MAKEFILE_DIR)/dist' \
+    'GOLDEN_LOCAL_DIR ?= $(MAKEFILE_DIR)/testdata/golden/local' \
+    '@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"'; do
+    grep -Fq -- "${line}" "${repo_root}/${stack}/Makefile" \
+      || fail "${stack}/Makefile no longer contains: ${line}"
+  done
+
+  # Both bump workflows name the fixtures as derived, check whether a render
+  # is needed, and commit it. The check workflow runs the comparison whenever
+  # the stack or this tool changes.
+  for workflow in chart-version-bump.yml stack-pin-bump.yml; do
+    workflow_has "${workflow}" "tools/ci/prepare-stack-pin-branch --derived ${golden} \\"
+    workflow_has "${workflow}" 'tools/ci/refresh-compute-plane-goldens needed "origin/${BASE_BRANCH}"'
+    workflow_has "${workflow}" 'tools/ci/refresh-compute-plane-goldens commit "origin/${BASE_BRANCH}"'
+  done
+  workflow_has compute-plane-goldens.yml "run: tools/ci/refresh-compute-plane-goldens check"
+  # Without the registry secrets the check fails; it never passes unchecked.
+  workflow_has compute-plane-goldens.yml "::error::secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY are not set"
+  workflow_has compute-plane-goldens.yml "- '${stack}/**'"
+  workflow_has compute-plane-goldens.yml "- 'tools/ci/refresh-compute-plane-goldens'"
+}
+
+# All three render the same way: helm and helmfile at the pins build-test.yml
+# renders the charts with, and the registry login chart-push-manual.yml uses.
+# Both are read from those workflows rather than repeated here.
+login="$(grep -F 'helm registry login' "${workflows}/chart-push-manual.yml" | sed 's/^[[:space:]]*//')"
+test -n "${login}" || fail "chart-push-manual.yml no longer logs in with helm registry login"
+pins="$(grep -E '^[[:space:]]+HELM(FILE)?_(VERSION|SHA256): ' "${workflows}/build-test.yml" | sed 's/^[[:space:]]*//' | sort -u)"
+test "$(wc -l <<<"${pins}")" -eq 4 || fail "build-test.yml no longer pins one helm and one helmfile: ${pins}"
+for workflow in chart-version-bump.yml stack-pin-bump.yml compute-plane-goldens.yml; do
+  test "$(grep -cF -- "${login}" "${workflows}/${workflow}")" -eq 1 \
+    || fail "${workflow} does not log in to the chart registry once, as chart-push-manual.yml does"
+  while IFS= read -r pin; do
+    workflow_has "${workflow}" "${pin}"
+  done <<<"${pins}"
+done
+
+# Stand-ins for `make render-local` and `make generate-golden`. The first
+# renders into dist/out, output derived from the pinned version only; the
+# second then replaces the fixture directory with it, as the Makefile does.
+fake_render_local="${work_dir}/fake-render-local"
+cat > "${fake_render_local}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+version="\$(sed -n 's/^version: //p' "${helmfile}")"
+rm -rf "${stack}/dist"
+mkdir -p "${stack}/dist/out/versions"
+printf 'image: nvca:%s\n' "\${version}" > "${stack}/dist/out/nvca.yaml"
+printf '%s\n' "\${version}" > "${stack}/dist/out/versions/\${version}"
+EOF
+fake_render="${work_dir}/fake-render"
+cat > "${fake_render}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+"${fake_render_local}"
+rm -rf "${golden}/local"
+mkdir -p "${golden}"
+cp -r "${stack}/dist/out" "${golden}/local"
+EOF
+# Renders as fake-render-local does, but with whitespace-only changes, which
+# the stack's comparison ignores.
+spaced_render_local="${work_dir}/spaced-render-local"
+cat > "${spaced_render_local}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+"${fake_render_local}"
+sed -i.bak 's/\$/  /' "${stack}/dist/out/nvca.yaml"
+mv "${stack}/dist/out/nvca.yaml.bak" "${work_dir}/spaced.bak"
+EOF
+failing_render="${work_dir}/failing-render"
+cat > "${failing_render}" <<EOF
+#!/usr/bin/env bash
+printf 'half written\n' > "${golden}/local/nvca.yaml"
+echo "Error: pull access denied" >&2
+exit 1
+EOF
+stray_render="${work_dir}/stray-render"
+cat > "${stray_render}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+"${fake_render}"
+printf 'edited by the render\n' >> "${stack}/README.md"
+EOF
+untouchable_render="${work_dir}/untouchable-render"
+cat > "${untouchable_render}" <<'EOF'
+#!/usr/bin/env bash
+echo "the render ran" >&2
+exit 99
+EOF
+chmod +x "${fake_render_local}" "${fake_render}" "${spaced_render_local}" \
+  "${failing_render}" "${stray_render}" "${untouchable_render}"
+
+identity=(-c user.name="Test User" -c user.email="test@example.com")
+
+# Creates a repository at <dir> whose main pins <version> and holds the
+# fixtures rendered from it.
+new_repo() {
+  local dir=$1 version=$2
+  git init --quiet --initial-branch=main "${dir}"
+  # The tool commits with the repository's identity, as the workflows set it
+  # before running it. A runner has no global one.
+  git -C "${dir}" config user.name "github-actions[bot]"
+  git -C "${dir}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+  mkdir -p "${dir}/${stack}/helmfile.d" "${dir}/${stack}/tests" "${dir}/deploy/helm/chart"
+  printf 'dist/\n' > "${dir}/.gitignore"
+  printf 'version: %s\n' "${version}" > "${dir}/${helmfile}"
+  printf 'stack notes\n' > "${dir}/${stack}/README.md"
+  printf 'version: 1.0.0\n' > "${dir}/deploy/helm/chart/Chart.yaml"
+  # The stack's real comparison, which check runs.
+  cp -p "${repo_root}/${stack}/tests/verify-golden.sh" "${repo_root}/${stack}/tests/compare-golden.sh" \
+    "${dir}/${stack}/tests/"
+  (cd "${dir}" && "${fake_render}")
+  git -C "${dir}" add .
+  git -C "${dir}" "${identity[@]}" commit --quiet -m "ci: seed"
+}
+
+edit() {
+  local file=$1 content=$2 subject=$3
+  printf '%s\n' "${content}" > "${file}"
+  git add -- "${file}"
+  git "${identity[@]}" commit --quiet -m "${subject}"
+}
+
+commits_since() { git rev-list --count "$1..HEAD"; }
+
+# 1. A render is needed only when something under the stack other than the
+# fixtures differs from the base, and is not run otherwise.
+t="${work_dir}/needed"
+new_repo "${t}" 1.0.0
+(
+  cd "${t}"
+  git branch base
+  test "$("${tool}" needed base)" = false || fail "an unchanged branch needs a render"
+  "${tool}" commit base "${untouchable_render}" > "${t}/same.log" \
+    || fail "an unchanged branch failed"
+  test "$(commits_since base)" -eq 0 || fail "an unchanged branch gained a commit"
+
+  edit deploy/helm/chart/Chart.yaml 'version: 1.1.0' "fix(charts): bump for src/chart/v1.1.0"
+  test "$("${tool}" needed base)" = false || fail "a change outside the stack needs a render"
+  "${tool}" commit base "${untouchable_render}" >/dev/null || fail "a change outside the stack ran the render"
+
+  edit "${golden}/local/nvca.yaml" 'image: hand-edited' "test(compute-plane): edit a fixture"
+  test "$("${tool}" needed base)" = false || fail "a fixture-only change needs a render"
+
+  edit "${stack}/README.md" 'more notes' "docs(compute-plane): notes"
+  test "$("${tool}" needed base)" = true || fail "a change under the stack does not need a render"
+)
+
+# 2. A pin change renders the fixtures and commits them, alone, in one commit.
+# A second run, and a stack change that does not move the output, add none.
+t="${work_dir}/commit"
+new_repo "${t}" 1.0.0
+(
+  cd "${t}"
+  git branch base
+  edit "${stack}/README.md" 'more notes' "docs(compute-plane): notes"
+  "${tool}" commit base "${fake_render}" > "${t}/noop.log" || fail "an output-neutral change failed"
+  test "$(commits_since base)" -eq 1 || fail "an output-neutral change gained a commit"
+  grep -Fq "already matches" "${t}/noop.log" || fail "the log does not say the fixtures match"
+
+  edit "${helmfile}" 'version: 1.1.0' "fix(stack): pin nvca-operator/v1.1.0"
+  "${tool}" commit base "${fake_render}" > "${t}/commit.log" || fail "the refresh failed: $(cat "${t}/commit.log")"
+  test "$(commits_since base)" -eq 3 || fail "the refresh did not add exactly one commit"
+  test "$(git log -1 --format=%s)" = "test(compute-plane): refresh goldens for the pins on this branch" \
+    || fail "unexpected subject: $(git log -1 --format=%s)"
+  changed="$(git diff --name-only HEAD~1 HEAD)"
+  want="$(printf '%s\n' \
+    "${golden}/local/nvca.yaml" \
+    "${golden}/local/versions/1.0.0" \
+    "${golden}/local/versions/1.1.0")"
+  test "${changed}" = "${want}" || fail "the refresh committed: ${changed}"
+  test ! -e "${golden}/local/versions/1.0.0" || fail "a fixture the render dropped was kept"
+  test "$(cat "${golden}/local/nvca.yaml")" = "image: nvca:1.1.0" || fail "the fixtures were not rendered"
+  test -z "$(git status --porcelain --untracked-files=all -- "${golden}")" || fail "fixtures left uncommitted"
+
+  "${tool}" commit base "${fake_render}" >/dev/null || fail "a second refresh failed"
+  test "$(commits_since base)" -eq 3 || fail "a second refresh added a commit"
+)
+
+# 3. A failed render commits nothing and leaves the fixtures as they were; so
+# does a render that edits tracked files outside the fixtures. A dirty tree
+# and an unknown base are refused.
+t="${work_dir}/failures"
+new_repo "${t}" 1.0.0
+(
+  cd "${t}"
+  git branch base
+  edit "${helmfile}" 'version: 1.1.0' "fix(stack): pin nvca-operator/v1.1.0"
+
+  if "${tool}" commit base "${failing_render}" >/dev/null 2>"${t}/failed.err"; then
+    fail "a failed render succeeded"
+  fi
+  grep -Fq "was not refreshed" "${t}/failed.err" || fail "the failure does not say so: $(cat "${t}/failed.err")"
+  test "$(commits_since base)" -eq 1 || fail "a failed render committed"
+  test -z "$(git status --porcelain --untracked-files=no)" || fail "a failed render left the fixtures edited"
+
+  if "${tool}" commit base "${stray_render}" >/dev/null 2>"${t}/stray.err"; then
+    fail "a render that edited files outside the fixtures succeeded"
+  fi
+  grep -Fq "outside ${golden}" "${t}/stray.err" || fail "the stray edit is not reported: $(cat "${t}/stray.err")"
+  test "$(commits_since base)" -eq 1 || fail "a stray render committed"
+  git checkout --quiet -- "${stack}/README.md"
+
+  printf 'dirty\n' >> "${stack}/README.md"
+  if "${tool}" commit base "${fake_render}" >/dev/null 2>&1; then
+    fail "the refresh ran over uncommitted changes"
+  fi
+  test "$(tail -n 1 "${stack}/README.md")" = "dirty" || fail "the refresh discarded uncommitted changes"
+  git checkout --quiet -- "${stack}/README.md"
+
+  set +e
+  "${tool}" needed no-such-ref >/dev/null 2>&1
+  status=$?
+  set -e
+  test "${status}" -eq 2 || fail "an unknown base exited ${status}, want 2"
+)
+
+# 4. check compares a fresh render with the fixtures through the stack's own
+# comparison: whitespace-only differences pass, a moved pin without new
+# fixtures fails with the command that renders them again, and so does a
+# failed render. It never edits the fixtures.
+t="${work_dir}/check"
+new_repo "${t}" 1.0.0
+(
+  cd "${t}"
+  "${tool}" check "${fake_render_local}" > "${t}/match.log" 2>&1 || fail "matching fixtures failed: $(cat "${t}/match.log")"
+  "${tool}" check "${spaced_render_local}" > "${t}/spaced.log" 2>&1 \
+    || fail "a whitespace-only difference failed: $(cat "${t}/spaced.log")"
+
+  edit "${helmfile}" 'version: 1.1.0' "fix(stack): pin nvca-operator/v1.1.0"
+  if "${tool}" check "${fake_render_local}" > "${t}/stale.out" 2> "${t}/stale.err"; then
+    fail "stale fixtures passed"
+  fi
+  grep -Fq "versions/1.1.0" "${t}/stale.out" || fail "the differing files are not listed: $(cat "${t}/stale.out")"
+  grep -Fq "does not match what the stack renders" "${t}/stale.err" || fail "the failure does not say why: $(cat "${t}/stale.err")"
+  grep -Fq "make -C ${stack} generate-golden DEV_MODE=1" "${t}/stale.err" \
+    || fail "the failure does not name the command that renders the fixtures again"
+  test -z "$(git status --porcelain --untracked-files=all -- "${golden}")" || fail "check edited the fixtures"
+
+  if "${tool}" check "${failing_render}" >/dev/null 2> "${t}/failed.err"; then
+    fail "a failed render passed"
+  fi
+  grep -Fq "was not checked" "${t}/failed.err" || fail "the render failure is not reported: $(cat "${t}/failed.err")"
+)
+
+# 5. With the branch helper, as the workflows run them: main moved the same
+# pin and rendered its own fixtures. The bump commit is regenerated, the old
+# fixture commit is dropped, and one fresh fixture commit lands on top.
+fake_bump="${work_dir}/fake-bump"
+cat > "${fake_bump}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+tag="" write=0
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    --tag) tag=\$2; shift 2 ;;
+    --write) write=1; shift ;;
+    *) echo "unknown argument \$1" >&2; exit 2 ;;
+  esac
+done
+version="\${tag##*/v}"
+current="\$(sed -n 's/^version: //p' "${helmfile}")"
+if [ "\$(printf '%s\n' "\${current}" "\${version}" | sort -V | tail -n 1)" = "\${current}" ]; then
+  echo "nvca-operator: already \${current}"
+  exit 0
+fi
+echo "nvca-operator: \${current} -> \${version}"
+if [ "\${write}" -eq 1 ]; then
+  printf 'version: %s\n' "\${version}" > "${helmfile}"
+fi
+echo "bump: minor"
+EOF
+chmod +x "${fake_bump}"
+
+t="${work_dir}/workflow"
+git init --quiet --bare --initial-branch=main "${t}/remote.git"
+new_repo "${t}/seed" 1.0.0
+(
+  cd "${t}/seed"
+  git remote add origin "${t}/remote.git"
+  git push --quiet -u origin main 2>/dev/null
+  git switch --quiet -c chore/stack-pin-bumps
+  printf 'version: 1.1.0\n' > "${helmfile}"
+  git add "${helmfile}"
+  git "${identity[@]}" commit --quiet -m "feat(stack): pin nvca-operator/v1.1.0" \
+    -m "Opened by the stack pin bump workflow on release of deploy/helm/nvca-operator/v1.1.0."
+  "${tool}" commit main "${fake_render}" >/dev/null
+  git push --quiet -u origin chore/stack-pin-bumps 2>/dev/null
+  git switch --quiet main
+  printf 'version: 1.0.5\n' > "${helmfile}"
+  "${fake_render}"
+  git add --all .
+  git "${identity[@]}" commit --quiet -m "fix(stack): pin nvca-operator 1.0.5 by hand"
+  git push --quiet origin main 2>/dev/null
+)
+git clone --quiet --branch main "${t}/remote.git" "${t}/runner" 2>/dev/null
+(
+  cd "${t}/runner"
+  git config user.name "github-actions[bot]"
+  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+  "${helper}" --derived "${golden}" chore/stack-pin-bumps main "${fake_bump}" > "${t}/prepare.log" 2>&1
+  grep -Fq "0 kept, 1 regenerated, 1 dropped" "${t}/prepare.log" \
+    || fail "unexpected helper summary: $(tail -n 1 "${t}/prepare.log")"
+  test "$(cat "${golden}/local/nvca.yaml")" = "image: nvca:1.0.5" \
+    || fail "the dropped fixture commit was replayed"
+
+  test "$("${tool}" needed origin/main)" = true || fail "the regenerated pin needs no render"
+  "${tool}" commit origin/main "${fake_render}" >/dev/null
+  want="$(printf '%s\n' \
+    "feat(stack): pin nvca-operator/v1.1.0" \
+    "test(compute-plane): refresh goldens for the pins on this branch")"
+  got="$(git log --reverse --format=%s origin/main..HEAD)"
+  test "${got}" = "${want}" || fail "unexpected commits: ${got}"
+  test "$(cat "${golden}/local/nvca.yaml")" = "image: nvca:1.1.0" || fail "the fixtures were not rendered again"
+  test "$(cat "${golden}/local/versions/1.1.0")" = "1.1.0" || fail "a rendered fixture is missing"
+  test ! -e "${golden}/local/versions/1.0.5" || fail "main's stale fixture was kept"
+)
+
+echo "test-refresh-compute-plane-goldens: all checks passed"

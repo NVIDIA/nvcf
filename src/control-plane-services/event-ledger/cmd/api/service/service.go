@@ -76,6 +76,7 @@ type Server struct {
 	statsConfig             config.StatsConfig
 	statsEventNames         map[string]struct{}
 	filteredStatsEventNames map[string]struct{}
+	accountColumnsEnabled   bool
 }
 
 func NewServer(conns Connections, logger *otelzap.Logger, publisher interfaces.EventPublisher, version string, httpConfig *config.HTTPClientConfig, paginationConfig config.PaginationConfig, statsConfig config.StatsConfig) *Server {
@@ -100,7 +101,15 @@ func NewServer(conns Connections, logger *otelzap.Logger, publisher interfaces.E
 		statsConfig,
 		statsEventNames,
 		filteredStatsEventNames,
+		false,
 	}
+}
+
+// WithAccountColumns sets whether v3 writes store nca_id and function_id in
+// their own columns. It is off by default.
+func (s *Server) WithAccountColumns(enabled bool) *Server {
+	s.accountColumnsEnabled = enabled
+	return s
 }
 
 func (s *Server) WriteStageTransitionEvent(traceCtx context.Context, ste types.StageTransitionEvent) error {

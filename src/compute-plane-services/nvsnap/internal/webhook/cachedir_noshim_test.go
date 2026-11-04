@@ -104,15 +104,15 @@ func TestTryL2CacheDir_NoShim_PodCommandUntouched(t *testing.T) {
 	if pw.Image != pod.Spec.Containers[0].Image {
 		t.Errorf("prewarm should reuse the workload image (already pulled), got %q", pw.Image)
 	}
-	if len(pw.VolumeMounts) != 1 || !pw.VolumeMounts[0].ReadOnly || pw.VolumeMounts[0].Name != cacheDirVolumeName {
-		t.Errorf("prewarm must mount only the rox, read-only, got %+v", pw.VolumeMounts)
+	if len(pw.VolumeMounts) != 2 || !pw.VolumeMounts[0].ReadOnly || pw.VolumeMounts[0].Name != cacheDirVolumeName || pw.VolumeMounts[1] != helperMount() {
+		t.Errorf("prewarm must mount only the rox and the helper, read-only, got %+v", pw.VolumeMounts)
 	}
 	if pw.SecurityContext == nil || pw.SecurityContext.RunAsUser == nil || *pw.SecurityContext.RunAsUser != 0 {
 		t.Error("prewarm must run as root: the rox files are root-owned")
 	}
 	cmd := strings.Join(pw.Command, " ")
-	if !strings.Contains(cmd, cacheSeedSrcPath) || !strings.Contains(cmd, "|| true") {
-		t.Errorf("prewarm must read the rox tree and be best-effort, got %q", cmd)
+	if !strings.HasPrefix(cmd, HelperBin+" prewarm --root "+cacheSeedSrcPath+" ") {
+		t.Errorf("prewarm must run the helper over the rox tree, got %q", cmd)
 	}
 }
 
@@ -193,10 +193,10 @@ func TestTryL2CacheDir_PrewarmFollowsStorageProfile(t *testing.T) {
 	}
 	off, on := false, true
 
-	if cmd, ok := prewarmCmd(t, newMutator(nil), newPod()); !ok || !strings.Contains(cmd, "-P 6 ") {
+	if cmd, ok := prewarmCmd(t, newMutator(nil), newPod()); !ok || !strings.Contains(cmd, "--workers 6 ") {
 		t.Errorf("no profile: want the prewarm with the default 6 readers, got ok=%v cmd=%q", ok, cmd)
 	}
-	if cmd, ok := prewarmCmd(t, newMutator(&checkpointstore.StorageProfile{PrewarmParallelism: 16}), newPod()); !ok || !strings.Contains(cmd, "-P 16 ") {
+	if cmd, ok := prewarmCmd(t, newMutator(&checkpointstore.StorageProfile{PrewarmParallelism: 16}), newPod()); !ok || !strings.Contains(cmd, "--workers 16 ") {
 		t.Errorf("profile parallelism 16 not applied, got ok=%v cmd=%q", ok, cmd)
 	}
 	if _, ok := prewarmCmd(t, newMutator(&checkpointstore.StorageProfile{Prewarm: &off}), newPod()); ok {
@@ -211,7 +211,7 @@ func TestTryL2CacheDir_PrewarmFollowsStorageProfile(t *testing.T) {
 }
 
 // NVSNAP_PREWARM supplied through ValueFrom cannot be read at admission: the
-// prewarm init must still be added, carry the same reference, and gate the
+// sweep step must still be added, carry the same reference, and gate the
 // sweep on the resolved value at run time.
 func TestTryL2CacheDir_PrewarmValueFromGatesAtRuntime(t *testing.T) {
 	m := &Mutator{
@@ -235,18 +235,40 @@ func TestTryL2CacheDir_PrewarmValueFromGatesAtRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range patches {
-		c, ok := p.Value.(corev1.Container)
-		if !ok || c.Name != "nvsnap-prewarm" {
-			continue
+		for _, c := range containersIn(p.Value) {
+			if c.Name != "nvsnap-prewarm" {
+				continue
+			}
+			cmd := strings.Join(c.Command, " ")
+			// The helper reads the resolved NVSNAP_PREWARM at run time.
+			if !strings.HasPrefix(cmd, HelperBin+" prewarm ") {
+				t.Errorf("prewarm step must run the helper, got %q", cmd)
+			}
+			if len(c.Env) != 1 || c.Env[0].Name != "NVSNAP_PREWARM" || c.Env[0].ValueFrom == nil || c.Env[0].ValueFrom.ConfigMapKeyRef == nil || c.Env[0].ValueFrom.ConfigMapKeyRef.Name != "tuning" {
+				t.Errorf("prewarm step must carry the workload's NVSNAP_PREWARM reference, got %+v", c.Env)
+			}
+			return
 		}
-		cmd := strings.Join(c.Command, " ")
-		if !strings.Contains(cmd, `[ "${NVSNAP_PREWARM:-1}" != "0" ] || exit 0`) {
-			t.Errorf("prewarm command must gate on the resolved NVSNAP_PREWARM, got %q", cmd)
-		}
-		if len(c.Env) != 1 || c.Env[0].Name != "NVSNAP_PREWARM" || c.Env[0].ValueFrom == nil || c.Env[0].ValueFrom.ConfigMapKeyRef == nil || c.Env[0].ValueFrom.ConfigMapKeyRef.Name != "tuning" {
-			t.Errorf("prewarm init must carry the workload's NVSNAP_PREWARM reference, got %+v", c.Env)
-		}
-		return
 	}
-	t.Fatal("a ValueFrom NVSNAP_PREWARM must still add the prewarm init container")
+	t.Fatal("a ValueFrom NVSNAP_PREWARM must still add the prewarm step")
+}
+
+// containersIn returns the containers a patch value adds, whether it is a
+// single container or a list.
+func containersIn(v any) []corev1.Container {
+	switch x := v.(type) {
+	case corev1.Container:
+		return []corev1.Container{x}
+	case []corev1.Container:
+		return x
+	case []any:
+		var out []corev1.Container
+		for _, e := range x {
+			if c, ok := e.(corev1.Container); ok {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	return nil
 }

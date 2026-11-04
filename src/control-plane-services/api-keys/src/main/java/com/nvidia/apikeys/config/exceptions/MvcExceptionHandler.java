@@ -18,16 +18,21 @@
 package com.nvidia.apikeys.config.exceptions;
 
 import com.nvidia.boot.exceptions.BootResponseException;
+import com.nvidia.boot.exceptions.ServiceUnavailableException;
 import com.nvidia.boot.exceptions.handlers.BootMvcExceptionHandler;
 import io.opentelemetry.api.trace.Span;
 import jakarta.annotation.Nonnull;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.request.WebRequest;
 
 @Configuration
@@ -49,6 +54,18 @@ public class MvcExceptionHandler extends BootMvcExceptionHandler {
             @Nonnull WebRequest request) {
         var problemDetail = resolveBody(ex, status);
         return super.handleExceptionInternal(ex, problemDetail, headers, status, request);
+    }
+
+    @ExceptionHandler({
+            TransientDataAccessException.class,
+            DataAccessResourceFailureException.class
+    })
+    protected ResponseEntity<Object> handleCassandraUnavailable(
+            DataAccessException ex,
+            WebRequest request) throws Exception {
+        return super.handleException(
+                new ServiceUnavailableException("Key storage is temporarily unavailable", ex),
+                request);
     }
 
     @Override

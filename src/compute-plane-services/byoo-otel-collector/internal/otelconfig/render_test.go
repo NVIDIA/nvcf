@@ -1670,6 +1670,102 @@ func TestGenerateExportersAndServiceKratosLogsMetricsTraces(t *testing.T) {
 	assert.Equal(t, logs["tls"], traces["tls"], "logs and traces read the same client cert pair")
 }
 
+// A SERVICENOW traces token is sent in exactly one header, chosen from its
+// prefix: ingest gateways reject a request that carries both. The token value
+// itself must never reach the rendered config.
+func Test_exporterTraces_ServiceNowTokenHeader(t *testing.T) {
+	const telemetryName = "example-traces"
+	const exporterId = "otlp/SERVICENOW-example-traces-traces"
+	tests := []struct {
+		name       string
+		token      *string
+		wantHeader string
+	}{
+		{name: "no secret file keeps the classic header", wantHeader: "lightstep-access-token"},
+		{name: "classic token", token: ptr("fake-classic-access-token"), wantHeader: "lightstep-access-token"},
+		{name: "otel_ token", token: ptr("otel_fake-ingest-token"), wantHeader: "otel-token"},
+		{name: "otel_ token with a trailing newline", token: ptr("otel_fake-ingest-token\n"), wantHeader: "otel-token"},
+		// The collector sends the file as it is, so the header must follow the
+		// raw value: a token with leading whitespace is not an otel_ token.
+		{name: "leading whitespace is not the prefix", token: ptr(" otel_fake-ingest-token"), wantHeader: "lightstep-access-token"},
+		{name: "prefix is case-sensitive", token: ptr("OTEL_fake-ingest-token"), wantHeader: "lightstep-access-token"},
+		{name: "otel- is not the prefix", token: ptr("otel-fake-ingest-token"), wantHeader: "lightstep-access-token"},
+		{name: "otel_ inside the token does not count", token: ptr("fake-otel_token"), wantHeader: "lightstep-access-token"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("ESS_SECRETS_PATH", dir)
+			tokenFile := filepath.Join(dir, telemetryName)
+			if tt.token != nil {
+				if err := os.WriteFile(tokenFile, []byte(*tt.token), 0o600); err != nil {
+					t.Fatalf("failed to write secret file %s: %v", tokenFile, err)
+				}
+			}
+			cfg := TelemetryConfig{
+				Telemetries: Telemetries{
+					Traces: &Telemetry{
+						Name:     telemetryName,
+						Protocol: ProtocolGRPC,
+						Provider: ProviderServiceNow,
+						Endpoint: "traces.example.invalid:8282",
+					},
+				},
+			}
+			otelConfig := &OpenTelemetryConfig{}
+			initializeConfigMaps(otelConfig)
+
+			if err := generateExportersAndService(cfg, otelConfig, TemplateConfig{Namespace: "test-namespace"}); err != nil {
+				t.Fatalf("generateExportersAndService() unexpected error = %v", err)
+			}
+
+			want := map[string]interface{}{
+				"endpoint": "traces.example.invalid:8282",
+				"headers": map[string]interface{}{
+					tt.wantHeader: fmt.Sprintf("${file:%s}", tokenFile),
+				},
+			}
+			assert.Equal(t, want, otelConfig.Exporters[exporterId])
+			assert.Equal(t, []string{exporterId}, otelConfig.Service.Pipelines["traces"].Exporters)
+
+			if tt.token != nil {
+				rendered, err := yaml.Marshal(otelConfig)
+				if err != nil {
+					t.Fatalf("failed to marshal otelConfig: %v", err)
+				}
+				assert.NotContains(t, string(rendered), "fake-", "the token value must not reach the rendered config")
+			}
+		})
+	}
+}
+
+func Test_exporterTraces_ServiceNowUnreadableTokenFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ESS_SECRETS_PATH", dir)
+	// A directory where the token file should be makes the read fail with an
+	// error other than "not exist".
+	if err := os.Mkdir(filepath.Join(dir, "example-traces"), 0o700); err != nil {
+		t.Fatalf("failed to create directory: %v", err)
+	}
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Traces: &Telemetry{
+				Name:     "example-traces",
+				Protocol: ProtocolGRPC,
+				Provider: ProviderServiceNow,
+				Endpoint: "traces.example.invalid:8282",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+
+	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{Namespace: "test-namespace"})
+	assert.ErrorContains(t, err, "failed to read secret file")
+	assert.Empty(t, otelConfig.Service.Pipelines["traces"].Exporters)
+}
+
 // Providers without a traces exporter, including KRATOS_THANOS, which accepts
 // metrics only, must fail rendering with an error that names the provider.
 func Test_exporterTraces_UnsupportedProviders(t *testing.T) {

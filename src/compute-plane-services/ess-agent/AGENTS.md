@@ -12,14 +12,6 @@ bazel build //:image_index
 bazel run //:image_load
 ```
 
-Internal image push targets:
-
-```bash
-bazel run //:image_push
-bazel run //:image_push_devops
-bazel run //:image_push_ncp_dev
-```
-
 Regenerate Bazel metadata after Go or module changes:
 
 ```bash
@@ -27,9 +19,9 @@ bazel run //:gazelle
 bazel mod tidy
 ```
 
-CI subproject id: `ess-agent`. Native Bazel validation and release wiring live
-in `tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
-present in this public snapshot.
+CI subproject id: `ess-agent`. Follow the root `RELEASE.md` and
+`docs/dev/github-release-process.md` for source versioning and publication
+handoffs. Inspect `.github/workflows/` for current public validation.
 
 ## Local Gotchas
 
@@ -41,3 +33,7 @@ present in this public snapshot.
 - `child_test.TestReload_noSignal` is skipped through `go_test.args`; upstream
   vendored tests are tagged `manual` and excluded from the default test suite.
 - `ESS_AGENT_INIT=true` makes the agent render templates and exit immediately.
+- The executable carries only CAP_CHOWN. Containers must permit CHOWN in
+  their capability bound, including when no-new-privileges is enabled.
+  Retain UID/GID 1000 and verify the running process capability, not only the
+  Pod specification. Image capability and numeric-user tests guard packaging.

@@ -1,6 +1,6 @@
 module github.com/NVIDIA/nvcf/src/compute-plane-services/worker-llm-credentials
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3

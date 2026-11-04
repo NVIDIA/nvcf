@@ -22,10 +22,15 @@ use rs_autoscaler::{
     metrics,
     nvcf_api::{nvcf_client::NvcfApiService, oauth2_client::OAuth2Client},
     routes,
-    scaling::{policy_cache::PolicyCache, ScalingPolicy, ScalingSettings},
+    scaling::{
+        policy_cache::PolicyCache, validate_discovery_interval, ActiveFunctionSource,
+        ScalingPolicy, ScalingSettings,
+    },
     secrets::secrets_file_watcher::SecretFileWatcher,
     settings, startup, timeseries_db, work,
-    work::{new_function_state_cache, new_metric_routing_cache},
+    work::{
+        local_registry::LocalFunctionRegistry, new_function_state_cache, new_metric_routing_cache,
+    },
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -43,6 +48,7 @@ const NODE_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project_name = env!("CARGO_PKG_NAME");
     let (_cli_args, config) = settings::parse_settings();
+    validate_discovery_interval(config.scaling.discover_new_functions_interval)?;
 
     let node_id = gethostname::gethostname()
         .into_string()
@@ -231,6 +237,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let function_state_cache = Arc::new(new_function_state_cache());
     let metric_routing_cache = Arc::new(new_metric_routing_cache());
+    let local_registry = (config.scaling.active_function_source
+        == ActiveFunctionSource::LocalDiscovery)
+        .then(|| {
+            Arc::new(LocalFunctionRegistry::new(Duration::from_secs(
+                config.cassandra.recently_invoked_ttl_seconds.max(1) as u64,
+            )))
+        });
+
+    let local_discovery_task = if let Some(registry) = local_registry.clone() {
+        let client = Arc::clone(&timeseries_db_client);
+        let buckets = Arc::clone(&bucket_manager);
+        let env = config.timeseries_db.env.clone();
+        let ignore_env = config.timeseries_db.ignore_env;
+        let interval = config.scaling.discover_new_functions_interval;
+        let lookback = Duration::from_secs(
+            config
+                .scaling
+                .discovery_recently_invoked_lookback_minutes
+                .checked_mul(60)
+                .ok_or("scaling.discovery_recently_invoked_lookback_minutes is too large")?,
+        );
+        Some(tokio::spawn(async move {
+            // Spread the additional discovery load across replicas. The first
+            // tick still happens soon after startup to warm the empty registry.
+            let jitter_millis = rand::rng().random_range(0..5000);
+            tokio::time::sleep(Duration::from_millis(jitter_millis)).await;
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                if buckets.get_my_buckets().is_empty() {
+                    continue;
+                }
+                match work::discovery::fetch_timeseries_db_active_functions(
+                    &client, &env, ignore_env, lookback,
+                )
+                .await
+                {
+                    Ok(functions) => registry.merge(functions, &buckets),
+                    Err(error) => {
+                        metrics::record_local_discovery_failure();
+                        tracing::error!(error = %error, "Local function discovery failed");
+                    }
+                }
+            }
+        }))
+    } else {
+        None
+    };
 
     tracing::info!("Initializing NVCF API client");
     let cassandra_service_manager_nvcf = Arc::clone(&cassandra_service_manager);
@@ -310,6 +364,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lock_manager_p0 = Arc::clone(&lock_manager);
     let function_state_cache_p0 = Arc::clone(&function_state_cache);
     let metric_routing_cache_p0 = Arc::clone(&metric_routing_cache);
+    let local_registry_p0 = local_registry.clone();
     let scaling_loop_interval = config.scaling.scaling_loop_interval;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(scaling_loop_interval);
@@ -321,10 +376,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 scaling_settings_p0.clone(),
                 &timeseries_db_env_p0,
                 timeseries_db_ignore_env,
-                &bucket_manager_p0,
+                Arc::clone(&bucket_manager_p0),
                 &lock_manager_p0,
                 Arc::clone(&function_state_cache_p0),
                 Arc::clone(&metric_routing_cache_p0),
+                local_registry_p0.clone(),
             )
             .await
             {
@@ -355,21 +411,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let server =
         axum::serve(listener, app.into_make_service()).with_graceful_shutdown(shutdown_signal);
+    let local_discovery_exit = async {
+        match local_discovery_task {
+            Some(task) => task.await,
+            None => std::future::pending().await,
+        }
+    };
 
     tokio::select! {
         result = server => result?,
         result = discovery_task => {
-            let message = match result {
-                Ok(()) => "function discovery task exited unexpectedly".to_string(),
-                Err(error) => format!("function discovery task failed: {error}"),
-            };
-            tracing::error!("{message}");
-            return Err(std::io::Error::other(message).into());
+            return Err(discovery_task_error("function discovery", result).into());
+        }
+        result = local_discovery_exit => {
+            return Err(discovery_task_error("local function discovery", result).into());
         }
     }
 
     tracing::warn!("Server terminated");
     Ok(())
+}
+
+fn discovery_task_error(name: &str, result: Result<(), tokio::task::JoinError>) -> std::io::Error {
+    let message = match result {
+        Ok(()) => format!("{name} task exited unexpectedly"),
+        Err(error) => format!("{name} task failed: {error}"),
+    };
+    tracing::error!("{message}");
+    std::io::Error::other(message)
 }
 
 async fn handler_404() -> impl IntoResponse {

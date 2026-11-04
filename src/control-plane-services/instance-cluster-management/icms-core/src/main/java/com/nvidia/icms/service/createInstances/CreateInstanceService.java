@@ -25,6 +25,7 @@ import static com.nvidia.icms.uec.IcmsUnifiedError.NVCF_CUSTOMER_NO_ACCESS_TO_IN
 import static com.nvidia.icms.util.InstanceServiceUtil.isSetEmptyOrNull;
 import static com.nvidia.icms.util.InstanceServiceUtil.isTargetingEnabled;
 
+import com.nvidia.icms.configuration.bean.CapacityGatingProperties;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.errors.IcmsBadRequestException;
 import com.nvidia.icms.inbound.rest.model.CreateSpotInstancesResponse;
@@ -34,7 +35,7 @@ import com.nvidia.icms.service.byoc.ByocCreateService;
 import com.nvidia.icms.service.byoc.ByocValidationService;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
 import com.nvidia.icms.service.extensions.api.InstanceLifecycleService;
-import com.nvidia.icms.service.gating.GpuGatingService;
+import com.nvidia.icms.service.gating.CapacityGatingService;
 import com.nvidia.icms.service.internal.InstanceValidationService;
 import com.nvidia.icms.service.extensions.api.ReservationProcessor;
 import com.nvidia.icms.service.platform.ComputePlatformService;
@@ -66,13 +67,14 @@ public class CreateInstanceService {
     private final InstanceLifecycleService instanceLifecycleService;
     private final ByocValidationService byocValidationService;
     private final IcmsConfigurationProperties icmsConfigurationProperties;
+    private final CapacityGatingProperties capacityGatingProperties;
     private final RequestDestinationProvider requestDestinationProvider;
     private final ClusterTargetingHelper clusterTargetingHelper;
     private final TelemetryEventClient telemetryEventClient;
     private final ReservationProcessor reservationProcessor;
     private final ComputePlatformService computePlatformService;
     private final InstanceValidationService instanceValidationService;
-    private final GpuGatingService gpuGatingService;
+    private final CapacityGatingService capacityGatingService;
 
     public CreateSpotInstancesResponse processInstanceRequest(
             @NotNull String customer,
@@ -122,7 +124,7 @@ public class CreateInstanceService {
                                                @NotNull SpotInstanceRequestSchema instanceRequest,
                                                @NotNull Map<String, CloudHealthEntity> cloudHealthByClusterId) {
                                                 
-        if (!icmsConfigurationProperties.isNcaAllowedForGpu(
+        if (!capacityGatingProperties.isNcaAllowedForGpu(
                 instanceRequest.getGpu(), instanceRequest.getNcaId())) {
             destinations = new HashSet<>(destinations);
             destinations.removeIf(destination ->
@@ -155,7 +157,7 @@ public class CreateInstanceService {
 
         // Applied last, on the destinations that would otherwise be used, so the errors above
         // still report their own cause and a gating rejection always means gating was the reason.
-        gpuGatingService.removeGatedDestinations(filteredDestinations, instanceRequest);
+        capacityGatingService.removeGatedDestinations(filteredDestinations, instanceRequest);
 
         return filteredDestinations;
     }

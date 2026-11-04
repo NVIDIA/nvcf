@@ -19,6 +19,9 @@ Additionally, Cloud Functions supports [Low Latency Streaming (LLS) functions](.
 
 For LLM functions, see [LLM Gateway](./llm-gateway.md#function-configuration) for OpenAI-compatible model route configuration.
 
+To inspect function deployment state and the control-plane and Kubernetes
+events associated with each instance, see [Event Ledger](./event-ledger.md).
+
 ## Invocation Types
 
 - [Generic HTTP function invocation](./generic-http-function-invocation.md):

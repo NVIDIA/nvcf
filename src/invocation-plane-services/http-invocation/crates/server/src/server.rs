@@ -14,13 +14,15 @@
 // limitations under the License.
 
 use axum::serve::ListenerExt;
+use futures::FutureExt as _;
 #[cfg(feature = "jemalloc")]
 use nvcf_invocation_service::profiling::pprof_server;
 use nvcf_invocation_service::telemetry;
 use nvcf_invocation_service::{
     app::app, metrics, secrets::secret_provider::SecretFileWatcher, settings,
+    worker_tls::TlsListener,
 };
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::IntoFuture, net::SocketAddr, sync::Arc, time::Duration};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -86,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
         )),
     };
     let tcp_nodelay = config.tcp_nodelay;
+    let worker_tls = config.worker_tls.clone();
     tracing::info!("Starting {}...", &project_name);
     tracing::warn!("App settings are: {:?}", config);
 
@@ -106,6 +109,17 @@ async fn main() -> anyhow::Result<()> {
     let quit_sig = async {
         let _ = tokio::signal::ctrl_c().await;
         tracing::warn!("Caught Ctrl+C! Initiating graceful shutdown.");
+    }
+    .shared();
+
+    // Bind before serving, so a missing or invalid certificate stops startup.
+    let worker_tls_listener = if worker_tls.enabled {
+        let addr = SocketAddr::from(([0, 0, 0, 0], worker_tls.port));
+        let listener = TlsListener::bind(addr, &worker_tls, tcp_nodelay).await?;
+        tracing::info!("listening on https://{}", addr);
+        Some(listener)
+    } else {
+        None
     };
 
     // Create listener with SO_REUSEADDR (for quick restarts) and explicit backlog.
@@ -125,9 +139,23 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    let worker_tls_router = {
+        let app = app.clone();
+        let quit_sig = quit_sig.clone();
+        async move {
+            match worker_tls_listener {
+                Some(listener) => {
+                    axum::serve(listener, app.into_make_service())
+                        .with_graceful_shutdown(quit_sig)
+                        .await
+                }
+                None => Ok(()),
+            }
+        }
+    };
     let nvcf_router =
         axum::serve(listener, app.into_make_service()).with_graceful_shutdown(quit_sig);
 
-    nvcf_router.await?;
+    tokio::try_join!(nvcf_router.into_future(), worker_tls_router)?;
     Ok(())
 }

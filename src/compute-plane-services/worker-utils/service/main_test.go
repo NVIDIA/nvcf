@@ -18,10 +18,13 @@ limitations under the License.
 package service
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics"
+	"github.com/NVIDIA/nvcf/src/libraries/go/worker/nvcf"
 )
 
 // TestMain pre-registers the shared worker metrics once, before any test spawns
@@ -33,5 +36,19 @@ import (
 // behavior.
 func TestMain(m *testing.M) {
 	_ = metrics.Initialize(metrics.NvcfRootNamespace, nil)
-	os.Exit(m.Run())
+	metadataDir, err := os.MkdirTemp("", "nvcf-worker-service-test-")
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "create test metadata directory: %v\n", err)
+		os.Exit(1)
+	}
+	nvcf.MetadataCredsTokenFile = filepath.Join(metadataDir, "self")
+
+	code := m.Run()
+	if err := os.RemoveAll(metadataDir); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "remove test metadata directory: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
 }

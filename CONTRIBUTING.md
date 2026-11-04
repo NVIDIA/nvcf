@@ -3,16 +3,16 @@
 If you are interested in contributing to NVCF, your contributions will fall into three categories:
 
 1. You want to report a bug, feature idea, or documentation issue
-   - File an [issue](https://github.com/NVIDIA/nvcf/issues/new/choose) describing what you encountered or what you want to see changed.
+   - File an [issue](https://github.com/dsx-ai-factory/nvcf/issues/new/choose) describing what you encountered or what you want to see changed.
    - The NVCF team will evaluate and triage issues. Maintainers assign labels and priority. If you believe an issue needs priority attention, comment on the issue to notify the team.
 2. You want to propose a new feature and implement it
-   - File a [feature issue](https://github.com/NVIDIA/nvcf/issues/new/choose) describing your intended feature, and we shall discuss the design and implementation there.
+   - File a [feature issue](https://github.com/dsx-ai-factory/nvcf/issues/new/choose) describing your intended feature, and we shall discuss the design and implementation there.
    - Once we agree that the plan looks good, go ahead and implement it, using the code contributions guide below.
 3. You want to implement a feature or bug fix for an outstanding issue
    - Follow the code contributions guide below.
    - If you need more context on a particular issue, start a discussion on the issue.
 
-Use [GitHub Discussions](https://github.com/NVIDIA/nvcf/discussions) for support and usage help. Maintainer triage rules are documented in [`.github/ISSUE_TRIAGE.md`](.github/ISSUE_TRIAGE.md).
+Use [GitHub Discussions](https://github.com/dsx-ai-factory/nvcf/discussions) for support and usage help. Maintainer triage rules are documented in [`.github/ISSUE_TRIAGE.md`](.github/ISSUE_TRIAGE.md).
 
 ---
 
@@ -28,8 +28,8 @@ All participants are expected to abide by our [Code of Conduct](CODE_OF_CONDUCT.
 
 New to the project? Look for issues labelled:
 
-- [good-first-issue](https://github.com/NVIDIA/nvcf/issues?q=is%3Aissue+is%3Aopen+label%3Agood-first-issue): beginner-friendly, with guidance.
-- [help-wanted](https://github.com/NVIDIA/nvcf/issues?q=is%3Aissue+is%3Aopen+label%3Ahelp-wanted): community contributions welcome.
+- [good-first-issue](https://github.com/dsx-ai-factory/nvcf/issues?q=is%3Aissue+is%3Aopen+label%3Agood-first-issue): beginner-friendly, with guidance.
+- [help-wanted](https://github.com/dsx-ai-factory/nvcf/issues?q=is%3Aissue+is%3Aopen+label%3Ahelp-wanted): community contributions welcome.
 
 ### Claiming an Issue
 
@@ -65,7 +65,10 @@ Name your branch using your username and a prefix that reflects the type of chan
 - `yourname/fix/description`: bug fix (for example, `jsmith/fix/router-timeout`)
 - `yourname/docs/description`: documentation change (for example, `jsmith/docs/update-quickstart`)
 
-Branch model: `main` is the active development branch. All PRs target `main`, except hotfixes. Stable releases are cut from `release-x.y` branches.
+Branch model: `main` is the active development branch. Target maintenance fixes
+at the owning component train when needed. Services and charts can release from
+main; stacks release from their maintenance branches. Follow the
+[release workflow](docs/dev/github-release-process.md) for branch names and gates.
 
 ### Step 3: Make Your Changes
 
@@ -95,7 +98,10 @@ Commit with a DCO sign-off and a conventional commit message (see [Commit Messag
 
 ### Step 6: Open a Pull Request
 
-- Push your branch and open a PR targeting `main`.
+- Push your branch and open a PR targeting the branch selected by the
+  [release workflow](docs/dev/github-release-process.md): `main` for new
+  development or compatible patches on its current minor, or the owning
+  maintenance branch when required.
 - Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md) when opening your pull request.
 - Reference the related issue in the PR description with `Fixes #123`.
 - Someone will review your PR soon!
@@ -208,9 +214,9 @@ If you discover a security vulnerability, please follow the instructions in our 
 
 ## Getting Help
 
-- GitHub Issues, for bug reports, feature ideas, and documentation issues: https://github.com/NVIDIA/nvcf/issues
-- GitHub Discussions, for support and usage help: https://github.com/NVIDIA/nvcf/discussions
-- GitHub Pull Requests, for code contributions: https://github.com/NVIDIA/nvcf/pulls
+- GitHub Issues, for bug reports, feature ideas, and documentation issues: https://github.com/dsx-ai-factory/nvcf/issues
+- GitHub Discussions, for support and usage help: https://github.com/dsx-ai-factory/nvcf/discussions
+- GitHub Pull Requests, for code contributions: https://github.com/dsx-ai-factory/nvcf/pulls
 
 For support or usage uncertainty, start with GitHub Discussions. For feature ideas, file an issue.
 

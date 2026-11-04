@@ -155,54 +155,6 @@ class InstanceV2RepositoryTest extends InstanceTestBase {
 
     }
 
-    @Test
-    void updateCreationBucket_preservesNewerInstanceUpdate() {
-        Instant createTime = Instant.parse("2026-01-15T18:42:31Z");
-        var instance = createDefaultInstanceV2(
-                RandomFactory.getRandomStringWithPrefix("instance", 5),
-                RandomFactory.getRandomStringWithPrefix("request", 5),
-                createTime,
-                "customer",
-                null);
-        instanceV2Repo.update(instance);
-
-        var scannedInstance = instanceV2Repo.findById(instance.getInstanceId()).orElseThrow();
-        instance.setInstanceStateName(SpotInstanceInternalState.TERMINATED);
-        instanceV2Repo.update(instance);
-
-        Instant creationBucket = createTime.truncatedTo(ChronoUnit.DAYS);
-        instanceV2Repository.updateCreationBucket(
-                scannedInstance.getInstanceId(),
-                creationBucket,
-                createTime.toEpochMilli() * 1000);
-
-        var updatedInstance = instanceV2Repo.findById(instance.getInstanceId()).orElseThrow();
-        assertEquals(SpotInstanceInternalState.TERMINATED,
-                updatedInstance.getInstanceStateName());
-        assertEquals(creationBucket, updatedInstance.getCreationBucket());
-    }
-
-    @Test
-    void updateCreationBucket_doesNotRecreateDeletedInstance() {
-        Instant createTime = Instant.parse("2026-01-15T18:42:31Z");
-        var instance = createDefaultInstanceV2(
-                RandomFactory.getRandomStringWithPrefix("instance", 5),
-                RandomFactory.getRandomStringWithPrefix("request", 5),
-                createTime,
-                "customer",
-                null);
-        instanceV2Repo.update(instance);
-
-        var scannedInstance = instanceV2Repo.findById(instance.getInstanceId()).orElseThrow();
-        instanceV2Repo.deleteById(instance.getInstanceId());
-        instanceV2Repository.updateCreationBucket(
-                scannedInstance.getInstanceId(),
-                createTime.truncatedTo(ChronoUnit.DAYS),
-                createTime.toEpochMilli() * 1000);
-
-        assertTrue(instanceV2Repo.findById(instance.getInstanceId()).isEmpty());
-    }
-
     @ParameterizedTest
     @ValueSource(ints = {1, 0, -1})
     void delete_ok(int monthOffset) {
@@ -1026,6 +978,42 @@ class InstanceV2RepositoryTest extends InstanceTestBase {
         assertEquals(2, entityIds.size());
         assertTrue( entityIds.contains(instanceIds.get(2)));
         assertTrue( entityIds.contains(instanceIds.get(3)));
+    }
+
+    @Test
+    void findInstanceIdsPerPeriod_creationBucketReads_ok() {
+
+        //arrange
+        Mockito.when(icmsConfigurationProperties.isCreationBucketReadsEnabled()).thenReturn(true);
+
+        Instant createDateNow = Instant.now();
+        Instant createDateYesterday2 = createDateNow.minus(2, ChronoUnit.DAYS);
+        Instant createDateLastMonth = TimeUtils.getSameDateTimeOfPreviousMonth(1);
+
+        String requestId = RandomFactory.getRandomStringWithPrefix("requestId", 5);
+        List<String> instanceIds = RandomFactory.getRandomStringList(4, "instanceId");
+
+        instanceV2Repository.insert(createDefaultInstanceV2(
+                instanceIds.get(0), requestId, createDateNow, null, null));
+        instanceV2Repository.insert(createDefaultInstanceV2(
+                instanceIds.get(1), requestId, createDateYesterday2, null, null));
+        InstanceV2Entity toDelete = createDefaultInstanceV2(
+                instanceIds.get(2), requestId, createDateLastMonth, null, null);
+        instanceV2Repository.insert(toDelete);
+        instanceV2Repository.insert(createDefaultInstanceV2(
+                instanceIds.get(3), requestId, createDateLastMonth, null, null));
+        instanceV2Repository.delete(toDelete, false);
+
+        //act
+        List<String> entityIds = instanceV2Repository.findInstanceIdsPerPeriod(
+                createDateLastMonth, createDateYesterday2);
+        List<InstanceV2Entity> entities = instanceV2Repository.findInstancesPerPeriod(
+                createDateLastMonth, createDateYesterday2);
+
+        //assert
+        // now is out of range, instance 2 is deleted
+        assertEquals(Set.of(instanceIds.get(1), instanceIds.get(3)), new HashSet<>(entityIds));
+        assertEquals(2, entities.size());
     }
 
     @Test

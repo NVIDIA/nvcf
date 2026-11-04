@@ -185,12 +185,6 @@ func AtomicWrite(path string, createDestDirs bool, contents []byte, perms os.Fil
 		}
 	} else {
 		existingPerms = currentInfo.Mode()
-
-		// The file exists, so try to preserve the ownership as well.
-		if err := preserveFilePermissions(f.Name(), currentInfo); err != nil {
-			log.Printf("[WARN] (runner) could not preserve file permissions for %q: %v",
-				f.Name(), err)
-		}
 	}
 
 	if perms == 0 {
@@ -199,6 +193,15 @@ func AtomicWrite(path string, createDestDirs bool, contents []byte, perms os.Fil
 
 	if err := os.Chmod(f.Name(), perms); err != nil {
 		return err
+	}
+
+	// Set the mode before transferring ownership. A non-root writer with
+	// CHOWN can change the owner, but cannot chmod the file afterward.
+	if currentInfo != nil {
+		if err := preserveFilePermissions(f.Name(), currentInfo); err != nil {
+			log.Printf("[WARN] (runner) could not preserve file permissions for %q: %v",
+				f.Name(), err)
+		}
 	}
 
 	// If we got this far, it means we are about to save the file. Copy the

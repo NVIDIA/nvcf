@@ -14,7 +14,7 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | `self-hosted install --compute-plane --cluster-name=X` | Register cluster + render compute manifests | YAML on stdout | One invocation per GPU cluster |
 | `self-hosted up --cluster-name=X` | One-shot first install (both planes) | (empty) stdout, progress on stderr | Always installs both planes; for compute-only use `compute-plane register` and `compute-plane install` |
 | `self-hosted up --plan-only --cluster-name=X` | Dry-run preview | JSONL on stderr | Agent-friendly, no cluster changes |
-| `self-hosted compute-plane register --control-plane-profile=P --cluster-name=X --kube-context=Y [--output=V]` | Register a compute cluster with an existing control plane and write its NVCA operator values | summary on stdout | For the 2nd, 3rd, ... GPU cluster after the first install. CP not touched |
+| `self-hosted compute-plane register --control-plane-profile=P --cluster-name=X --kube-context=Y [--output=V]` | Register a compute cluster with an existing control plane and write its NVCA operator values | summary on stdout | For the 2nd, 3rd, ... GPU cluster after the first install. CP not touched. The NVCA OTel collector is never enabled automatically from the control plane's Event Ledger state; set `global.nvcaOperator.selfManaged.otelCollector.enabled: true` explicitly on each compute plane that should send events to the Event Ledger |
 | `self-hosted compute-plane install --values=V --kube-context=Y` | Install a compute plane from the values `compute-plane register` wrote | progress on stderr | Run after `compute-plane register`. Installs V whatever its name, never another values file beside it |
 | `self-hosted status [--cluster-name=X] [--watch]` | Snapshot cluster health | TTY/plain/JSONL | `--watch` for live re-render |
 | `self-hosted uninstall --compute-plane --cluster-name=X` | Per-plane primitive: `helmfile destroy` on one compute plane (no ICMS unregister, no drain) | progress | Just the helm releases on that compute plane |
@@ -94,11 +94,20 @@ Attach an endpoint with `--logs-telemetry-id`, `--metrics-telemetry-id`, or `--t
 |---|---|---|
 | `init` | Mint admin token from API Keys via public api gateway | Idempotent; writes `~/.nvcf-cli.state`; clears saved function state and all API keys (function and task) |
 | `status` | Show CLI state (token, last endpoints, function context) | Distinct from `self-hosted status` |
-| `api-key generate [--for function\|task] [--description=…] [--expires-in=…]` | Mint API keys | Default (no `--for`): generates both a function key and a task key; `--for function` or `--for task` generates one only; `--scopes` requires `--for` |
+| `api-key generate [--for function\|task\|event-ledger] [--description=…] [--expires-in=…]` | Mint API keys | Default (no `--for`): generates a function key, a task key and an Event Ledger key; `--for function`, `--for task` or `--for event-ledger` generates one only; `--scopes` requires `--for` |
 | `api-key generate --validate` | Mint and immediately validate each generated key | Validates each key against its correct audience (NVCF for function keys, NVCT for task keys) |
 | `api-key list` | List API keys for current owner | Lists NVCF-scoped keys only |
 | `api-key delete KEY-ID` / `api-key revoke KEY-ID` | Remove an API key | **Confirm with user** |
-| `api-key show` | Show currently saved API key from state | |
+| `api-key show` | Show the saved function, task and Event Ledger keys from state | |
+
+## Event Ledger
+
+Event Ledger commands need the Event Ledger addon on the control plane and an API key with the `fnds:getEvents` read scope (`api-key generate --for event-ledger`). The URL comes from `EVENT_LEDGER_URL` or `event_ledger_url`. Without one, it is derived from `base_http_url` by replacing the leading `api.` with `events.`. Set `event_ledger_host` (or `EVENT_LEDGER_HOST`) when the gateway routes by Host header.
+
+| Command | Purpose | Notes |
+|---|---|---|
+| `stats get [--function-version-id=VID] [--event-filter=NAME[,NAME]]` | Latest event for every instance of a function version | The version ID must be a UUID; uses the saved version ID when the flag is omitted; `--json` for machine-readable output |
+| `stages events list [--function-version-id=VID] [--instance-id=ID] [--deployment-id=ID] [--gpu-specification-id=ID] [--cluster-id=ID] [--resource-id=ID] [--attribute-key=K --attribute-value=V]` | Event history of one instance, most recent first | Context filters (`--instance-id`, `--deployment-id`, `--gpu-specification-id`, `--cluster-id`, `--resource-id`) are optional and must match how the events were ingested; with none, it returns the events stored without a context. `--attribute-key` and `--attribute-value` go together and keep only events with that attribute value. Run `stats get` first to see the contexts |
 
 ## Agent skill
 

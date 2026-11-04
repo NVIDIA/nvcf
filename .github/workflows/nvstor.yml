@@ -1,0 +1,112 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# nvstor checks that the Bazel row does not cover. The nvstor row in bazel.yml
+# builds and tests nvstor-peer and the crates it depends on for amd64; this
+# workflow adds rustfmt, clippy and the Cargo tests of those crates, the
+# dependency license policy, the NOTICE and publication-hygiene checks, and an
+# arm64 cross-build of nvstor-peer (the Bazel row builds for the runner's own
+# architecture only). No RDMA device is needed: tests that need one are
+# #[ignore]d and run by hand on RDMA hardware.
+
+name: nvstor
+
+on:
+  push:
+    branches: [main, 'release-**', 'release/**']
+    paths: &paths
+      - 'src/compute-plane-services/nvstor/**'
+      - '.github/workflows/nvstor.yml'
+      # The Bazel scaffold the arm64 cross-build depends on: rules_rust and
+      # the Rust toolchain, the zig cross toolchain and the platforms.
+      - 'MODULE.bazel'
+      - 'MODULE.bazel.lock'
+      - '.bazelrc'
+      - '.bazelversion'
+      - 'platforms/**'
+      - 'tools/bazel/**'
+  pull_request:
+    branches: [main, 'release-**', 'release/**']
+    paths: *paths
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nvstor-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo:
+    name: cargo checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: src/compute-plane-services/nvstor
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install rdma-core development files
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libibverbs-dev
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      # The Bazel-built crates. The other workspace members build with
+      # Cargo and are not checked here yet.
+      - name: Check Rust diagnostics
+        run: cargo clippy --locked -p nvstor-core -p nvstor-rdma -p nvstor-peer --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked -p nvstor-core -p nvstor-rdma -p nvstor-peer
+
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny@0.20.2
+
+      - name: Check dependency licenses, bans and sources
+        run: cargo deny --locked check licenses bans sources
+
+      - name: Check NOTICE is up to date
+        run: python3 scripts/gen-notice.py --check
+
+      - name: Check publication hygiene
+        run: python3 scripts/check-hygiene.py
+
+  arm64:
+    name: nvstor-peer arm64 cross-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Fetch arm64 rdma-core
+        run: src/compute-plane-services/nvstor/scripts/fetch-rdma-core.sh arm64 "$RUNNER_TEMP/rdma-core-arm64"
+
+      # --config=release (-c opt): the repository default, fastbuild, compiles
+      # Rust without optimisation, and this is the binary that is shipped.
+      - name: bazel build (linux_arm64, release)
+        run: |
+          bazel build \
+            --config=release \
+            --platforms=//platforms:linux_arm64 \
+            --action_env=RDMA_CORE_PREFIX="$RUNNER_TEMP/rdma-core-arm64/usr" \
+            //src/compute-plane-services/nvstor/crates/nvstor-peer:nvstor-peer
+          file -L bazel-bin/src/compute-plane-services/nvstor/crates/nvstor-peer/nvstor-peer \
+            | grep -q 'ARM aarch64' \
+            || { echo "nvstor-peer is not an arm64 binary" >&2; exit 1; }

@@ -155,7 +155,7 @@ func runService(cfg config.Config) error {
 	}
 	defer publisher.Stop()
 
-	server := service.NewServer(conns, logger, publisher, cfg.Telemetry.ServiceVersion, &cfg.HTTP, cfg.Pagination, cfg.Stats)
+	server := service.NewServer(conns, logger, publisher, cfg.Telemetry.ServiceVersion, &cfg.HTTP, cfg.Pagination, cfg.Stats).WithAccountColumns(cfg.V3.AccountColumnsEnabled)
 	router := mux.NewRouter()
 	router.Use(middleware.EnableCORS)
 	router.Use(middleware.BodyLimitMiddleware(10 * 1024 * 1024)) // 10MB limit
@@ -482,6 +482,14 @@ func runService(cfg config.Config) error {
 	// V3 Events endpoint - retrieve all events for a specific namespace and context (context via query params)
 	authRouter.Handle("/v3/ledger/namespace/{namespace}/events",
 		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.ReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetEventsV3)),
+	).Methods("GET", "OPTIONS")
+
+	// Account-scoped V3 reads for KAS. The account in the path is trusted.
+	authRouter.Handle("/v3/ledger/accounts/{ncaId}/functions/{functionId}/versions/{functionVersionId}/events",
+		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.AdminReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetAccountEventsV3)),
+	).Methods("GET", "OPTIONS")
+	authRouter.Handle("/v3/ledger/accounts/{ncaId}/functions/{functionId}/versions/{functionVersionId}/stats",
+		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.AdminReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetAccountStatsV3)),
 	).Methods("GET", "OPTIONS")
 
 	// Cross Account Endpoints for KAS (V2)

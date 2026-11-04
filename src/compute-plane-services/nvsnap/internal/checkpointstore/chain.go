@@ -23,7 +23,7 @@ limitations under the License.
 //   - PerCapturePVCBackend    — rwx → snapshot → rox PVC (cluster-wide fan-out
 //                               for N restored pods mounting one read-only disk)
 //
-// See docs/design/ROOTFS-EVERYWHERE.md.
+// See docs/ARCHITECTURE.md §2.
 
 package checkpointstore
 
@@ -31,6 +31,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
@@ -53,6 +54,24 @@ type Chain struct {
 }
 
 var _ Backend = (*Chain)(nil)
+
+// RecordManifest records m with every member that keeps records without
+// data; it fails when none does.
+func (c *Chain) RecordManifest(ctx context.Context, hash string, m Manifest) error {
+	recorded := false
+	for _, b := range c.Members {
+		if r, ok := b.(ManifestRecorder); ok {
+			if err := r.RecordManifest(ctx, hash, m); err != nil {
+				return err
+			}
+			recorded = true
+		}
+	}
+	if !recorded {
+		return ErrUnsupported
+	}
+	return nil
+}
 
 // Put fans out across all members in order. Returns the manifest from the
 // first member that successfully populated SizeBytes / FileCount; rolls
@@ -101,14 +120,37 @@ func (c *Chain) Put(ctx context.Context, hash string, sources []CaptureSource, m
 	return primary, nil
 }
 
-// rollback best-effort deletes a hash from the first n members. Used when
-// a later Put fails and the chain needs to leave the catalog clean.
+// rollbackAttempts bounds the deletes of one member during a rollback.
+const rollbackAttempts = 3
+
+// rollbackBackoff is the wait before the second delete attempt; it doubles
+// for each later one.
+var rollbackBackoff = 200 * time.Millisecond
+
+// rollback deletes a hash from the first n members. Used when a later Put
+// fails and the chain needs to leave the catalog clean: a manifest left
+// behind would read as a capture that exists. A failed delete is retried;
+// one that still fails is logged for orphan GC.
 func (c *Chain) rollback(ctx context.Context, hash string, n int) {
 	for i := 0; i < n; i++ {
-		if err := c.Members[i].Delete(ctx, hash); err != nil && !errors.Is(err, ErrNotFound) {
-			if c.Log != nil {
-				c.Log.WithError(err).WithField("member_index", i).Warn("chain.Put: rollback Delete failed; orphan-GC will catch this later")
+		wait := rollbackBackoff
+		for attempt := 1; ; attempt++ {
+			err := c.Members[i].Delete(ctx, hash)
+			if err == nil || errors.Is(err, ErrNotFound) {
+				break
 			}
+			if attempt == rollbackAttempts || ctx.Err() != nil {
+				if c.Log != nil {
+					c.Log.WithError(err).WithField("member_index", i).WithField("attempts", attempt).
+						Error("chain.Put: rollback Delete failed; the hash stays recorded until orphan GC removes it")
+				}
+				break
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(wait):
+			}
+			wait *= 2
 		}
 	}
 }

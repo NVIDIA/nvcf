@@ -232,6 +232,34 @@ func remoteWriteTLSCredentials(credentialPath, telemetryName string) (map[string
 	return creds, nil
 }
 
+const (
+	serviceNowLightstepHeader = "lightstep-access-token"
+	serviceNowOtelTokenHeader = "otel-token"
+	otelTokenPrefix           = "otel_"
+)
+
+// serviceNowTokenHeader picks the header a SERVICENOW traces token is sent in.
+// Tokens that start with "otel_" go in otel-token; any other token is a classic
+// Lightstep access token and keeps lightstep-access-token. Ingest gateways
+// reject a request that carries both headers, so exactly one is chosen. Only
+// the prefix is read: the rendered config still references the token file.
+// The prefix is matched against the raw file, not a trimmed copy, because the
+// collector sends the file's contents as they are. A missing file keeps the
+// classic header.
+func serviceNowTokenHeader(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return serviceNowLightstepHeader, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to read secret file %s: %w", path, err)
+	}
+	if bytes.HasPrefix(content, []byte(otelTokenPrefix)) {
+		return serviceNowOtelTokenHeader, nil
+	}
+	return serviceNowLightstepHeader, nil
+}
+
 func secretFileHasContent(path string) (bool, error) {
 	content, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -863,12 +891,17 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 		exporterType = "otlp"
 		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
-		exporterCredential = fmt.Sprintf("${file:%s}", filepath.Join(credentialPath, config.Telemetries.Traces.Name))
+		credentialFile := filepath.Join(credentialPath, config.Telemetries.Traces.Name)
+		exporterCredential = fmt.Sprintf("${file:%s}", credentialFile)
 
+		header, err := serviceNowTokenHeader(credentialFile)
+		if err != nil {
+			return "", err
+		}
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"endpoint": config.Telemetries.Traces.Endpoint,
 			"headers": map[string]interface{}{
-				"lightstep-access-token": exporterCredential,
+				header: exporterCredential,
 			},
 		}
 	case ProviderAzureMonitor:

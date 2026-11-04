@@ -46,6 +46,7 @@ timeseries_db:
   ignore_env: true
   disable_auth: true
 scaling:
+  active_function_source: cassandra
   scaling_loop_interval_seconds: 30
   discover_new_functions_interval_seconds: 30
   lookback_seconds: 600

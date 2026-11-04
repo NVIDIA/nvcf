@@ -63,6 +63,42 @@ For a standalone `nvca-operator` Helm release, list the gates in
 include every gate you need. For more information, refer to
 [Managing Feature Flags](../compute-plane/cluster-management/configuration.md#managing-feature-flags).
 
+### Turn telemetry off for a deployment
+
+The NVCF API accepts telemetry endpoints even where workload telemetry export is
+not available, so tenants can register endpoints that never receive anything. On
+such a deployment, turn telemetry off:
+
+```yaml
+api:
+  remoteConfig:
+    configData:
+      nvcf:
+        telemetry:
+          enabled: false
+
+nvctApi:
+  remoteConfig:
+    configData:
+      nvct:
+        telemetry:
+          enabled: false
+```
+
+Each API reads its own setting, so set both. The NVCF API setting is also
+available as an environment variable, `api.env.NVCF_TELEMETRY_ENABLED: "false"`.
+The stack builds the NVCT API environment itself, so remote config is the only
+route for the task side.
+
+With telemetry off, registering an endpoint or attaching one to a function
+returns 400 `telemetry is not supported on this deployment`, and so does
+creating a task that attaches one. Deleting an endpoint still works, so
+endpoints registered before the change can be cleared. Each API reads the
+setting once at startup, so changing it needs a restart.
+
+The setting defaults to on, so a deployment that does not set it is unchanged.
+It is temporary and is removed once telemetry export is available everywhere.
+
 ### Sidecar sizing and collector options
 
 The `nvca-operator` chart exposes BYOO sizing under the `byoo` key. Leave a key
@@ -212,43 +248,38 @@ inside the pod on these ports:
 ## Supported providers
 
 A telemetry endpoint has a provider, an endpoint, a set of signal types, and a
-secret. The collector supports these providers:
+secret. The BYOO collector renders an exporter only for the providers and
+signal types in this table. Telemetry registration returns 400 for any other
+provider or signal type. Secret updates return 400 for any other provider. A
+secret update checks the new secret against the stored signal types that the
+provider supports and ignores the others. An endpoint stored with an
+unsupported signal type can still rotate its secret. Function and task creation
+return 400 when they reference a telemetry for a signal type its provider does
+not support.
 
-| Provider | Logs | Metrics | Traces | Exporter |
-|---|---|---|---|---|
-| `OTEL_COLLECTOR` | Yes | Yes | Yes | OTLP HTTP |
-| `GRAFANA_CLOUD` | Yes | Yes | Yes | OTLP HTTP with basic auth |
-| `DATADOG` | Yes | Yes | Yes | Datadog |
-| `AZURE_MONITOR` | Yes | Yes | Yes | Azure Monitor |
-| `SPLUNK` | Yes | No | No | Splunk HTTP Event Collector (HEC) |
-| `PROMETHEUS` | No | Yes | No | Prometheus remote write |
-| `SERVICENOW` | No | No | Yes | OTLP gRPC |
+The `secret.value` field is a string or a JSON object of string fields. The
+collector writes a string to one credential file. It writes each key of a JSON
+object to its own file. The `secret.name` is the telemetry name. An empty value
+counts as not set.
 
-The API accepts other provider values. The BYOO collector does not render an
-exporter for them, so do not use them on self-managed clusters.
-
-### Secret shapes
-
-The `secret.value` field is a string or a JSON object. The collector writes a
-string to one credential file. It writes each key of a JSON object to its own
-file. The `secret.name` is the telemetry name.
-
-| Provider | `endpoint` | `secret.value` |
-|---|---|---|
-| `OTEL_COLLECTOR` | OTLP HTTP base URL, for example `https://otel.example.com:4318` | String. Sent as `Authorization: Bearer <value>`. |
-| `GRAFANA_CLOUD` | Grafana Cloud OTLP endpoint | Object with `instanceId` and `apiKey`. |
-| `DATADOG` | Datadog site, for example `datadoghq.com` | String. The Datadog API key. |
-| `AZURE_MONITOR` | Azure Monitor ingestion endpoint | Object with `instrumentationKey`, `applicationId`, and `liveEndpoint`. |
-| `SPLUNK` | Splunk HEC URL | String. The HEC token. |
-| `PROMETHEUS` | Remote-write URL | Object with `clientCert` and `clientKey`, `caFile`, or all three. All values are PEM text. |
-| `SERVICENOW` | OTLP gRPC endpoint | String. Sent in the `lightstep-access-token` header. |
+| Provider | Logs | Metrics | Traces | `endpoint` | `secret.value` |
+|---|---|---|---|---|---|
+| `AZURE_MONITOR` | Yes | Yes | Yes | Azure Monitor ingestion endpoint | Object with `instrumentationKey`, `applicationId`, and `liveEndpoint`. |
+| `DATADOG` | Yes | Yes | Yes | Datadog site, for example `datadoghq.com` | String. The Datadog API key. |
+| `GRAFANA_CLOUD` | Yes | Yes | Yes | Grafana Cloud OTLP endpoint | Object with `instanceId` and `apiKey`. |
+| `KRATOS` | Yes | No | Yes | Full OTLP HTTP logs or traces URL, used as is | Logs: object with `collectorId`, `clientCert`, and `clientKey`. Traces: object with `clientCert` and `clientKey`, and optionally `caFile` and `collectorId`. Certificates and keys are PEM text. |
+| `KRATOS_THANOS` | No | Yes | No | Remote-write URL | Object with `clientCert` and `clientKey`, `caFile`, or all three. All values are PEM text. |
+| `OTEL_COLLECTOR` | Yes | Yes | Yes | OTLP HTTP base URL, for example `https://otel.example.com:4318` | String. Sent as `Authorization: Bearer <value>`. |
+| `PROMETHEUS` | No | Yes | No | Remote-write URL | Object with `clientCert` and `clientKey`, `caFile`, or all three. All values are PEM text. |
+| `SERVICENOW` | No | No | Yes | OTLP gRPC endpoint | String. A token that starts with `otel_` is sent in the `otel-token` header. Any other token is sent in the `lightstep-access-token` header. |
+| `SPLUNK` | Yes | No | No | Splunk HTTP Event Collector (HEC) URL | String. The HEC token. |
 
 Use `OTEL_COLLECTOR` to send to any OTLP HTTP receiver, including your own
 OpenTelemetry Collector. The collector appends the standard OTLP signal paths,
 such as `/v1/logs`, to the base URL.
 
-For `PROMETHEUS`, a client certificate needs a client key. An empty value
-counts as not set.
+`KRATOS` sends `collectorId` in the `collector-id` header. For `PROMETHEUS` and
+`KRATOS_THANOS`, a client certificate needs a client key.
 
 ## Register a telemetry endpoint
 
@@ -330,10 +361,10 @@ and `secret.value` unencrypted. Use it only on a trusted network.
 
 | Field | Values |
 |---|---|
-| `endpoint` | Provider endpoint, as listed in [Secret shapes](#secret-shapes). |
+| `endpoint` | Provider endpoint, as listed in [Supported providers](#supported-providers). |
 | `protocol` | `HTTP` or `GRPC`. |
 | `provider` | A provider from [Supported providers](#supported-providers). |
-| `types` | One or more of `LOGS`, `METRICS`, and `TRACES`. |
+| `types` | One or more of `LOGS`, `METRICS`, and `TRACES`. The provider must support each type. |
 | `secret` | `name` and `value`. The name is 1 to 48 characters. It starts with a letter or digit, followed by letters, digits, `_`, `.`, or `-`. It must be unique in the account. |
 
 The response includes a `telemetryId`. Use it to attach the endpoint to
@@ -350,7 +381,7 @@ Other operations:
 ## Attach endpoints to functions and tasks
 
 Each workload can reference one endpoint per signal. The endpoint must include
-that signal in its `types`.
+that signal in its `types`, and its provider must support that signal.
 
 For functions, pass the IDs to `nvcf-cli function create`:
 

@@ -227,29 +227,23 @@ public snapshot; still follow OSS Snapshot Hygiene manually before finishing.
 | `nvcf-self-managed-installation` | `ai-tooling/user/skills/` | Install and deploy the self-managed NVCF stack |
 | `nvcf-self-managed-prerequisite` | `ai-tooling/user/skills/` | Install cluster-level prerequisites such as KAI Scheduler and SMB CSI driver |
 
-## GitLab CI for native subprojects
+## CI and release routing for native subprojects
 
-The umbrella parent pipeline (`.gitlab-ci.yml`) is not where native service
-build, test, helm-lint, or release validation jobs go. `.gitlab-ci.yml` and
-`tools/ci/generated-release-jobs.yml` are internal GitLab CI config not
-present in this public snapshot.
+Public validation and source release automation live in `.github/workflows/`.
+Read `RELEASE.md` and `docs/dev/github-release-process.md` for current component
+versioning and maintenance behavior. Read `docs/dev/umbrella-releases.md` for
+candidate assembly and product publication.
 
-| Job kind | Where to declare it |
-|---|---|
-| `<id>-bazel`, Go checks, custom `checks:` | `tools/ci/subproject-validations.yaml` (runs in `subproject-validations` child pipeline) |
-| Image push, semantic-release, helm publish | `release:` in same YAML, output in `tools/ci/generated-release-jobs.yml` |
-| License scan, bazel-smoke, docs, OSS snapshot | root `.gitlab-ci.yml` only |
-
-Before adding or moving any CI job for a path under `src/`, `deploy/helm/`, or
-`migrations/`, read this section in full.
-Do not add per-service jobs to root `.gitlab-ci.yml` and do not recreate
-`src/**/.gitlab-ci.yml`, `deploy/helm/**/.gitlab-ci.yml`, or
-`migrations/**/.gitlab-ci.yml` for native subprojects. Helm CI-only values
-belong in `tools/ci/helm-validate-values/`, not under chart `ci/` dirs.
+The former generated GitLab umbrella release jobs are retired for native
+public components. Do not recreate `src/**/.gitlab-ci.yml`,
+`deploy/helm/**/.gitlab-ci.yml` or `migrations/**/.gitlab-ci.yml` to add a lane.
+Keep private credentials, destinations and publication instructions outside
+this public source tree. Inspect the affected workflow and owning build
+configuration before adding validation.
 
 ## Commit Messages
 
-Use Conventional Commits v1.0.0. Include issue references in the footer when required by the change type. For GitHub PR work, use a public `NVIDIA/nvcf` issue reference.
+Use Conventional Commits v1.0.0. Include issue references in the footer when required by the change type. For GitHub PR work, use a public `dsx-ai-factory/nvcf` issue reference.
 
 Sign off every commit with `git commit -s` (Developer Certificate of Origin,
 see `CONTRIBUTING.md`). The DCO check rejects pull requests with unsigned
@@ -274,8 +268,8 @@ Use Conventional Commit format for Pull Request titles, as described in the
 Commit Messages section. Release automation depends on this format. Examples:
 `feat:`, `fix:`, `chore:`, `docs:`.
 
-For GitHub PRs, agents must create or link a public `NVIDIA/nvcf` issue in
-`## Issues` using `Closes #123`, `Fixes #123`, `Resolves NVIDIA/nvcf#123`, or
+For GitHub PRs, agents must create or link a public `dsx-ai-factory/nvcf` issue in
+`## Issues` using `Closes #123`, `Fixes #123`, `Resolves dsx-ai-factory/nvcf#123`, or
 `Relates to #123`. If context is private, create a generic public issue. Do not
 use `NO-REF`, Jira keys, private tracker or bug IDs, private URLs, title-only
 refs, other-repo issues, or invented issue numbers for agent-authored PRs.

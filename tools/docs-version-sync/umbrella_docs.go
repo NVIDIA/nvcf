@@ -96,6 +96,9 @@ func validateUmbrellaDocsCatalogIdentity(manifest *umbrellaManifest, catalog *Ca
 }
 
 func umbrellaDocsCatalog(root string, manifest *umbrellaManifest, data []byte) (*Catalog, error) {
+	if manifest.SchemaVersion == 2 {
+		return nil, fmt.Errorf("maintained docs preparation and activation for release-local schema 2 manifests are not yet supported; retain the existing docs edition until selected-inventory catalog support is available (https://github.com/NVIDIA/nvcf/issues/2798)")
+	}
 	catalog, err := catalogAtCommit(root, manifest.SourceCommit)
 	if err != nil {
 		return nil, err

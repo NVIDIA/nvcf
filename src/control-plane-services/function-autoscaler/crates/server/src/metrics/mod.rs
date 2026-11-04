@@ -119,6 +119,26 @@ const AUTOSCALING_FUNCTION_DISCOVERY_DURATION: Metric = Metric {
     description: "Duration of function discovery thread",
 };
 
+const LOCAL_REGISTRY_SIZE: Metric = Metric {
+    name: "nvcf_autoscaler.local_registry_size",
+    description: "Number of function versions tracked by local discovery",
+};
+
+const LOCAL_DISCOVERY_CANDIDATES: Metric = Metric {
+    name: "nvcf_autoscaler.local_discovery_candidates",
+    description: "Number of function versions returned by the last local discovery query",
+};
+
+const LOCAL_DISCOVERY_OWNED: Metric = Metric {
+    name: "nvcf_autoscaler.local_discovery_owned",
+    description: "Number of discovered function versions owned by this node",
+};
+
+const LOCAL_DISCOVERY_FAILURES: Metric = Metric {
+    name: "nvcf_autoscaler.local_discovery_failures_total",
+    description: "Number of failed local discovery cycles",
+};
+
 const AUTOSCALING_CASSANDRA_HEALTH_STATUS: Metric = Metric {
     name: "nvcf_autoscaler.cassandra.health_status",
     description: "Cassandra health check status (1 if healthy, 0 if not)",
@@ -178,7 +198,7 @@ const OAUTH2_API_REQUEST_DURATION: Metric = Metric {
     description: "Duration of OAuth2 API requests in milliseconds (includes count via _count)",
 };
 
-const GAUGES: [Metric; 11] = [
+const GAUGES: [Metric; 14] = [
     AUTOSCALING_STATUS,
     AUTOSCALING_QUEUE_SIZE,
     AUTOSCALING_QUEUE_CAPACITY,
@@ -190,9 +210,12 @@ const GAUGES: [Metric; 11] = [
     AUTOSCALING_CASSANDRA_HEALTH_STATUS,
     AUTOSCALING_HEALTH_OVERALL_STATUS,
     AUTOSCALING_HEALTH_COMPONENT_STATUS,
+    LOCAL_REGISTRY_SIZE,
+    LOCAL_DISCOVERY_CANDIDATES,
+    LOCAL_DISCOVERY_OWNED,
 ];
 
-const COUNTERS: [Metric; 11] = [
+const COUNTERS: [Metric; 12] = [
     AUTOSCALING_REQUESTS_QUEUED_TOTAL,
     AUTOSCALING_REQUESTS_REJECTED_TOTAL,
     AUTOSCALING_REQUESTS_PROCESSED_TOTAL,
@@ -204,7 +227,22 @@ const COUNTERS: [Metric; 11] = [
     AUTOSCALING_TSDB_REQUESTS_TOTAL,
     AUTOSCALING_MISSING_CURRENT_INSTANCES_TOTAL,
     NVCF_API_RPC_REQUESTS_TOTAL,
+    LOCAL_DISCOVERY_FAILURES,
 ];
+
+pub fn record_local_discovery(candidates: usize, owned: usize, registry_size: usize) {
+    gauge!(LOCAL_DISCOVERY_CANDIDATES.name).set(candidates as f64);
+    gauge!(LOCAL_DISCOVERY_OWNED.name).set(owned as f64);
+    record_local_registry_size(registry_size);
+}
+
+pub fn record_local_registry_size(size: usize) {
+    gauge!(LOCAL_REGISTRY_SIZE.name).set(size as f64);
+}
+
+pub fn record_local_discovery_failure() {
+    counter!(LOCAL_DISCOVERY_FAILURES.name).increment(1);
+}
 
 const HISTOGRAMS: [Metric; 5] = [
     AUTOSCALING_UTILIZATION_DATA_AGE,

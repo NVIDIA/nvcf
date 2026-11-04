@@ -235,7 +235,8 @@ If request stats go stale, volatile output TPS is cleared. Sticky input TPS
 stays until a later valid sample replaces it.
 The maximum is the greatest max-eligible `last_mean_input_tps` published for the
 current model generation. A configured `--initial-input-tps`, engine stats
-stream counters, embeddings samples, and calibration can raise it. An OpenAI
+stream counters, embeddings and decision request samples, and calibration can
+raise it. An OpenAI
 fallback mean raises it only when every request it counts reported uncached
 prompt tokens under the Fallback rules above. Other fallback means update
 `last_mean_input_tps` but not the maximum, because cached input may be counted
@@ -292,7 +293,8 @@ does not inflate that gauge.
 ## Mock Defaults
 
 `mock-dynamo` serves the stats stream, OpenAI-compatible
-chat/Responses/embeddings endpoints, and `/kv-cache/stats`. Use
+chat/Responses/embeddings endpoints, the decision routes, and
+`/kv-cache/stats`. Use
 `pylon --engine-stats-stream=off` when a test intentionally exercises OpenAI
 fallback.
 

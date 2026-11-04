@@ -27,7 +27,8 @@ godog_test.go
             TestMultiClusterUp, TestSingleClusterHelmfile, TestSingleClusterHA,
             TestMultiClusterHelmfile,
             TestMultiClusterHelmfileLLMLastClusterAffinity,
-            TestSingleClusterEKSHelmfile, TestMultiClusterEKSHelmfile) and
+            TestSingleClusterEKSHelmfile, TestMultiClusterEKSHelmfile,
+            TestBYOORender, TestBYOO, TestBYOOExistingInstall) and
             wiring tests with a fake CommandRunner.
 .golangci.yml
 .goheader.tmpl
@@ -59,6 +60,30 @@ supports the `x_load_tester_echo` body control, and reads the forwarded request
 from its reply. It defaults to the released
 `nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:5.1.0`;
 set `SAMPLE_LLM_ECHO_IMAGE` to override it.
+The Vanity Gateway shadow sampling scenario deploys two LLM functions from the
+same image, so it must also honor the `LOAD_TESTER_DEFAULT_*` container
+settings, and the cluster needs two free 1x GPU instances. It serves OpenAI
+routes on `vanity-openai.localhost`.
+The decision route scenarios (`@llm-decision-routes`) cover `POST /v1/decisions`
+and `POST /v1/systemone` through the LLM gateway and through the Vanity Gateway.
+They are opt-in. `TestSingleClusterHelmfile` skips them unless
+`SAMPLE_LLM_DECISIONS_IMAGE` is set, because they also need LLM gateway,
+Stargate, Pylon and Vanity Gateway builds that serve the routes, which the
+pinned stack may not include yet. Set it to an image of the in-repo sample that
+serves both routes. If the latest released sample does not serve them yet,
+build the image from this checkout and make the cluster able to pull it:
+
+```sh
+docker build --platform linux/amd64 \
+  -t nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local \
+  examples/function-samples/openai-compatible-sample
+k3d image import -c ncp-local \
+  nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local
+export SAMPLE_LLM_DECISIONS_IMAGE=nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local
+```
+
+Or push a tag and set `SAMPLE_LLM_DECISIONS_IMAGE` to it. The Vanity scenario
+needs two free 1x GPU instances.
 
 Each `-run` argument is anchored with `^...$` so the live entry point
 runs without also matching its `...FeatureFileWiresToSteps` wiring
@@ -86,6 +111,7 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
   SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   SAMPLE_LLM_ECHO_IMAGE=<optional-image-reference> \
+  SAMPLE_LLM_DECISIONS_IMAGE=<optional-image-reference-enables-decision-routes> \
   go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
 
 # Single-cluster HA Helmfile feature: installs the control plane with
@@ -128,6 +154,122 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   LAST_CLUSTER_INSTANCE_TYPE=<optional-type> \
   go test -run '^TestMultiClusterHelmfileLLMLastClusterAffinity$' -timeout 120m -v
 ```
+
+### OpenBao JWT plugin lifecycle
+
+`TestOpenBaoJWTPluginLifecycle` exercises real file-backed OpenBao restarts,
+declarative registration, version tuning, plugin reload, rollback, and gated
+cleanup. The test verifies JWT signatures, retained public keys, and recovery
+when migrations have not created their first JWT mount. It uses new disposable
+Docker containers without installing a Kubernetes stack. It starts the
+published legacy server binary, upgrades to the bridge server binary, and tests
+legacy, bridge, and target-only plugin layouts with retained storage. The test
+does not qualify Helm hooks, HA failover, or multi-architecture release images.
+
+Follow the root local QA rules before running. Use a fresh worktree containing
+the candidate changes, inventory existing Docker and cluster state, and choose
+an isolated environment with the operator. Use unique image tags and container
+names. Do not reuse a container from a previous run. The test leaves its
+container and artifacts in place for inspection; removal needs operator approval.
+
+From the repository root, build the bridge and test images. The verifier uses
+the same pinned Go image as the production Dockerfile:
+
+```bash
+OPENBAO_JWT_TEST_ID=<unique-run-id>
+OPENBAO_JWT_BRIDGE_IMAGE="nvcf-openbao:jwt-bridge-$OPENBAO_JWT_TEST_ID"
+OPENBAO_JWT_TEST_IMAGE="nvcf-openbao:jwt-test-$OPENBAO_JWT_TEST_ID"
+export OPENBAO_JWT_TEST_CONTAINER="nvcf-jwt-test-$OPENBAO_JWT_TEST_ID"
+export OPENBAO_JWT_RECOVERY_CONTAINER="nvcf-jwt-recovery-$OPENBAO_JWT_TEST_ID"
+GO_IMAGE=$(sed -n 's/^ARG GO_IMAGE=//p' infra/openbao/Dockerfile)
+JWT_LEGACY_IMAGE=$(sed -n 's/^ARG JWT_LEGACY_IMAGE=//p' infra/openbao/Dockerfile)
+docker buildx build --load -t "$OPENBAO_JWT_BRIDGE_IMAGE" infra/openbao
+docker buildx build --load -f infra/openbao/tests/Dockerfile \
+  --build-arg "OPENBAO_IMAGE=$OPENBAO_JWT_BRIDGE_IMAGE" \
+  --build-arg "GO_IMAGE=$GO_IMAGE" \
+  --build-arg "JWT_LEGACY_IMAGE=$JWT_LEGACY_IMAGE" \
+  -t "$OPENBAO_JWT_TEST_IMAGE" infra/openbao
+docker run -d --name "$OPENBAO_JWT_TEST_CONTAINER" \
+  --network none "$OPENBAO_JWT_TEST_IMAGE"
+docker run -d --name "$OPENBAO_JWT_RECOVERY_CONTAINER" \
+  --network none "$OPENBAO_JWT_TEST_IMAGE"
+cd tests/bdd
+go test -run '^TestOpenBaoJWTPluginLifecycle$' -timeout 15m -v
+```
+
+The `-short` suite runs a separate fake-runner wiring check. It does not
+validate an OpenBao deployment.
+
+### BYOO features
+
+`byoo-render.feature` renders the compute-plane stack for each observability
+profile and checks that only `compute` and `all` enable the `BYOObservability`
+NVCA gate. It needs no cluster.
+
+```sh
+cd tests/bdd
+NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  go test -run '^TestBYOORender$' -timeout 30m -v
+```
+
+`byoo.feature` registers a telemetry endpoint that points at an in-cluster
+OpenTelemetry Collector Contrib sink, runs a task, a container function, and
+the BYOO sample function with telemetries, and checks the sink's counters. The
+BYOO collector also forwards its own metrics, so the task metrics check and
+all three sample-function signal checks read `otelcol_exporter_sent_*`
+counters from sink pipelines that keep only that sample's `service.name`. The
+task span and log checks read the sink's receiver counters. The last scenario
+reinstalls NVCA with the gate off and checks that a function with telemetries
+moves to `ERROR` with a reason that names the missing NVCA feature flags. It
+has two entry points:
+
+- `TestBYOO` brings up the single-cluster topology, installs the stack with
+  the `compute` observability profile, runs the workload scenarios, then runs
+  the gate-off scenario. Use `BDD_CLEANUP_MODE=stack-single` to switch from
+  another install. Rerun the install to turn the gate back on.
+- `TestBYOOExistingInstall` skips the `@stack-change` scenarios and runs only
+  the workload scenarios against the current `ncp-local` install. It does not
+  bring up the cluster or install, upgrade, or remove the stack. It runs
+  `nvcf-cli init` for an admin token. The install must use the local endpoints in
+  `fixtures/nvcf-cli-local.yaml` and have the `BYOObservability` gate on, for
+  example a `nvcf-cli self-hosted up` install with the default compute-plane
+  observability profile.
+
+Preconditions:
+
+- `SAMPLE_BYOO_TASK_IMAGE` names `examples/task-samples/task-byoo-sample` and
+  `SAMPLE_BYOO_FUNCTION_IMAGE` names
+  `examples/function-samples/byoo-telemetry-sample`, each in a registry the
+  cluster can pull. The tasks and functions APIs check that the image exists
+  in its registry, so a locally imported image is not enough on a default
+  install. Publish them the same way as `task-simple-sample:local`.
+- The cluster can pull the BYOO collector sidecar image. The compute-plane
+  stack resolves it as `byoo-otel-collector` under `global.image.registry` and
+  `global.image.repository`, with the tag pinned in its base values. Mirror
+  that image to the sample NGC repository, or override
+  `global.nvcaOperator.byooOtelCollector.imageRepository`.
+- The cluster can pull `otel/opentelemetry-collector-contrib` from Docker Hub
+  for the reference sink.
+
+```sh
+cd tests/bdd
+
+# Fresh install
+NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  SAMPLE_BYOO_TASK_IMAGE=<image-reference> \
+  SAMPLE_BYOO_FUNCTION_IMAGE=<image-reference> \
+  go test -run '^TestBYOO$' -timeout 120m -v
+
+# Existing local install
+SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  SAMPLE_BYOO_TASK_IMAGE=<image-reference> \
+  SAMPLE_BYOO_FUNCTION_IMAGE=<image-reference> \
+  go test -run '^TestBYOOExistingInstall$' -timeout 60m -v
+```
+
+The workload scenarios leave the `bdd-byoo-sink` namespace in place and
+restart its sinks at the start of each scenario so counters start at zero.
+Remove it with `kubectl --context k3d-ncp-local delete namespace bdd-byoo-sink`.
 
 ### EKS Helmfile features (non-local)
 
@@ -324,7 +466,7 @@ tests/bdd/scripts/destroy-nonlocal-stack.sh \
 
 Operator notes:
 
-- `stack-multi` and `topology-multi` require `jq` on `PATH`.
+- `stack-multi`, `topology-single`, and `topology-multi` require `jq` on `PATH`.
 - CRDs survive every mode. If a future install schema-incompatibly
   changes a CRD, run `kubectl --context <ctx> delete crd <name>`
   manually before the next install.

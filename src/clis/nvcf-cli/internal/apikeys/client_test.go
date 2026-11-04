@@ -194,6 +194,15 @@ func TestGenerateAPIKey_RejectsUnexpectedResponsePrefix(t *testing.T) {
 	assert.ErrorContains(t, err, "invalid character")
 }
 
+func TestGenerateAPIKey_EventLedgerDefaultScopes(t *testing.T) {
+	payload, _ := captureRequest(t, &Config{
+		ServiceID:     "svc-id",
+		DefaultScopes: DefaultEventLedgerScopes(),
+	}, nil)
+
+	assert.Equal(t, []string{"fnds:getEvents"}, scopesFrom(policyFrom(t, payload)))
+}
+
 func TestDefaultScopes_IncludeManageTelemetries(t *testing.T) {
 	assert.Contains(t, DefaultScopes(), "manage_telemetries")
 

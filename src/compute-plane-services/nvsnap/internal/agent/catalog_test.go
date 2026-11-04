@@ -231,8 +231,13 @@ func TestComputeHash_Determinism(t *testing.T) {
 		DriverVersion: "550.91.99", // same major
 		GPUType:       "ignored-by-hash",
 	}
-	if computeHash(a) != computeHash(b) {
-		t.Errorf("expected equal hashes; a=%s b=%s", computeHash(a), computeHash(b))
+	if computeHash(a, "tenant:nca-id=acct-1") != computeHash(b, "tenant:nca-id=acct-1") {
+		t.Errorf("expected equal hashes; a=%s b=%s", computeHash(a, "tenant:nca-id=acct-1"), computeHash(b, "tenant:nca-id=acct-1"))
+	}
+	// The same capture of another tenant has another hash: no tenant
+	// restores or reuses another's.
+	if computeHash(a, "tenant:nca-id=acct-1") == computeHash(a, "tenant:nca-id=acct-2") {
+		t.Error("two tenants share a catalog hash")
 	}
 }
 
@@ -247,9 +252,10 @@ func TestComputeHash_DriverMajorParse(t *testing.T) {
 		{"notanumber", 0},
 	}
 	for _, tc := range cases {
-		got := computeHash(CatalogInfo{DriverVersion: tc.drv})
+		got := computeHash(CatalogInfo{DriverVersion: tc.drv}, "namespace:fn")
 		want := checkpointstore.ComputeHash(checkpointstore.HashInput{
 			CUDADriverMajor:      tc.want,
+			Tenant:               "namespace:fn",
 			CaptureFormatVersion: catalogFormatVersion,
 		})
 		if got != want {

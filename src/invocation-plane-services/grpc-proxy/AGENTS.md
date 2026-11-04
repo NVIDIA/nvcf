@@ -16,17 +16,9 @@ bazel run //:gazelle
 bazel mod tidy
 ```
 
-Internal image push targets live under `//nvidia-internal`:
-
-```bash
-bazel run //nvidia-internal:image_push_kaze
-bazel run //nvidia-internal:image_push_devops
-bazel run //nvidia-internal:image_push_ncp_dev
-```
-
-CI subproject id: `grpc-proxy`. Native Bazel validation and release wiring live
-in `tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
-present in this public snapshot.
+CI subproject id: `grpc-proxy`. Follow the root `RELEASE.md` and
+`docs/dev/github-release-process.md` for source versioning and publication
+handoffs. Inspect `.github/workflows/` for current public validation.
 
 ## Local Gotchas
 

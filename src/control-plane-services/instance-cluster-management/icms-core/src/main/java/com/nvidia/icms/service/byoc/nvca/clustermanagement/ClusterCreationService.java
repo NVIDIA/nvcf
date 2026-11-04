@@ -17,9 +17,9 @@
 package com.nvidia.icms.service.byoc.nvca.clustermanagement;
 
 import static com.nvidia.icms.outbound.cassandra.byoc.NvcaConverter.getGpusV5;
-import static com.nvidia.icms.service.byoc.ClusterRegistrationService.validateAuthorizedNcaIdsForNewCluster;
-import static com.nvidia.icms.service.byoc.ClusterRegistrationService.validateNcaId;
-import static com.nvidia.icms.service.byoc.ClusterRegistrationService.validateNcaIdDoNotBelongsToAuthorizedNcaIds;
+import static com.nvidia.icms.service.byoc.ClusterValidation.validateAuthorizedNcaIdsForNewCluster;
+import static com.nvidia.icms.service.byoc.ClusterValidation.validateNcaId;
+import static com.nvidia.icms.service.byoc.ClusterValidation.validateNcaIdDoNotBelongsToAuthorizedNcaIds;
 import static com.nvidia.icms.service.byoc.nvca.NvcaClusterRegistrationService.MAX_JWKS_SIZE_BYTES;
 import static com.nvidia.icms.util.AuthUtils.computeJwksFingerprint;
 import static com.nvidia.icms.service.byoc.nvca.NvcaClusterRegistrationService.validateGpuName;
@@ -72,7 +72,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.CreationQueueUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.service.AppAuditService;
-import com.nvidia.icms.service.byoc.ClusterRegistrationService;
+import com.nvidia.icms.service.byoc.ClusterValidation;
 import com.nvidia.icms.service.byoc.nvca.ClusterOidcIdentityService;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.Events;
@@ -250,7 +250,7 @@ public class ClusterCreationService {
                 if (gpu.getName().equals(existingGpu.getName())) {
 
                     // Validate is GPU is shared then instance types also needs to be same
-                    ClusterRegistrationService.validateInstanceTypesV5(existingGpu.getInstanceTypes(), gpu.getInstanceTypes(),
+                    ClusterValidation.validateInstanceTypesV5(existingGpu.getInstanceTypes(), gpu.getInstanceTypes(),
                                                                        true, existingGpu.getName());
                     return true;
                 }

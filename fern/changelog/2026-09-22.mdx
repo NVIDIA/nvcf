@@ -140,8 +140,8 @@ configured runtime settings.
 - Git tag: `deploy/stacks/nvcf-compute-plane/v1.0.0`
 
 This release ships NVCA and the NVCA operator 3.10.0, up from 3.0.3 in 0.6.1.
-It also includes the `nvca-operator` chart 1.28.0 and a new required chart,
-`nvcf-cluster-topology`.
+It also includes the `nvca-operator` chart 1.28.0 and the optional
+`nvcf-cluster-topology` chart for topology-aware scheduling.
 
 <a id="what-is-new-1"></a>
 
@@ -208,9 +208,15 @@ Documentation Update: This release adds the following guides:
   ICMS, ReVal, and NATS endpoints. `make register-cluster` now generates them.
   Any non-empty `selfManaged.*` endpoint values left in an old environment
   file act as overrides and will point the cluster at stale addresses.
-- The operator installs a new `ModelCacheBinding` CRD, and the
-  `nvcf-cluster-topology` chart is a required component. Cluster-admin rights
+- The operator installs a new `ModelCacheBinding` CRD. Cluster-admin rights
   are needed for the CRD install.
+- The `nvcf-cluster-topology` chart is required only for topology-aware
+  scheduling. The stack installs it as `nvcf-kai-topology` when both
+  `addons.topologyAwareScheduling.enabled` and `addons.kaiScheduler.enabled`
+  are true. It also installs `nvcf-grove-topology` when both
+  `addons.topologyAwareScheduling.enabled` and `addons.groveOperator.enabled`
+  are true. These addons are disabled by
+  default, so a default install does not install either topology release.
 - KAI Scheduler is optional, but gang scheduling and topology-aware placement
   do not function without it.
 - Resource enforcement is enabled by default; workloads without resource
