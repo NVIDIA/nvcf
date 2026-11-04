@@ -78,6 +78,52 @@ publications:
     type: resource
     version: 1.16.2
     registry: public-resources
+  - name: byoo-otel-collector
+    type: image
+    version: 0.160.0-nv-0.4.7
+    registry: public-images
+  - name: ess-agent
+    type: image
+    version: 1.4.4
+    registry: public-images
+  - name: nvcf-ess
+    type: image
+    version: 0.5.7
+    registry: public-images
+  - name: nvcf-notary
+    type: image
+    version: 1.14.8
+    registry: public-images
+  - name: nvcf-openbao
+    type: image
+    version: 2.6.3-nv-1.3.7
+    registry: public-images
+  - name: nvcf-openbao-migrations
+    type: image
+    version: 0.19.10
+    registry: public-images
+  - name: nvcf-state-metrics-service
+    type: image
+    version: 1.24.1
+    registry: public-images
+  - name: pylon
+    type: image
+    version: 0.29.2
+    registry: public-images
+  - name: stargate
+    type: image
+    version: 0.29.2
+    registry: public-images
+  - name: helm-nvcf-ui
+    type: chart
+    version: 1.1.4
+    registry: public-helm
+    chart_format: http
+  - name: nvcf-gateway-routes
+    type: chart
+    version: 1.18.3
+    registry: public-helm
+    chart_format: http
 version_overrides:
   - name: nvcf-cli
     type: resource
@@ -85,9 +131,7 @@ version_overrides:
     source: independent source release; not pinned by stack
 publication_pending:
   - admin-token-issuer-proxy
-  - byoo-otel-collector
   - cassandra
-  - ess-agent
   - helm-admin-token-issuer-proxy
   - helm-nvca-operator
   - helm-nvcf-api
@@ -109,7 +153,6 @@ publication_pending:
   - helm-nvcf-rate-limiter
   - helm-nvcf-sis
   - helm-nvcf-state-metrics
-  - helm-nvcf-ui
   - helm-nvcf-vanity-gateway
   - helm-reval
   - icms-service-oss
@@ -121,34 +164,26 @@ publication_pending:
   - nvcf-cassandra-migrations
   - nvcf-compute-plane-stack
   - nvcf-default-monitors
-  - nvcf-ess
   - nvcf-event-ledger
   - nvcf-function-autoscaler
-  - nvcf-gateway-routes
   - nvcf-grpc-proxy
   - nvcf-image-credential-helper
   - nvcf-invocation-service
   - nvcf-nats-auth-callout-service
-  - nvcf-notary
   - nvcf-observability-stack
-  - nvcf-openbao
-  - nvcf-openbao-migrations-image-0.19.10
   - nvcf-openbao-migrations-image-0.23.1
   - nvcf-otel-collector-chart
   - nvcf-otel-collector-image
   - nvcf-ratelimiter
   - nvcf-self-managed-stack
   - nvcf-service-oss
-  - nvcf-state-metrics-service
   - nvcf-upgrade-receipt
   - nvcf-worker-init-oss
   - nvcf-worker-llm-credentials-oss
   - nvcf-worker-task-oss
   - nvcf-worker-utils-oss
   - nvct-service-oss
-  - pylon
   - reval-server
-  - stargate
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
