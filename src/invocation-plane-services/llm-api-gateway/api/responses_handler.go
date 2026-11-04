@@ -417,15 +417,13 @@ func (h *ResponsesHandlers) aggregateNativeResponsesStream(
 	}
 
 	start := time.Now()
+	// A read error after the terminal event does not change the response; one
+	// before it fails the request like a stream that ends without one.
 	stream, err := consumeNativeResponsesSSE(resp.Body, nil)
-	if err != nil {
-		h.finalizeNativeResponsesUsage(c, request, nil, false)
-		return err
-	}
 	terminalResponse := stream.terminal
 	if terminalResponse == nil {
 		h.finalizeNativeResponsesUsage(c, request, nil, false)
-		return echo.NewHTTPError(http.StatusBadGateway, msgNativeResponsesNoTerminal)
+		return echo.NewHTTPError(http.StatusBadGateway, msgNativeResponsesNoTerminal).SetInternal(err)
 	}
 
 	h.recordNativeResponsesProviderTime(c, start, false)

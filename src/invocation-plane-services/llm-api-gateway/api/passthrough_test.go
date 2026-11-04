@@ -464,6 +464,55 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 	}
 }
 
+func TestResponsesUnaryReturns502WhenUpstreamStreamFails(t *testing.T) {
+	t.Parallel()
+
+	created := "event: response.created\n" +
+		`data: {"type":"response.created","sequence_number":4,"response":{"id":"resp_1","object":"response","created_at":1,"model":"company-name/model-name","status":"in_progress","output":[]}}` + "\n\n"
+
+	tests := []struct {
+		name         string
+		upstreamBody string
+		dropMidway   bool
+	}{
+		{name: "ends after non terminal event", upstreamBody: created},
+		{name: "connection drops mid stream", upstreamBody: created, dropMidway: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.Header().Set(echo.HeaderContentType, "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, tt.upstreamBody)
+				w.(http.Flusher).Flush()
+				if tt.dropMidway {
+					panic(http.ErrAbortHandler)
+				}
+			}))
+			t.Cleanup(upstream.Close)
+			e := newPassthroughAPI(t, upstream.URL)
+			handlerErr := captureHandlerError(e)
+
+			clientBody := `{"model":"fn-alpha/company-name/model-name","input":"hi","stream":false}`
+			rec := servePassthroughRequest(t, e, "/v1/responses", clientBody)
+			body := rec.Body.String()
+
+			require.Equal(t, http.StatusBadGateway, rec.Code, body)
+			var httpErr *echo.HTTPError
+			require.ErrorAs(t, *handlerErr, &httpErr, "logs and metrics must record the 502")
+			require.Equal(t, http.StatusBadGateway, httpErr.Code)
+			var errBody openAIErrorResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &errBody), body)
+			require.Equal(t, "server_error", errBody.Error.Type)
+			require.Equal(t, msgNativeResponsesNoTerminal, errBody.Error.Message)
+		})
+	}
+}
+
 func TestResponsesStreamKeepsTerminalStreamWhenConnectionDropsAfterIt(t *testing.T) {
 	t.Parallel()
 
@@ -484,6 +533,29 @@ func TestResponsesStreamKeepsTerminalStreamWhenConnectionDropsAfterIt(t *testing
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, completed, rec.Body.String())
+}
+
+func TestResponsesUnaryKeepsTerminalResponseWhenConnectionDropsAfterIt(t *testing.T) {
+	t.Parallel()
+
+	const response = `{"id":"resp_1","object":"response","status":"completed","output":[]}`
+	completed := "event: response.completed\n" +
+		`data: {"type":"response.completed","sequence_number":0,"response":` + response + `}` + "\n\n"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set(echo.HeaderContentType, "text/event-stream")
+		_, _ = io.WriteString(w, completed)
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(upstream.Close)
+	e := newPassthroughAPI(t, upstream.URL)
+
+	clientBody := `{"model":"fn-alpha/company-name/model-name","input":"hi","stream":false}`
+	rec := servePassthroughRequest(t, e, "/v1/responses", clientBody)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.JSONEq(t, response, rec.Body.String())
 }
 
 func TestResponsesStreamReadsUncompressedStreamWhenClientAcceptsGzip(t *testing.T) {
