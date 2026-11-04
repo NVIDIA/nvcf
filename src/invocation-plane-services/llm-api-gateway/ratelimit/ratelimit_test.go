@@ -583,6 +583,21 @@ func (s *RateLimiterTestSuite) TestDebtDoesNotOverflowForMaxRate() {
 	s.Equal(int64(math.MaxInt64), res.CurrentValue)
 }
 
+func (s *RateLimiterTestSuite) TestDebtBucketTTLCoversFullRepayment() {
+	limiter := s.newLimiter()
+
+	_, err := limiter.CheckLimit(s.ctx, "rl:test:ttl-debt",
+		RateLimit{Limit: 100, Period: time.Minute, AllowDebt: true}, 150, false, "", true)
+	s.Require().NoError(err)
+	_, err = limiter.CheckLimit(s.ctx, "rl:test:ttl-nodebt",
+		RateLimit{Limit: 100, Period: time.Minute}, 150, false, "", true)
+	s.Require().NoError(err)
+
+	// A bucket at -Limit needs two periods to refill; expiring after one would forgive it.
+	s.Equal(2*time.Minute, s.store.lastTTL["rl:test:ttl-debt"])
+	s.Equal(time.Minute, s.store.lastTTL["rl:test:ttl-nodebt"])
+}
+
 func TestRateLimiterTestSuite(t *testing.T) {
 	suite.Run(t, new(RateLimiterTestSuite))
 }

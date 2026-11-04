@@ -265,6 +265,10 @@ func (rl *rateLimiter) leakyBucket(
 		if allowDebt && mode == limiterModeMustConsume {
 			floor = -rate
 		}
+		ttl := period
+		if allowDebt {
+			ttl = 2 * period // repaying -rate takes two periods; expiring earlier forgives debt
+		}
 		newValue := saturatingConsume(currentValue, tokensRequested, floor, rate)
 
 		var expected *bucketState
@@ -277,7 +281,7 @@ func (rl *rateLimiter) leakyBucket(
 			key,
 			expected,
 			bucketState{Value: newValue, LastRefill: nowMs},
-			period,
+			ttl,
 		)
 		if err != nil {
 			return 0, false, fmt.Errorf("cas rate limit bucket: %w", err)
