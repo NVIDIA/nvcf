@@ -81,6 +81,7 @@ type Config struct {
 	ClusterName              string `mapstructure:"CLUSTER_NAME"`
 	JetstreamPlacementTag    string `mapstructure:"JETSTREAM_PLACEMENT_TAG"`
 	EventLedgerAddr          string `mapstructure:"EVENT_LEDGER_ADDR"`
+	EventLedgerOAuth2Addr    string `mapstructure:"EVENT_LEDGER_OAUTH2_ADDR"`
 }
 
 type NVCFProxy struct {
@@ -241,10 +242,12 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 
 	var eventLedger *eventledger.Publisher
 	if config.EventLedgerAddr != "" {
-		eventLedger, err = eventledger.New(config.EventLedgerAddr, config.SecretsPath, config.OAuth2Fqdn)
+		// The ledger trusts its own OAuth2 namespace, not the NVCF API's.
+		eventLedger, err = eventledger.New(config.EventLedgerAddr, config.SecretsPath, config.EventLedgerOAuth2Addr)
 		if err != nil {
 			return nil, err
 		}
+		director.eventLedger = eventLedger
 	}
 
 	http2Server := createHttp2Server(director, "0.0.0.0:10081", healthManager)

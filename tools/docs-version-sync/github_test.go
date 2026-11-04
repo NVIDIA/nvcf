@@ -33,7 +33,7 @@ func TestResolveStackSourceReleaseDiscoversLatestStableTag(t *testing.T) {
 	const latestCommit = "ffffffffffffffffffffffffffffffffffffffff"
 	var server *httptest.Server
 	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/repos/NVIDIA/nvcf/git/matching-refs/tags/deploy/stacks/self-managed/v" {
+		if r.URL.Path != "/repos/dsx-ai-factory/nvcf/git/matching-refs/tags/deploy/stacks/self-managed/v" {
 			http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
 			return
 		}
@@ -74,7 +74,7 @@ func TestResolveStackSourceReleaseDiscoversLatestStableTag(t *testing.T) {
 func TestResolveStackSourceReleaseAcceptsExplicitSelectors(t *testing.T) {
 	const commit = "1515151515151515151515151515151515151515"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/repos/NVIDIA/nvcf/git/ref/tags/deploy/stacks/self-managed/v0.15.0-rc.2" {
+		if r.URL.Path != "/repos/dsx-ai-factory/nvcf/git/ref/tags/deploy/stacks/self-managed/v0.15.0-rc.2" {
 			http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
 			return
 		}
@@ -108,9 +108,9 @@ func TestResolveStackSourceReleaseDereferencesAnnotatedTag(t *testing.T) {
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/NVIDIA/nvcf/git/ref/tags/deploy/stacks/self-managed/v0.14.5":
+		case "/repos/dsx-ai-factory/nvcf/git/ref/tags/deploy/stacks/self-managed/v0.14.5":
 			fmt.Fprint(w, `{"ref":"refs/tags/deploy/stacks/self-managed/v0.14.5","object":{"type":"tag","sha":"`+tagObject+`"}}`)
-		case "/repos/NVIDIA/nvcf/git/tags/" + tagObject:
+		case "/repos/dsx-ai-factory/nvcf/git/tags/" + tagObject:
 			fmt.Fprint(w, `{"object":{"type":"commit","sha":"`+commit+`"}}`)
 		default:
 			http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
@@ -243,7 +243,7 @@ func TestResolvedStackInventoryRejectsMismatchedSourceIdentity(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/NVIDIA/nvcf/releases/tags/" + source.Tag:
+		case "/repos/dsx-ai-factory/nvcf/releases/tags/" + source.Tag:
 			_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q}]}`, source.Tag, resolvedStackInventoryAssetName, server.URL+"/inventory")
 		case "/inventory":
 			_, _ = w.Write(raw)

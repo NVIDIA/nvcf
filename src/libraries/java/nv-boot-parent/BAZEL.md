@@ -614,7 +614,7 @@ lists to `.github/workflows/bazel.yml`.
 The `ci_lane` descriptor field chooses where GitHub Actions executes Bazel:
 
 - `build-container`: the job runs inside the pinned
-  `ghcr.io/nvidia/nvcf/bazel-ci` image. Java, Bazelisk, and other build tools
+  `ghcr.io/dsx-ai-factory/nvcf/bazel-ci` image. Java, Bazelisk, and other build tools
   are already installed. The host Docker daemon is not exposed there, so this
   lane cannot run Testcontainers tests or build Docker images.
 - `docker-host`: the job runs directly on GitHub's `ubuntu-latest` virtual

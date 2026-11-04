@@ -40,6 +40,37 @@ and resource type. Use these values in the commands throughout this section.
 | `nvca-operator` | NVCA Operator | `nvca-operator` | Deployment |
 | `envoy-gateway-system` | Envoy Gateway | `envoy-gateway` | Deployment |
 
+### Pod Annotations
+
+Set pod annotations for a service in `environments/<environment-name>.yaml`, for example to opt its
+pods into a log or metrics agent. Each key is passed to the chart unchanged; unset keys render
+nothing.
+
+| Service | Key |
+| --- | --- |
+| NVCF API | `api.podAnnotations` |
+| NVCT API | `nvctApi.podAnnotations` |
+| Invocation Service | `invocation.podAnnotations` |
+| gRPC Proxy | `grpcproxy.podAnnotations` |
+| API Keys Service | `apikeys.podAnnotations` |
+| ESS API | `ess.podAnnotations` |
+| NATS auth callout | `natsAuthCalloutService.podAnnotations` |
+| NATS | `nats.podAnnotations` |
+| OpenBao | `openbao.server.annotations` |
+
+```yaml
+# environments/<environment-name>.yaml
+api:
+  podAnnotations:
+    example.com/scrape: "true"
+```
+
+Annotation values must be strings, so quote numbers and booleans (`"8080"`, `"true"`), and do not
+set keys the charts manage themselves, such as `checksum/config`. A change rolls the Deployments and
+NATS. OpenBao uses the `OnDelete` update strategy, so its pods pick up new annotations only when
+they are restarted. Keys starting with `nvcf.nvidia.com/nats-worker-auth` are reserved for the auth
+callout's restart on a worker auth change, and setting them fails the render.
+
 ### Restarting a Service
 
 **Restarting a Deployment:**

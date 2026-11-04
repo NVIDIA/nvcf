@@ -250,9 +250,15 @@ navigation:
     - page: Control Plane Operations
       path: ../docs/self-managed/control-plane-operations.md
       slug: control-plane-operations
+    - page: Upgrade Prerequisites and Recovery
+      path: ../docs/self-managed/upgrade-recovery.md
+      slug: upgrade-recovery
     - page: OpenBao Patch Upgrade
       path: ../docs/self-managed/runbooks/openbao-patch-upgrade.md
       slug: open-bao-patch-upgrade
+    - page: OpenBao JWT Plugin Upgrade
+      path: ../docs/self-managed/runbooks/openbao-jwt-plugin-upgrade.md
+      slug: open-bao-jwt-plugin-upgrade
     - page: Troubleshooting
       path: ../docs/self-managed/troubleshooting.md
       slug: troubleshooting
