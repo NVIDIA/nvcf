@@ -24,9 +24,8 @@ not the selected release combination.
 
 The artifact contains the manifest, original released inventories and
 `candidate.json`. The assembly summary prints the three source tags. Follow
-the extracted stack READMEs and the [shared consumption guide](../../../docs/overview/umbrella-releases.md)
-for installation inputs. Record the candidate commit, workflow run and
-environment with the results in #3080.
+the extracted stack READMEs for installation inputs. Record the candidate
+commit, workflow run and environment with the results in #3080.
 
 ## Registry access before installation
 
