@@ -31,10 +31,10 @@ import (
 	echo "github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 const chatStreamPartialChunk = `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"company-name/model-name","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"
