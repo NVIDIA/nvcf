@@ -258,8 +258,12 @@ fn resolve_startup_health_wait(
 }
 
 fn parse_go_duration(value: &str) -> Option<Duration> {
+    let value = value.strip_prefix('+').unwrap_or(value);
     if value.is_empty() {
         return None;
+    }
+    if value == "0" {
+        return Some(Duration::ZERO);
     }
     let mut rest = value;
     let mut total_nanos: u128 = 0;
@@ -1508,6 +1512,9 @@ mod tests {
             ("1.5\u{b5}s", Duration::from_nanos(1500)),
             ("2us3ns", Duration::from_nanos(2003)),
             ("0s", Duration::ZERO),
+            ("0", Duration::ZERO),
+            ("+10m", Duration::from_secs(600)),
+            ("+0", Duration::ZERO),
         ] {
             assert_eq!(parse_go_duration(value), Some(expected), "{value}");
         }
@@ -1523,7 +1530,8 @@ mod tests {
             "1..5s",
             "1x",
             "-1s",
-            "+1s",
+            "+",
+            "++1s",
             " 1s",
             "1s ",
             "1 s",
