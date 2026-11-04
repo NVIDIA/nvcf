@@ -26,6 +26,7 @@ to a maintained train before moving further.
 | Self-managed (control plane) | `1.0.0` | Compute plane `1.0.0` or later, Observability `1.0.0` or later |
 | Compute plane | `1.1.0` | Self-managed (control plane) `1.1.0` or later, Observability `1.0.0` or later |
 | Compute plane | `1.0.0` | Self-managed (control plane) `1.0.0` or later, Observability `1.0.0` or later |
+| Observability | `1.1.0` | Self-managed (control plane) `1.1.0` or later, Compute plane `1.1.0` or later |
 | Observability | `1.0.0` | Self-managed (control plane) `1.0.0` or later, Compute plane `1.0.0` or later |
 
 {/*docs-version-sync:END compatibility-matrix*/}
