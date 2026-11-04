@@ -1111,12 +1111,13 @@ func (p *StargateProvider) readStream(
 		}
 	}
 
-	if len(dataLines) > 0 && !emit() {
-		return
-	}
-
+	// Check the context first: an event cut off because the client went away
+	// would otherwise fail to decode and look like an upstream failure.
 	if ctx.Err() != nil {
 		sendContextErr()
+		return
+	}
+	if len(dataLines) > 0 && !emit() {
 		return
 	}
 	if err := scanner.Err(); err != nil {

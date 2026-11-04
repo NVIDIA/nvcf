@@ -780,6 +780,24 @@ func TestStargateProviderReadStreamDoesNotBlockOnFullEventChannelAfterCancellati
 	}
 }
 
+// A client that goes away while an event is still buffered must not be
+// recorded as an upstream failure.
+func TestStargateProviderReadStreamReportsCancellationBeforeTrailingData(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	events := make(chan StreamEvent, 1)
+	// The first line of a multi-line event, cut off when the client went away.
+	body := io.NopCloser(strings.NewReader(`data: {"id":`))
+	(&StargateProvider{}).readStream(ctx, cancel, body, events)
+
+	event, ok := <-events
+	require.True(t, ok, "the stream closed without reporting the cancellation")
+	require.ErrorIs(t, event.Err, context.Canceled)
+	require.NotErrorIs(t, event.Err, ErrStreamIncomplete)
+}
+
 // A missed request deadline must reach a reader that is behind, or the stream
 // ends like a finished one ([DONE] or a partial 200).
 func TestStargateProviderReadStreamDeliversDeadlineToSlowReader(t *testing.T) {
