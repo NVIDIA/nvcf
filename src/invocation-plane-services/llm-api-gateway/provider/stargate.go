@@ -1069,19 +1069,21 @@ func (p *StargateProvider) readStream(
 			return false
 		}
 
+		// An error member can come with choices (OpenRouter sends finish_reason
+		// "error"). Only payloads that contain the key are parsed for it.
+		if strings.Contains(payload, `"error"`) {
+			if upstreamErr := upstreamStreamError(payload); upstreamErr != nil {
+				events <- StreamEvent{Err: upstreamErr}
+				return false
+			}
+		}
+
 		var chunk models.ChatCompletionChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			events <- StreamEvent{
 				Err: fmt.Errorf("%w: decode stargate stream chunk: %w", ErrStreamIncomplete, err),
 			}
 			return false
-		}
-		// Error events carry neither choices nor usage, so ordinary chunks are not parsed twice.
-		if len(chunk.Choices) == 0 && chunk.Usage == nil {
-			if upstreamErr := upstreamStreamError(payload); upstreamErr != nil {
-				events <- StreamEvent{Err: upstreamErr}
-				return false
-			}
 		}
 
 		select {

@@ -44,7 +44,8 @@ type UpstreamStreamError struct {
 }
 
 func (e *UpstreamStreamError) Error() string {
-	return fmt.Sprintf("%s: upstream error event: %s", ErrStreamIncomplete, e.Raw)
+	// The upstream controls the event size, so the log text is capped like the message.
+	return fmt.Sprintf("%s: upstream error event: %s", ErrStreamIncomplete, truncateMessage(string(e.Raw)))
 }
 
 func (e *UpstreamStreamError) Unwrap() error {

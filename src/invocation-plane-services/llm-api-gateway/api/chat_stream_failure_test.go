@@ -55,6 +55,10 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 		return partial + `data: {"error":` + member + "}\n\n" + "data: [DONE]\n\n"
 	}
 	const vllmError = `{"message":"engine failed","type":"InternalServerError","param":null,"code":500}`
+	// OpenRouter puts the error next to choices, with finish_reason "error".
+	const errorWithChoices = partial +
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"company-name/model-name","error":{"code":502,"message":"engine failed"},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
 
 	tests := []struct {
 		name         string
@@ -79,10 +83,12 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 			upstreamBody: upstreamError(`"engine failed"`), streamMessage: "engine failed",
 		},
 		{name: "stream upstream error event without message", stream: true, upstreamBody: upstreamError(`{"code":500}`)},
+		{name: "stream upstream error with choices", stream: true, upstreamBody: errorWithChoices, streamMessage: "engine failed"},
 		{name: "unary clean end after output", upstreamBody: partial},
 		{name: "unary clean end n=2 one choice finished", upstreamBody: siblingFinished},
 		{name: "unary connection drops after output", upstreamBody: partial, dropMidway: true},
 		{name: "unary upstream error event after output", upstreamBody: upstreamError(vllmError)},
+		{name: "unary upstream error with choices", upstreamBody: errorWithChoices},
 	}
 
 	for _, tt := range tests {
