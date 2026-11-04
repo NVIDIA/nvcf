@@ -41,9 +41,9 @@ import (
 	testgrpc "google.golang.org/grpc/interop/grpc_testing"
 	"google.golang.org/grpc/status"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 )
 
 const (

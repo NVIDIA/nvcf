@@ -14,7 +14,7 @@ go_library(
         "local_jwks.go",
         "types.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/authorizers",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/authorizers",
     visibility = ["//visibility:public"],
     deps = [
         "//src/control-plane-services/helm-reval/pkg/reval/config",

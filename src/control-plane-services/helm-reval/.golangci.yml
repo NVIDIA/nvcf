@@ -40,7 +40,7 @@ formatters:
       sections:
         - standard
         - default
-        - prefix(github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval)
+        - prefix(github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval)
         - blank
         - dot
         - alias

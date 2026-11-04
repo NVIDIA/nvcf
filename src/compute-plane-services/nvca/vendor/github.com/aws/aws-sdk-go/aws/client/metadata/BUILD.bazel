@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "metadata",
     srcs = ["client_info.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/client/metadata",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/client/metadata",
     importpath = "github.com/aws/aws-sdk-go/aws/client/metadata",
     visibility = ["//visibility:public"],
 )

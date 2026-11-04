@@ -177,7 +177,7 @@ func TestUmbrellaDocsProductAssetReadback(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest.Status = ReleaseSetQualified
-	manifest.Qualification = "https://github.com/NVIDIA/nvcf/issues/2483"
+	manifest.Qualification = "https://github.com/dsx-ai-factory/nvcf/issues/2483"
 	data, err := marshalUmbrellaManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +202,7 @@ func TestUmbrellaDocsProductAssetReadback(t *testing.T) {
 	}
 	sort.Strings(names)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/repos/NVIDIA/nvcf")
+		path := strings.TrimPrefix(r.URL.Path, "/repos/dsx-ai-factory/nvcf")
 		if r.Method != "GET" || r.Header.Get("Authorization") != "" {
 			t.Error("docs artifact check must be public and read-only")
 		}
@@ -231,7 +231,7 @@ func TestUmbrellaDocsProductAssetReadback(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	publisher := umbrellaPublisher{api: server.URL, repository: "NVIDIA/nvcf", client: server.Client()}
+	publisher := umbrellaPublisher{api: server.URL, repository: "dsx-ai-factory/nvcf", client: server.Client()}
 	if err := verifyPublishedDocsProduct(fixture.root, release, publisher); err != nil {
 		t.Fatal(err)
 	}

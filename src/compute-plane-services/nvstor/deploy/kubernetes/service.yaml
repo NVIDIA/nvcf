@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+---
+# Headless service for StatefulSet pod DNS
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvstor-server-headless
+  namespace: nvstor-storage
+  labels:
+    app.kubernetes.io/name: nvstor
+    app.kubernetes.io/component: server
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: nvstor
+    app.kubernetes.io/component: server
+  ports:
+    - name: grpc
+      port: 9100
+      targetPort: 9100
+    - name: health
+      port: 9101
+      targetPort: 9101
+    - name: raft
+      port: 9102
+      targetPort: 9102
+    - name: nfs
+      port: 2049
+      targetPort: 2049
+    - name: s3-http
+      port: 9000
+      targetPort: 9000
+    - name: nbd
+      port: 10809
+      targetPort: 10809
+
+---
+# External service for client access
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvstor-server
+  namespace: nvstor-storage
+  labels:
+    app.kubernetes.io/name: nvstor
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: nvstor
+    app.kubernetes.io/component: server
+  ports:
+    - name: grpc
+      port: 9100
+      targetPort: 9100
+    - name: nfs
+      port: 2049
+      targetPort: 2049
+    - name: s3-http
+      port: 9000
+      targetPort: 9000
+    - name: nbd
+      port: 10809
+      targetPort: 10809
+    - name: health
+      port: 9101
+      targetPort: 9101
+
+---
+# Metrics service for Prometheus scraping
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvstor-server-metrics
+  namespace: nvstor-storage
+  labels:
+    app.kubernetes.io/name: nvstor
+    app.kubernetes.io/component: server
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9101"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: nvstor
+    app.kubernetes.io/component: server
+  ports:
+    - name: metrics
+      port: 9101
+      targetPort: http

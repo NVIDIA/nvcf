@@ -22,8 +22,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/hellofresh/health-go/v5"
 	"github.com/nats-io/nats.go"
 	pb "google.golang.org/grpc/health/grpc_health_v1"

@@ -21,20 +21,20 @@ import (
 	"context"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/sourcegraph/conc/pool"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	cleanupns "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/namespace"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/persistentvolume"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/pod"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/storageclass"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	bartclient "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	cleanupns "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/gc/namespace"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/gc/persistentvolume"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/gc/pod"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/gc/storageclass"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	bartclient "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 const (

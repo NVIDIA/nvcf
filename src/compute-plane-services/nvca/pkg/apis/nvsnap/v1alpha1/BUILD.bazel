@@ -8,7 +8,7 @@ go_library(
         "register.go",
         "zz_generated.deepcopy.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvsnap/v1alpha1",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvsnap/v1alpha1",
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",

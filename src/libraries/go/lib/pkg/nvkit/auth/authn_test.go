@@ -31,8 +31,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/test/utils"
+	nverrors "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/test/utils"
 )
 
 const (

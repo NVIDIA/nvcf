@@ -27,9 +27,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/webhook"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/webhook"
 	"github.com/nats-io/nats.go"
 	"golang.org/x/sync/errgroup"
 )

@@ -31,7 +31,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/db"
 )
 
 // fullHash is a realistic 64-char content hash; identical to one the

@@ -10,7 +10,7 @@ go_library(
         "matchers.go",
         "string.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/mock/gomock",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/mock/gomock",
     importpath = "go.uber.org/mock/gomock",
     visibility = ["//visibility:public"],
 )

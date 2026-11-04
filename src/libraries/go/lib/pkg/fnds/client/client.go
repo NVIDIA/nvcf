@@ -32,7 +32,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
-	fndstypes "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types"
+	fndstypes "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types"
 )
 
 type LedgerClient interface {

@@ -8,7 +8,7 @@ go_library(
         "doc.go",
         "version.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/Masterminds/semver/v3",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/Masterminds/semver/v3",
     importpath = "github.com/Masterminds/semver/v3",
     visibility = ["//visibility:public"],
 )

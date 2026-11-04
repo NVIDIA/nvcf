@@ -119,7 +119,7 @@ for inventory in "$FIXTURE_PUBLISHED"/*.json; do
   encoded=$(jq -rn --arg tag "$tag" '$tag | @uri')
   asset=${inventory##*/}
   case "$url" in
-    "https://api.github.com/repos/NVIDIA/nvcf/releases/tags/$encoded")
+    "https://api.github.com/repos/dsx-ai-factory/nvcf/releases/tags/$encoded")
       case "${FIXTURE_FAILURE:-}" in
         missing-release) echo 'HTTP 404: fixture tag has no public release' >&2; exit 22 ;;
         draft) jq '.draft=true' "$inventory.release" > "$output" ;;
@@ -131,7 +131,7 @@ for inventory in "$FIXTURE_PUBLISHED"/*.json; do
         *) cp "$inventory.release" "$output" ;;
       esac
       exit 0 ;;
-    "https://github.com/NVIDIA/nvcf/releases/download/$tag/$asset")
+    "https://github.com/dsx-ai-factory/nvcf/releases/download/$tag/$asset")
       [[ "${FIXTURE_FAILURE:-}" != missing-inventory ]] || exit 22
       cp "$inventory" "$output"
       [[ "${FIXTURE_FAILURE:-}" != corrupt-inventory ]] || printf '\n' >> "$output"
@@ -146,7 +146,7 @@ cat > "$work/bin/git" <<'GIT'
 set -euo pipefail
 args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do
-  if [[ "${args[i]}" == https://github.com/NVIDIA/nvcf.git ]]; then
+  if [[ "${args[i]}" == https://github.com/dsx-ai-factory/nvcf.git ]]; then
     [[ " $* " == *' fetch --no-tags --no-write-fetch-head '* ]]
     [[ " $* " == *' -c credential.helper= -c http.extraheader= '* ]]
     printf '%s\n' "$*" >> "$FIXTURE_NETWORK"

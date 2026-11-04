@@ -30,7 +30,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-llm-credentials/configs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-llm-credentials/configs"
 )
 
 // installLogObserver swaps in an in-memory zap core for the duration of a test

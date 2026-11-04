@@ -9,7 +9,7 @@ go install "k8s.io/kube-openapi/cmd/openapi-gen@${CODEGEN_VERSION}"
 
 openapi_gen() {
   local -r header_file="${repo_root}/scripts/boilerplate.go.txt"
-  local -r pkg_name="github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+  local -r pkg_name="github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca"
   local -r api=${1:?"API path needed"}
 
   cd "${repo_root}"

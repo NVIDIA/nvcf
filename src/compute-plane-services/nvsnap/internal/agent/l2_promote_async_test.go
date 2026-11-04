@@ -26,7 +26,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // fakeBackend is a hand-rolled stub for checkpointstore.Backend. We

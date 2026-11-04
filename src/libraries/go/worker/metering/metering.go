@@ -26,7 +26,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
 )
 
 const DefaultInfraMeteringHeartbeatInterval = time.Duration(30) * time.Second

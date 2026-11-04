@@ -9,7 +9,7 @@ go_library(
         "smithy.go",
         "v4signer_adapter.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/auth/smithy",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/auth/smithy",
     importpath = "github.com/aws/aws-sdk-go-v2/internal/auth/smithy",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
     deps = [

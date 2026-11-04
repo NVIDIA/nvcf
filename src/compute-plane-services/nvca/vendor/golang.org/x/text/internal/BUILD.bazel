@@ -6,7 +6,7 @@ go_library(
         "internal.go",
         "match.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/text/internal",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/text/internal",
     importpath = "golang.org/x/text/internal",
     visibility = ["//src/compute-plane-services/nvca/vendor/golang.org/x/text:__subpackages__"],
     deps = ["//src/compute-plane-services/nvca/vendor/golang.org/x/text/language"],

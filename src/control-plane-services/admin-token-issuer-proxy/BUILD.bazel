@@ -3,7 +3,7 @@
 
 load("@gazelle//:def.bzl", "gazelle")
 
-# gazelle:prefix github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy
+# gazelle:prefix github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy
 # gazelle:proto disable_global
 # gazelle:go_naming_convention import_alias
 # gazelle:exclude docs

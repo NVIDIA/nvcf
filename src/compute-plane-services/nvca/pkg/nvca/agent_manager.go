@@ -23,8 +23,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	cmnhttp "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	cmnhttp "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/http"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,18 +39,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
-	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
-	mscontroller "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
-	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcaauth "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/auth"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/gc"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	nvcametrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
+	mscontroller "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/miniservice"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	nvcav1new "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	nvcaerrors "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 var (
@@ -81,6 +81,29 @@ func storageControllerTypes(cachingEnabled bool) []nvcav1new.StorageRequestType 
 	return sts
 }
 
+// agentManagerCacheOptions returns the cache options of the agent's controller
+// manager. DefaultTransform also applies to the informers that the manager
+// creates lazily on a first read, and to every ByObject entry that sets no
+// transform of its own.
+func agentManagerCacheOptions() cache.Options {
+	return cache.Options{
+		DefaultTransform: k8sutil.StripManagedFields,
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.Event{}: {
+				// Exclude Kyverno events from the cache entirely.
+				// These PolicyViolation events are not actionable by users and can
+				// be very numerous, contributing to memory pressure. This filter
+				// is applied server-side so events never come over the wire.
+				Field: fields.AndSelectors(
+					fields.OneTermNotEqualSelector("reportingComponent", "kyverno-admission"),
+					fields.OneTermNotEqualSelector("reportingComponent", "kyverno-scan"),
+					fields.OneTermNotEqualSelector("reportingComponent", "kyverno-generate"),
+				),
+			},
+		},
+	}
+}
+
 func startControllerManagerForAgent(
 	ctx context.Context,
 	a *Agent,
@@ -93,22 +116,7 @@ func startControllerManagerForAgent(
 	mgr, err := ctrl.NewManager(clients.Config, manager.Options{
 		Scheme:        mgrScheme,
 		WebhookServer: fakeWebhookServer{},
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Event{}: {
-					// Exclude Kyverno events from the cache entirely.
-					// These PolicyViolation events are not actionable by users and can
-					// be very numerous, contributing to memory pressure. This filter
-					// is applied server-side so events never come over the wire.
-					// See DGXCINC-3086.
-					Field: fields.AndSelectors(
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-admission"),
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-scan"),
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-generate"),
-					),
-				},
-			},
-		},
+		Cache:         agentManagerCacheOptions(),
 	})
 	if err != nil {
 		log.WithError(err).Error("Failed to create controller manager")

@@ -34,10 +34,10 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	llmgatewaypb "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf/pb"
-	nvauth "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	llmgatewaypb "github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/nvcf/pb"
+	nvauth "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const (

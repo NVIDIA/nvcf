@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,7 +40,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 )
 
 const (

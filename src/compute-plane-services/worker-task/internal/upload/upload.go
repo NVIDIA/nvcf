@@ -34,10 +34,10 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/secrets"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/pkg/ngc"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/secrets"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/pkg/ngc"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 )
 
 const (

@@ -31,9 +31,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
+	pb "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-llm-credentials/configs"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-llm-credentials/configs"
 )
 
 // testWorkerToken is the token the mock NVCF server hands back. Matching the

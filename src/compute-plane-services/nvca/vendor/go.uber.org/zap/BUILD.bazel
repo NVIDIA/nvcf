@@ -20,7 +20,7 @@ go_library(
         "time.go",
         "writer.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/zap",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/zap",
     importpath = "go.uber.org/zap",
     visibility = ["//visibility:public"],
     deps = [

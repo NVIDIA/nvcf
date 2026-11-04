@@ -7,7 +7,7 @@ go_library(
         "unsafe_disabled.go",
         "unsafe_enabled.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/klauspost/compress/internal/le",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/klauspost/compress/internal/le",
     importpath = "github.com/klauspost/compress/internal/le",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/klauspost/compress:__subpackages__"],
 )

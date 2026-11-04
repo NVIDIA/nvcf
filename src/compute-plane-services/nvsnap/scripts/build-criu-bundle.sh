@@ -9,7 +9,6 @@ set -euo pipefail
 # - CUDA plugin (built in same environment for GLIBC compatibility)
 # - cuda-checkpoint binary
 # - iptables shims
-# - restore-entrypoint
 #
 # This bundle can be mounted into ANY container and works standalone.
 #
@@ -163,20 +162,6 @@ else
     echo "  Bundle will be incomplete without cuda-checkpoint."
 fi
 
-# Build and add restore-entrypoint
-log_info "Building restore-entrypoint"
-cd "$PROJECT_ROOT"
-CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o "$OUTPUT_DIR/restore-entrypoint" ./cmd/restore-entrypoint
-
-# Create restore-entrypoint wrapper
-cat > "$OUTPUT_DIR/restore-entrypoint-wrapper" << 'WRAPPER'
-#!/bin/bash
-BUNDLE_DIR="$(dirname "$(readlink -f "$0")")"
-export PATH="$BUNDLE_DIR:$PATH"
-export CRIU_BUNDLE_PATH="$BUNDLE_DIR"
-exec "$BUNDLE_DIR/restore-entrypoint" "$@"
-WRAPPER
-chmod +x "$OUTPUT_DIR/restore-entrypoint-wrapper"
 
 # Create tarball
 log_info "Creating tarball"

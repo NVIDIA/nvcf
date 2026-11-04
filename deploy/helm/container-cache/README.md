@@ -354,7 +354,10 @@ Vault signs a short-lived intermediate for it:
 3. The vault-agent sidecar repeats the same request on start and then again at
    about 80 percent of the certificate's lifetime. Each time it rewrites
    `ssl-bundle.crt` and calls the nginx `/reload` endpoint on port 13129.
-   No pod restart is involved.
+   No pod restart is involved. Vault Agent runs that hook only when the
+   rendered template output changes, so the template renders the issued
+   certificate's serial and expiration; without that line every render is
+   identical and the hook never fires.
 4. nginx reads `ssl-bundle.crt` from disk every time it mints a leaf
    certificate, so new connections are signed with the new intermediate as
    soon as the file changes. Minted leaves are cached in shared memory for one

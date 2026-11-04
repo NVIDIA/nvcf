@@ -32,7 +32,7 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/internal/utils"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nvcf-ui/backend/internal/utils"
 )
 
 var (

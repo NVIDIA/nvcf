@@ -26,9 +26,9 @@ func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventory(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested[r.URL.Path] = true
 		switch r.URL.Path {
-		case "/repos/NVIDIA/nvcf/git/ref/tags/" + release.Tag:
+		case "/repos/dsx-ai-factory/nvcf/git/ref/tags/" + release.Tag:
 			_, _ = fmt.Fprintf(w, `{"ref":"refs/tags/%s","object":{"type":"commit","sha":"%s"}}`, release.Tag, release.Commit)
-		case "/repos/NVIDIA/nvcf/releases/tags/" + release.Tag:
+		case "/repos/dsx-ai-factory/nvcf/releases/tags/" + release.Tag:
 			_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q}]}`, release.Tag, resolvedStackInventoryAssetName, server.URL+"/inventory")
 		case "/inventory":
 			if got := r.Header.Get("Authorization"); got != "" {
@@ -50,8 +50,8 @@ func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventory(t *testing.T) {
 		t.Fatalf("updateCatalogFromGitHub failed: %v", err)
 	}
 	for _, path := range []string{
-		"/repos/NVIDIA/nvcf/git/ref/tags/" + release.Tag,
-		"/repos/NVIDIA/nvcf/releases/tags/" + release.Tag,
+		"/repos/dsx-ai-factory/nvcf/git/ref/tags/" + release.Tag,
+		"/repos/dsx-ai-factory/nvcf/releases/tags/" + release.Tag,
 		"/inventory",
 	} {
 		if !requested[path] {
@@ -106,10 +106,10 @@ func TestUpdateCatalogFromGitHubInventoriesMergesThreeStackAssets(t *testing.T) 
 		for _, spec := range stackInventorySpecs {
 			release := releases[spec.Key]
 			switch r.URL.Path {
-			case "/repos/NVIDIA/nvcf/git/ref/tags/" + release.Tag:
+			case "/repos/dsx-ai-factory/nvcf/git/ref/tags/" + release.Tag:
 				_, _ = fmt.Fprintf(w, `{"ref":"refs/tags/%s","object":{"type":"commit","sha":"%s"}}`, release.Tag, release.Commit)
 				return
-			case "/repos/NVIDIA/nvcf/releases/tags/" + release.Tag:
+			case "/repos/dsx-ai-factory/nvcf/releases/tags/" + release.Tag:
 				_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q}]}`, release.Tag, spec.AssetName, server.URL+"/inventory/"+spec.Key)
 				return
 			case "/inventory/" + spec.Key:
@@ -718,7 +718,7 @@ func testCatalogResolvedInventory(t *testing.T, source stackSourceRelease) resol
 		{Plane: "compute-plane", Name: "nvca-operator", Namespace: "nvca-operator", Required: true, Chart: "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvca-operator", Version: "4.5.6"},
 		{Plane: "control-plane", Name: "ingress", Namespace: "gateway-system", Required: true, Chart: "https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes", Version: "2.3.4"},
 		{Plane: "control-plane", Name: "llm-request-router", Namespace: "nvcf", Required: false, Chart: "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-llm-request-router", Version: "1.2.3"},
-		{Plane: "observability", Name: "collector", Namespace: "monitoring", Required: false, Chart: "https://github.com/NVIDIA/nvcf/tree/" + source.Commit + "/deploy/stacks/observability/charts/source-chart", Version: "0.1.0"},
+		{Plane: "observability", Name: "collector", Namespace: "monitoring", Required: false, Chart: "https://github.com/dsx-ai-factory/nvcf/tree/" + source.Commit + "/deploy/stacks/observability/charts/source-chart", Version: "0.1.0"},
 	}
 	artifacts := []resolvedInventoryArtifact{
 		{Type: "container-image", Name: "nvca", Repository: "nvcr.io/nvidia/nvcf/nvca", Version: "6.7.8", Digest: "sha256:" + strings.Repeat("b", 64), Reference: "nvcr.io/nvidia/nvcf/nvca:6.7.8@sha256:" + strings.Repeat("b", 64), Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "nvca-operator"}}},
@@ -727,7 +727,7 @@ func testCatalogResolvedInventory(t *testing.T, source stackSourceRelease) resol
 		{Type: "helm-chart", Name: "helm-nvca-operator", Repository: "https://helm.ngc.nvidia.com/nvidia/nvcf", Version: "4.5.6", Reference: "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvca-operator@4.5.6", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "nvca-operator"}}},
 		{Type: "helm-chart", Name: "helm-nvcf-llm-request-router", Repository: "https://helm.ngc.nvidia.com/nvidia/nvcf", Version: "1.2.3", Reference: "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-llm-request-router@1.2.3", Sources: []resolvedArtifactSource{{Plane: "control-plane", Release: "llm-request-router"}}},
 		{Type: "helm-chart", Name: "nvcf-gateway-routes", Repository: "https://helm.ngc.nvidia.com/nvidia/nvcf", Version: "2.3.4", Reference: "https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes@2.3.4", Sources: []resolvedArtifactSource{{Plane: "control-plane", Release: "ingress"}}},
-		{Type: "helm-chart", Name: "source-chart", Repository: "https://github.com/NVIDIA/nvcf/tree/" + source.Commit + "/deploy/stacks/observability/charts", Version: "0.1.0", Reference: "https://github.com/NVIDIA/nvcf/tree/" + source.Commit + "/deploy/stacks/observability/charts/source-chart@0.1.0", Sources: []resolvedArtifactSource{{Plane: "observability", Release: "collector"}}},
+		{Type: "helm-chart", Name: "source-chart", Repository: "https://github.com/dsx-ai-factory/nvcf/tree/" + source.Commit + "/deploy/stacks/observability/charts", Version: "0.1.0", Reference: "https://github.com/dsx-ai-factory/nvcf/tree/" + source.Commit + "/deploy/stacks/observability/charts/source-chart@0.1.0", Sources: []resolvedArtifactSource{{Plane: "observability", Release: "collector"}}},
 	}
 	sort.Slice(releases, func(i, j int) bool { return compareResolvedInventoryReleases(releases[i], releases[j]) < 0 })
 	sort.Slice(artifacts, func(i, j int) bool { return compareResolvedInventoryArtifacts(artifacts[i], artifacts[j]) < 0 })

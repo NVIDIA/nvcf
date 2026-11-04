@@ -28,9 +28,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/types"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/upload"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvct"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/upload"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvct"
 )
 
 // writeRaw atomically writes arbitrary bytes to the progress file (truncating).

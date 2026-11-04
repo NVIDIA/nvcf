@@ -23,7 +23,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/tools/ncp-local-cluster/credential-provider-go/internal/types"
+	"github.com/dsx-ai-factory/nvcf/tools/ncp-local-cluster/credential-provider-go/internal/types"
 	"github.com/google/go-containerregistry/pkg/name"
 )
 

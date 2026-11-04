@@ -28,13 +28,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	nvcffndsclient "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/client"
-	cmnhttp "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
-	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	nvcffndsclient "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/fnds/client"
+	cmnhttp "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/http"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	nvcaconfig "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/prometheus/client_golang/prometheus"
@@ -54,34 +54,34 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/workqueue"
 
-	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
-	nvcalogging "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/logging"
-	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv/msgsemconv"
-	mscontroller "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice"
-	nvcaotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/otel"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
-	nvcainternaltranslate "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/translate"
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/scheme"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/byoofederation"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/hostisolation"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kata"
-	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/fnds"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
-	natsqueue "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/nats"
-	queuesqs "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/sqs"
-	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcaauth "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/auth"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	nvcalogging "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/logging"
+	nvcametrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv/msgsemconv"
+	mscontroller "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/miniservice"
+	nvcaotel "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/otel"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	nvcainternaltranslate "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/translate"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/scheme"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/byoofederation"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/hostisolation"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kata"
+	nvcaerrors "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/fnds"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	natsqueue "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue/nats"
+	queuesqs "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue/sqs"
+	nvcastorage "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 const (
@@ -933,6 +933,57 @@ func (a *Agent) RegisterWithICMS(ctx context.Context) (*types.ICMSRegistrationRe
 	return res, nil
 }
 
+// Delays between attempts of the initial ICMS registration. The cap matches the 60s
+// registration sync.
+var (
+	initialICMSRegistrationRetryInterval = 10 * time.Second
+	maxICMSRegistrationRetryInterval     = time.Minute
+)
+
+// registerWithICMSRetrying calls RegisterWithICMS until it succeeds, fails with an
+// error that retrying cannot fix, or ctx is done. A failed initial registration, such
+// as an ICMS 409 for an instance type that still has active instances, fails the same
+// way after a restart, so exiting would only crash-loop. Start arms readiness after
+// registration, so the replica stays NotReady while it retries. With the Recreate
+// strategy (GracefulNoGPU) no previous replica keeps serving meanwhile; the operator
+// rejects configuration changes that would cause the 409 before the rollout.
+func (a *Agent) registerWithICMSRetrying(ctx context.Context) (*types.ICMSRegistrationResponse, error) {
+	return retryICMSRegistration(ctx, a.RegisterWithICMS)
+}
+
+func retryICMSRegistration(
+	ctx context.Context,
+	register func(context.Context) (*types.ICMSRegistrationResponse, error),
+) (*types.ICMSRegistrationResponse, error) {
+	log := core.GetLogger(ctx)
+	backoff := newGPURegistrationRetryBackoff(initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval)
+	for {
+		res, err := register(ctx)
+		if err == nil {
+			return res, nil
+		}
+		// An attempt cut short by shutdown is not worth a retry warning.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// Other client errors, such as bad credentials or a malformed request,
+		// fail the same way on every attempt.
+		if code := nvcaerrors.GetHTTPStatusCode(err); code >= 400 && code < 500 &&
+			code != http.StatusConflict && code != http.StatusTooManyRequests {
+			return nil, err
+		}
+		delay := backoff.next()
+		log.WithError(err).Warnf("Failed to register with ICMS, retrying in %s", delay)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func (a *Agent) registerWithICMS(ctx context.Context, regBackendGPUs []types.RegistrationGPU) (*types.ICMSRegistrationResponse, error) {
 	log := core.GetLogger(ctx)
 	k8sVersion := a.K8sVersion
@@ -958,7 +1009,12 @@ func (a *Agent) registerWithICMS(ctx context.Context, regBackendGPUs []types.Reg
 	nvcametrics.FromContext(ctx).RecordUpstreamRequest(nvcametrics.UpstreamOperationRegister, err)
 	if err != nil {
 		log.WithError(err).WithField("req", rreq).Error("Register with ICMS")
-		return nil, fmt.Errorf("register with ICMS: %v", err)
+		if nvcaerrors.GetHTTPStatusCode(err) == http.StatusConflict {
+			if hint := a.backendk8scache.overheadRemovedInstanceTypesHint(ctx); hint != "" {
+				return nil, fmt.Errorf("register with ICMS: %w; %s", err, hint)
+			}
+		}
+		return nil, fmt.Errorf("register with ICMS: %w", err)
 	}
 
 	if err := a.backendk8scache.StoreICMSRegistrationResponse(ctx, res); err != nil {
@@ -1295,10 +1351,13 @@ func (a *Agent) Start(ctx context.Context) error {
 			},
 		}
 	} else {
-		// Register with ICMS after health.
+		// Register with ICMS after health. This blocks until registration
+		// succeeds, fails with an error retrying cannot fix, or ctx is done;
+		// readiness is armed only afterwards, so a rolling update does not cut
+		// over to this replica while it retries.
 		log.Info("Registering with ICMS")
 		var regErr error
-		res, regErr = a.RegisterWithICMS(ctx)
+		res, regErr = a.registerWithICMSRetrying(ctx)
 		if regErr != nil {
 			log.WithError(regErr).Error("Failed to register with ICMS")
 			return regErr

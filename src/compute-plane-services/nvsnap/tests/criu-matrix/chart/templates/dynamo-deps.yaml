@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- /* etcd and NATS for a DynamoGraphDeployment, in the function's namespace
+       under the names production Dynamo functions use, so the workers
+       discover each other the way they do there. */}}
+{{- if and (eq .Values.kind "DynamoGraphDeployment") .Values.dynamo.etcdNats }}
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mini-service-etcd}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: mini-service-etcd}}
+  template:
+    metadata: {labels: {app: mini-service-etcd}}
+    spec:
+      containers:
+        - name: etcd
+          image: {{ .Values.dynamo.etcdImage }}
+          command: ["etcd", "--data-dir=/var/lib/etcd", "--listen-client-urls=http://0.0.0.0:2379", "--advertise-client-urls=http://mini-service-etcd:2379"]
+          ports: [{containerPort: 2379, name: client}]
+          readinessProbe: {httpGet: {path: /health, port: 2379}, periodSeconds: 5}
+          volumeMounts: [{name: data, mountPath: /var/lib/etcd}]
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mini-service-etcd}
+spec:
+  selector: {app: mini-service-etcd}
+  ports: [{name: client, port: 2379, targetPort: 2379}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mini-service-nats}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: mini-service-nats}}
+  template:
+    metadata: {labels: {app: mini-service-nats}}
+    spec:
+      containers:
+        - name: nats
+          image: {{ .Values.dynamo.natsImage }}
+          args: ["-js", "-m", "8222"]
+          ports: [{containerPort: 4222, name: client}, {containerPort: 8222, name: monitor}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8222}, periodSeconds: 5}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mini-service-nats}
+spec:
+  selector: {app: mini-service-nats}
+  ports: [{name: client, port: 4222, targetPort: 4222}, {name: monitor, port: 8222, targetPort: 8222}]
+{{- end }}

@@ -27,7 +27,7 @@ import (
 	utilerror "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	translateutil "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
+	translateutil "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
 )
 
 const (

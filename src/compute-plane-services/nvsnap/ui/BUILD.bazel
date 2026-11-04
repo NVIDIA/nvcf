@@ -11,6 +11,6 @@ go_library(
         ["dist/**"],
         allow_empty = False,
     ),
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/ui",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/ui",
     visibility = ["//visibility:public"],
 )

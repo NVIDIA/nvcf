@@ -6,7 +6,7 @@ go_library(
         "event_handler.go",
         "kind.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/source",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/source",
     importpath = "sigs.k8s.io/controller-runtime/pkg/internal/source",
     visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
     deps = [

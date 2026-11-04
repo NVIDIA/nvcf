@@ -22,7 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/progress"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker/progress"
 )
 
 func TestMetricsRegistered(t *testing.T) {

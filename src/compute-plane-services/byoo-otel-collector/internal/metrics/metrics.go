@@ -26,7 +26,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
 )
 
 const (

@@ -26,13 +26,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sirupsen/logrus"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/auth"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue"
 )
 
 var (

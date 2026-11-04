@@ -6,7 +6,7 @@ go_library(
         "custom.go",
         "interceptor.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/custom",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/custom",
     importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/custom",
     visibility = ["//visibility:public"],
     deps = [

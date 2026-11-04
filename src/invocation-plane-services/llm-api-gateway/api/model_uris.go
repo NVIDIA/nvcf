@@ -25,7 +25,7 @@ import (
 	echo "github.com/labstack/echo/v4"
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const (
@@ -33,6 +33,8 @@ const (
 	responsesEndpointPath       = "/v1/responses"
 	embeddingsEndpointPath      = "/v1/embeddings"
 	messagesEndpointPath        = "/v1/messages"
+	decisionsEndpointPath       = "/v1/decisions"
+	systemOneEndpointPath       = "/v1/systemone"
 )
 
 // requireModelURIAllowlist checks the model's declared uris allowlist for

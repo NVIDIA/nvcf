@@ -27,10 +27,11 @@ use reqwest::{Client, Error as ReqwestError, Method, Response, StatusCode};
 use sonic_rs::JsonValueTrait;
 use stargate_protocol::common::{connection_header_names, is_hop_by_hop_header};
 use stargate_protocol::tunnel_contract::{
-    HEADER_MODEL, HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
-    HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE, HEADER_STARGATE_UPSTREAM_RETRYABLE,
-    RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED, RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
-    RETRY_REASON_UPSTREAM_ADMISSION_REJECTED, is_internal_control_header,
+    HEADER_MODEL, HEADER_STARGATE_ERROR_CODE, HEADER_STARGATE_EXPECTED_QUEUE_MS,
+    HEADER_STARGATE_RETRY_AFTER_MS, HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
+    HEADER_STARGATE_UPSTREAM_RETRYABLE, RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED,
+    RETRY_REASON_QUEUE_ESTIMATE_MISMATCH, RETRY_REASON_UPSTREAM_ADMISSION_REJECTED,
+    is_internal_control_header,
 };
 use stargate_telemetry::{
     inject_trace_context, parent_context_from_headers, traceparent_from_headers,
@@ -75,8 +76,10 @@ pub const DEFAULT_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(300);
 /// Longest gap between streamed outputs once generation has started.
 pub const DEFAULT_OUTPUT_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES: usize = 64 * 1024;
-pub(super) const RETRY_REASON_LOCAL_CONNECT_FAILURE: &str = "local_connect_failure";
-pub(super) const RETRY_REASON_MODEL_GENERATION_UNAVAILABLE: &str = "model_generation_unavailable";
+const ERROR_CODE_INVALID_REQUEST: &str = "invalid_request";
+pub(super) use stargate_protocol::tunnel_contract::{
+    RETRY_REASON_LOCAL_CONNECT_FAILURE, RETRY_REASON_MODEL_GENERATION_UNAVAILABLE,
+};
 pub(super) const WEBTRANSPORT_STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
@@ -590,6 +593,7 @@ async fn send_complete_response(
     transport.finish_response().await
 }
 
+/// Sends a Pylon-generated 400. Every caller rejects the request itself.
 async fn send_problem_response(
     transport: &mut impl TunnelRequestTransport,
     status: StatusCode,
@@ -598,7 +602,7 @@ async fn send_problem_response(
     send_complete_response(
         transport,
         status,
-        problem_response_headers(),
+        problem_response_headers(ERROR_CODE_INVALID_REQUEST),
         problem_details_body(status, detail),
     )
     .await
@@ -827,7 +831,8 @@ pub(super) async fn forward_tunnel_request(
                     true,
                     RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED,
                 );
-                let mut headers = problem_response_headers();
+                let mut headers =
+                    problem_response_headers(RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED);
                 insert_retry_metadata(
                     &mut headers,
                     true,
@@ -981,15 +986,23 @@ async fn send_upstream_request(
             upstream_headers.append(name, value.clone());
         }
     }
-    if path_and_query.split('?').next() == Some("/v1/messages") {
-        let private_headers: Vec<_> = upstream_headers
-            .keys()
-            .filter(|name| !is_messages_backend_header(name))
-            .cloned()
-            .collect();
-        for name in private_headers {
-            upstream_headers.remove(name);
+    match path_and_query.split('?').next() {
+        Some("/v1/messages") => {
+            let private_headers: Vec<_> = upstream_headers
+                .keys()
+                .filter(|name| !is_messages_backend_header(name))
+                .cloned()
+                .collect();
+            for name in private_headers {
+                upstream_headers.remove(name);
+            }
         }
+        Some("/v1/decisions" | "/v1/systemone") => {
+            for name in CALLER_CREDENTIAL_HEADERS {
+                upstream_headers.remove(name);
+            }
+        }
+        _ => {}
     }
     if !health_request {
         if let Some(priority) = priority {
@@ -1047,6 +1060,15 @@ pub(super) enum UpstreamRequestError {
     Send(#[source] ReqwestError),
 }
 
+// The decision routes forward vendor headers, so they drop only the caller's
+// credentials instead of using an allowlist like Messages.
+const CALLER_CREDENTIAL_HEADERS: [HeaderName; 4] = [
+    reqwest::header::AUTHORIZATION,
+    HeaderName::from_static("x-api-key"),
+    reqwest::header::PROXY_AUTHORIZATION,
+    reqwest::header::COOKIE,
+];
+
 // Routing metadata stays on the tunnel for admission, then stops at the
 // model API boundary. Messages forwards only protocol and trace headers.
 fn is_messages_backend_header(name: &HeaderName) -> bool {
@@ -1101,7 +1123,8 @@ fn input_usage_expected(
                     .and_then(|body| body.get("stream_options")?.get("include_usage")?.as_bool())
                     == Some(true)
         }
-        Some(RequestObservationEndpoint::Embeddings) | None => false,
+        Some(RequestObservationEndpoint::Embeddings | RequestObservationEndpoint::Decisions)
+        | None => false,
     }
 }
 
@@ -1165,6 +1188,7 @@ fn request_observation_endpoint(
         Some("/v1/chat/completions") => Some(RequestObservationEndpoint::ChatCompletions),
         Some("/v1/responses") => Some(RequestObservationEndpoint::Responses),
         Some("/v1/embeddings") => Some(RequestObservationEndpoint::Embeddings),
+        Some("/v1/decisions" | "/v1/systemone") => Some(RequestObservationEndpoint::Decisions),
         _ => None,
     }
 }
@@ -1305,7 +1329,7 @@ pub(super) fn queue_mismatch_response_headers(
         RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
     );
 
-    let mut headers = problem_response_headers();
+    let mut headers = problem_response_headers(RETRY_REASON_QUEUE_ESTIMATE_MISMATCH);
     insert_retry_metadata(&mut headers, true, RETRY_REASON_QUEUE_ESTIMATE_MISMATCH);
     if let QueueAdmissionDecision::Rejected {
         retry_after_ms: Some(retry_after_ms),
@@ -1321,15 +1345,23 @@ pub(super) fn queue_mismatch_response_headers(
     Ok(headers)
 }
 
-pub(super) fn problem_response_headers() -> HeaderMap {
-    HeaderMap::from_iter([(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/problem+json"),
-    )])
+/// Headers for a response Pylon generates itself. The error code tells
+/// Stargate and its callers that the model server did not produce it.
+pub(super) fn problem_response_headers(error_code: &'static str) -> HeaderMap {
+    HeaderMap::from_iter([
+        (
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/problem+json"),
+        ),
+        (
+            HeaderName::from_static(HEADER_STARGATE_ERROR_CODE),
+            HeaderValue::from_static(error_code),
+        ),
+    ])
 }
 
 pub(super) fn local_connect_failure_headers(retryable: bool) -> HeaderMap {
-    let mut headers = problem_response_headers();
+    let mut headers = problem_response_headers(RETRY_REASON_LOCAL_CONNECT_FAILURE);
     insert_retry_metadata(&mut headers, retryable, RETRY_REASON_LOCAL_CONNECT_FAILURE);
     headers
 }
@@ -1343,7 +1375,7 @@ pub(super) fn model_generation_unavailable_headers(app: &TunnelServerApp) -> Hea
         true,
         RETRY_REASON_MODEL_GENERATION_UNAVAILABLE,
     );
-    let mut headers = problem_response_headers();
+    let mut headers = problem_response_headers(RETRY_REASON_MODEL_GENERATION_UNAVAILABLE);
     insert_retry_metadata(
         &mut headers,
         true,
@@ -1560,6 +1592,79 @@ mod tests {
                 .unwrap();
         assert_eq!(forwarded.len(), 1);
         assert_eq!(forwarded["x-end-to-end"], "preserved");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn decision_routes_strip_caller_credentials_before_the_backend() {
+        const CREDENTIALS: [&str; 4] = [
+            "authorization",
+            "x-api-key",
+            "proxy-authorization",
+            "cookie",
+        ];
+        let (captured_tx, captured_rx) = flume::unbounded();
+        let capture = move |headers: HeaderMap| {
+            let captured_tx = captured_tx.clone();
+            async move {
+                captured_tx.send(headers).unwrap();
+                "ok"
+            }
+        };
+        let server = TestHttpServer::spawn(
+            Router::new()
+                .route("/v1/decisions", post(capture.clone()))
+                .route("/v1/systemone", post(capture.clone()))
+                .route("/v1/chat/completions", post(capture)),
+        )
+        .await;
+        let app = TunnelServerApp::new(
+            "credential-test".to_string(),
+            server.as_str().to_string(),
+            TunnelForwardingConfig::default(),
+        );
+        let mut headers = HeaderMap::new();
+        for name in CREDENTIALS {
+            headers.insert(name, HeaderValue::from_static("caller-secret"));
+        }
+        headers.insert(
+            "typesafe-danger-zone-images",
+            HeaderValue::from_static("true"),
+        );
+        headers.insert("x-vendor-test", HeaderValue::from_static("v"));
+        for path in [
+            "/v1/decisions",
+            "/v1/systemone",
+            "/v1/decisions?mock_error=429",
+            "/v1/chat/completions",
+        ] {
+            let response = send_upstream_request(
+                &app,
+                None,
+                UpstreamRequestParts {
+                    method: Method::POST,
+                    path_and_query: path,
+                    headers: &headers,
+                    body: Vec::new(),
+                    health_request: false,
+                    priority: None,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.text().await.unwrap(), "ok", "{path}");
+            let forwarded = captured_rx.recv_async().await.unwrap();
+            let decision_route = !path.starts_with("/v1/chat/");
+            for name in CREDENTIALS {
+                assert_eq!(
+                    forwarded.contains_key(name),
+                    !decision_route,
+                    "{path}: {name} forwarding"
+                );
+            }
+            assert_eq!(forwarded["typesafe-danger-zone-images"], "true", "{path}");
+            assert_eq!(forwarded["x-vendor-test"], "v", "{path}");
+        }
         server.shutdown().await;
     }
 
@@ -2452,6 +2557,149 @@ mod tests {
             metadata_observations.last().unwrap().observation().state,
             crate::RequestObservationState::Failed
         );
+    }
+
+    #[tokio::test]
+    async fn pylon_generated_errors_carry_the_router_error_code() {
+        let error_code = |transport: &TestTransport| {
+            transport.response_headers[0]
+                .get(HEADER_STARGATE_ERROR_CODE)
+                .map(|value| value.to_str().unwrap().to_string())
+        };
+        for path in ["/v1/decisions", "/v1/chat/completions"] {
+            let body = if path == "/v1/decisions" {
+                br#"{"questions":[]}"#.as_slice()
+            } else {
+                br#"{"messages":[],"stream":true}"#.as_slice()
+            };
+
+            let (app, _observations) = observed_app("http://127.0.0.1:0");
+            let mut transport = TestTransport {
+                request_body: body.to_vec(),
+                ..TestTransport::default()
+            };
+            forward_tunnel_request(&app, observed_request(path), &mut transport)
+                .await
+                .unwrap();
+            assert_eq!(transport.response_heads, [StatusCode::SERVICE_UNAVAILABLE]);
+            assert_eq!(
+                error_code(&transport).as_deref(),
+                Some(RETRY_REASON_LOCAL_CONNECT_FAILURE),
+                "{path} connect failure"
+            );
+
+            let app = TunnelServerApp::new(
+                "pending-generation".to_string(),
+                "http://127.0.0.1:0".to_string(),
+                TunnelForwardingConfig::default(),
+            );
+            assert!(
+                app.runtime_state
+                    .begin_generation(ModelGeneration::new("model-a", 1))
+            );
+            let mut transport = TestTransport {
+                request_body: body.to_vec(),
+                ..TestTransport::default()
+            };
+            forward_tunnel_request(&app, observed_request(path), &mut transport)
+                .await
+                .unwrap();
+            assert_eq!(transport.response_heads, [StatusCode::SERVICE_UNAVAILABLE]);
+            assert_eq!(
+                error_code(&transport).as_deref(),
+                Some(RETRY_REASON_MODEL_GENERATION_UNAVAILABLE),
+                "{path} pending generation"
+            );
+
+            let (app, _observations) = observed_app("http://127.0.0.1:0");
+            let mut transport = TestTransport {
+                request_body: b"not json".to_vec(),
+                ..TestTransport::default()
+            };
+            forward_tunnel_request(&app, observed_request(path), &mut transport)
+                .await
+                .unwrap();
+            assert_eq!(transport.response_heads, [StatusCode::BAD_REQUEST]);
+            assert_eq!(
+                error_code(&transport).as_deref(),
+                Some("invalid_request"),
+                "{path} malformed body"
+            );
+        }
+
+        // A backend error is relayed unmarked, even when the backend tries
+        // to set the code itself.
+        let upstream = TestHttpServer::spawn(Router::new().route(
+            "/v1/decisions",
+            post(|| async {
+                AxumResponse::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header(HEADER_STARGATE_ERROR_CODE, "spoofed")
+                    .body(Body::from("down"))
+                    .unwrap()
+            }),
+        ))
+        .await;
+        let (app, _observations) = observed_app(upstream.as_str());
+        let mut transport = TestTransport {
+            request_body: br#"{"questions":[]}"#.to_vec(),
+            ..TestTransport::default()
+        };
+        forward_tunnel_request(&app, observed_request("/v1/decisions"), &mut transport)
+            .await
+            .unwrap();
+        assert_eq!(transport.response_heads, [StatusCode::SERVICE_UNAVAILABLE]);
+        assert_eq!(error_code(&transport), None);
+    }
+
+    #[tokio::test]
+    async fn decision_routes_are_observed_as_non_streaming_requests() {
+        for path in ["/v1/decisions", "/v1/systemone"] {
+            for (status, terminal_state) in [
+                (StatusCode::OK, crate::RequestObservationState::Complete),
+                (
+                    StatusCode::BAD_REQUEST,
+                    crate::RequestObservationState::Failed,
+                ),
+            ] {
+                let (result, transport, observations) = run_observed_response(
+                    path,
+                    br#"{"model":"model-a","questions":[]}"#,
+                    status,
+                    Some("application/json"),
+                    r#"{"answers":[]}"#,
+                )
+                .await;
+                result.expect("the decision response should be forwarded");
+
+                assert_eq!(transport.response_heads, [status], "{path}");
+                assert_eq!(
+                    transport.response_events,
+                    [bytes::Bytes::from_static(br#"{"answers":[]}"#)],
+                    "{path}"
+                );
+                let states: Vec<_> = observations
+                    .iter()
+                    .map(|event| event.observation().state)
+                    .collect();
+                assert_eq!(
+                    states.first(),
+                    Some(&crate::RequestObservationState::UpstreamConnecting),
+                    "{path} {status}: {states:?}"
+                );
+                let terminal = observations.last().unwrap().observation();
+                assert_eq!(terminal.state, terminal_state, "{path} {status}");
+                assert_eq!(
+                    terminal.endpoint,
+                    RequestObservationEndpoint::Decisions,
+                    "{path}"
+                );
+                assert_eq!(terminal.input_tokens, 12, "{path}");
+                assert_eq!(terminal.upstream_status, Some(status.as_u16()), "{path}");
+                assert!(!terminal.embedding_items_observed, "{path}");
+                assert_eq!(terminal.output_messages, 0, "{path}");
+            }
+        }
     }
 
     #[tokio::test]

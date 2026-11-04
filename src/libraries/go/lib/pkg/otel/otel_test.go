@@ -61,7 +61,7 @@ func TestInvokeWithSpan(t *testing.T) {
 	defer tracerProvider.Shutdown(ctx)
 	otel.SetTracerProvider(tracerProvider)
 
-	tracer := otel.Tracer("github.com/NVIDIA/nvcf/src/libraries/go/lib/otel")
+	tracer := otel.Tracer("github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/otel")
 	pc, expectedFile, _, ok := runtime.Caller(0)
 	require.True(t, ok)
 	expectedFunction := runtime.FuncForPC(pc)

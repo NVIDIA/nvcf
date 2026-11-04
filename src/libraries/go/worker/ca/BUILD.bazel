@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "ca",
     srcs = ["ca.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/ca",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/ca",
     visibility = ["//visibility:public"],
 )
 

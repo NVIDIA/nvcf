@@ -38,12 +38,14 @@ type Entry struct {
 // pins in additional values files under the chart path. AppVersion is left
 // alone by default, because in a multi-image chart it may belong to another
 // service. Set AppVersion when this service owns both the declared paths and
-// the chart's appVersion.
+// the chart's appVersion. ManualBumpReason keeps an upgrade-sensitive edge in
+// the inventory while requiring a reviewed pin change instead of an auto-bump.
 type Deploy struct {
-	Service     string
-	ValuesPaths []string
-	ValuesFiles []ValuesFile
-	AppVersion  bool
+	Service          string
+	ValuesPaths      []string
+	ValuesFiles      []ValuesFile
+	AppVersion       bool
+	ManualBumpReason string
 }
 
 // ValuesFile names additional values outside the chart's primary values.yaml
@@ -63,10 +65,11 @@ func (d *Deploy) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var obj struct {
-		Service     string       `json:"service"`
-		ValuesPaths []string     `json:"values_paths"`
-		ValuesFiles []ValuesFile `json:"values_files"`
-		AppVersion  bool         `json:"app_version"`
+		Service          string       `json:"service"`
+		ValuesPaths      []string     `json:"values_paths"`
+		ValuesFiles      []ValuesFile `json:"values_files"`
+		AppVersion       bool         `json:"app_version"`
+		ManualBumpReason string       `json:"manual_bump_reason"`
 	}
 	if err := json.Unmarshal(b, &obj); err != nil {
 		return fmt.Errorf("deploys entry: %w", err)
@@ -86,7 +89,7 @@ func (d *Deploy) UnmarshalJSON(b []byte) error {
 			return fmt.Errorf("deploys entry for %s: values_files file %q requires paths", obj.Service, valuesFile.File)
 		}
 	}
-	*d = Deploy{Service: obj.Service, ValuesPaths: obj.ValuesPaths, ValuesFiles: obj.ValuesFiles, AppVersion: obj.AppVersion}
+	*d = Deploy{Service: obj.Service, ValuesPaths: obj.ValuesPaths, ValuesFiles: obj.ValuesFiles, AppVersion: obj.AppVersion, ManualBumpReason: strings.TrimSpace(obj.ManualBumpReason)}
 	return nil
 }
 
@@ -155,9 +158,10 @@ func (m *Metadata) ServiceForTag(tag string) (serviceID, version string, err err
 // edge named them explicitly.
 type ChartDeploy struct {
 	Entry
-	ValuesPaths []string
-	ValuesFiles []ValuesFile
-	AppVersion  bool
+	ValuesPaths      []string
+	ValuesFiles      []ValuesFile
+	AppVersion       bool
+	ManualBumpReason string
 }
 
 // ChartsDeploying returns the chart entries that declare they deploy
@@ -179,7 +183,7 @@ func (m *Metadata) ChartsDeploying(serviceID string) []ChartDeploy {
 			if !strings.HasPrefix(e.Path, ChartPrefix) && len(d.ValuesFiles) == 0 {
 				break
 			}
-			out = append(out, ChartDeploy{Entry: e, ValuesPaths: d.ValuesPaths, ValuesFiles: d.ValuesFiles, AppVersion: d.AppVersion})
+			out = append(out, ChartDeploy{Entry: e, ValuesPaths: d.ValuesPaths, ValuesFiles: d.ValuesFiles, AppVersion: d.AppVersion, ManualBumpReason: d.ManualBumpReason})
 			break
 		}
 	}

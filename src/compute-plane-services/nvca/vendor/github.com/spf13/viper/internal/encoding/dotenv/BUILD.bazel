@@ -6,7 +6,7 @@ go_library(
         "codec.go",
         "map_utils.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/viper/internal/encoding/dotenv",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/viper/internal/encoding/dotenv",
     importpath = "github.com/spf13/viper/internal/encoding/dotenv",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/spf13/viper:__subpackages__"],
     deps = [

@@ -33,7 +33,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 	"golang.org/x/oauth2"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/auth"
 )
 
 func TestNatsConnectionLogging(t *testing.T) {

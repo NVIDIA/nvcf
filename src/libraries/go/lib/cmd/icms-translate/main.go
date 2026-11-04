@@ -23,7 +23,7 @@ import (
 
 	"github.com/urfave/cli/v2"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/cmd"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/cmd"
 )
 
 func main() {

@@ -20,7 +20,7 @@ package featureflagmock
 import (
 	"sync"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 )
 
 type Fetcher struct {

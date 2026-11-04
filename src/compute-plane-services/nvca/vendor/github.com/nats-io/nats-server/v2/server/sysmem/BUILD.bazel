@@ -11,7 +11,7 @@ go_library(
         "mem_windows.go",
         "sysctl.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server/sysmem",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server/sysmem",
     importpath = "github.com/nats-io/nats-server/v2/server/sysmem",
     visibility = ["//visibility:public"],
     deps = select({

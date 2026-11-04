@@ -9,7 +9,7 @@ go_library(
         "http.go",
         "publisher.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/config",
     visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
     deps = [
         "//src/control-plane-services/event-ledger/internal/observability/common",

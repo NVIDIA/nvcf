@@ -6,7 +6,7 @@ go_library(
         "metricregistry.go",
         "metrics.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/experimental/stats",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/experimental/stats",
     importpath = "google.golang.org/grpc/experimental/stats",
     visibility = ["//visibility:public"],
     deps = [

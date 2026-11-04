@@ -459,10 +459,16 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
             &retry
         ));
     }
-    assert!(should_forward_header(
-        &HeaderName::from_bytes(b"X-Request-Id")?,
-        &retry
-    ));
+    for name in [
+        "X-Request-Id",
+        "TypeSafe-Danger-Zone-Images",
+        "X-Vendor-Test",
+    ] {
+        assert!(
+            should_forward_header(&HeaderName::from_bytes(name.as_bytes())?, &retry),
+            "{name} must reach the backend"
+        );
+    }
     Ok(())
 }
 

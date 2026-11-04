@@ -6,7 +6,7 @@ go_library(
         "time.go",
         "timeformattype_string.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/cast/internal",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/cast/internal",
     importpath = "github.com/spf13/cast/internal",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/spf13/cast:__subpackages__"],
 )

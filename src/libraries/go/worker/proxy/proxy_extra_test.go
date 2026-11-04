@@ -30,8 +30,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/http2"
 
-	pb "github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
+	pb "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/test/testutils"
 )
 
 // recordRoundTripper records whether it was called and returns a canned response.

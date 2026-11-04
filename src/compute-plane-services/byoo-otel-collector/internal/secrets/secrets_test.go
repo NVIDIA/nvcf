@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
 	"github.com/stretchr/testify/assert"
 )
 

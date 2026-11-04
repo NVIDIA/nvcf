@@ -25,9 +25,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 type EchoProvider struct{}

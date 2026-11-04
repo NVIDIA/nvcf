@@ -4,10 +4,11 @@ go_library(
     name = "httpcommon",
     srcs = [
         "ascii.go",
+        "gzip.go",
         "headermap.go",
         "request.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/net/internal/httpcommon",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/net/internal/httpcommon",
     importpath = "golang.org/x/net/internal/httpcommon",
     visibility = ["//src/compute-plane-services/nvca/vendor/golang.org/x/net:__subpackages__"],
     deps = [

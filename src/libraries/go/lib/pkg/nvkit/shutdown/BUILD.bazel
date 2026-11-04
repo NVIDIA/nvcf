@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "shutdown",
     srcs = ["shutdown.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/shutdown",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/shutdown",
     visibility = ["//visibility:public"],
 )
 

@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "nvcaintrospect",
     srcs = ["introspect.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth/nvcaintrospect",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/auth/nvcaintrospect",
     visibility = ["//visibility:public"],
     deps = [
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",

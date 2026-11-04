@@ -25,7 +25,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth/nvcaintrospect"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/auth/nvcaintrospect"
 )
 
 // IntrospectRequest and IntrospectResult are the shared nvcaintrospect types,

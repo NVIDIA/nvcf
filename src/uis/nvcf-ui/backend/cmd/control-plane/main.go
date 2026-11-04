@@ -20,8 +20,8 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
-	cplane "github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/internal/control-plane"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/internal/utils"
+	cplane "github.com/dsx-ai-factory/nvcf/src/control-plane-services/nvcf-ui/backend/internal/control-plane"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nvcf-ui/backend/internal/utils"
 )
 
 const (

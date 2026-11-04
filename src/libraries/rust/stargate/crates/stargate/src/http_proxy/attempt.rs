@@ -17,11 +17,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::body::Body;
-use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::Response;
 use stargate_protocol::tunnel_contract::{
-    HEADER_INFERENCE_SERVER_ID as HEADER_CHOSEN_INFERENCE_SERVER_ID, HEADER_STARGATE_RETRY_REASON,
-    HEADER_STARGATE_RETRYABLE,
+    HEADER_INFERENCE_SERVER_ID as HEADER_CHOSEN_INFERENCE_SERVER_ID, HEADER_STARGATE_ERROR_CODE,
+    HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE, RETRY_REASON_LOCAL_CONNECT_FAILURE,
+    RETRY_REASON_MODEL_GENERATION_UNAVAILABLE,
 };
 use tracing::{Instrument, Span, field, info, warn};
 
@@ -517,6 +518,9 @@ fn build_proxy_response(
     *response.status_mut() = upstream.status;
     let response_headers = response.headers_mut();
     copy_forwardable_headers(&upstream.headers, response_headers);
+    if let Some(code) = pylon_error_code(upstream.status, &upstream.headers) {
+        response_headers.insert(HeaderName::from_static(HEADER_STARGATE_ERROR_CODE), code);
+    }
     for (name, value) in [
         (
             HEADER_CHOSEN_INFERENCE_SERVER_ID,
@@ -534,6 +538,27 @@ fn build_proxy_response(
         );
     }
     Ok(response)
+}
+
+/// The error code of a response Pylon generated itself. Pylon marks those
+/// responses and strips the header from backend responses. Older Pylon builds
+/// leave it out, so their own failures are recognized by retry reason.
+fn pylon_error_code(status: StatusCode, headers: &HeaderMap) -> Option<HeaderValue> {
+    if status.is_success() {
+        return None;
+    }
+    if let Some(code) = headers.get(HEADER_STARGATE_ERROR_CODE) {
+        return Some(code.clone());
+    }
+    match header_str(headers, HEADER_STARGATE_RETRY_REASON)? {
+        RETRY_REASON_LOCAL_CONNECT_FAILURE => {
+            Some(HeaderValue::from_static(RETRY_REASON_LOCAL_CONNECT_FAILURE))
+        }
+        RETRY_REASON_MODEL_GENERATION_UNAVAILABLE => Some(HeaderValue::from_static(
+            RETRY_REASON_MODEL_GENERATION_UNAVAILABLE,
+        )),
+        _ => None,
+    }
 }
 
 fn record_upstream_result_to_span(
@@ -962,5 +987,82 @@ mod tests {
             ),
             ProxyAttemptOutcome::ProxyError(StatusCode::PAYLOAD_TOO_LARGE)
         ));
+    }
+
+    #[tokio::test]
+    async fn pylon_generated_errors_keep_a_router_error_code() {
+        let header = |name: &'static str, value: &'static str| {
+            (
+                HeaderName::from_static(name),
+                HeaderValue::from_static(value),
+            )
+        };
+        let marked = HeaderMap::from_iter([
+            header(HEADER_STARGATE_ERROR_CODE, "local_connect_failure"),
+            header(HEADER_STARGATE_RETRYABLE, "true"),
+            header(HEADER_STARGATE_RETRY_REASON, "local_connect_failure"),
+        ]);
+        // Pylon builds without the marker still name their own failures in
+        // the retry reason.
+        let older_connect_failure = HeaderMap::from_iter([
+            header(HEADER_STARGATE_RETRYABLE, "false"),
+            header(HEADER_STARGATE_RETRY_REASON, "local_connect_failure"),
+        ]);
+        let older_generation = HeaderMap::from_iter([
+            header(HEADER_STARGATE_RETRYABLE, "true"),
+            header(HEADER_STARGATE_RETRY_REASON, "model_generation_unavailable"),
+        ]);
+        for (headers, code) in [
+            (marked, "local_connect_failure"),
+            (older_connect_failure, "local_connect_failure"),
+            (older_generation, "model_generation_unavailable"),
+        ] {
+            for disposition in [
+                FinalRetryDisposition::PassThrough,
+                FinalRetryDisposition::Exhausted("local_connect_failure".to_string()),
+            ] {
+                let ProxyAttemptOutcome::ReturnFinal(response) = finish_response(
+                    disposition.clone(),
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    headers.clone(),
+                ) else {
+                    panic!("expected the Pylon response")
+                };
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+                assert_eq!(
+                    response.headers()[HEADER_STARGATE_ERROR_CODE],
+                    code,
+                    "{disposition:?}"
+                );
+                assert!(
+                    !response
+                        .headers()
+                        .contains_key(HEADER_STARGATE_RETRY_REASON)
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn backend_errors_stay_unmarked_after_retries() {
+        let backend_rejection = HeaderMap::from_iter([
+            (
+                HeaderName::from_static(HEADER_STARGATE_RETRYABLE),
+                HeaderValue::from_static("true"),
+            ),
+            (
+                HeaderName::from_static(HEADER_STARGATE_RETRY_REASON),
+                HeaderValue::from_static("upstream_admission_rejected"),
+            ),
+        ]);
+        let ProxyAttemptOutcome::ReturnFinal(response) = finish_response(
+            FinalRetryDisposition::Exhausted("upstream_admission_rejected".to_string()),
+            StatusCode::TOO_MANY_REQUESTS,
+            backend_rejection,
+        ) else {
+            panic!("expected the backend response")
+        };
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(!response.headers().contains_key(HEADER_STARGATE_ERROR_CODE));
     }
 }

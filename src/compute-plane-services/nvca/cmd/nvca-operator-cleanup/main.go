@@ -23,8 +23,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 	cli "github.com/urfave/cli/v2"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,8 +33,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/cleanup"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/operator/cleanup"
 )
 
 func main() {

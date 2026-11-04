@@ -33,8 +33,8 @@ import (
 	cloudevent "github.com/cloudevents/sdk-go/v2/event"
 	"gopkg.in/yaml.v2"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common/core/types"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/config"
 )
 
 const SendSyncTimeout = 30 * time.Second

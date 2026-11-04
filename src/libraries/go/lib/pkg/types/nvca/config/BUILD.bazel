@@ -25,7 +25,7 @@ go_library(
         "types.go",
         "zz_generated.deepcopy.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_go_viper_mapstructure_v2//:mapstructure",

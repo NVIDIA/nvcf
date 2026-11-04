@@ -33,8 +33,8 @@ import (
 	promexporter "go.opentelemetry.io/otel/exporters/prometheus"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue"
 )
 
 // newScrapeRecorder returns a Recorder wired to a fresh registry, plus a scrape

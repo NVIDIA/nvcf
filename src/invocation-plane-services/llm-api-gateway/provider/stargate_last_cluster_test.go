@@ -34,11 +34,11 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/lastcluster"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/lastcluster"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 // lastClusterStore is a lastcluster.Store that counts calls, can fail them,

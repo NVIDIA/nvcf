@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "metrics",
     srcs = ["metrics.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_nats_io_nats_go//:nats_go",

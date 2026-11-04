@@ -8,7 +8,7 @@ go_library(
         "shared_config_resolve_home.go",
         "shared_config_resolve_home_go1.12.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/internal/shareddefaults",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/internal/shareddefaults",
     importpath = "github.com/aws/aws-sdk-go/internal/shareddefaults",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go:__subpackages__"],
 )

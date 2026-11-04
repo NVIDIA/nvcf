@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "config",
     srcs = ["config.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/config",
     visibility = ["//visibility:public"],
 )
 

@@ -7,7 +7,7 @@ go_library(
         "ifaces.go",
         "registry_iface.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/jsonutils/adapters/ifaces",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/jsonutils/adapters/ifaces",
     importpath = "github.com/go-openapi/swag/jsonutils/adapters/ifaces",
     visibility = ["//visibility:public"],
 )
