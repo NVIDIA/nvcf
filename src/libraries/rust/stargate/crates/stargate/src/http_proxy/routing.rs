@@ -135,13 +135,13 @@ pub(super) fn classify_no_routing_choice(inputs: NoRoutingChoiceInputs) -> NoRou
     if inputs.num_candidates > 0 && inputs.eligible_candidate_count > 0 && inputs.retry_allowed {
         NoRoutingChoiceAction::RetryRouting
     } else if inputs.eligible_candidate_count == 0
-        && (inputs.num_candidates > 0 || inputs.target_registered)
+        && (inputs.num_candidates > 0
+            || inputs.target_registered
+            || inputs.failed_backend_count > 0
+            || inputs.failed_cluster_count > 0)
     {
         NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoReadyBackends)
-    } else if inputs.num_candidates == 0
-        && inputs.failed_backend_count == 0
-        && inputs.failed_cluster_count == 0
-    {
+    } else if inputs.num_candidates == 0 {
         NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoCandidatesNotFound)
     } else {
         NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
@@ -570,13 +570,13 @@ mod tests {
     }
 
     #[test]
-    fn no_routing_choice_finalizes_failed_empty_route_as_unavailable() {
+    fn no_routing_choice_finalizes_failed_empty_route_as_no_ready_backends() {
         assert_eq!(
             classify_no_routing_choice(NoRoutingChoiceInputs {
                 failed_backend_count: 1,
                 ..no_routing_inputs(0, 0)
             }),
-            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
+            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoReadyBackends)
         );
     }
 

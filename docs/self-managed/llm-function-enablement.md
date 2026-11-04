@@ -1089,7 +1089,9 @@ is still loading. The response carries `Retry-After`, and clients should retry.
 By default the router keeps a model known for 15 minutes after its last
 backend leaves, so a removed function returns this `503` before it returns
 `404`. The request router flag `--deregistered-model-grace-ms` sets this
-period, and `0` disables it. Check:
+period, and `0` disables it. Each request router replica keeps this in
+memory, so a replica that never saw the model, or restarted since, returns
+`404` right away. Check:
 
 - The deployment became `ACTIVE` more than about one minute ago. The sidecar
   registers with the request routers after the pod is `Running`.
