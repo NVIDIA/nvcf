@@ -15,6 +15,8 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	k8sevents "k8s.io/client-go/tools/record"
@@ -48,7 +50,25 @@ const (
 
 // podEvent records an event on pod; nothing without a kube client.
 func (a *Agent) podEvent(pod *corev1.Pod, warning bool, reason, format string, args ...any) {
-	if pod == nil || a.kubeClient == nil {
+	if pod == nil {
+		return
+	}
+	a.event(pod, warning, reason, format, args...)
+}
+
+// nodeEvent records an event on this agent's node.
+func (a *Agent) nodeEvent(warning bool, reason, format string, args ...any) {
+	if a.config.NodeName == "" {
+		return
+	}
+	// A node's events name it by name for its UID, as the kubelet's do.
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: a.config.NodeName, UID: types.UID(a.config.NodeName)}}
+	a.event(node, warning, reason, format, args...)
+}
+
+// event records an event on obj; nothing without a kube client.
+func (a *Agent) event(obj k8sruntime.Object, warning bool, reason, format string, args ...any) {
+	if a.kubeClient == nil {
 		return
 	}
 	a.eventsOnce.Do(func() {
@@ -63,7 +83,7 @@ func (a *Agent) podEvent(pod *corev1.Pod, warning bool, reason, format string, a
 	if warning {
 		kind = corev1.EventTypeWarning
 	}
-	a.events.Eventf(pod, kind, reason, format, args...)
+	a.events.Eventf(obj, kind, reason, format, args...)
 }
 
 // nodeGPU returns the GPU product of node, from its labels; "" when it

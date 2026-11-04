@@ -77,6 +77,7 @@ the column below is that status, corrected where the code disagrees.
 | [RESTORE-POD-ADDRESS.md](design/RESTORE-POD-ADDRESS.md) | How a restored pod keeps its captured address, and the guards against an address another pod holds | Built, behind `agent.restoreCapturedAddress` (`internal/agent/restore_address.go`) |
 | [RESTORE-CLOCK-GPU-RELOAD.md](design/RESTORE-CLOCK-GPU-RELOAD.md) | How a restored process's clocks are kept consistent across the GPU reload | In use; §6 proposed |
 | [RESTORE-FETCH-LOAD-OVERLAP.md](design/RESTORE-FETCH-LOAD-OVERLAP.md) | How fetching a checkpoint could overlap with loading it during a restore | Proposed |
+| [GPU-FAULT-PROBE.md](design/GPU-FAULT-PROBE.md) | Why a pod's failure on a faulty GPU is not counted against nvsnap: the probe, what it decides, what it cannot tell | Built (`internal/agent/gpu_probe.go`) |
 | [VERSIONED-NODE-BUNDLE.md](design/VERSIONED-NODE-BUNDLE.md) | How the node bundle (CRIU, gpushare, helper) is versioned so upgrades do not break running pods | Built (`internal/webhook/bundle_mount.go` `BundleVersionsDir`) |
 | [helm-shared-model-volume.md](design/helm-shared-model-volume.md) | One model volume per model per cluster, and the cache set | Built and verified (as the doc states) |
 | [helm-chart-cache-election.md](design/helm-chart-cache-election.md) | One downloader per hash when a chart starts many workers | Built and verified (as the doc states) |

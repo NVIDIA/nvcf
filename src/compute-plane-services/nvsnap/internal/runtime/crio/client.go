@@ -37,6 +37,7 @@ import (
 	"strings"
 	"time"
 
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -228,6 +229,36 @@ func (c *Client) inspect(ctx context.Context, id string) (*runtime.ContainerInfo
 		RootFS: rootfs,
 		Labels: status.Labels,
 	}, nil
+}
+
+// ContainerSpec returns the OCI spec container id was created with, from
+// the runtime's verbose status: CRI-O keeps it there for an exited
+// container too.
+func (c *Client) ContainerSpec(ctx context.Context, id string) (*specs.Spec, error) {
+	resp, err := c.runtime.ContainerStatus(ctx, &runtimeapi.ContainerStatusRequest{ContainerId: id, Verbose: true})
+	if err != nil {
+		return nil, fmt.Errorf("%w: ContainerStatus %s: %w", runtime.ErrNotFound, id, err)
+	}
+	return specOfInfo(resp.Info)
+}
+
+// specOfInfo parses the runtime spec out of the "info" blob of a verbose
+// ContainerStatus.
+func specOfInfo(info map[string]string) (*specs.Spec, error) {
+	raw, ok := info["info"]
+	if !ok {
+		return nil, fmt.Errorf("ContainerStatus info missing 'info' key (runtime may not support verbose)")
+	}
+	var parsed struct {
+		RuntimeSpec *specs.Spec `json:"runtimeSpec"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, fmt.Errorf("parse info JSON: %w", err)
+	}
+	if parsed.RuntimeSpec == nil {
+		return nil, fmt.Errorf("ContainerStatus info has no runtimeSpec")
+	}
+	return parsed.RuntimeSpec, nil
 }
 
 // extractPID parses the "info" blob from ContainerStatus(verbose=true).

@@ -67,6 +67,8 @@ type GroupRestoreMemberResult struct {
 	NewIP        string         `json:"newIp,omitempty"`
 	Result       *RestoreResult `json:"result,omitempty"`
 	Error        string         `json:"error,omitempty"`
+	// GPUFaults are the faulty GPUs the member's restore failed on.
+	GPUFaults []gpuFault `json:"gpuFaults,omitempty"`
 }
 
 // GroupRestoreResult reports a group restore.
@@ -265,6 +267,9 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 			res.Members[i].Result = r
 			if err != nil {
 				res.Members[i].Error = err.Error()
+				if f := onFaultyGPU(err); f != nil {
+					res.Members[i].GPUFaults = f.Faults
+				}
 			}
 			finished[i] = true
 		}()
@@ -337,7 +342,17 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 			res.DeletedPods = append(res.DeletedPods, name)
 		}
 	}
-	return res, &groupRestoreFailure{membersFailed("group restore", res.Session, len(res.Members), failed)}
+	failure := &groupRestoreFailure{err: membersFailed("group restore", res.Session, len(res.Members), failed)}
+	var faults []gpuFault
+	for _, m := range res.Members {
+		faults = append(faults, m.GPUFaults...)
+	}
+	if len(faults) > 0 {
+		// One rank on a faulty GPU fails the others with it: the whole
+		// failure is the GPU's.
+		failure.fault = &gpuFaultError{Faults: faults, cause: failure.err}
+	}
+	return res, failure
 }
 
 // addressCollision is a placement the instance cannot restore into: a
@@ -354,13 +369,22 @@ func (e *addressCollision) Error() string {
 }
 
 // groupRestoreFailure is a group restore that ran and failed: the
-// checkpoints themselves are suspect. Any other error of groupRestore
-// (a pod without an IP, a fetch that did not finish) says nothing about
-// them.
-type groupRestoreFailure struct{ err error }
+// checkpoints themselves are suspect, unless it ran on a faulty GPU
+// (fault). Any other error of groupRestore (a pod without an IP, a fetch
+// that did not finish) says nothing about them.
+type groupRestoreFailure struct {
+	err   error
+	fault *gpuFaultError
+}
 
 func (e *groupRestoreFailure) Error() string { return e.err.Error() }
-func (e *groupRestoreFailure) Unwrap() error { return e.err }
+
+func (e *groupRestoreFailure) Unwrap() []error {
+	if e.fault != nil {
+		return []error{e.err, e.fault}
+	}
+	return []error{e.err}
+}
 
 // allRefusedAsRestored reports whether every member refused the restore
 // because its pod already runs a GPU workload.
@@ -477,7 +501,7 @@ func postRestore(ctx context.Context, client *http.Client, base string, req Rest
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
+		return nil, gpuFaultFromHeader(resp.Header.Get(gpuFaultHeader), fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b))))
 	}
 	var r RestoreResult
 	if err := json.Unmarshal(b, &r); err != nil {

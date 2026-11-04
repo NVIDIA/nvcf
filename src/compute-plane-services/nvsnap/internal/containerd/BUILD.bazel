@@ -9,6 +9,7 @@ go_library(
         "//src/compute-plane-services/nvsnap/internal/runtime",
         "@com_github_containerd_containerd//:containerd",
         "@com_github_containerd_containerd//namespaces",
+        "@com_github_opencontainers_runtime_spec//specs-go",
         "@com_github_sirupsen_logrus//:logrus",
     ],
 )

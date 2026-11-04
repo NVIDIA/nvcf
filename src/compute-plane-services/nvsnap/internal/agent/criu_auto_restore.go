@@ -242,7 +242,7 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod string, uid type
 	t0 := time.Now()
 	ref := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: pod, UID: uid}}
 	err := func() error {
-		_, err := a.Restore(rctx, RestoreRequest{
+		_, err := a.restoreProbed(rctx, RestoreRequest{
 			CheckpointID:             id,
 			PlaceholderNamespace:     ns,
 			PlaceholderPodName:       pod,
@@ -281,11 +281,18 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod string, uid type
 		return
 	}
 	outcome := metrics.RestoreFailed
-	if errors.Is(err, errCheckpointUnavailable) {
+	fault := onFaultyGPU(err)
+	switch {
+	case errors.Is(err, errCheckpointUnavailable):
 		outcome = metrics.RestoreNotRun
+	case fault != nil:
+		outcome = metrics.RestoreGPUFault
 	}
 	c.observeRestore(groupKey, ref, a.nodeGPU(ctx, a.config.NodeName), 1, outcome, err, 0, log)
 	switch {
+	case fault != nil:
+		log.WithError(err).Warn("CRIU auto-restore failed on a faulty GPU; it is not counted against the checkpoint, and the pod is deleted so its replacement restores again")
+		record(func(d map[string]string) bool { return recordGPUFault(d, id, fault) })
 	case errors.Is(err, errCheckpointUnavailable):
 		log.WithError(err).Warn("CRIU auto-restore did not run; deleting the pod so its replacement tries again")
 		record(func(d map[string]string) bool { return recordFailure(d, id, false, err) })

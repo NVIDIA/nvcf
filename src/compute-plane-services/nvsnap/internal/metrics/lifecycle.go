@@ -39,6 +39,16 @@ const (
 	RestoreFailed   = "failed"  // ran and failed
 	RestoreNotRun   = "not-run" // could not run (fetch, placeholders); tried again
 	RestoreRefused  = "refused" // the pod may not restore what it names
+	// RestoreGPUFault ran and failed on a GPU the probe found faulty: not
+	// counted against the capture.
+	RestoreGPUFault = "gpu-fault"
+)
+
+// GPU probe results: the probe of a GPU a failed pod was given.
+const (
+	ProbeHealthy = "healthy"
+	ProbeFaulty  = "faulty"
+	ProbeUnknown = "unknown" // the probe could not tell; the failure counts
 )
 
 // Admission decisions. AdmitMissed is counted by the agents, not the
@@ -156,6 +166,15 @@ var (
 		Buckets:   []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
 	})
 
+	// GPUProbes counts the probes of the GPUs a failed pod was given, by
+	// result and, for a faulty GPU, the driver's error (a fixed set of
+	// names). A faulty GPU's failure is not counted against nvsnap.
+	GPUProbes = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "gpu_probes_total",
+		Help:      "Probes of the GPUs of a pod that failed, by GPU product, result and CUDA error.",
+	}, []string{"gpu", "result", "error"})
+
 	// BuildInfo is 1 for the agent bundle this agent serves; join on it to
 	// compare releases.
 	BuildInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -169,7 +188,7 @@ var (
 var lifecycleCollectors = []prometheus.Collector{
 	CaptureOutcomes, CapturePhaseSeconds, CaptureBytes,
 	RestoreOutcomes, RestorePhaseSeconds, RestoreFetches, RestoreFetchSeconds,
-	PodReadySeconds, Admissions, WebhookRequests, WebhookSeconds, BuildInfo,
+	PodReadySeconds, Admissions, WebhookRequests, WebhookSeconds, GPUProbes, BuildInfo,
 }
 
 // Ranks buckets an instance size: the label stays bounded for instances of
@@ -290,6 +309,11 @@ func ObservePodReady(method, gpu string, ranks int, d time.Duration) {
 // CountAdmission counts a webhook decision.
 func CountAdmission(decision, reason string) {
 	Admissions.WithLabelValues(decision, reason).Inc()
+}
+
+// ObserveGPUProbe counts the probe of one GPU.
+func ObserveGPUProbe(gpu, result, cudaError string) {
+	GPUProbes.WithLabelValues(GPU(gpu), result, cudaError).Inc()
 }
 
 // ObserveWebhook records an admission request answered with code in d.

@@ -100,6 +100,12 @@ const (
 	// groupLastRestoreFailureKey holds the last one's cause.
 	groupRestoreFailuresKey    = "restoreFailures"
 	groupLastRestoreFailureKey = "lastRestoreFailure"
+	// groupGPUFaultsKey counts the restores of a capture that failed on a
+	// GPU the probe found faulty (gpu_probe.go): they say nothing about the
+	// capture and do not count toward criuGroupMaxRestoreFailures.
+	// groupLastGPUFaultKey names the last one's GPUs.
+	groupGPUFaultsKey    = "gpuFaults"
+	groupLastGPUFaultKey = "lastGPUFault"
 
 	lwsGroupKeyLabel = "leaderworkerset.sigs.k8s.io/group-key"
 
@@ -1131,7 +1137,10 @@ func (c *criuAutoRestorer) groupRestoredContainer(ctx context.Context, key strin
 // failure keeps them, and counts toward criuGroupMaxStalls.
 func (c *criuAutoRestorer) failGroup(ctx context.Context, leader *corev1.Pod, key string, restoreFailed bool, cause error, log *logrus.Entry) {
 	outcome := metrics.RestoreNotRun
-	if restoreFailed {
+	switch {
+	case restoreFailed && onFaultyGPU(cause) != nil:
+		outcome = metrics.RestoreGPUFault
+	case restoreFailed:
 		outcome = metrics.RestoreFailed
 	}
 	c.observeRestore(key, leader, c.a.podGPU(ctx, leader), c.instanceRanks(ctx, leader), outcome, cause, 0, log)
@@ -1178,7 +1187,17 @@ func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key
 	if !mayRecord {
 		log.WithError(rerr).WithField("reason", why).Warn("CRIU group restore: not recording the failure on a group record the pod may not act under")
 	}
-	switch {
+	switch fault := onFaultyGPU(cause); {
+	case restoreFailed && fault != nil:
+		log.WithError(cause).Warn("CRIU group restore failed on a faulty GPU; it is not counted against the capture, and its pods are deleted so their replacements restore again")
+		if !mayRecord {
+			break
+		}
+		if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
+			return recordGPUFault(d, leaderID, fault)
+		}); err != nil && !apierrors.IsNotFound(err) {
+			log.WithError(err).Warn("CRIU group restore: cannot update the group record")
+		}
 	case !restoreFailed:
 		log.WithError(cause).Warn("CRIU group restore did not run; deleting its pods so their replacements try again")
 		if !mayRecord {
@@ -1261,6 +1280,22 @@ func recordFailure(d map[string]string, id string, restoreFailed bool, cause err
 	}
 	n, _ := strconv.Atoi(d["stalls"])
 	d["stalls"], d["lastStall"] = strconv.Itoa(n+1), truncate(cause.Error(), groupReasonMax)
+	return true
+}
+
+// recordGPUFault records on group record d a restore of checkpoint id that
+// failed on faulty GPUs: counted apart from its failures. A record of
+// another capture is left as it is.
+func recordGPUFault(d map[string]string, id string, f *gpuFaultError) bool {
+	if !recordUsable(d) || !recordOf(d, id) {
+		return false
+	}
+	gpus := make([]string, len(f.Faults))
+	for i, g := range f.Faults {
+		gpus[i] = g.String()
+	}
+	n, _ := strconv.Atoi(d[groupGPUFaultsKey])
+	d[groupGPUFaultsKey], d[groupLastGPUFaultKey] = strconv.Itoa(n+1), truncate(strings.Join(gpus, ", "), groupReasonMax)
 	return true
 }
 

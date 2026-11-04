@@ -258,6 +258,12 @@ func (c *criuAutoRestorer) considerGPUShareFailure(ctx context.Context, pod *cor
 		return
 	}
 	log = log.WithField("criuGroup", key)
+	// A pod on a faulty GPU fails with the library or without it: its
+	// failure says nothing about the library, either way.
+	if onFaultyGPU(c.a.onPodGPUFault(ctx, pod, gpuContainer(pod), errors.New(failure), log)) != nil {
+		log.Warn("gpushare: the pod failed on a faulty GPU; that says nothing about the library, so its configuration is left as it is")
+		return
+	}
 	if without {
 		cleared, err := c.clearGPUShareFailed(ctx, key, bundle, failure)
 		switch {
