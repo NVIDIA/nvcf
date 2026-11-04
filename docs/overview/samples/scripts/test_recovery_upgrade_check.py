@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Execute upgrade recovery commands with synthetic messages and CLI output."""
 
-import base64
 import json
 import os
 from pathlib import Path
@@ -26,56 +25,83 @@ def block_containing(path, marker):
 
 
 class UpgradeRecoveryChecks(unittest.TestCase):
-    def test_changed_message_stops_before_removal(self):
-        for field, value in (("data", "bmV3LXJlcXVlc3Q="),
-                             ("subject", "another.queue"),
-                             ("time", "2026-11-04T01:00:00Z")):
-            with self.subTest(field=field):
-                self.run_removal(changed={field: value}, allowed=False)
-
-    def test_identical_message_removes_only_selected_sequence_interactively(self):
-        self.run_removal(allowed=True)
-
-    def test_failed_reread_stops_before_removal(self):
-        self.run_removal(read_status=1, allowed=False)
-
-    def run_removal(self, changed=None, read_status=0, allowed=False):
+    def test_nats_inspection_uses_selected_context_without_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            original = {"seq": 7, "subject": "creation.queue",
-                        "time": "2026-11-03T01:00:00Z",
-                        "data": base64.b64encode(b'{"requestId":"old-request"}').decode()}
-            current = {**original, **(changed or {})}
-            (root / "message-7.json").write_text(json.dumps(original))
-            (root / "current.json").write_text(json.dumps(current))
-            env = {**os.environ, "RECOVERY_RECORD": directory, "SEQ": "7",
-                   "STREAM": "CreateNvcaFunctionTaskStream", "NATS_BOX_POD": "test-box",
-                   "READ_STATUS": str(read_status)}
+            env = {**os.environ, "CALL_LOG": str(root / "calls"),
+                   "NATS_CONTEXT": "site-context"}
             stub = r'''
-nats_read() {
-  if [ "$1 $2" = 'stream get' ]; then
-    if [ "$READ_STATUS" != 0 ]; then return "$READ_STATUS"; fi
-    cat "$RECOVERY_RECORD/current.json"
-  else
-    printf '%s\n' '{"state":{"messages":0}}'
-  fi
+kubectl() {
+  printf '%s\n' "$*" >> "$CALL_LOG"
+  case "$*" in
+    *'get pod'*) printf '%s\n' 'test-box' ;;
+    *'stream info'*) printf '%s\n' '{"state":{"messages":1,"first_seq":7}}' ;;
+    *'consumer list'*) printf '%s\n' 'creation-consumer' ;;
+    *) return 99 ;;
+  esac
 }
-kcp() { printf '%s\n' "$*" >> "$RECOVERY_RECORD/removals"; }
 '''
-            command = block_containing(RECOVERY, 'if ! cmp -s')
+            command = block_containing(RECOVERY, 'NATS_BOX_POD=')
+            command = command.replace('/absolute/path/to/new-recovery-record',
+                                      str(root / "record"))
             result = subprocess.run(["bash", "-euo", "pipefail", "-c", stub + command],
                                     env=env, capture_output=True, text=True)
-            removals = root / "removals"
-            if allowed:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (root / "calls").read_text().splitlines()
+            nats_calls = [call for call in calls if ' -- nats ' in call]
+            prefix = ('--kubeconfig /absolute/path/to/control-plane-kubeconfig '
+                      '--context control-plane-context -n nats-system exec test-box '
+                      '-- nats --context site-context ')
+            self.assertEqual(nats_calls, [
+                prefix + 'stream info CreateNvcaFunctionTaskStream --json',
+                prefix + 'consumer list CreateNvcaFunctionTaskStream'])
+            self.assertEqual(json.loads((root / "record/stream-before.json").read_text())
+                             ['state']['messages'], 1)
+
+    def test_compute_evidence_preserves_each_cluster_and_repeat_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for cluster in ("compute-a", "compute-b", "compute-a"):
+                result = self.run_compute_capture(root, cluster)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(removals.read_text().splitlines(), [
-                    "-n nats-system exec -it test-box -- nats --context default "
-                    "stream rmm CreateNvcaFunctionTaskStream 7"])
-                self.assertTrue((root / "stream-after.json").is_file())
-            else:
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse(removals.exists())
-                self.assertFalse((root / "stream-after.json").exists())
+            records = list(root.glob("compute-*"))
+            self.assertEqual(len(records), 3)
+            self.assertEqual(len(list(root.glob("compute-compute-a.*"))), 2)
+            self.assertEqual(len(list(root.glob("compute-compute-b.*"))), 1)
+            for record in records:
+                expected = "compute-a" if record.name.startswith("compute-compute-a.") else "compute-b"
+                self.assertEqual(json.loads(record.read_text())["items"][0]["metadata"]["name"], expected)
+
+    def test_failed_compute_capture_preserves_previous_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = self.run_compute_capture(root, "compute-a")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            before = {p: p.read_bytes() for p in root.iterdir()}
+            result = self.run_compute_capture(root, "compute-a", status=1)
+            self.assertNotEqual(result.returncode, 0)
+            for path, contents in before.items():
+                self.assertEqual(path.read_bytes(), contents)
+
+    def run_compute_capture(self, root, cluster, status=0):
+        env = {**os.environ, "RECOVERY_RECORD": str(root), "CAPTURE_STATUS": str(status),
+               "CAPTURE_CLUSTER": cluster,
+               "CAPTURE_JSON": json.dumps({"items": [{"metadata": {"name": cluster}}]})}
+        stub = r'''
+kubectl() {
+  test "$*" = "--kubeconfig /site/$CAPTURE_CLUSTER --context $CAPTURE_CLUSTER get icmsrequests.nvca.nvcf.nvidia.io -A -o json"
+  if [ "$CAPTURE_STATUS" != 0 ]; then return "$CAPTURE_STATUS"; fi
+  printf '%s\n' "$CAPTURE_JSON"
+}
+'''
+        command = block_containing(RECOVERY, 'get icmsrequests.nvca.nvcf.nvidia.io')
+        command = command.replace('COMPUTE_CLUSTER="compute-cluster-name"',
+                                  f'COMPUTE_CLUSTER="{cluster}"')
+        command = command.replace('/absolute/path/to/compute-kubeconfig', f'/site/{cluster}')
+        command = command.replace('COMPUTE_CONTEXT="compute-context"',
+                                  f'COMPUTE_CONTEXT="{cluster}"')
+        return subprocess.run(["bash", "-euo", "pipefail", "-c", stub + command],
+                              env=env, capture_output=True, text=True)
 
     def test_profile_export_uses_explicit_config_and_context(self):
         self.run_profile_export(export_status=0)
