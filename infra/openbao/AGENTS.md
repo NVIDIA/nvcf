@@ -9,6 +9,7 @@ Run from the repository root:
 ```sh
 sh infra/openbao/scripts/test-semver.sh
 sh infra/openbao/scripts/test-runtime-packages.sh
+sh infra/openbao/tests/verify-runtime-ca-test.sh
 python3 -B -m unittest discover -s infra/openbao/tests
 bash deploy/helm/openbao/tests/jwt-plugin-lifecycle.sh
 bash migrations/openbao/tests/jwt-plugin-version-test.sh

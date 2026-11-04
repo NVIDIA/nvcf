@@ -30,19 +30,19 @@ check() {
     exit 1
   fi
 }
-check pass go1.26.9 v0.60.0
-check pass go1.27.2 v0.60.0
+check fail go1.26.9 v0.60.0
+check fail go1.27.2 v0.60.0
 check pass go1.26.10 v0.61.0
 check pass go1.27.3 ''
 check fail go1.26.8 v0.60.0
 check fail go1.27.0 v0.60.0
 check fail go1.27.1 v0.60.0
 check fail go1.25.12 v0.60.0
-check fail go1.27.2 v0.58.0
-check fail go1.27.2 v0.60.0-rc.1
+check fail go1.27.3 v0.58.0
+check fail go1.27.3 v0.60.0-rc.1
 check fail go1.27rc1 v0.60.0
 check fail unknown v0.60.0
-check pass go1.27.2 v0.60.0
+check pass go1.27.3 v0.60.0
 printf '\t=>\tgolang.org/x/net\tv0.58.0\th1:test\n' >> "$work/metadata"
 if GO="$work/go" METADATA="$work/metadata" "$verifier" binary >/dev/null 2>&1; then
   echo "accepted an unverified x/net replacement" >&2
