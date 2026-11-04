@@ -519,6 +519,7 @@ public class IcmsClient {
     // The worker reads one KEY=value entry per line and unquotes Go double-quoted values, so a
     // value with a control character is quoted to stay one entry. Other values are not quoted, so
     // workers see the same bytes as before.
+    // Example: "a\nb" becomes "a\\u000ab", which the worker unquotes back to "a\nb".
     static String encodeEnvironmentValue(Object value) {
         var text = String.valueOf(value);
         if (text.chars().noneMatch(Character::isISOControl)) {

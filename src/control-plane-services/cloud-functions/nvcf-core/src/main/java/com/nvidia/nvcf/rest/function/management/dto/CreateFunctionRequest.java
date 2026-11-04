@@ -142,7 +142,8 @@ public class CreateFunctionRequest {
     @Schema(description = """
             Helm Chart Service Name is required when helmChart property is specified. It must be
             a DNS label: letters, digits, and hyphens, starting and ending with a letter or digit.
-            """)
+            """,
+            example = "entrypoint")
     @Pattern(regexp = HELM_CHART_SERVICE_NAME_REGEX,
             message = "Invalid helmChartServiceName: Must conform to regex "
                     + HELM_CHART_SERVICE_NAME_REGEX)
