@@ -836,18 +836,6 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 			zap.L().Warn("failed to open stateful work request", zap.Error(err), zap.String("function id", functionId), zap.Stringer("request id", requestId))
 			return nil, fmt.Errorf("failed to open stateful work request: %w", err)
 		}
-		if invokeResponse.StreamingDispatch == nil {
-			s.eventLedger.Publish(ctx, newWorkDispatched(minted, isRejoin, time.Now()))
-		} else {
-			// A streaming request is dispatched once a worker answers it. The
-			// sender always reports, so this goroutine always ends.
-			go func() {
-				if <-invokeResponse.StreamingDispatch {
-					s.eventLedger.Publish(ctx, newWorkDispatched(minted, isRejoin, time.Now()))
-				}
-			}()
-		}
-
 		// Remembered until the worker CONNECTs back, so a shutdown can find the
 		// requests whose tokens are about to be lost with this pod and drop
 		// them from the work queue rather than leave them to be pulled and
@@ -873,6 +861,19 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 			functionId:        apiFunctionId,
 			functionVersionId: apiFunctionVersionId,
 		}).Value()
+		if invokeResponse.StreamingDispatch == nil {
+			s.eventLedger.Publish(ctx, newWorkDispatched(minted, isRejoin, time.Now()))
+		} else {
+			// A streaming request is dispatched once a worker answers it. The
+			// sender always reports, so this goroutine always ends. A worker that
+			// attaches before its answer is seen stops the sender, and SetConnection
+			// marks the connection before that, so an attached worker also counts.
+			go func() {
+				if <-invokeResponse.StreamingDispatch || workerConnection.EverConnected() {
+					s.eventLedger.Publish(ctx, newWorkDispatched(minted, isRejoin, time.Now()))
+				}
+			}()
+		}
 		if cancelInvokingWorker != nil {
 			go func() {
 				// once a connection shows up or the context goes away we should stop looking for a worker

@@ -257,7 +257,7 @@ func TestDispatchFailurePublishesSetupFailed(t *testing.T) {
 }
 
 func TestStreamingDispatchWaitsForAWorker(t *testing.T) {
-	setUp := func(t *testing.T) (*eventledger.Publisher, func() []map[string]any, chan<- bool) {
+	setUp := func(t *testing.T) (*StreamDirector, *eventledger.Publisher, func() []map[string]any, chan<- bool) {
 		publisher, received := newRecordingLedger(t)
 		answered := make(chan bool, 1)
 		director := NewStreamDirector(FunctionInvokerFunc(func(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuth func(invocation.WorkerAuth)) (invocation.Result, context.CancelFunc, error) {
@@ -270,11 +270,11 @@ func TestStreamingDispatchWaitsForAWorker(t *testing.T) {
 		client, _ := net.Pipe()
 		_, err := director.getAndInitWorkerConnection(t.Context(), worker.NewConnectionTrackingConn(client), "client-auth", testFunctionId, "", nil)
 		require.NoError(t, err)
-		return publisher, received, answered
+		return director, publisher, received, answered
 	}
 
 	t.Run("not before a worker answers", func(t *testing.T) {
-		publisher, received, answered := setUp(t)
+		_, publisher, received, answered := setUp(t)
 		// Close delivers everything published so far.
 		publisher.Close()
 		assert.Empty(t, received())
@@ -282,8 +282,19 @@ func TestStreamingDispatchWaitsForAWorker(t *testing.T) {
 		answered <- false
 	})
 	t.Run("once a worker answers", func(t *testing.T) {
-		publisher, received, answered := setUp(t)
+		_, publisher, received, answered := setUp(t)
 		answered <- true
+		require.Eventually(t, func() bool {
+			return len(ofType(received(), eventTypeWorkDispatched)) == 1
+		}, 5*time.Second, 10*time.Millisecond)
+		publisher.Close()
+	})
+	t.Run("a worker attaches before its answer is seen", func(t *testing.T) {
+		director, publisher, received, answered := setUp(t)
+		info := director.workerAuth.Get(testWorkerToken).Value()
+		workerLink, _ := net.Pipe()
+		require.NoError(t, director.RegisterWorker(t.Context(), testWorkerToken, info, workerLink))
+		answered <- false
 		require.Eventually(t, func() bool {
 			return len(ofType(received(), eventTypeWorkDispatched)) == 1
 		}, 5*time.Second, 10*time.Millisecond)
