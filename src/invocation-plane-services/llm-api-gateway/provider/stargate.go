@@ -1041,7 +1041,7 @@ func (p *StargateProvider) readStream(
 		var chunk models.ChatCompletionChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			events <- StreamEvent{
-				Err: fmt.Errorf("decode stargate stream chunk: %w", err),
+				Err: fmt.Errorf("%w: decode stargate stream chunk: %w", ErrStreamIncomplete, err),
 			}
 			return false
 		}
@@ -1090,11 +1090,11 @@ func (p *StargateProvider) readStream(
 			return
 		}
 		events <- StreamEvent{
-			Err: fmt.Errorf("read stargate stream: %w", err),
+			Err: fmt.Errorf("%w: read stargate stream: %w", ErrStreamIncomplete, err),
 		}
 		return
 	}
 	// A stream cut short upstream (Pylon output timeout, worker hang) can still
 	// end in a clean EOF, so only [DONE] marks a finished response.
-	events <- StreamEvent{Err: errors.New("stargate stream ended before [DONE]")}
+	events <- StreamEvent{Err: fmt.Errorf("%w: stargate stream ended before [DONE]", ErrStreamIncomplete)}
 }

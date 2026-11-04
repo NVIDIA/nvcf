@@ -31,6 +31,9 @@ import (
 
 var ErrProxyNotSupported = errors.New("openai proxy endpoints are not supported by this provider")
 
+// ErrStreamIncomplete marks a chat stream that failed after the upstream answered 200.
+var ErrStreamIncomplete = errors.New("upstream chat stream incomplete")
+
 type AdmissionPlan interface {
 	FinalizeTokens(
 		ctx context.Context,

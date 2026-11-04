@@ -91,6 +91,7 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 				var errBody openAIErrorResponse
 				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &errBody), body)
 				require.Equal(t, "server_error", errBody.Error.Type)
+				require.Equal(t, msgChatStreamIncomplete, errBody.Error.Message)
 				return
 			}
 			// The client keeps its 200; logs, metrics and traces record a 502.
