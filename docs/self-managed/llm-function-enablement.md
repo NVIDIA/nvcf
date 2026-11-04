@@ -1083,8 +1083,15 @@ A `404` with `no eligible candidates` from `llm.invocation.<domain>` means the
 request reached the LLM Gateway, but the requested function or model was
 unknown or was not registered on the selected request router. The message is
 in `error.message`, as described in [Error Responses](#error-responses).
-Similar `503` candidate errors mean the router knows the target but has no
-active eligible backend. Check:
+A `503` with `no ready backends` means the router knows the model but no
+backend is ready, for example while the only instance is replaced or the model
+is still loading. The response carries `Retry-After`, and clients should retry.
+By default the router keeps a model known for 15 minutes after its last
+backend leaves, so a removed function returns this `503` before it returns
+`404`. The request router flag `--deregistered-model-grace-ms` sets this
+period, and `0` disables it. Each request router replica keeps this in
+memory, so a replica that never saw the model, or restarted since, returns
+`404` right away. Check:
 
 - The deployment became `ACTIVE` more than about one minute ago. The sidecar
   registers with the request routers after the pod is `Running`.

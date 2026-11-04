@@ -128,7 +128,10 @@ func newHTTPErrorHandler(exposeRouterErrorCodes bool) echo.HTTPErrorHandler {
 		shape := errorShapeFor(c.Request())
 		anthropic := shape == shapeAnthropic
 		var upstream *provider.UpstreamError
-		if errors.As(err, &upstream) && upstream.RouterCode == "" && shape != shapeSystemOne {
+		if errors.As(err, &upstream) && upstream.RetryAfter != "" {
+			c.Response().Header().Set("Retry-After", upstream.RetryAfter)
+		}
+		if upstream != nil && upstream.RouterCode == "" && shape != shapeSystemOne {
 			native := isOpenAIErrorBody
 			if anthropic {
 				native = isAnthropicErrorBody

@@ -550,6 +550,7 @@ pub fn base_config(
             stargate::registration::DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
         routing_reservation_ttl_min: Duration::from_millis(1),
         routing_reservation_ttl_max: Duration::from_millis(1000),
+        deregistered_model_grace: stargate::registration::DEFAULT_DEREGISTERED_MODEL_GRACE,
         proxy_transport: ProxyTransportConfig {
             quic: QuicTunnelConfig {
                 connect_timeout: Duration::from_secs(5),
@@ -793,6 +794,16 @@ pub fn make_stargate_runtime_with_model_discovery(
 ) -> (SocketAddr, SocketAddr, SocketAddr, StargateRuntime) {
     let mut config = base_ephemeral_config(id);
     config.model_discovery_listen_addr = ephemeral_loopback_addr();
+    build_test_runtime(id, config, TestDiscovery::SelfOnly, None).with_model_discovery()
+}
+
+pub fn make_stargate_runtime_with_model_discovery_and_deregistered_model_grace(
+    id: &str,
+    deregistered_model_grace: Duration,
+) -> (SocketAddr, SocketAddr, SocketAddr, StargateRuntime) {
+    let mut config = base_ephemeral_config(id);
+    config.model_discovery_listen_addr = ephemeral_loopback_addr();
+    config.deregistered_model_grace = deregistered_model_grace;
     build_test_runtime(id, config, TestDiscovery::SelfOnly, None).with_model_discovery()
 }
 

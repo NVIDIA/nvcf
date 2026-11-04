@@ -78,6 +78,8 @@ pub struct StargateRuntimeConfig {
     /// Lower and upper bounds for backend RTT-based routing reservation expiry.
     pub routing_reservation_ttl_min: Duration,
     pub routing_reservation_ttl_max: Duration,
+    /// How long a model stays known (`503`, not `404`) after its last backend leaves; zero disables.
+    pub deregistered_model_grace: Duration,
     /// QUIC, TLS, tunnel-protocol, and retry configuration for backend request forwarding.
     pub proxy_transport: ProxyTransportConfig,
     /// Optional JSON load-balancer config path.
@@ -302,7 +304,10 @@ impl StargateRuntime {
         )
         .context("failed to initialize quic proxy")?;
         let quic_proxy = Arc::new(quic_proxy);
-        let shared_state = Arc::new(StargateState::new_with_metrics(metrics.clone()));
+        let shared_state = Arc::new(
+            StargateState::new_with_metrics(metrics.clone())
+                .with_deregistered_model_grace(self.config.deregistered_model_grace),
+        );
 
         let lb_config = match &self.config.lb_config_path {
             Some(path) => {
@@ -645,6 +650,7 @@ mod tests {
                 crate::control_plane::DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
             routing_reservation_ttl_min: Duration::from_millis(1),
             routing_reservation_ttl_max: Duration::from_millis(1000),
+            deregistered_model_grace: crate::routing_state::DEFAULT_DEREGISTERED_MODEL_GRACE,
             proxy_transport: ProxyTransportConfig {
                 quic: crate::tunnel::QuicTunnelConfig {
                     connect_timeout: Duration::from_secs(5),

@@ -20,7 +20,9 @@ use std::time::Duration;
 use crate::common::{
     BackendHandle, TokenMapAuthenticator, direct_registration_config, init_crypto,
     make_stargate_runtime, make_stargate_runtime_with_auth_and_model_discovery,
-    make_stargate_runtime_with_model_discovery, make_stargate_runtime_with_shared_discovery,
+    make_stargate_runtime_with_model_discovery,
+    make_stargate_runtime_with_model_discovery_and_deregistered_model_grace,
+    make_stargate_runtime_with_shared_discovery,
     make_stargate_runtime_with_shared_discovery_and_remote_watch_urls,
     make_stargate_runtime_with_watch_intervals, start_dummy_inst, wait_for_all_probes_routed_to,
     wait_for_routing, wait_for_routing_with_rk, wait_until, with_proxy_headers,
@@ -510,49 +512,119 @@ async fn http_model_discovery_and_debug_state_follow_live_registration() {
     fixture.shutdown().await;
 }
 
-#[tokio::test]
-async fn recent_list_models_hit_can_be_followed_by_no_candidates_404() {
-    let mut fixture = ModelDiscoveryFixture::start("test-sg-list-404-race").await;
-    let mut backend = fixture.register("list-404-backend", "list-404-model").await;
-    assert_models!(fixture, None, ["list-404-model"], ["list-404-model"]);
-
-    backend.stop();
-
+async fn wait_for_chat_status(
+    http_addr: SocketAddr,
+    model: &str,
+    status: reqwest::StatusCode,
+) -> reqwest::Response {
     let http_client = reqwest::Client::new();
-    let stargate_url = format!("http://{}/v1/chat/completions", fixture.http_addr);
+    let stargate_url = format!("http://{http_addr}/v1/chat/completions");
     let body = serde_json::json!({
-        "model": "list-404-model",
+        "model": model,
         "messages": [{"role": "user", "content": "hi"}],
         "stream": true,
     });
-    let response = wait_until(
-        "proxy returns no-candidates 404 after recent ListModels hit",
+    wait_until(
+        &format!("proxy returns {status} for {model}"),
         TEST_TIMEOUT,
         Duration::from_millis(50),
         || {
             let request = with_proxy_headers(
                 http_client.post(&stargate_url),
-                "list-404-model",
-                "req-list-404-race",
+                model,
+                &format!("req-{model}"),
             )
             .header("content-type", "application/json")
             .json(&body);
             async move {
                 let response = request.send().await.map_err(|error| error.to_string())?;
-                (response.status() == 404)
+                (response.status() == status)
                     .then_some(response)
-                    .ok_or_else(|| "response was not 404".to_string())
+                    .ok_or_else(|| "unexpected status".to_string())
             }
         },
     )
+    .await
+}
+
+fn stargate_error_code(response: &reqwest::Response) -> Option<&str> {
+    response
+        .headers()
+        .get("x-stargate-error-code")
+        .and_then(|value| value.to_str().ok())
+}
+
+#[tokio::test]
+async fn recent_list_models_hit_followed_by_deregistration_returns_retryable_503() {
+    let mut fixture = ModelDiscoveryFixture::start("test-sg-list-503-race").await;
+    let mut backend = fixture.register("list-503-backend", "list-503-model").await;
+    assert_models!(fixture, None, ["list-503-model"], ["list-503-model"]);
+
+    backend.stop();
+
+    let response = wait_for_chat_status(
+        fixture.http_addr,
+        "list-503-model",
+        reqwest::StatusCode::SERVICE_UNAVAILABLE,
+    )
     .await;
+    assert_eq!(stargate_error_code(&response), Some("no_ready_backends"));
     assert_eq!(
         response
             .headers()
-            .get("x-stargate-error-code")
+            .get(reqwest::header::RETRY_AFTER)
             .and_then(|value| value.to_str().ok()),
-        Some("no_eligible_candidates"),
-        "recent ListModels hit followed by local model disappearance should return the no-candidates contract"
+        Some("5")
+    );
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .expect("no-ready-backends response body should be json");
+    assert_eq!(body["code"], "no_ready_backends");
+    assert_models!(fixture, None, ["list-503-model"], []);
+
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn deregistered_model_returns_no_candidates_404_after_grace_expires() {
+    let mut fixture = ModelDiscoveryFixture::from_runtime(
+        make_stargate_runtime_with_model_discovery_and_deregistered_model_grace(
+            "test-sg-list-404-after-grace",
+            Duration::from_secs(2),
+        ),
+    )
+    .await;
+    let mut backend = fixture.register("list-404-backend", "list-404-model").await;
+    assert_models!(fixture, None, ["list-404-model"], ["list-404-model"]);
+
+    backend.stop();
+
+    let during_grace = wait_for_chat_status(
+        fixture.http_addr,
+        "list-404-model",
+        reqwest::StatusCode::SERVICE_UNAVAILABLE,
+    )
+    .await;
+    assert_eq!(
+        stargate_error_code(&during_grace),
+        Some("no_ready_backends")
+    );
+    assert!(
+        during_grace
+            .headers()
+            .contains_key(reqwest::header::RETRY_AFTER)
+    );
+
+    let response = wait_for_chat_status(
+        fixture.http_addr,
+        "list-404-model",
+        reqwest::StatusCode::NOT_FOUND,
+    )
+    .await;
+    assert_eq!(
+        stargate_error_code(&response),
+        Some("no_eligible_candidates")
     );
     let body: serde_json::Value = response
         .json()
