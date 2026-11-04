@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,6 +175,10 @@ func TestImageCatalogCharts(t *testing.T) {
 	if os.Getenv("NVCF_IMAGE_CATALOG_E2E") != "1" {
 		t.Skip("set NVCF_IMAGE_CATALOG_E2E=1 to render the four real charts with Helm")
 	}
+	helmConfiguration := t.TempDir()
+	t.Setenv("HELM_REPOSITORY_CONFIG", filepath.Join(helmConfiguration, "repositories.yaml"))
+	t.Setenv("HELM_REPOSITORY_CACHE", filepath.Join(helmConfiguration, "cache"))
+	t.Setenv("HELM_REGISTRY_CONFIG", filepath.Join(helmConfiguration, "registry.json"))
 	for _, test := range []struct {
 		name   string
 		path   string
@@ -193,6 +198,7 @@ func TestImageCatalogCharts(t *testing.T) {
 			}
 			// Dependency downloads stay in the test-owned chart copy.
 			if test.name == "nats" || test.name == "openbao" {
+				registerImageCatalogRepositories(t, chart)
 				if _, err := imageCatalogCommand("helm", "dependency", "build", "--skip-refresh", chart); err != nil {
 					t.Fatal(err)
 				}
@@ -297,5 +303,30 @@ func TestImageCatalogCharts(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func registerImageCatalogRepositories(t *testing.T, chart string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(chart, "Chart.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata struct {
+		Dependencies []struct {
+			Repository string
+		}
+	}
+	if err := yaml.Unmarshal(raw, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	for index, dependency := range metadata.Dependencies {
+		if !strings.HasPrefix(dependency.Repository, "https://") {
+			continue
+		}
+		name := "image-catalog-" + fmt.Sprint(index)
+		if _, err := imageCatalogCommand("helm", "repo", "add", name, dependency.Repository); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
