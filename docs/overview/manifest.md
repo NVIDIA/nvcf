@@ -61,22 +61,24 @@ See [Image Mirroring](./image-mirroring.md) for additional registry examples.
 
 ### Supporting images that ship from Docker Hub
 
-The NATS configuration reloader and the account-bootstrap Kubernetes
-utilities are not republished under the public `nvidia/nvcf` catalog, so they
-default to their upstream Docker Hub source:
+The development self-managed stack defaults its NATS server, configuration
+reloader, NATS box, and account-bootstrap Kubernetes utilities to Docker Hub
+images. The server and reloader versions shown here are not in the current
+public `nvidia/nvcf` catalog. The generated artifact table below records the
+latest released stack versions.
 
 | Value | Default image |
 | --- | --- |
-| `nats.reloader.image` | `docker.io/natsio/nats-server-config-reloader:0.24.0` |
+| `nats.container.image` | `docker.io/synadia/nats-server:2.14.9-alpine3.22` |
+| `nats.reloader.image` | `docker.io/natsio/nats-server-config-reloader:0.25.0` |
+| `nats.natsBox.container.image` | `docker.io/natsio/nats-box:0.20.1-nonroot` |
 | `api.accountBootstrap.image` | `docker.io/alpine/k8s:1.37.0` |
 
-A public-catalog install needs no configuration for these two images. Verify
-that your cluster can reach Docker Hub. If your egress to Docker Hub is
-authenticated or rate-limited, add the pull secret to
-`global.imagePullSecrets`.
+These development stack defaults need no image overrides. Verify that your
+cluster can reach Docker Hub. If your egress to Docker Hub is authenticated or
+rate-limited, add the pull secret to `global.imagePullSecrets`.
 
-If you have mirrored both images into your own registry, redirect them from
-your environment file
+If you have mirrored these images, redirect them from your environment file
 (`deploy/stacks/self-managed/environments/<environment>.yaml`). Set `registry`
 and `repository` together, because each key falls back to its own Docker Hub
 default rather than to `global.image`. You do not need to edit
@@ -84,11 +86,22 @@ default rather than to `global.image`. You do not need to edit
 
 ```yaml
 nats:
+  container:
+    image:
+      registry: <your-registry>
+      repository: <your-repository>/nats-server
+      tag: "2.14.9-alpine3.22"
   reloader:
     image:
       registry: <your-registry>
       repository: <your-repository>/nats-server-config-reloader
-      tag: "0.24.0"
+      tag: "0.25.0"
+  natsBox:
+    container:
+      image:
+        registry: <your-registry>
+        repository: <your-repository>/nats-box
+        tag: "0.20.1-nonroot"
 
 api:
   accountBootstrap:
@@ -100,10 +113,10 @@ api:
 
 ### Use upstream NATS images
 
-To use upstream images, merge these values into
+To pin the current upstream NATS images explicitly, merge these values into
 `deploy/stacks/self-managed/environments/<environment>.yaml`. Helmfile passes
 these settings to the selected NATS chart; no chart or release-definition
-changes are needed. This example uses NATS server 2.14.6, reloader 0.24.0, and
+changes are needed. This example uses NATS server 2.14.9, reloader 0.25.0, and
 NATS box 0.20.1. The box pin identifies the upstream multi-platform index for
 Linux AMD64 and ARM64.
 
@@ -113,12 +126,12 @@ nats:
     image:
       registry: docker.io
       repository: synadia/nats-server
-      tag: "2.14.6-alpine3.22"
+      tag: "2.14.9-alpine3.22"
   reloader:
     image:
       registry: docker.io
       repository: natsio/nats-server-config-reloader
-      tag: "0.24.0"
+      tag: "0.25.0"
   podTemplate:
     merge:
       spec:
