@@ -110,8 +110,9 @@ unchanged. Responses are not streamed; `stream` is ignored.
   least `1`. `Accept-Encoding` is set to `identity` so the gateway can read
   the reported usage.
 - The gateway holds the whole request body in memory and reads it a few
-  times. Images make these bodies large, so set
-  `NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES` when you enable these routes.
+  times. Images make these bodies large; size
+  `NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES` (default 50 MiB) against the pod
+  memory limit when you enable these routes.
 - `/v1/decisions` returns errors in the OpenAI shape. `/v1/systemone` returns
   `{"error":{"code","message","request_id"},"request_id"}`, where `request_id`
   equals the `X-Request-ID` response header. Both routes use the same codes,
@@ -284,7 +285,7 @@ Useful overrides:
 
 - `NVCF_GATEWAY_ADDR` to bind a specific listen address
 - `NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES` to reject larger request bodies with
-  413 (default `0`, no limit)
+  413 (default `52428800`, 50 MiB; `0` disables the limit)
 - `NVCF_DECISION_IMAGE_TOKENS` for the flat input token estimate of each image
   on the decision routes (default `1024`, must be `0` or more). The Helm
   chart sets it with `llmApiGateway.config.decisionImageTokens`.
