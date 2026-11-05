@@ -163,9 +163,10 @@ From lowest to highest priority:
 
 Enable the LLM addon before creating or invoking functions with
 `functionType: "LLM"`. The addon deploys `llm-request-router` and
-`llm-api-gateway`, adds the `llm.invocation.<domain>` route when Gateway API
-ingress is enabled, and configures workers to use the LLM sidecar. The Helmfile
-condition is `addons.llm.enabled`. Do not use the obsolete `llm.enabled` path.
+`llm-api-gateway`, adds the `llm.<domain>` and `llm.invocation.<domain>` routes
+when Gateway API ingress is enabled, and configures workers to use the LLM
+sidecar. The Helmfile condition is `addons.llm.enabled`. Do not use the
+obsolete `llm.enabled` path.
 
 For a single-node isolated test cluster, add this configuration to
 `environments/<env>.yaml` before applying the stack:
