@@ -116,12 +116,14 @@ public class CassandraSessionLivenessConfiguration {
 
     /**
      * The application's driver settings with schema metadata off, which keeps the probe cheap
-     * when many pods check at once. The probe only reads the application's loader: a session
+     * when many pods check at once, and driver metrics off, so the probe works with any metrics
+     * factory and registers no meters. The probe only reads the application's loader: a session
      * registers with its loader on start and closes it on close.
      */
     static DriverConfigLoader probeConfigLoader(DriverConfigLoader applicationLoader) {
         var overrides = new OptionsMap();
         overrides.put(TypedDriverOption.METADATA_SCHEMA_ENABLED, false);
+        overrides.put(TypedDriverOption.METRICS_FACTORY_CLASS, "NoopMetricsFactory");
         return DriverConfigLoader.compose(DriverConfigLoader.fromMap(overrides),
                                           new ReadOnlyConfigLoader(applicationLoader));
     }

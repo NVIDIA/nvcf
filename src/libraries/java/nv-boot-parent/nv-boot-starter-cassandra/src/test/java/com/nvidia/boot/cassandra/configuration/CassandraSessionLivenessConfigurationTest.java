@@ -17,6 +17,7 @@
 package com.nvidia.boot.cassandra.configuration;
 
 import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.METADATA_SCHEMA_ENABLED;
+import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.METRICS_FACTORY_CLASS;
 import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.REQUEST_TIMEOUT;
 import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.RETRY_POLICY_CLASS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -162,7 +163,7 @@ class CassandraSessionLivenessConfigurationTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void freshSessionSkipsSchemaMetadataAndKeepsApplicationSettings() {
+    void freshSessionSkipsSchemaMetadataAndMetricsAndKeepsApplicationSettings() {
         var builder = mock(CqlSessionBuilder.class);
         when(builder.withMetricRegistry(any())).thenReturn(builder);
         when(builder.build()).thenReturn(mock(CqlSession.class));
@@ -178,6 +179,7 @@ class CassandraSessionLivenessConfigurationTest {
         verify(builder).withConfigLoader(loader.capture());
         var profile = loader.getValue().getInitialConfig().getDefaultProfile();
         assertThat(profile.getBoolean(METADATA_SCHEMA_ENABLED)).isFalse();
+        assertThat(profile.getString(METRICS_FACTORY_CLASS)).isEqualTo("NoopMetricsFactory");
         assertThat(profile.getDuration(REQUEST_TIMEOUT)).isEqualTo(Duration.ofSeconds(7));
     }
 
@@ -199,6 +201,7 @@ class CassandraSessionLivenessConfigurationTest {
     private static DriverConfigLoader applicationLoader() {
         var options = OptionsMap.driverDefaults();
         options.put(TypedDriverOption.REQUEST_TIMEOUT, Duration.ofSeconds(7));
+        options.put(TypedDriverOption.METRICS_FACTORY_CLASS, "DropwizardMetricsFactory");
         return DriverConfigLoader.fromMap(options);
     }
 
