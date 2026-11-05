@@ -429,7 +429,8 @@ The collector sends each signal only to the endpoint attached for that signal.
   Bit reads the logs of the inference or task container. For Helm workloads, it
   reads the logs of the application pods in the workload namespace that run on
   the same node as the utils pod. It skips the utils pod, the shared storage
-  SMB server pod, and any `byoo-otel-collector` or `fluentbit-logs` container.
+  SMB server pod, and any `byoo-otel-collector`, `fluentbit-logs`, or
+  `model-cache-init` container.
 - The collector's own `otelcol_*` metrics, with the workload metrics.
 - Worker, NVCA, DCGM, cAdvisor, and kube-state-metrics series for the workload,
   only when platform metrics federation is on. Federation is off by default on

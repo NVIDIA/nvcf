@@ -175,6 +175,13 @@ const (
 	// smbServerPodName is the shared storage SMB server pod that NVCA runs in a
 	// Helm workload namespace. It matches SMBServerPodName in NVCA's pkg/storage.
 	smbServerPodName = "nvcf-smb-server"
+
+	// modelCacheInitContainerName is the init container that NVCA's Helm storage
+	// webhook adds to workload pods to download the model cache when no shared
+	// cache backend is available. It matches EphemeralModelCacheInitContainerName
+	// in NVCA's pkg/storage. The model cache writer Job runs in NVCA's own
+	// namespace, outside the workload namespace that Fluent Bit reads.
+	modelCacheInitContainerName = "model-cache-init"
 )
 
 var (
@@ -603,6 +610,8 @@ func NewFluentbitConfigMap(name string, podName string, workloadType string) *co
 			// The sidecars by container name, in case they run in another pod.
 			containerLogGlob("", ByooOTelCollectorPodNameBase),
 			containerLogGlob("", FluentbitContainerName),
+			// The model cache download that NVCA injects into workload pods.
+			containerLogGlob("", modelCacheInitContainerName),
 		)
 	} else {
 		// For container deployments, use specific pod name and container name patterns

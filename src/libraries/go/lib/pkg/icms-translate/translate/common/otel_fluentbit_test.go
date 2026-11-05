@@ -521,6 +521,7 @@ func TestFluentbitConfigContainsInferenceAndTaskContainers(t *testing.T) {
 	assert.Contains(t, config, "Port  14358", "Should use HTTP port 14358")
 }
 
+// TestFluentbitConfigForHelmWorkload checks the Helm tail input's Path and Exclude_Path values.
 func TestFluentbitConfigForHelmWorkload(t *testing.T) {
 	podName := UtilsPodName
 	cm := NewFluentbitConfigMap("test-cm", podName, WorkloadTypeHelm)
@@ -538,6 +539,7 @@ func TestFluentbitConfigForHelmWorkload(t *testing.T) {
 		"/var/log/containers/nvcf-smb-server_${POD_NAMESPACE}_*.log",
 		"/var/log/containers/*_${POD_NAMESPACE}_byoo-otel-collector-*.log",
 		"/var/log/containers/*_${POD_NAMESPACE}_fluentbit-logs-*.log",
+		"/var/log/containers/*_${POD_NAMESPACE}_model-cache-init-*.log",
 	}, ","), input["exclude_path"])
 
 	// Verify basic configuration
@@ -610,6 +612,9 @@ func TestFluentbitTailInputParsesContainerRuntimeLogs(t *testing.T) {
 // testContainerID is a container ID as kubelet writes it into log file names.
 const testContainerID = "4f3b2a1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a"
 
+// testCacheHandle is a model cache handle, which defaults to the function version ID.
+const testCacheHandle = "6d1f0c2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
+
 // kubeletLogFile returns the path kubelet gives a container's log file.
 func kubeletLogFile(pod, namespace, container string) string {
 	return fmt.Sprintf("/var/log/containers/%s_%s_%s-%s.log", pod, namespace, container, testContainerID)
@@ -654,12 +659,14 @@ func fluentbitCollects(t *testing.T, config, podName, namespace, file string) bo
 	return true
 }
 
+// TestFnmatchMatchesFullPath checks that the fnmatch helper lets '*' match '/' as Fluent Bit does.
 func TestFnmatchMatchesFullPath(t *testing.T) {
 	assert.True(t, fnmatch(t, "*.gz", "/var/log/containers/a_b_c-1.log.gz"))
 	assert.True(t, fnmatch(t, "/var/log/containers/a_*.log", "/var/log/containers/a_b_c-1.log"))
 	assert.False(t, fnmatch(t, "a_*", "/var/log/containers/a_b_c-1.log"))
 }
 
+// TestFluentbitHelmCollectsWorkloadLogsOnly checks which kubelet log files the Helm tail input reads.
 func TestFluentbitHelmCollectsWorkloadLogsOnly(t *testing.T) {
 	const namespace = "sr-0123456789abcdef"
 	podName := UtilsPodName
@@ -677,6 +684,8 @@ func TestFluentbitHelmCollectsWorkloadLogsOnly(t *testing.T) {
 		{"workload pod named like utils", kubeletLogFile("utils-api-0", namespace, "api"), true},
 		{"workload container named utils", kubeletLogFile("worker-0", namespace, UtilsContainerName), true},
 		{"workload container named like Fluent Bit", kubeletLogFile("worker-0", namespace, "fluentbit"), true},
+		{"workload container named like model cache init", kubeletLogFile("worker-0", namespace, "model-cache"), true},
+		{"workload pod named like the model cache writer Job", kubeletLogFile("writer-job-0", namespace, "writer"), true},
 
 		{"utils container", kubeletLogFile(podName, namespace, UtilsContainerName), false},
 		{"ESS container", kubeletLogFile(podName, namespace, ESSContainerName), false},
@@ -688,6 +697,9 @@ func TestFluentbitHelmCollectsWorkloadLogsOnly(t *testing.T) {
 		{"Fluent Bit in another pod", kubeletLogFile("worker-0", namespace, FluentbitContainerName), false},
 		{"workload in another namespace", kubeletLogFile("worker-0", "sr-fedcba9876543210", "worker"), false},
 		{"utils pod in another namespace", kubeletLogFile(podName, "sr-fedcba9876543210", UtilsContainerName), false},
+		{"model cache init container in a workload pod", kubeletLogFile("mini-service-7d9f8c6b5-x2k4p", namespace, modelCacheInitContainerName), false},
+		// NVCA runs the model cache writer Job in its own nvca-modelcache-init namespace.
+		{"model cache writer Job pod", kubeletLogFile("writer-job-"+testCacheHandle+"-7xk2q", "nvca-modelcache-init", InitContainerName), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -696,6 +708,7 @@ func TestFluentbitHelmCollectsWorkloadLogsOnly(t *testing.T) {
 	}
 }
 
+// TestFluentbitContainerCollectsWorkloadLogsOnly checks which kubelet log files the container tail input reads.
 func TestFluentbitContainerCollectsWorkloadLogsOnly(t *testing.T) {
 	const namespace = "sr-0123456789abcdef"
 	podName := "0-4b5c6d7e-8f90-4a1b-9c2d-3e4f5a6b7c8d"
