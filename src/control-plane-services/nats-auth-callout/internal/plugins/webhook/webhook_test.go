@@ -24,6 +24,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -397,6 +398,7 @@ func TestWebhookPlugin(t *testing.T) {
 	})
 }
 
+// TestWebhookPluginAuditLog checks the audit entry written for allowed and denied requests.
 func TestWebhookPluginAuditLog(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -453,6 +455,65 @@ func TestWebhookPluginAuditLog(t *testing.T) {
 			delete(entry, "ts")
 			assert.Equal(t, tt.want, entry)
 			assert.NotContains(t, out.String(), authReq.Payload, "audit entry must not contain the token")
+		})
+	}
+}
+
+// TestWebhookPluginAuditLogOmitsURLCredentials checks that a failed request does not
+// write credentials from the configured webhook URL to the audit entry or the error.
+func TestWebhookPluginAuditLogOmitsURLCredentials(t *testing.T) {
+	secrets := []string{"audit-user", "audit-password", "audit-query-secret"}
+	tests := []struct {
+		name       string
+		handler    http.HandlerFunc
+		wantPrefix string
+	}{
+		{
+			name: "transport failure",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					conn.Close()
+				}
+			},
+			wantPrefix: "webhook request failed: Post: ",
+		},
+		{
+			name: "retries exhausted",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			},
+			wantPrefix: "webhook request failed: retries exhausted",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			defer server.Close()
+			webhookURL, err := url.Parse(server.URL)
+			require.NoError(t, err)
+			webhookURL.User = url.UserPassword(secrets[0], secrets[1])
+			webhookURL.RawQuery = "token=" + secrets[2]
+
+			plugin, err := NewPlugin(Config{URL: webhookURL.String(), Timeout: 5 * time.Second, RetryAttempts: 1}, zaptest.NewLogger(t))
+			require.NoError(t, err)
+			var out bytes.Buffer
+			plugin.auditLogger = newAuditLogger(zapcore.AddSync(&out))
+
+			authReq := &types.Request{Account: "test-account", PluginName: "webhook-alias", Payload: "test-token"}
+			_, err = plugin.Authenticate(context.Background(), authReq)
+			require.Error(t, err)
+			assert.True(t, strings.HasPrefix(err.Error(), tt.wantPrefix), "error %q should start with %q", err, tt.wantPrefix)
+
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(out.Bytes(), &entry))
+			assert.Equal(t, "deny", entry["result"])
+			assert.Equal(t, err.Error(), entry["error"])
+			for _, secret := range secrets {
+				assert.NotContains(t, err.Error(), secret, "error must not contain URL credentials")
+				assert.NotContains(t, out.String(), secret, "audit entry must not contain URL credentials")
+			}
 		})
 	}
 }

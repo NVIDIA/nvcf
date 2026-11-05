@@ -21,8 +21,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -184,8 +186,7 @@ func (p *Plugin) callWebhook(ctx context.Context, account, pluginName, payload s
 	// Execute request with retries
 	resp, err := p.retryClient.Do(retryReq)
 	if err != nil {
-		// untested: network-level failures are complex to test reliably
-		return nil, types.NewAuthError(types.ErrTypeInternalError, fmt.Sprintf("webhook request failed: %v", err), 500)
+		return nil, types.NewAuthError(types.ErrTypeInternalError, "webhook request failed: "+describeRequestError(err), 500)
 	}
 	defer resp.Body.Close()
 
@@ -195,6 +196,23 @@ func (p *Plugin) callWebhook(ctx context.Context, account, pluginName, payload s
 	}
 
 	return p.parseSuccessResponse(resp)
+}
+
+// describeRequestError describes a failed webhook request without the request URL.
+// The retryable client and net/http both put the URL into their error text, and
+// the configured URL can carry credentials in its userinfo or query string.
+func describeRequestError(err error) string {
+	var urlErr *url.Error
+	switch {
+	case errors.As(err, &urlErr):
+		return urlErr.Op + ": " + urlErr.Err.Error()
+	case errors.Is(err, context.Canceled):
+		return context.Canceled.Error()
+	case errors.Is(err, context.DeadlineExceeded):
+		return context.DeadlineExceeded.Error()
+	default:
+		return "retries exhausted"
+	}
 }
 
 // handleErrorResponse handles non-2xx HTTP responses and converts them to appropriate auth errors.
