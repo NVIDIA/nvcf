@@ -59,6 +59,38 @@ assert_all_clients() {
 render_case default
 assert_all_clients default ""
 
+assert_all_images() {
+  local case_name="$1" expected="$2"
+  assert_client "$case_name" openbao-server .openbao.migrations.image.tag "$expected"
+  assert_client "$case_name" sis .sis.lls.hmacRotation.image.tag "$expected"
+  assert_client "$case_name" llm-request-router .llmRequestRouter.pki.image.tag "$expected"
+  assert_client "$case_name" nvcf-ui .nvcfUi.openbaoMigrations.image.tag "$expected"
+}
+
+assert_all_images default "$(yq -r '.openbao.migrations.image.tag' "$stack_dir/environments/base.yaml")"
+render_case shared-image --state-values-set-string openbao.migrations.image.tag=0.19.99
+assert_all_images shared-image 0.19.99
+
+render_case explicit-images \
+  --state-values-set-string openbao.migrations.image.tag=0.19.99 \
+  --state-values-set-string addons.lls.hmacRotation.image.tag=0.19.96 \
+  --state-values-set-string addons.llm.pki.image.tag=0.19.97 \
+  --state-values-set-string addons.nvcfUi.openbaoMigrations.image.tag=0.19.98
+assert_client explicit-images openbao-server .openbao.migrations.image.tag 0.19.99
+assert_client explicit-images sis .sis.lls.hmacRotation.image.tag 0.19.96
+assert_client explicit-images llm-request-router .llmRequestRouter.pki.image.tag 0.19.97
+assert_client explicit-images nvcf-ui .nvcfUi.openbaoMigrations.image.tag 0.19.98
+
+render_case empty-images \
+  --state-values-set-string openbao.migrations.image.tag=0.19.99 \
+  --state-values-set-string addons.lls.hmacRotation.image.tag= \
+  --state-values-set-string addons.llm.pki.image.tag= \
+  --state-values-set-string addons.nvcfUi.openbaoMigrations.image.tag=
+assert_all_images empty-images 0.19.99
+
+render_case bridge --state-values-set openbao.jwtPluginLifecycle.mode=bridge
+assert_client bridge openbao-server .openbao.jwtPluginLifecycle.mode bridge
+
 render_case compatible --state-values-set-string openbao.migrations.kubectlMinor=1.36
 assert_all_clients compatible 1.36
 

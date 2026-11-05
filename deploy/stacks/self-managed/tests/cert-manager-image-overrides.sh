@@ -63,15 +63,20 @@ assert_images() {
 printf '{}\n' > "$environment_file"
 render
 cp "$work_dir/rendered.yaml" "$work_dir/default.yaml"
+chart_tag="$(yq -r '.appVersion' "$chart/charts/cert-manager/Chart.yaml")"
+for component in controller webhook cainjector startupapicheck acmesolver; do
+  assert_equal "$(rendered_image "$component")" \
+    "quay.io/jetstack/cert-manager-$component:$chart_tag" "$component chart-owned upstream default"
+done
 # Test each values-template input independently, without rendering a chart.
-# Unspecified fields and other components must retain their global defaults.
+# Unspecified fields and other components must retain chart-owned defaults.
 printf 'global:\n  image:\n    registry: global.example.com\n    repository: private\n' > "$environment_file"
 cp "$environment_file" "$work_dir/global-environment.yaml"
 write_values "$work_dir/global-values.yaml"
-for component in controller webhook cainjector startupapicheck; do
+for component in controller webhook cainjector startupapicheck acmesolver; do
   path="$(image_path "$component")"
-  assert_equal "$(yq -r ".\"cert-manager\".$path.repository" "$work_dir/global-values.yaml")" \
-    "global.example.com/private/cert-manager-$component" "$component global mirror fallback"
+  assert_equal "$(yq -r ".\"cert-manager\".$path.repository // \"\"" "$work_dir/global-values.yaml")" \
+    "" "$component inherits the chart repository instead of the global mirror"
 done
 for component in controller webhook cainjector startupapicheck acmesolver; do
   path="$(image_path "$component")"
@@ -105,11 +110,6 @@ done
 yq -i '.global.image = {"registry": "global.example.com", "repository": "private"}' "$environment_file"
 render
 assert_images
-for component in controller webhook cainjector startupapicheck acmesolver; do
-  path="$(image_path "$component")"
-  assert_equal "$(yq -r ".certManager.$path.tag" "$environment_file")" \
-    "$(yq -r '.appVersion' "$chart/charts/cert-manager/Chart.yaml")" "$component matches selected subchart"
-done
 for name in cert-manager cert-manager-webhook cert-manager-cainjector cert-manager-startupapicheck; do
   assert_equal "$(yq "select((.kind == \"Deployment\" or .kind == \"Job\") and .metadata.name == \"$name\") | .spec.template.spec.securityContext.runAsNonRoot" "$work_dir/rendered.yaml")" true "$name retains nonroot"
 done

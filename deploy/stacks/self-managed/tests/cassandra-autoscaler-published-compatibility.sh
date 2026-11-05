@@ -18,17 +18,31 @@ cassandra_manifest="$work_dir/cassandra.yaml"
 cassandra_release="$work_dir/cassandra-release.json"
 autoscaler_manifest="$work_dir/function-autoscaler.yaml"
 autoscaler_release="$work_dir/function-autoscaler-release.json"
-# These literals are the compatibility contract under test. Review and advance
-# them together only after the autoscaler no longer uses the removed tables.
-cassandra_chart_version=0.21.3
-autoscaler_chart_version=0.5.0
-migrations_image_version=0.17.6
+# Keep the autoscaler's legacy tables by staying on the compatible chart and
+# migration minor lines. Patch versions follow the stack's source of truth.
+cassandra_chart_version="$(awk '
+  $1 == "-" && $2 == "name:" { release = $3 }
+  release == "cassandra" && $1 == "version:" { print $2; exit }
+' "$stack_dir/helmfile.d/01-dependencies.yaml.gotmpl")"
+autoscaler_chart_version="$(awk '
+  $1 == "-" && $2 == "name:" { release = $3 }
+  release == "function-autoscaler" && $1 == "version:" { print $2; exit }
+' "$stack_dir/helmfile.d/03-observability.yaml.gotmpl")"
+migrations_image_version="$(yq -r '.cassandra.migrations.image.tag' "$stack_dir/environments/base.yaml")"
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
   echo "cassandra-autoscaler-published-compatibility: $*" >&2
   exit 1
 }
+
+[[ "$cassandra_chart_version" =~ ^0\.21\.[0-9]+$ ]] ||
+  fail "Cassandra minor changed; review autoscaler schema compatibility"
+[[ "$autoscaler_chart_version" =~ ^0\.5\.[0-9]+$ ]] ||
+  fail "autoscaler minor changed; review Cassandra schema compatibility"
+[[ "$migrations_image_version" =~ ^0\.17\.([0-9]+)$ ]] &&
+  (( BASH_REMATCH[1] >= 6 )) ||
+  fail "migrations must retain the compatible 0.17 line, patch 6 or later"
 
 mkdir -p "$test_stacks_dir"
 cp -R "$stacks_dir"/. "$test_stacks_dir"
@@ -125,10 +139,13 @@ test "$(yq -r '.[0].version' "$autoscaler_release")" = \
   fail "observability Helmfile did not select function autoscaler $autoscaler_chart_version"
 
 autoscaler_chart="oci://${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/helm-nvcf-function-autoscaler"
-autoscaler_image_version="$(helm show chart "$autoscaler_chart" \
-  --version "$autoscaler_chart_version" | yq -r '.appVersion // ""')"
+autoscaler_image_version="$(yq -r '.functionAutoscaler.image.tag // ""' "$stack_dir/environments/base.yaml")"
+if test -z "$autoscaler_image_version"; then
+  autoscaler_image_version="$(helm show chart "$autoscaler_chart" \
+    --version "$autoscaler_chart_version" | yq -r '.appVersion // ""')"
+fi
 test -n "$autoscaler_image_version" ||
-  fail "published function autoscaler chart has no appVersion"
+  fail "neither the stack nor published function autoscaler chart selects an image version"
 
 autoscaler_image="$(yq ea -r '
   select(.kind == "Deployment" and .metadata.name == "function-autoscaler") |

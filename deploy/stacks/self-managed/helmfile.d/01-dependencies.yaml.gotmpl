@@ -113,19 +113,19 @@ releases:
 
   # --- NVCF NCP Dependencies ---
   - name: nats
-    version: 0.8.4
+    version: 0.8.6
     condition: nats.enabled # From defaults.yaml or env overrides
     namespace: nats-system
     <<: *dependency # Inherits base values from the dependency template
 
   - name: cert-manager
-    version: 0.1.0
+    version: 0.2.0
     condition: certManager.enabled
     namespace: cert-manager
     <<: *dependency
 
   - name: openbao-server # this name MUST not change
-    version: 0.32.8
+    version: 0.32.9
     condition: openbao.enabled # From defaults.yaml or env overrides
     namespace: vault-system
     <<: *dependency # Inherits base values from the dependency template
@@ -167,7 +167,7 @@ releases:
 {{- end }}
 
   - name: cassandra
-    version: 0.21.3
+    version: 0.21.4
     condition: cassandra.enabled # From defaults.yaml or env overrides
     namespace: cassandra-system
     <<: *dependency # Inherits base values from the dependency template
