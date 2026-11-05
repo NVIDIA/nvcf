@@ -356,3 +356,21 @@ Native release notes live in `fern/changelog/`. Dated MDX files use `##` heading
 for cards and frontmatter tags for filters. Keep links relative and record the
 edition and exact artifact versions in release entries. Qualification remains a
 reviewed declaration; a development entry is not release approval.
+
+## Chart image settings
+
+The nats wrapper exposes image coordinates in its native values. Use ordinary
+Helm values files to override registry, repository and tag fields, including
+mirrors with different repository names. The image index is used by CI; Helm
+consumes the existing values keys directly.
+
+Run the maintenance chart's defaults, indirect-image coverage and override tests:
+
+```sh
+NVCF_IMAGE_CATALOG_E2E=1 go test -C tools/docs-version-sync -run '^TestImageCatalogCharts/nats$' -count=1
+```
+
+The test downloads dependencies in an isolated copy and Helm configuration.
+It checks last-file precedence and tag/digest overrides. Successful rendering
+does not establish that an image is published or that its security fixes have
+been qualified.

@@ -142,6 +142,11 @@ jobs:
       - name: Run observability Helmfile profile tests
         run: make -C deploy/stacks/observability test
 
+      - name: Test chart image defaults and ordinary overrides
+        env:
+          NVCF_IMAGE_CATALOG_E2E: "1"
+        run: go test -C tools/docs-version-sync -run '^TestImageCatalogCharts/nats$' -count=1
+
       - name: Test OpenBao auto-unseal retry behavior
         run: bash deploy/helm/openbao/tests/auto-unseal-sidecar.sh
 
@@ -239,11 +244,18 @@ jobs:
       - name: Check migrations against the proposed version bump
         env:
           BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           STACK: ${{ matrix.stack }}
         run: |
-          bump="$(tools/ci/release-bump-type for-branch "origin/${BASE_REF}")"
+          bump="$(tools/ci/release-bump-type for-branch "${BASE_SHA}")"
           echo "proposed bump: ${bump}"
-          tools/ci/check-stack-upgrade-policy --stack "${STACK}" --bump "${bump}"
+          args=()
+          # Maintenance PRs change an existing train, which may have synthetic
+          # history. Compare their target branch, not a newer sibling release.
+          if [[ "${BASE_REF}" == release-* ]]; then
+            args+=(--base-ref "${BASE_SHA}")
+          fi
+          tools/ci/check-stack-upgrade-policy --stack "${STACK}" --bump "${bump}" "${args[@]}"
 
   github-release-helper:
     name: GitHub release helper
