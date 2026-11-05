@@ -336,6 +336,11 @@ func collectResolvedImages(node *yaml.Node, images map[string]parsedImageReferen
 					return err
 				}
 			}
+			if key.Value == "env" {
+				if err := collectResolvedAgentEnvironment(value, images); err != nil {
+					return err
+				}
+			}
 			if err := collectResolvedImages(value, images); err != nil {
 				return err
 			}
@@ -368,6 +373,33 @@ func collectResolvedImageArguments(node *yaml.Node, images map[string]parsedImag
 	for _, child := range node.Content {
 		if err := collectResolvedImageArguments(child, images); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func collectResolvedAgentEnvironment(node *yaml.Node, images map[string]parsedImageReference) error {
+	if node.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for _, entry := range node.Content {
+		var variable struct {
+			Name  string `yaml:"name"`
+			Value string `yaml:"value"`
+		}
+		if err := entry.Decode(&variable); err != nil {
+			return fmt.Errorf("decode agent environment: %w", err)
+		}
+		if variable.Name != "AGENT_INJECT_VAULT_IMAGE" {
+			continue
+		}
+		image, err := parseResolvedImageReference(variable.Value)
+		if err != nil {
+			return fmt.Errorf("AGENT_INJECT_VAULT_IMAGE: %w", err)
+		}
+		image.Indirect = true
+		if existing, exists := images[image.Reference]; !exists || existing.Indirect {
+			images[image.Reference] = image
 		}
 	}
 	return nil
