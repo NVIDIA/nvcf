@@ -20,6 +20,28 @@ The chart's tag stays in effect unless `upgradeReceipt.image.tag` is set.
 Qualify any replacement helper against the target Kubernetes version. The
 image pull secrets still come from `global.imagePullSecrets`.
 
+## Kubernetes client compatibility
+
+The default helper matches the API account-bootstrap toolbox. Its kubectl
+1.37 client supports Kubernetes API servers within one minor version, as
+defined by the [Kubernetes version skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+For Kubernetes 1.35, set a compatible client in the stack environment before
+installing or upgrading:
+
+```yaml
+upgradeReceipt:
+  image:
+    tag: "1.36.6"
+```
+
+This tag-only override keeps the configured registry and repository. Without
+a mirror, these are `docker.io` and `alpine/k8s`. If you configured a mirror,
+make the compatible tag available there too. The override does not select or
+upgrade the Kubernetes server. Qualify the receipt install and upgrade hooks
+on the target cluster when changing its helper image.
+
+## Release inventory
+
 The release inventory includes both this local chart, pinned to the stack
 commit, and the rendered helper image as required control-plane artifacts.
 Different helper versions used by other hooks remain separate inventory

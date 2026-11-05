@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -506,4 +507,55 @@ func findResolvedInventoryArtifact(t *testing.T, inventory resolvedStackInventor
 	}
 	t.Fatalf("artifact %s %s not found", artifactType, reference)
 	return resolvedInventoryArtifact{}
+}
+
+func TestResolvedInventoryIncludesInjectedAgentImages(t *testing.T) {
+	inputs := resolvedInventoryTestInputs(t)
+	inputs[1].ManifestByRelease["resource-config"] = []byte(`
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: injector
+          image: registry.example.com/injector:fixture
+          env:
+            - name: AGENT_INJECT_VAULT_IMAGE
+              value: mirror.example.com/agent:fixture
+`)
+	inventory, err := generateResolvedStackInventory(resolvedInventoryTestSource(), inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findResolvedInventoryArtifact(t, inventory, "container-image", "registry.example.com/injector:fixture")
+	agent := findResolvedInventoryArtifact(t, inventory, "container-image", "mirror.example.com/agent:fixture")
+	if len(agent.Sources) != 1 || agent.Sources[0].Requirement != ManifestOptional {
+		t.Fatalf("injected-only image must retain its indirect requirement: %+v", agent)
+	}
+}
+
+func TestResolvedAgentEnvironmentPreservesDirectImageRequirement(t *testing.T) {
+	reference := "registry.example.com/agent:fixture"
+	environment := "env: [{name: AGENT_INJECT_VAULT_IMAGE, value: " + reference + "}]\n"
+	direct := "image: " + reference + "\n"
+	for _, manifest := range []string{direct + environment, environment + direct} {
+		images, err := extractResolvedImages([]byte(manifest))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(images) != 1 || images[0].Indirect {
+			t.Fatalf("direct image requirement was lost: %+v", images)
+		}
+	}
+}
+
+func TestResolvedAgentEnvironmentRejectsIncompleteImages(t *testing.T) {
+	for _, reference := range []string{"", "missing-tag", "${REGISTRY}/agent:fixture"} {
+		manifest := fmt.Sprintf("env: [{name: AGENT_INJECT_VAULT_IMAGE, value: %q}]\n", reference)
+		_, err := extractResolvedImages([]byte(manifest))
+		if err == nil || !strings.Contains(err.Error(), "AGENT_INJECT_VAULT_IMAGE") {
+			t.Fatalf("invalid agent image %q: %v", reference, err)
+		}
+	}
 }

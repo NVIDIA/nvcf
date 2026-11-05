@@ -32,7 +32,7 @@ fail() {
 # this stack-level forwarding test.
 nats_reloader_default_registry="$(yq -r '.nats.reloader.image.registry // ""' "$nats_chart_values")"
 nats_reloader_default_repository="$(yq -r '.nats.reloader.image.repository // ""' "$nats_chart_values")"
-nats_reloader_default_tag="$(yq -r '.nats.reloader.image.tag // ""' "$nats_chart_values")"
+nats_reloader_default_tag="$(sed -n 's/.*natsReloaderTag :=.*default "\([^"]*\)".*/\1/p' "$stack_dir/global.yaml.gotmpl")"
 account_bootstrap_default_registry="$(yq -r '.api.accountBootstrap.image.registry // ""' "$api_chart_values")"
 account_bootstrap_default_repository="$(yq -r '.api.accountBootstrap.image.repository // ""' "$api_chart_values")"
 account_bootstrap_default_tag="$(yq -r '.api.accountBootstrap.image.tag // ""' "$api_chart_values")"
@@ -188,8 +188,8 @@ test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroup' "$work_dir/
   fail "NATS storage group must reach the pod"
 assert_absent "$work_dir/default-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader chart default"
-assert_yaml_path_absent "$work_dir/default-values.yaml" \
-  .nats.reloader.image "nats.reloader chart default"
+test "$(yq -r '.nats.reloader.image.tag' "$work_dir/default-values.yaml")" = "$nats_reloader_default_tag" ||
+  fail "nats.reloader chart default must use the stack security selection"
 assert_absent "$work_dir/default-values.yaml" \
   alpine/k8s "api.accountBootstrap chart default"
 assert_yaml_path_absent "$work_dir/default-values.yaml" \
@@ -301,9 +301,9 @@ assert_image "$work_dir/partial-values.yaml" \
 assert_image "$work_dir/partial-values.yaml" \
   mirror/cassandra-seeds nvcr.io "" "cassandra.dynamicSeedDiscovery repository-only override"
 assert_image "$work_dir/partial-values.yaml" \
-  mirror/nats-server-config-reloader "" "" "nats.reloader repository-only forwarding"
-assert_yaml_path_absent "$work_dir/partial-values.yaml" \
-  .nats.reloader.image.tag "nats.reloader repository-only forwarding"
+  mirror/nats-server-config-reloader "" "$nats_reloader_default_tag" "nats.reloader repository-only forwarding"
+test "$(yq -r '.nats.reloader.image.tag' "$work_dir/partial-values.yaml")" = "$nats_reloader_default_tag" ||
+  fail "nats.reloader repository-only forwarding must retain the security tag"
 assert_image "$work_dir/partial-values.yaml" \
   mirror/alpine-k8s "" "" "api.accountBootstrap repository-only forwarding"
 assert_image "$work_dir/partial-values.yaml" \
@@ -374,8 +374,8 @@ grep -q 'registry: ""' "$work_dir/empty-values.yaml" &&
   fail "explicit empty: an empty registry reached the chart values"
 assert_absent "$work_dir/empty-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader explicit empty"
-assert_yaml_path_absent "$work_dir/empty-values.yaml" \
-  .nats.reloader.image "nats.reloader explicit empty"
+test "$(yq -r '.nats.reloader.image.tag' "$work_dir/empty-values.yaml")" = "$nats_reloader_default_tag" ||
+  fail "nats.reloader explicit empty must use the stack security selection"
 assert_absent "$work_dir/empty-values.yaml" \
   alpine/k8s "api.accountBootstrap explicit empty"
 assert_yaml_path_absent "$work_dir/empty-values.yaml" \
@@ -399,8 +399,8 @@ EOF
 render_values "$work_dir/public-catalog-values.yaml"
 assert_absent "$work_dir/public-catalog-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader public catalog"
-assert_yaml_path_absent "$work_dir/public-catalog-values.yaml" \
-  .nats.reloader.image "nats.reloader public catalog"
+test "$(yq -r '.nats.reloader.image.tag' "$work_dir/public-catalog-values.yaml")" = "$nats_reloader_default_tag" ||
+  fail "nats.reloader public catalog must use the stack security selection"
 assert_absent "$work_dir/public-catalog-values.yaml" \
   alpine/k8s "api.accountBootstrap public catalog"
 assert_yaml_path_absent "$work_dir/public-catalog-values.yaml" \
@@ -442,9 +442,9 @@ EOF
 
 render_values "$work_dir/mirror-values.yaml"
 assert_image "$work_dir/mirror-values.yaml" \
-  mirror/nvcf/nats-server-config-reloader mirror.example.com "" "nats.reloader mirror forwarding"
-assert_yaml_path_absent "$work_dir/mirror-values.yaml" \
-  .nats.reloader.image.tag "nats.reloader mirror forwarding"
+  mirror/nvcf/nats-server-config-reloader mirror.example.com "$nats_reloader_default_tag" "nats.reloader mirror forwarding"
+test "$(yq -r '.nats.reloader.image.tag' "$work_dir/mirror-values.yaml")" = "$nats_reloader_default_tag" ||
+  fail "nats.reloader mirror forwarding must retain the security tag"
 assert_image "$work_dir/mirror-values.yaml" \
   mirror/nvcf/alpine-k8s mirror.example.com "" "api.accountBootstrap mirror forwarding"
 assert_image "$work_dir/mirror-values.yaml" \
@@ -495,7 +495,8 @@ test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroupChangePolicy'
   fail "nats pod filesystem-group change policy must be preserved"
 test "$(yq -r '.nats.container.merge.securityContext.readOnlyRootFilesystem' "$work_dir/security-context-values.yaml")" = true ||
   fail "nats container security settings must be preserved"
-assert_yaml_path_absent "$work_dir/security-context-values.yaml" .nats.reloader.image "nats security-only override"
+test "$(yq -r '.nats.reloader.image.tag' "$work_dir/security-context-values.yaml")" = "$nats_reloader_default_tag" ||
+  fail "nats security-only override must retain the security tag"
 
 # Maintenance images must be selectable without taking unrelated chart changes.
 write_env <<'EOF'

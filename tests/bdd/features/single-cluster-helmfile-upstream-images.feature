@@ -47,7 +47,9 @@ Feature: Install a local single-cluster stack with upstream supporting images
     # the same rendered release.
     Then the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-nats" should contain:
       | text                                                               |
+      | docker.io/synadia/nats-server:                                      |
       | docker.io/natsio/nats-server-config-reloader:                       |
+      | docker.io/natsio/nats-box:                                          |
       | # Source: helm-nvcf-nats/templates/nkey-secret.yaml                |
 
     # Cassandra initialization currently uses its migrations image. Selecting
