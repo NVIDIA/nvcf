@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
@@ -72,7 +73,8 @@ func NormalizeEnvOverrideName(name string) string {
 }
 
 // EncodeEnvB64 encodes a map of environment variables to a base64 text string.
-// Format: KEY=value separated by newlines.
+// Format: KEY=value separated by newlines; a value that contains a control
+// character is double-quoted so it stays a single entry.
 func EncodeEnvB64(envs map[string]string) string {
 	if len(envs) == 0 {
 		return ""
@@ -97,12 +99,13 @@ func EncodeEnvB64(envs map[string]string) string {
 }
 
 // encodeEnvValue mirrors the function API encoder (IcmsClient.encodeEnvironmentValue).
-// A value with an ISO control character is emitted in Go double-quoted form so a line
-// break cannot forge a second KEY=value entry; EnvDecoderText reverses it with
-// strconv.Unquote. A value with no control character is returned unchanged, so values
-// without control characters stay byte-identical.
+// A value with a control character is emitted in Go double-quoted form so a line break
+// cannot forge a second KEY=value entry; EnvDecoderText reverses it with strconv.Unquote.
+// A value with no control character is returned unchanged, so values without control
+// characters stay byte-identical. unicode.IsControl matches the API encoder's
+// Character.isISOControl (the C0 and C1 control ranges).
 func encodeEnvValue(value string) string {
-	if !strings.ContainsFunc(value, isISOControl) {
+	if !strings.ContainsFunc(value, unicode.IsControl) {
 		return value
 	}
 
@@ -113,7 +116,7 @@ func encodeEnvValue(value string) string {
 		case r == '"' || r == '\\':
 			sb.WriteByte('\\')
 			sb.WriteRune(r)
-		case isISOControl(r):
+		case unicode.IsControl(r):
 			sb.WriteString(fmt.Sprintf(`\u%04x`, r))
 		default:
 			sb.WriteRune(r)
@@ -121,10 +124,4 @@ func encodeEnvValue(value string) string {
 	}
 	sb.WriteByte('"')
 	return sb.String()
-}
-
-// isISOControl reports whether r is an ISO control character, matching Java's
-// Character.isISOControl: the C0 range U+0000-U+001F and the C1 range U+007F-U+009F.
-func isISOControl(r rune) bool {
-	return r <= 0x1f || (r >= 0x7f && r <= 0x9f)
 }

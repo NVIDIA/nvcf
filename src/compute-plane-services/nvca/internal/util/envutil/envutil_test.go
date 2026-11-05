@@ -158,10 +158,9 @@ func TestEncodeDecodeRoundtrip(t *testing.T) {
 	}
 }
 
-// The encoded literals match IcmsClient.encodeEnvironmentValue in nvcf-core and the
-// decoder cases in icms-translate common. Keeping both producers byte-identical is the
-// point of #3157: NVCA re-encodes overridden environments and must not re-open the
-// worker env injection that the function API closed.
+// NVCA re-encodes overridden environments, so EncodeEnvB64 must match the function API
+// encoder (IcmsClient.encodeEnvironmentValue) byte for byte. The encoded literals here
+// match that encoder and the decoder cases in icms-translate common.
 func TestEncodeEnvB64_QuotesControlCharacters(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -191,14 +190,13 @@ func TestEncodeEnvB64_QuotesControlCharacters(t *testing.T) {
 	}
 }
 
-// ApplyEnvOverrides is the path #3157 fixes: it decodes, applies overrides, and
-// re-encodes. A control character in an untouched value must survive as one entry.
+// ApplyEnvOverrides decodes, applies overrides, and re-encodes. A control character in
+// an untouched value must survive the round-trip as one entry.
 func TestApplyEnvOverrides_PreservesControlCharEncoding(t *testing.T) {
-	// The function API encodes this value quoted; the decoder unquotes it on the way in.
-	envB64 := EncodeEnvB64(map[string]string{
-		"FIRST":                    "1",
-		"INFERENCE_CONTAINER_ARGS": "a\nEXTRA=injected",
-	})
+	// The function API wire format: the containerArgs value is quoted on the way out, so
+	// ApplyEnvOverrides unquotes it on decode and must re-quote it on re-encode.
+	wire := "FIRST=1\nINFERENCE_CONTAINER_ARGS=\"a\\u000aEXTRA=injected\"\n"
+	envB64 := base64.StdEncoding.EncodeToString([]byte(wire))
 
 	result, err := ApplyEnvOverrides(envB64, map[string]string{"NEW": "value"})
 	require.NoError(t, err)
