@@ -5,6 +5,7 @@
 """Wait for the ICMS cluster read API to advertise function admission capacity."""
 
 import argparse
+import http.client
 import json
 import math
 from pathlib import Path
@@ -65,7 +66,7 @@ def wait_for_capacity(args):
                 raise ValueError(f"ICMS capacity read failed: HTTP {error.code}") from None
             clusters = []
             print(f"ICMS capacity read pending: HTTP {error.code}", flush=True)
-        except (urllib.error.URLError, TimeoutError, OSError):
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.IncompleteRead):
             clusters = []
             print("ICMS capacity read pending: transport unavailable", flush=True)
         except ValueError:

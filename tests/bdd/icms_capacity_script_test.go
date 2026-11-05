@@ -38,15 +38,17 @@ func TestICMSCapacityScript(t *testing.T) {
 	const exhausted = `[{"clusterName":"local-compute","region":"us-west-1","gpus":[{"name":"H100","instanceTypes":[{"name":"NCP.GPU.H100_1x"}]}],"status":"READY","gpuUsage":{"H100":{"available":0}}}]`
 	const unhealthy = `[{"clusterName":"local-compute","region":"us-west-1","gpus":[{"name":"H100","instanceTypes":[{"name":"NCP.GPU.H100_1x"}]}],"status":"UNHEALTHY","gpuUsage":{"H100":{"available":4}}}]`
 	for _, tc := range []struct {
-		name      string
-		status    int
-		bodies    []string
-		dripBody  bool
-		wantError string
-		wantCalls int32
+		name              string
+		status            int
+		bodies            []string
+		dripBody          bool
+		truncateFirstBody bool
+		wantError         string
+		wantCalls         int32
 	}{
 		{name: "ready", bodies: []string{ready}, wantCalls: 1},
 		{name: "delayed heartbeat", bodies: []string{exhausted, ready}, wantCalls: 2},
+		{name: "incomplete response retried", bodies: []string{`[{"status":"test-admin-token"`, ready}, truncateFirstBody: true, wantCalls: 2},
 		{name: "response exceeds deadline", bodies: []string{ready}, dripBody: true, wantError: "before timeout", wantCalls: 1},
 		{name: "capacity timeout", bodies: []string{exhausted}, wantError: "before timeout"},
 		{name: "unhealthy capacity", bodies: []string{unhealthy}, wantError: "before timeout"},
@@ -86,8 +88,11 @@ func TestICMSCapacityScript(t *testing.T) {
 				if status == http.StatusFound {
 					w.Header().Set("Location", "/redirect-target")
 				}
-				w.WriteHeader(status)
 				i := min(int(n)-1, len(tc.bodies)-1)
+				if tc.truncateFirstBody && n == 1 {
+					w.Header().Set("Content-Length", fmt.Sprint(len(tc.bodies[i])+1))
+				}
+				w.WriteHeader(status)
 				if tc.dripBody {
 					for offset := 0; offset < len(tc.bodies[i]); offset += 16 {
 						if _, err := fmt.Fprint(w, tc.bodies[i][offset:min(offset+16, len(tc.bodies[i]))]); err != nil {
@@ -122,6 +127,9 @@ func TestICMSCapacityScript(t *testing.T) {
 			}
 			if strings.Contains(string(output), "test-admin-token") {
 				t.Fatal("capacity wait exposed the token or untrusted response body")
+			}
+			if tc.truncateFirstBody && !strings.Contains(string(output), "ICMS capacity read pending: transport unavailable") {
+				t.Fatal("incomplete capacity response was not reported as a transport failure")
 			}
 			if got := calls.Load(); got == 0 || (tc.wantCalls != 0 && got != tc.wantCalls) {
 				t.Fatalf("HTTP requests = %d, want %d (zero means at least one)", got, tc.wantCalls)
