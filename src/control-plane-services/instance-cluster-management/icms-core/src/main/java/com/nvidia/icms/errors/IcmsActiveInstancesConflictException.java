@@ -28,7 +28,11 @@ import lombok.Getter;
 @Getter
 public class IcmsActiveInstancesConflictException extends IcmsConflictException {
 
-    public static final String REASON = "ACTIVE_INSTANCES_ON_REMOVED_INSTANCE_TYPES";
+    /**
+     * {@code reason} of the {@link ActiveInstancesConflictErrorResponse} for this conflict.
+     */
+    public static final String REASON_ACTIVE_INSTANCES_ON_REMOVED_INSTANCE_TYPES =
+            "ACTIVE_INSTANCES_ON_REMOVED_INSTANCE_TYPES";
 
     private final List<String> instanceTypes;
     private final List<String> activeInstanceIds;

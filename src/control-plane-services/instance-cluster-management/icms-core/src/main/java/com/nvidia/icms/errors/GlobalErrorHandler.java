@@ -59,6 +59,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.annotation.RequestScope;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 
+import static com.nvidia.icms.errors.IcmsActiveInstancesConflictException.REASON_ACTIVE_INSTANCES_ON_REMOVED_INSTANCE_TYPES;
 import static com.nvidia.icms.service.telemetry.model.Events.INTERNAL_SERVER_ERROR_EVENT;
 
 
@@ -93,7 +94,7 @@ public class GlobalErrorHandler {
         sendTelemetryEvent(exception, Events.ERROR_EVENT.toString());
         ActiveInstancesConflictErrorResponse error = new ActiveInstancesConflictErrorResponse();
         error.setError(exception.getBody().getDetail());
-        error.setReason(IcmsActiveInstancesConflictException.REASON);
+        error.setReason(REASON_ACTIVE_INSTANCES_ON_REMOVED_INSTANCE_TYPES);
         error.setInstanceTypes(exception.getInstanceTypes());
         error.setActiveInstanceIds(exception.getActiveInstanceIds());
 

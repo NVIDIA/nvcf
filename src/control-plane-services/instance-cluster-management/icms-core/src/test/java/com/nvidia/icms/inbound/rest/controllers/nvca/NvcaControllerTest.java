@@ -272,7 +272,7 @@ class NvcaControllerTest extends IntegrationTest {
         var response = objectMapper.readValue(mvcResult.getResponse().getContentAsString(),
                                               ActiveInstancesConflictErrorResponse.class);
         assertEquals("dummy_conflict_message", response.getError());
-        assertEquals(IcmsActiveInstancesConflictException.REASON, response.getReason());
+        assertEquals("ACTIVE_INSTANCES_ON_REMOVED_INSTANCE_TYPES", response.getReason());
         assertEquals(List.of("dummy_instance_type"), response.getInstanceTypes());
         assertEquals(List.of("dummy_instance_1", "dummy_instance_2"), response.getActiveInstanceIds());
     }

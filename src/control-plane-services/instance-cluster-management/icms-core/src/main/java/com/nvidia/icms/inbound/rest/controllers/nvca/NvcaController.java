@@ -25,6 +25,7 @@ import static org.springframework.http.MediaType.APPLICATION_JSON_VALUE;
 
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nvidia.icms.configuration.nvca.NvcaConfigurationProperties;
+import com.nvidia.icms.errors.ActiveInstancesConflictErrorResponse;
 import com.nvidia.icms.errors.IcmsBadRequestException;
 import com.nvidia.icms.errors.IcmsConflictException;
 import com.nvidia.icms.errors.IcmsNotFoundException;
@@ -118,7 +119,12 @@ public class NvcaController {
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "400", description = "Bad request"),
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "401", description = "Unauthorized"),
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "403", description = "Forbidden - invalid token provided"),
-                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "409", description = "Conflict - mismatch with already present data"),
+                    @ApiResponse(
+                            content = @Content(schema = @Schema(
+                                    implementation = ActiveInstancesConflictErrorResponse.class)),
+                            responseCode = "409",
+                            description = "Conflict - mismatch with already present data, or "
+                                    + "instance types with active instances would be removed"),
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "429", description = "Too many requests"),
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "500", description = "Internal server error")
             },
@@ -158,7 +164,12 @@ public class NvcaController {
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "401", description = "Unauthorized"),
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "403", description = "Forbidden - invalid token provided"),
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "404", description = "Not Found - unknown cluster"),
-                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "409", description = "Conflict - mismatch with already present data"),
+                    @ApiResponse(
+                            content = @Content(schema = @Schema(
+                                    implementation = ActiveInstancesConflictErrorResponse.class)),
+                            responseCode = "409",
+                            description = "Conflict - mismatch with already present data, or "
+                                    + "instance types with active instances would be removed"),
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "429", description = "Too many requests"),
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)), responseCode = "500", description = "Internal server error")
             },

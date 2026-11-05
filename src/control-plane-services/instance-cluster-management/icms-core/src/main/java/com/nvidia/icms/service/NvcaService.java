@@ -42,8 +42,8 @@ public class NvcaService {
     }
 
     public void validateNvcaClusterRegistration(
-            @NotNull NvcaRegistrationRequest nvcaRegistrationRequest,
-            @NotNull String clusterId) {
+            NvcaRegistrationRequest nvcaRegistrationRequest,
+            String clusterId) {
         nvcaClusterRegistrationService.validateNvcaClusterRegistration(nvcaRegistrationRequest,
                                                                        clusterId);
     }

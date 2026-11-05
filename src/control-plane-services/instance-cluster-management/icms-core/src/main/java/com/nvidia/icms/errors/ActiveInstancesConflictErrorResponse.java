@@ -16,19 +16,33 @@
  */
 package com.nvidia.icms.errors;
 
+import static com.nvidia.icms.errors.IcmsActiveInstancesConflictException.REASON_ACTIVE_INSTANCES_ON_REMOVED_INSTANCE_TYPES;
+
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
-import lombok.Data;
-import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 
 /**
- * {@link CustomErrorResponse} for {@link IcmsActiveInstancesConflictException}. The
- * {@code error} message is unchanged, so clients that only read it keep working.
+ * API response body of the 409 that cluster registration and registration validation
+ * return when the request would remove instance types that still have active instances.
+ * It keeps the human-readable {@code error} message of {@link CustomErrorResponse}, so
+ * clients that only read {@code error} keep working, and adds the same facts as fields.
  */
-@Data
-@EqualsAndHashCode(callSuper = true)
+@Getter
+@Setter
+@Schema(description = "Conflict body. Every conflict sets error; a registration that would "
+        + "remove instance types with active instances also sets the fields below.")
 public class ActiveInstancesConflictErrorResponse extends CustomErrorResponse {
 
+    @Schema(description = "Machine-readable cause of the conflict.",
+            allowableValues = {REASON_ACTIVE_INSTANCES_ON_REMOVED_INSTANCE_TYPES})
     private String reason;
+
+    @Schema(description = "Instance types that the request leaves out but that still have "
+            + "active instances on this cluster, sorted.")
     private List<String> instanceTypes;
+
+    @Schema(description = "IDs of the active instances on those instance types, sorted.")
     private List<String> activeInstanceIds;
 }

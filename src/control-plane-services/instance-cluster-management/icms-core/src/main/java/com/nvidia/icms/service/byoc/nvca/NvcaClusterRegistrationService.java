@@ -238,11 +238,11 @@ public class NvcaClusterRegistrationService {
                 StringUtils.isNotBlank(nvcaRegistrationRequest.getOidcIssuer()),
                 StringUtils.isNotBlank(nvcaRegistrationRequest.getJwks()));
 
-        RegistrationPlan plan = planRegistration(nvcaRegistrationRequest, clusterId);
-        ClusterEntity clusterInfo = plan.clusterInfo();
-        Set<GpuV5Udt> existingGpus = plan.existingGpus();
-        Set<GpuV5Udt> providedGpus = plan.providedGpus();
-        Set<String> removedGpuNames = plan.removedGpuNames();
+        ValidatedRegistration validated = validateRegistration(nvcaRegistrationRequest, clusterId);
+        ClusterEntity clusterInfo = validated.clusterInfo();
+        Set<GpuV5Udt> existingGpus = validated.existingGpus();
+        Set<GpuV5Udt> providedGpus = validated.providedGpus();
+        Set<String> removedGpuNames = validated.removedGpuNames();
 
         // Setting up clusterTargeting in clusterInfo
         setAllowTargetingField(clusterInfo, nvcaRegistrationRequest);
@@ -268,7 +268,8 @@ public class NvcaClusterRegistrationService {
         // We should delete queue for removed GPUs after queue creation of newly added GPUs
         // this will make sure if there is any error in queue creation then we don't delete queue before returning the error
         if (!isSetEmptyOrNull(removedGpuNames)) {
-            deleteQueueForRemovedGpus(removedGpuNames, plan.clusterByGroupIdList(), clusterInfo);
+            deleteQueueForRemovedGpus(removedGpuNames, validated.clusterByGroupIdList(),
+                                      clusterInfo);
         }
 
         // Updating GPUs from NVCA
@@ -289,13 +290,14 @@ public class NvcaClusterRegistrationService {
             clusterInfo.setClusterSource(ClusterSource.NGC_MANAGED.toString());
         }
 
-        applyOidcIdentityIfPresent(nvcaRegistrationRequest, clusterInfo, plan.jwksFingerprint());
+        applyOidcIdentityIfPresent(nvcaRegistrationRequest, clusterInfo,
+                                   validated.jwksFingerprint());
 
         // Generating response
         NvcaAccessCreds nvcaQueueAccessCreds =
                 clusterQueueAccessCredsService.generateCredsForNvcaQueues(clusterInfo);
 
-        updateEntityInDb(clusterInfo, plan.entityBefore(), auditProps);
+        updateEntityInDb(clusterInfo, validated.entityBefore(), auditProps);
 
         return NvcaRegistrationResponse.builder()
                 .credentials(nvcaQueueAccessCreds)
@@ -316,8 +318,8 @@ public class NvcaClusterRegistrationService {
      */
     @Observed
     public void validateNvcaClusterRegistration(
-            @NotNull NvcaRegistrationRequest nvcaRegistrationRequest,
-            @NotNull String clusterId) {
+            NvcaRegistrationRequest nvcaRegistrationRequest,
+            String clusterId) {
 
         log.info(
                 "Received cluster registration validation request from {} cluster: status {}, "
@@ -328,27 +330,32 @@ public class NvcaClusterRegistrationService {
                         ? 0
                         : nvcaRegistrationRequest.getGpus().size());
 
-        planRegistration(nvcaRegistrationRequest, clusterId);
+        validateRegistration(nvcaRegistrationRequest, clusterId);
     }
 
     /**
-     * What a registration reads and checks before its first side effect.
+     * Result of {@link #validateRegistration}: the cluster as read, and what the
+     * registration needs to apply the request.
+     *
+     * @param jwksFingerprint fingerprint of the validated JWKS, or null when the request
+     *                        carries no cluster OIDC identity to apply
      */
-    private record RegistrationPlan(
+    private record ValidatedRegistration(
             ClusterEntity clusterInfo,
             ClusterEntity entityBefore,
             Set<GpuV5Udt> existingGpus,
             Set<GpuV5Udt> providedGpus,
             Set<String> removedGpuNames,
             List<ClusterByGroupIdAndIdEntity> clusterByGroupIdList,
-            String jwksFingerprint) {
+            @Nullable String jwksFingerprint) {
     }
 
     /**
-     * Reads the cluster and runs every registration check. It only reads, so a
-     * validation can stop here and a registration can apply the result.
+     * Runs every registration check: cluster, status, GPUs, instance types with active
+     * instances, and JWKS. It only reads, so validation stops here, and registration
+     * applies the returned result.
      */
-    private RegistrationPlan planRegistration(
+    private ValidatedRegistration validateRegistration(
             NvcaRegistrationRequest nvcaRegistrationRequest,
             String clusterId) {
 
@@ -394,8 +401,8 @@ public class NvcaClusterRegistrationService {
 
         String jwksFingerprint = validateOidcIdentityIfPresent(nvcaRegistrationRequest, clusterId);
 
-        return new RegistrationPlan(clusterInfo, entityBefore, existingGpus, providedGpus,
-                                    removedGpuNames, clusterByGroupIdList, jwksFingerprint);
+        return new ValidatedRegistration(clusterInfo, entityBefore, existingGpus, providedGpus,
+                                         removedGpuNames, clusterByGroupIdList, jwksFingerprint);
     }
 
     /**
@@ -411,6 +418,7 @@ public class NvcaClusterRegistrationService {
      * Validates the JWKS in the request and returns its fingerprint, or null when the
      * request carries no cluster OIDC identity to apply.
      */
+    @Nullable
     private String validateOidcIdentityIfPresent(
             NvcaRegistrationRequest nvcaRegistrationRequest,
             String clusterId) {
@@ -448,7 +456,7 @@ public class NvcaClusterRegistrationService {
     private void applyOidcIdentityIfPresent(
             NvcaRegistrationRequest nvcaRegistrationRequest,
             ClusterEntity clusterInfo,
-            String jwksFingerprint) {
+            @Nullable String jwksFingerprint) {
         if (jwksFingerprint == null) {
             return;
         }
