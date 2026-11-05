@@ -22,6 +22,7 @@ import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.service.eventledger.EventLedgerClient;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -32,24 +33,29 @@ public class FunctionStatusTransitionService {
 
     private final FunctionsRepository functionsRepository;
     private final EventLedgerClient eventLedgerClient;
-    // Inject the time source so transition timestamps can be controlled in tests.
     private final Clock clock;
 
-    public void persist(
+    public record Transition(
+            String ncaId, UUID functionId, UUID functionVersionId, UUID deploymentId,
+            FunctionStatus previousStatus, FunctionStatus currentStatus, Instant persistedAt) {
+    }
+
+    public Optional<Transition> persist(
             FunctionEntity function, UUID deploymentId, FunctionStatus newStatus) {
         var previousStatus = function.getFunctionStatus();
         if (previousStatus == newStatus) {
-            return;
+            return Optional.empty();
         }
         function.setFunctionStatus(newStatus);
         functionsRepository.insert(function);
-        eventLedgerClient.publish(
-                function.getNcaId(),
-                function.getFunctionId(),
-                function.getFunctionVersionId(),
-                deploymentId,
-                previousStatus,
-                newStatus,
-                Instant.now(clock));
+        return Optional.of(new Transition(function.getNcaId(), function.getFunctionId(),
+                                          function.getFunctionVersionId(), deploymentId,
+                                          previousStatus, newStatus, Instant.now(clock)));
+    }
+
+    public void publish(Optional<Transition> transition) {
+        transition.ifPresent(t -> eventLedgerClient.publish(
+                t.ncaId(), t.functionId(), t.functionVersionId(), t.deploymentId(),
+                t.previousStatus(), t.currentStatus(), t.persistedAt()));
     }
 }

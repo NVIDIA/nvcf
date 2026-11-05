@@ -51,11 +51,15 @@ import static com.nvidia.nvcf.util.TestUtil.createHealthUdt;
 import static java.util.concurrent.Future.State.RUNNING;
 import static java.util.concurrent.Future.State.SUCCESS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.google.common.collect.Sets;
 import com.nvidia.nvcf.IntegrationTestConfiguration;
@@ -562,8 +566,11 @@ class FunctionsRepositoryTest {
         functionsRepository.save(function);
         var timestampLowerBound = Instant.now(clock);
 
-        functionStatusTransitionService.persist(
+        var transition = functionStatusTransitionService.persist(
                 function, TEST_DEPLOYMENT_ID, FunctionStatus.ACTIVE);
+        assertThat(transition).isPresent();
+        verifyNoInteractions(eventLedgerClient);
+        functionStatusTransitionService.publish(transition);
         var timestampUpperBound = Instant.now(clock);
 
         var persistedFunction = functionsRepository
@@ -590,8 +597,10 @@ class FunctionsRepositoryTest {
                 TEST_FUNCTION_ID, TEST_VERSION_ID_1, TEST_NCA_ID, TEST_FUNCTION_NAME);
         functionsRepository.save(function);
 
-        functionStatusTransitionService.persist(
+        var transition = functionStatusTransitionService.persist(
                 function, TEST_DEPLOYMENT_ID, FunctionStatus.INACTIVE);
+        assertThat(transition).isEmpty();
+        functionStatusTransitionService.publish(transition);
 
         assertThat(functionsRepository.getByFunctionVersionId(TEST_VERSION_ID_1))
                 .get()
@@ -599,6 +608,22 @@ class FunctionsRepositoryTest {
                 .isEqualTo(FunctionStatus.INACTIVE);
         verify(eventLedgerClient, never()).publish(
                 eq(TEST_NCA_ID), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void doesNotPublishWhenStatusPersistenceFails() {
+        var repository = mock(FunctionsRepository.class);
+        var transitionService = new FunctionStatusTransitionService(repository, eventLedgerClient,
+                                                                    clock);
+        var function = getTestEntity(
+                TEST_FUNCTION_ID, TEST_VERSION_ID_1, TEST_NCA_ID, TEST_FUNCTION_NAME);
+        doThrow(new IllegalStateException("database unavailable"))
+                .when(repository).insert(function);
+
+        assertThatThrownBy(() -> transitionService.persist(
+                function, TEST_DEPLOYMENT_ID, FunctionStatus.ACTIVE))
+                .isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(eventLedgerClient);
     }
 
     private FunctionEntity getTestEntity(

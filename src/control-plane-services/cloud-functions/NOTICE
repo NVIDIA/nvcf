@@ -1,6 +1,6 @@
 
-Lists of 291 third-party dependencies.
-     (Apache License, Version 2.0) LZ4 Java Compression (at.yawk.lz4:lz4-java:1.11.2 - https://github.com/yawkat/lz4-java)
+Lists of 290 third-party dependencies.
+     (Apache License, Version 2.0) LZ4 Java Compression (at.yawk.lz4:lz4-java:1.11.4 - https://github.com/yawkat/lz4-java)
      (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.38 - http://logback.qos.ch)
      (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.38 - http://logback.qos.ch)
      (The Apache Software License, Version 2.0) bucket4j-core (com.bucket4j:bucket4j-core:8.10.1 - http://github.com/bucket4j/bucket4j/bucket4j-core)
