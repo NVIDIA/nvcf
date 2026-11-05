@@ -13,6 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# CI indexes the prefilled image settings below. Helm consumes those settings
+# directly; override them with ordinary values files.
+thirdPartyImages:
+  natsServer: nats.container.image
+  natsReloader: nats.reloader.image
+  natsBox: nats.natsBox.container.image
+
 # NATS Configuration (reference: https://github.com/nats-io/k8s/tree/main/helm/charts/nats)
 nats:
   enabled: true
