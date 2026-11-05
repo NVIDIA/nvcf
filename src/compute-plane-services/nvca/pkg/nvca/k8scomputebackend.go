@@ -472,6 +472,9 @@ func (c K8sComputeBackend) applyFunctionCreationMessage(ctx context.Context, req
 
 	// if requested instances are already created, return
 	if int(instCount) == len(activeInstances) {
+		if err := c.retryFunctionModelCacheCleanup(ctx, req, bdCreate, initCacheJob); err != nil {
+			log.WithError(err).Warn("failed to retry model cache cleanup")
+		}
 		return c.bk8s.ApplyICMSRequestStatusChange(ctx, req)
 	}
 
@@ -670,6 +673,18 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 	cachemf mutateFunc,
 ) (mf func(*corev1.Pod), roPVCName string, err error) {
 	log := core.GetLogger(ctx)
+	// A request whose caching already failed stays on non-cached workers. Without this,
+	// a later pass finds no Job and no volume and starts the cache writer again. The check also
+	// covers a pass that starts from an informer copy that does not show the annotation yet.
+	if c.bk8s.modelCachingFailed(req) {
+		log.Infof("model caching already failed for request %v/%v, creating non-cached workers",
+			req.Namespace, req.Name)
+		if err := c.retryFailedModelCacheCleanup(ctx, req, rwPVC, initJob); err != nil {
+			log.WithError(err).Warn("failed to retry model cache cleanup")
+		}
+		c.clearCacheReference(ctx, req)
+		return func(*corev1.Pod) {}, "", nil
+	}
 	// setup init cache Job writer and RWMany PVC
 	mc, roPVCName := c.SetupModelCachingForRequest(ctx, rwPVC, initJob, req, cachemf)
 	switch mc {
@@ -703,6 +718,10 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 		}
 		return nil, "", fmt.Errorf("model caching is still in progress")
 	case ModelCachingFailed:
+		if err := c.bk8s.markModelCachingFailed(ctx, req); err != nil {
+			return nil, "", fmt.Errorf("record model caching failure on request %v/%v: %w", req.Namespace, req.Name, err)
+		}
+		c.clearLiveCacheReference(ctx, req)
 		c.bk8s.EmitICMSEvent(req, corev1.EventTypeWarning,
 			string(types.EventCategoryModelCaching), "Caching setup failed, resort to non-cached workers", nil)
 		log.Warnf("model caching failed, NVCA will create non-cached workers")

@@ -159,11 +159,14 @@ type BackendK8sCache struct {
 	lowLatencyStreamingEnabled bool
 	clients                    *kubeclients.KubeClients
 	modelCacheMtx              sync.Mutex
-	logPostingEnabled          bool
-	computeBackend             BackendType
-	clusterRegion              string
-	clusterName                string
-	cloudProvider              string
+	// modelCachingFallbacks holds requests whose model caching fallback this agent recorded, until the
+	// request is deleted. Keyed by modelCachingFallbackKey.
+	modelCachingFallbacks sync.Map
+	logPostingEnabled     bool
+	computeBackend        BackendType
+	clusterRegion         string
+	clusterName           string
+	cloudProvider         string
 
 	// Helm config flags
 	helmRBACEnforcementEnabled           bool
@@ -828,6 +831,7 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 				}
 				c.icmsRequestWQ.Add(makeNamespacedName(req))
 			},
+			DeleteFunc: c.forgetModelCachingFallback,
 		})
 		if err != nil {
 			log.WithError(err).Error("failed to add event handler for ICMS requests")
@@ -2035,6 +2039,66 @@ func getICMSRequestObjectMeta(depInfo types.DeploymentInfo) metav1.ObjectMeta {
 	return om
 }
 
+// modelCachingFallbackKey identifies a request across informer copies. The UID keeps a recreated request
+// with the same name from inheriting an old fallback.
+func modelCachingFallbackKey(req *nvcav2beta1new.ICMSRequest) string {
+	return req.Namespace + "/" + req.Name + "/" + string(req.UID)
+}
+
+// markModelCachingFailed records on the ICMSRequest that model caching failed, so later passes
+// over the request skip caching. The merge patch avoids conflicts with concurrent status writes.
+func (c *BackendK8sCache) markModelCachingFailed(ctx context.Context, req *nvcav2beta1new.ICMSRequest) error {
+	if req.Annotations[types.ModelCachingFailedAnnotationKey] == "true" {
+		return nil
+	}
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]string{types.ModelCachingFailedAnnotationKey: "true"},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = c.clients.BART.NvcaV2beta1().ICMSRequests(req.Namespace).Patch(
+		ctx, req.Name, apitypes.MergePatchType, patch, metav1.PatchOptions{})
+	if metrics := nvcametrics.FromContext(ctx); metrics != nil {
+		metrics.TrackK8sAPICall("icmsrequest", err)
+	}
+	if err != nil {
+		return err
+	}
+	if req.Annotations == nil {
+		req.Annotations = map[string]string{}
+	}
+	req.Annotations[types.ModelCachingFailedAnnotationKey] = "true"
+	// The informer copy may not show the annotation for a while. Remember the fallback so a pass that
+	// starts from that older copy does not start a new writer after cleanup removed the failed one.
+	c.modelCachingFallbacks.Store(modelCachingFallbackKey(req), struct{}{})
+	return nil
+}
+
+// modelCachingFailed reports whether the request has recorded its model caching fallback: the annotation
+// is on this copy, or this agent recorded it. The record is kept even after an annotated copy is seen,
+// because a pass that started from an older copy may still run afterwards.
+func (c *BackendK8sCache) modelCachingFailed(req *nvcav2beta1new.ICMSRequest) bool {
+	if req.Annotations[types.ModelCachingFailedAnnotationKey] == "true" {
+		return true
+	}
+	_, recorded := c.modelCachingFallbacks.Load(modelCachingFallbackKey(req))
+	return recorded
+}
+
+// forgetModelCachingFallback drops the in-memory fallback record of a deleted request, the only point at
+// which no older copy of the request can start another pass.
+func (c *BackendK8sCache) forgetModelCachingFallback(obj any) {
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
+	if req, ok := obj.(*nvcav2beta1new.ICMSRequest); ok {
+		c.modelCachingFallbacks.Delete(modelCachingFallbackKey(req))
+	}
+}
+
 func (c *BackendK8sCache) applyICMSRequestStatusChange(ctx context.Context,
 	sr *nvcav2beta1new.ICMSRequest, modify func(context.Context, *nvcav2beta1new.ICMSRequest),
 ) bool {
@@ -2675,6 +2739,18 @@ func (c *BackendK8sCache) syncICMSRequest(ctx context.Context, req *nvcav2beta1n
 			if err := c.ApplyICMSRequestStatusChange(ctx, req); err != nil {
 				log.WithError(err).Debug("Failed to apply the ICMS request")
 				return fmt.Errorf("failed to sync ICMS request %s, will be requeued, err: %w", req.Name, err)
+			}
+		}
+		// Retry before the request can be removed, including after completion is acknowledged.
+		switch requestAction {
+		case common.FunctionCreationAction, common.TaskCreationAction:
+			if err := c.icmsRequestHelper.RetryFailedModelCacheCleanup(ctx, req); err != nil {
+				// Keep the request for another attempt only when the error can clear. A permanent error
+				// would otherwise keep the request, and requeue it, forever.
+				if k8sutil.IsTransientK8sError(err) {
+					return fmt.Errorf("retry model cache cleanup for request %s: %w", req.Name, err)
+				}
+				log.WithError(err).Errorf("model cache cleanup for request %s failed, needs manual cleanup", req.Name)
 			}
 		}
 		err = c.CleanupCreationRequestResources(ctx, req)

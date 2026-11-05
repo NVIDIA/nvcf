@@ -169,3 +169,8 @@ func IsInfraOwnedObject(obj client.Object) bool {
 	}
 	return annotations[InfraObjectAnnotationKey] != ""
 }
+
+// ModelCachingFailedAnnotationKey is set to "true" on an ICMSRequest whose model caching failed. It
+// records a per-request fallback so later passes create non-cached workers instead of restarting the
+// cache writer.
+const ModelCachingFailedAnnotationKey = labelFQDNPrefix + "/model-caching-failed"
