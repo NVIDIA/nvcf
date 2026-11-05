@@ -790,9 +790,18 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// L1 path needs the manifest. If L1 doesn't have it (CRIU-only-on-L2
 	// that also missed the L2 branch, or a truly absent capture), cold-start.
 	if !haveManifest {
+		// Nothing to restore yet, but the pod is still what the first
+		// capture will be taken from: keep the placement every cold pod
+		// gets (the gpushare library and store, the tools, the admitted
+		// configuration). Dropped, the platform's restore-from stamp on
+		// a first deployment admits the pod bare and no capture can ever
+		// be taken from it.
 		m.logger().WithField("hash", checkpointstore.ShortHash(hash)).
-			Info("no capture for hash; admitting pod unchanged (cold start)")
-		return nil, nil
+			Info("no capture for hash; cold start")
+		if len(injectPatches) == 0 {
+			return nil, nil
+		}
+		return mergePatchPlan(injectPatches), nil
 	}
 
 	// Note: we do NOT peer-fetch the capture bytes here. The webhook
