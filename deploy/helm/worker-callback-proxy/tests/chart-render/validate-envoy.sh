@@ -6,6 +6,8 @@
 # that a rotated grpc-proxy CA Secret is picked up without a restart, that
 # invocation tunnels are routed and idle-closed, and that an invocation
 # callback runs TLS to Envoy and TLS to the pod through the tunnel.
+# It also checks POST and streamed callbacks through Envoy's own TLS session to
+# the pod, and that a pod certificate naming another host is refused.
 # Needs Docker.
 #
 # Usage:
@@ -27,12 +29,14 @@ upstream="worker-callback-proxy-upstream-${suffix}"
 tls_container="worker-callback-proxy-tls-${suffix}"
 plain_container="worker-callback-proxy-plain-${suffix}"
 wrong_ca_container="worker-callback-proxy-wrongca-${suffix}"
+bad_upstream="worker-callback-proxy-bad-upstream-${suffix}"
+bad_envoy="worker-callback-proxy-bad-envoy-${suffix}"
 tls_upstream="worker-callback-proxy-tls-upstream-${suffix}"
 network="worker-callback-proxy-${suffix}"
 ca_volume="worker-callback-proxy-ca-${suffix}"
 
 cleanup() {
-  docker rm -f "${container}" "${idle_container}" "${upstream}" "${tls_container}" "${tls_upstream}" "${plain_container}" "${wrong_ca_container}" >/dev/null 2>&1 || true
+  docker rm -f "${container}" "${idle_container}" "${upstream}" "${tls_container}" "${tls_upstream}" "${plain_container}" "${wrong_ca_container}" "${bad_upstream}" "${bad_envoy}" >/dev/null 2>&1 || true
   docker network rm "${network}" >/dev/null 2>&1 || true
   docker volume rm -f "${ca_volume}" >/dev/null 2>&1 || true
   rm -rf "${work_dir}"
@@ -46,13 +50,14 @@ fail() {
 
 # Throwaway CAs, a frontend certificate and an invocation-service pod
 # certificate, from Helm's own generators.
-mkdir -p "${work_dir}/gen/templates" "${work_dir}/frontend" "${work_dir}/ca" "${work_dir}/invocation"
+mkdir -p "${work_dir}/bad" "${work_dir}/gen/templates" "${work_dir}/frontend" "${work_dir}/ca" "${work_dir}/invocation"
 printf 'apiVersion: v2\nname: gen\nversion: 0.1.0\n' >"${work_dir}/gen/Chart.yaml"
 cat >"${work_dir}/gen/templates/certs.yaml" <<'EOF'
 {{- $ca := genCA "validate-ca-one" 1 }}
 {{- $ca2 := genCA "validate-ca-two" 1 }}
 {{- $frontend := genSignedCert "frontend" nil (list "*.grpc-worker.example.com") 1 $ca }}
 {{- $invocation := genSignedCert "invocation" nil (list "*.invocation.nvcf.svc.cluster.local") 1 $ca }}
+{{- $bad := genSignedCert "bad" nil (list "*.other.example.com") 1 $ca }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -64,6 +69,8 @@ data:
   tls_key: {{ $frontend.Key | quote }}
   invocation_crt: {{ $invocation.Cert | quote }}
   invocation_key: {{ $invocation.Key | quote }}
+  bad_crt: {{ $bad.Cert | quote }}
+  bad_key: {{ $bad.Key | quote }}
 EOF
 helm template gen "${work_dir}/gen" >"${work_dir}/certs.yaml"
 yq -r .data.ca_one "${work_dir}/certs.yaml" >"${work_dir}/ca/ca_one.crt"
@@ -72,6 +79,9 @@ yq -r .data.tls_crt "${work_dir}/certs.yaml" >"${work_dir}/frontend/tls.crt"
 yq -r .data.tls_key "${work_dir}/certs.yaml" >"${work_dir}/frontend/tls.key"
 yq -r .data.invocation_crt "${work_dir}/certs.yaml" >"${work_dir}/invocation/tls.crt"
 yq -r .data.invocation_key "${work_dir}/certs.yaml" >"${work_dir}/invocation/tls.key"
+yq -r .data.bad_crt "${work_dir}/certs.yaml" >"${work_dir}/bad/tls.crt"
+yq -r .data.bad_key "${work_dir}/certs.yaml" >"${work_dir}/bad/tls.key"
+chmod -R a+rX "${work_dir}/bad"
 # The CA bundles Envoy trusts for the invocation-service pod: the CA that signed
 # the pod certificate, and a different CA for the rejection check.
 mkdir -p "${work_dir}/invocation-ca" "${work_dir}/invocation-ca-wrong"
@@ -250,16 +260,27 @@ echo "ok: invocationStreamIdle closes only quiet CONNECT tunnels"
 # for the invocation-service pod.
 docker run -d --name "${tls_upstream}" --network "${network}" -v "${work_dir}/invocation:/tls:ro" "${PYTHON_IMAGE}" \
   python -c '
-import http.server, ssl
-class Pong(http.server.BaseHTTPRequestHandler):
+import http.server, ssl, time
+class H(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Length", "4")
-        self.end_headers()
-        self.wfile.write(b"pong")
-    def log_message(self, *args):
+        if self.path == "/stream":
+            self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self.wfile.write(b"5\r\nfirst\r\n"); self.wfile.flush()
+            time.sleep(6)
+            self.wfile.write(b"6\r\nsecond\r\n0\r\n\r\n"); self.wfile.flush()
+            return
+        self.send_response(200); self.send_header("Content-Length", "4"); self.end_headers(); self.wfile.write(b"pong")
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(n)
+        out = ("len=%d" % len(body)).encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
+    def log_message(self, *a):
         pass
-server = http.server.HTTPServer(("0.0.0.0", 8443), Pong)
+server = http.server.ThreadingHTTPServer(("0.0.0.0", 8443), H)
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 ctx.load_cert_chain("/tls/tls.crt", "/tls/tls.key")
 server.socket = ctx.wrap_socket(server.socket, server_side=True)
@@ -322,3 +343,50 @@ wrong_out="$(docker run --rm --network "${network}" --add-host "${proxy_host}:${
 [[ "${wrong_out}" != *pong* ]] ||
   fail "Envoy accepted a pod certificate that the invocation CA did not sign"
 echo "ok: Envoy refuses a pod certificate from another CA"
+
+# POST and streamed callbacks use the same TLS session to the pod as a GET, and
+# the pod certificate must match the pod name as well as chain to the CA.
+head -c 1048576 /dev/zero | tr '\0' a >"${work_dir}/body.txt"
+chmod a+r "${work_dir}/body.txt"
+post_out="$(docker run --rm --network "${network}" --add-host "${proxy_host}:${envoy_ip}" \
+  -v "${work_dir}/ca:/ca:ro" -v "${work_dir}/body.txt:/body.txt:ro" "${CURL_IMAGE}" -sS --max-time 20 \
+  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt -X POST --data-binary @/body.txt "http://${tls_pod}:8443/upload" 2>&1 || true)"
+[[ "${post_out}" == "len=1048576" ]] || fail "a 1 MiB POST callback did not reach the TLS pod intact: ${post_out}"
+echo "ok: POST callbacks (1 MiB body) run through Envoy's own TLS session"
+
+# The pod sends one chunk, waits six seconds, then sends another. A client that
+# reads for three seconds sees only the first if Envoy forwards chunks as they arrive.
+stream_out="$(docker run --rm --network "${network}" --add-host "${proxy_host}:${envoy_ip}" \
+  -v "${work_dir}/ca:/ca:ro" "${CURL_IMAGE}" -sN --max-time 3 \
+  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt "http://${tls_pod}:8443/stream" 2>&1 || true)"
+[[ "${stream_out}" == *first* && "${stream_out}" != *second* ]] ||
+  fail "a streamed response was buffered instead of forwarded as it arrived: ${stream_out}"
+echo "ok: streamed responses are forwarded chunk by chunk"
+
+docker run -d --name "${bad_upstream}" --network "${network}" -v "${work_dir}/bad:/tls:ro" "${PYTHON_IMAGE}" \
+  python -c '
+import http.server, ssl
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.send_header("Content-Length", "4"); self.end_headers(); self.wfile.write(b"pong")
+    def log_message(self, *a):
+        pass
+server = http.server.HTTPServer(("0.0.0.0", 8443), H)
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain("/tls/tls.crt", "/tls/tls.key")
+server.socket = ctx.wrap_socket(server.socket, server_side=True)
+server.serve_forever()' >/dev/null
+bad_ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${network}\").IPAddress}}" "${bad_upstream}")"
+bad_pod="10-0-0-9.invocation.nvcf.svc.cluster.local"
+run_envoy "${work_dir}/default" \
+  "-d --name ${bad_envoy} --network ${network} --add-host ${bad_pod}:${bad_ip}" >/dev/null
+for _ in $(seq 1 30); do
+  docker exec "${bad_envoy}" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081' 2>/dev/null && break
+  sleep 1
+done
+bad_envoy_ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${network}\").IPAddress}}" "${bad_envoy}")"
+bad_out="$(docker run --rm --network "${network}" --add-host "${proxy_host}:${bad_envoy_ip}" \
+  -v "${work_dir}/ca:/ca:ro" "${CURL_IMAGE}" -sS --max-time 10 \
+  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt "http://${bad_pod}:8443/ping" 2>&1 || true)"
+[[ "${bad_out}" != *pong* ]] || fail "Envoy accepted a pod certificate that the right CA signed but that names another host"
+echo "ok: Envoy refuses a pod certificate from the right CA that does not match the pod name"
