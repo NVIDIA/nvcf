@@ -55,10 +55,6 @@ hooks, init containers, injected agents and the ACME solver argument:
 NVCF_IMAGE_CATALOG_E2E=1 go test -C tools/docs-version-sync -run '^TestImageCatalogCharts$' -count=1
 ```
 
-The [Helm values BDD suite](../../tests/bdd/image-values.md) exercises direct
-Helm upgrades in an isolated QA environment. Registry publication and final
-release-bundle qualification remain separate checks.
-
 ## Release and documentation flow
 
 ```text
