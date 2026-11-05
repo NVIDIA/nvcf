@@ -5017,7 +5017,7 @@ func TestEnsureInstanceNamespace_TerminatingRequeues(t *testing.T) {
 	}
 
 	icmsReq := &nvcav2beta1.ICMSRequest{}
-	err := r.ensureInstanceNamespace(ctx, ms, icmsReq)
+	err := r.ensureInstanceNamespace(ctx, ms, icmsReq, nil)
 
 	// Should return nil (for requeue), not an error
 	assert.NoError(t, err, "Terminating namespace should not return an error")

@@ -38,6 +38,13 @@ const (
 	falseVal = "false"
 )
 
+// NeedsEnforceLabelKey and EnforcementsAnnotationKey are the metadata keys SetMetadata writes. Code that merges
+// metadata into an existing object uses them to drop a stale value once enforcement is turned off.
+const (
+	NeedsEnforceLabelKey      = needsEnforceLabel
+	EnforcementsAnnotationKey = enforcementsAnnotation
+)
+
 func SetMetadata(obj metav1.Object, enforcements featureflag.Attributes) {
 	labels := obj.GetLabels()
 	if labels == nil {
