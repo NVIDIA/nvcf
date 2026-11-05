@@ -38,7 +38,7 @@ import (
 	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-const msgChatStreamIncomplete = "upstream stream ended before completion"
+const msgUpstreamStreamIncomplete = "upstream stream ended before completion"
 
 type UnaryResponseSender func(
 	c *GatewayContext,
@@ -242,8 +242,8 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 // event instead of [DONE] makes OpenAI SDKs raise, and the 502 marks the request failed.
 // An upstream error event keeps its message but takes the gateway's error shape.
 func failChatCompletionStream(c *GatewayContext, cause error) error {
-	failure := echo.NewHTTPError(http.StatusBadGateway, msgChatStreamIncomplete)
-	message := msgChatStreamIncomplete
+	failure := echo.NewHTTPError(http.StatusBadGateway, msgUpstreamStreamIncomplete)
+	message := msgUpstreamStreamIncomplete
 	var upstreamErr *provider.UpstreamStreamError
 	if errors.As(cause, &upstreamErr) && upstreamErr.Message != "" {
 		message = upstreamErr.Message

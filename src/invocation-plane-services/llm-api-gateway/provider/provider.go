@@ -35,8 +35,8 @@ var ErrProxyNotSupported = errors.New("openai proxy endpoints are not supported 
 // ErrStreamIncomplete marks a stream that failed after the upstream answered 200.
 var ErrStreamIncomplete = errors.New("upstream stream incomplete")
 
-// UpstreamStreamError is an error event the upstream sent in a chat or
-// Responses stream after it answered 200. It unwraps to ErrStreamIncomplete.
+// UpstreamStreamError is an error event the upstream sent in a chat, Responses,
+// or Messages stream after it answered 200. It unwraps to ErrStreamIncomplete.
 type UpstreamStreamError struct {
 	// Message is the upstream error message; empty when the event has no string message.
 	Message string

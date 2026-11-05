@@ -237,7 +237,7 @@ func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 // as 502. The Anthropic SDK raises on an error event but never checks for
 // message_stop, so a failed stream also ends with one.
 func failMessagesRelay(c *GatewayContext, relay *messagesRelayWriter, observer *messagesUsageObserver, readErr error) error {
-	failure := echo.NewHTTPError(http.StatusBadGateway, msgChatStreamIncomplete)
+	failure := echo.NewHTTPError(http.StatusBadGateway, msgUpstreamStreamIncomplete)
 	var cause error
 	switch {
 	case observer.failed:
@@ -268,7 +268,7 @@ func failMessagesRelay(c *GatewayContext, relay *messagesRelayWriter, observer *
 	}
 	payload, err := json.Marshal(anthropicErrorResponse{
 		Type:      "error",
-		Error:     anthropicError{Type: anthropicErrorType(http.StatusBadGateway), Message: msgChatStreamIncomplete},
+		Error:     anthropicError{Type: anthropicErrorType(http.StatusBadGateway), Message: msgUpstreamStreamIncomplete},
 		RequestID: errorRequestID(c),
 	})
 	if err != nil {

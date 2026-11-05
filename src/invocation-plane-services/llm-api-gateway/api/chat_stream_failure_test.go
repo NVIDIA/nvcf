@@ -68,7 +68,7 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 		// dropMidway aborts the upstream connection, which is what the gateway
 		// sees once the tunnel propagates the Pylon reset.
 		dropMidway bool
-		// streamMessage is the message of the streaming error event; empty means msgChatStreamIncomplete.
+		// streamMessage is the message of the streaming error event; empty means msgUpstreamStreamIncomplete.
 		streamMessage string
 	}{
 		{name: "stream clean end after output", stream: true, upstreamBody: partial},
@@ -124,7 +124,7 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 				var errBody openAIErrorResponse
 				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &errBody), body)
 				require.Equal(t, "server_error", errBody.Error.Type)
-				require.Equal(t, msgChatStreamIncomplete, errBody.Error.Message)
+				require.Equal(t, msgUpstreamStreamIncomplete, errBody.Error.Message)
 				return
 			}
 			// The client keeps its 200; logs, metrics and traces record a 502.
@@ -142,7 +142,7 @@ func TestChatCompletionsFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 			require.Equal(t, "server_error", event.Error.Type)
 			wantMessage := tt.streamMessage
 			if wantMessage == "" {
-				wantMessage = msgChatStreamIncomplete
+				wantMessage = msgUpstreamStreamIncomplete
 			}
 			require.Equal(t, wantMessage, event.Error.Message)
 		})

@@ -32,7 +32,7 @@ func providerHTTPError(err error) error {
 		return httpErr
 	}
 	if errors.Is(err, provider.ErrStreamIncomplete) {
-		return echo.NewHTTPError(http.StatusBadGateway, msgChatStreamIncomplete).SetInternal(err)
+		return echo.NewHTTPError(http.StatusBadGateway, msgUpstreamStreamIncomplete).SetInternal(err)
 	}
 
 	// Transport errors carry internal addresses; keep them for the request log only.
