@@ -7,6 +7,10 @@
 # without patching global.yaml.gotmpl. The gateway-routes chart owns the default
 # (enabled: true); the stack forwards enabled only when an environment file sets
 # it, so an unset flag passes no override and the chart default stands.
+#
+# The llmApiGateway route follows addons.llm.enabled, like the other add-on
+# routes, so an install without the LLM add-on gets no llm.<domain> route to a
+# Service it never deployed.
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -95,9 +99,9 @@ write_env() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. Default: flags unset -> the stack passes NO enabled override for any of the
-#    three, so the gateway-routes chart default (true) stands and existing
-#    installs are unchanged.
+# 1. Default: flags unset -> the stack passes NO enabled override for apiKeys,
+#    sis or reval, so the gateway-routes chart default (true) stands. With the
+#    LLM add-on off by default, llmApiGateway is forced to false.
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:
@@ -111,6 +115,7 @@ render_ingress_values "$default_values"
 assert_route_unset apiKeys "$default_values"
 assert_route_unset sis "$default_values"
 assert_route_unset reval "$default_values"
+assert_route_enabled llmApiGateway false "$default_values"
 
 # ---------------------------------------------------------------------------
 # 2. Override: an environment file disabling the three routes reaches the chart
@@ -137,5 +142,22 @@ render_ingress_values "$off_values"
 assert_route_enabled apiKeys false "$off_values"
 assert_route_enabled sis false "$off_values"
 assert_route_enabled reval false "$off_values"
+
+# ---------------------------------------------------------------------------
+# 3. LLM add-on on: the llmApiGateway route is enabled with it.
+# ---------------------------------------------------------------------------
+write_env <<'EOF'
+global:
+  image:
+    registry: nvcr.io
+    repository: test/nvcf
+addons:
+  llm:
+    enabled: true
+EOF
+
+llm_values="$work_dir/ingress-llm-values.yaml"
+render_ingress_values "$llm_values"
+assert_route_enabled llmApiGateway true "$llm_values"
 
 echo "gateway-routes-enable-wiring: all checks passed"

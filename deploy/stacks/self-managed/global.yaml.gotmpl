@@ -2503,6 +2503,8 @@ nvcfGatewayRoutes:
     invocation:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "invocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    llmApiGateway:
+      enabled: {{ dig "addons" "llm" "enabled" false .Values }}
     llmInvocation:
       enabled: {{ dig "addons" "llm" "enabled" false .Values }}
       backend:
