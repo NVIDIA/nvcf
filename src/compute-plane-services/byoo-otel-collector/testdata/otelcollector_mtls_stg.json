@@ -1,0 +1,31 @@
+{
+  "telemetries": {
+    "logsTelemetry": {
+      "telemetryId": "4f0b8a52-6a7c-4a43-9b0e-2f5f2f1b7c01",
+      "name": "nv-otelcollector-mtls-stg",
+      "endpoint": "https://otel-mtls.example.invalid:4318",
+      "protocol": "HTTP",
+      "provider": "OTEL_COLLECTOR",
+      "types": ["LOGS", "METRICS", "TRACES"],
+      "createdAt": "2026-11-02T00:00:00.000Z"
+    },
+    "metricsTelemetry": {
+      "telemetryId": "4f0b8a52-6a7c-4a43-9b0e-2f5f2f1b7c01",
+      "name": "nv-otelcollector-mtls-stg",
+      "endpoint": "https://otel-mtls.example.invalid:4318",
+      "protocol": "HTTP",
+      "provider": "OTEL_COLLECTOR",
+      "types": ["LOGS", "METRICS", "TRACES"],
+      "createdAt": "2026-11-02T00:00:00.000Z"
+    },
+    "tracesTelemetry": {
+      "telemetryId": "4f0b8a52-6a7c-4a43-9b0e-2f5f2f1b7c01",
+      "name": "nv-otelcollector-mtls-stg",
+      "endpoint": "https://otel-mtls.example.invalid:4318",
+      "protocol": "HTTP",
+      "provider": "OTEL_COLLECTOR",
+      "types": ["LOGS", "METRICS", "TRACES"],
+      "createdAt": "2026-11-02T00:00:00.000Z"
+    }
+  }
+}

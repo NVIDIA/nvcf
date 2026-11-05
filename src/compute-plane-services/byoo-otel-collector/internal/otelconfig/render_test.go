@@ -1791,3 +1791,133 @@ func Test_exporterTraces_UnsupportedProviders(t *testing.T) {
 		})
 	}
 }
+
+// OTEL_COLLECTOR reads a string secret as a bearer token. An object secret can
+// add a client cert pair and a CA for receivers that require mTLS. Blank values
+// count as missing, and the config never references a file the secret does not
+// have, because a blank cert or CA file stops the collector from starting.
+func Test_otelCollectorExporter(t *testing.T) {
+	const telemetryName = "example-otel"
+	const endpoint = "https://otel.example.invalid:4318"
+	tests := []struct {
+		name        string
+		secrets     map[string]string
+		wantHeader  string
+		wantTLSKeys []string
+		wantErr     string
+	}{
+		{
+			name:       "string secret is a bearer token",
+			secrets:    map[string]string{},
+			wantHeader: telemetryName,
+		},
+		{
+			name:       "token only",
+			secrets:    map[string]string{"token": "fake-token"},
+			wantHeader: telemetryName + "-token",
+		},
+		{
+			name:        "client cert pair only",
+			secrets:     map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key"},
+			wantTLSKeys: []string{"cert_file", "key_file"},
+		},
+		{
+			name:        "client cert pair with CA",
+			secrets:     map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key", "caFile": "fake-ca"},
+			wantTLSKeys: []string{"ca_file", "cert_file", "key_file"},
+		},
+		{
+			name:        "token and client cert pair",
+			secrets:     map[string]string{"token": "fake-token", "clientCert": "fake-cert", "clientKey": "fake-key"},
+			wantHeader:  telemetryName + "-token",
+			wantTLSKeys: []string{"cert_file", "key_file"},
+		},
+		{
+			name:        "token with CA",
+			secrets:     map[string]string{"token": "fake-token", "caFile": "fake-ca"},
+			wantHeader:  telemetryName + "-token",
+			wantTLSKeys: []string{"ca_file"},
+		},
+		{
+			name:        "blank token and CA are dropped",
+			secrets:     map[string]string{"token": " \n", "clientCert": "fake-cert", "clientKey": "fake-key", "caFile": ""},
+			wantTLSKeys: []string{"cert_file", "key_file"},
+		},
+		{
+			name:    "missing clientKey",
+			secrets: map[string]string{"clientCert": "fake-cert", "caFile": "fake-ca"},
+			wantErr: "missing or empty: clientKey",
+		},
+		{
+			name:    "missing clientCert",
+			secrets: map[string]string{"token": "fake-token", "clientKey": "fake-key"},
+			wantErr: "missing or empty: clientCert",
+		},
+	}
+
+	signals := []struct {
+		name     string
+		pipeline string
+		set      func(*Telemetries, *Telemetry)
+	}{
+		{"logs", "logs", func(ts *Telemetries, tm *Telemetry) { ts.Logs = tm }},
+		{"metrics", "metrics", func(ts *Telemetries, tm *Telemetry) { ts.Metrics = tm }},
+		{"traces", "traces", func(ts *Telemetries, tm *Telemetry) { ts.Traces = tm }},
+	}
+
+	for _, signal := range signals {
+		for _, tt := range tests {
+			t.Run(signal.name+"/"+tt.name, func(t *testing.T) {
+				dir := writeTLSSecretFiles(t, telemetryName, tt.secrets)
+				cfg := TelemetryConfig{}
+				signal.set(&cfg.Telemetries, &Telemetry{
+					Name:     telemetryName,
+					Protocol: ProtocolHTTP,
+					Provider: ProviderOtelCollector,
+					Endpoint: endpoint,
+				})
+				otelConfig := &OpenTelemetryConfig{}
+				initializeConfigMaps(otelConfig)
+
+				err := generateExportersAndService(cfg, otelConfig, TemplateConfig{Namespace: "test-namespace"})
+				exporterId := fmt.Sprintf("otlp_http/OTEL_COLLECTOR-%s-%s", telemetryName, signal.name)
+				if tt.wantErr != "" {
+					assert.ErrorContains(t, err, tt.wantErr)
+					assert.ErrorContains(t, err, telemetryName, "error must name the telemetry")
+					assert.NotContains(t, otelConfig.Exporters, exporterId)
+					return
+				}
+				if err != nil {
+					t.Fatalf("generateExportersAndService() unexpected error = %v", err)
+				}
+
+				exporter := otelConfig.Exporters[exporterId]
+				assert.Equal(t, endpoint, exporter["endpoint"])
+				assert.Equal(t, []string{exporterId}, otelConfig.Service.Pipelines[signal.pipeline].Exporters)
+
+				if tt.wantHeader != "" {
+					assert.Equal(t, map[string]interface{}{
+						"Authorization": fmt.Sprintf("Bearer ${file:%s}", filepath.Join(dir, tt.wantHeader)),
+					}, exporter["headers"])
+				} else {
+					assert.NotContains(t, exporter, "headers")
+				}
+
+				if len(tt.wantTLSKeys) == 0 {
+					assert.NotContains(t, exporter, "tls")
+					return
+				}
+				tls, ok := exporter["tls"].(map[string]interface{})
+				if !ok {
+					t.Fatalf("exporter tls = %#v, want a map", exporter["tls"])
+				}
+				files := map[string]string{"cert_file": "clientCert", "key_file": "clientKey", "ca_file": "caFile"}
+				want := map[string]interface{}{}
+				for _, key := range tt.wantTLSKeys {
+					want[key] = filepath.Join(dir, telemetryName+"-"+files[key])
+				}
+				assert.Equal(t, want, tls)
+			})
+		}
+	}
+}

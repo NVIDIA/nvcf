@@ -475,7 +475,7 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 			"headers": map[string]interface{}{
 				"collector-id": collectorId,
 			},
-			"tls": kratosClientTLS(credentialPath, config.Telemetries.Logs.Name),
+			"tls": clientCertTLS(credentialPath, config.Telemetries.Logs.Name),
 		}
 	case ProviderAzureMonitor:
 		exporterType = "azuremonitor"
@@ -500,14 +500,12 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-logs", config.Telemetries.Logs.Provider, config.Telemetries.Logs.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
-		exporterCredential = fmt.Sprintf("${file:%s}", filepath.Join(credentialPath, config.Telemetries.Logs.Name))
 
-		otelConfig.Exporters[exporterId] = map[string]interface{}{
-			"endpoint": config.Telemetries.Logs.Endpoint,
-			"headers": map[string]interface{}{
-				"Authorization": fmt.Sprintf("Bearer %s", exporterCredential),
-			},
+		exporter, err := otelCollectorExporter(credentialPath, "logs", config.Telemetries.Logs)
+		if err != nil {
+			return "", err
 		}
+		otelConfig.Exporters[exporterId] = exporter
 	default:
 		return "", fmt.Errorf("invalid logs provider: %s", config.Telemetries.Logs.Provider)
 	}
@@ -515,10 +513,63 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 	return exporterId, nil
 }
 
-// kratosClientTLS returns the mTLS block for a KRATOS exporter. The secrets
-// extractor writes the clientCert and clientKey keys of the telemetry secret to
-// <name>-clientCert and <name>-clientKey.
-func kratosClientTLS(credentialPath, telemetryName string) map[string]interface{} {
+// otelCollectorExporter returns the OTLP/HTTP exporter for an OTEL_COLLECTOR
+// telemetry. A string secret is a bearer token, which the secrets extractor
+// writes to <name>. An object secret can hold a bearer token in token, a client
+// cert pair in clientCert and clientKey, and a CA in caFile. It needs a token,
+// a cert pair, or both. Blank values count as missing, because a blank cert or
+// CA file stops the collector from starting.
+func otelCollectorExporter(credentialPath, signal string, telemetry *Telemetry) (map[string]interface{}, error) {
+	secretFile := func(key string) string {
+		return filepath.Join(credentialPath, fmt.Sprintf("%s-%s", telemetry.Name, key))
+	}
+	present := map[string]bool{}
+	for _, key := range []string{"token", "clientCert", "clientKey", "caFile"} {
+		hasContent, err := secretFileHasContent(secretFile(key))
+		if err != nil {
+			return nil, err
+		}
+		present[key] = hasContent
+	}
+
+	exporter := map[string]interface{}{"endpoint": telemetry.Endpoint}
+	if !present["token"] && !present["clientCert"] && !present["clientKey"] {
+		exporter["headers"] = map[string]interface{}{
+			"Authorization": fmt.Sprintf("Bearer ${file:%s}", filepath.Join(credentialPath, telemetry.Name)),
+		}
+		return exporter, nil
+	}
+
+	if present["clientCert"] != present["clientKey"] {
+		missing := "clientKey"
+		if !present["clientCert"] {
+			missing = "clientCert"
+		}
+		return nil, fmt.Errorf("%s telemetry %q: OTEL_COLLECTOR secret needs clientCert and clientKey together, missing or empty: %s",
+			signal, telemetry.Name, missing)
+	}
+	if present["token"] {
+		exporter["headers"] = map[string]interface{}{
+			"Authorization": fmt.Sprintf("Bearer ${file:%s}", secretFile("token")),
+		}
+	}
+	tls := map[string]interface{}{}
+	if present["clientCert"] {
+		tls = clientCertTLS(credentialPath, telemetry.Name)
+	}
+	if present["caFile"] {
+		tls["ca_file"] = secretFile("caFile")
+	}
+	if len(tls) > 0 {
+		exporter["tls"] = tls
+	}
+	return exporter, nil
+}
+
+// clientCertTLS returns the mTLS block for an exporter that authenticates with
+// a client cert pair. The secrets extractor writes the clientCert and clientKey
+// keys of the telemetry secret to <name>-clientCert and <name>-clientKey.
+func clientCertTLS(credentialPath, telemetryName string) map[string]interface{} {
 	return map[string]interface{}{
 		"cert_file": filepath.Join(credentialPath, fmt.Sprintf("%s-clientCert", telemetryName)),
 		"key_file":  filepath.Join(credentialPath, fmt.Sprintf("%s-clientKey", telemetryName)),
@@ -627,14 +678,12 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-metrics", config.Telemetries.Metrics.Provider, config.Telemetries.Metrics.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
-		exporterCredential = fmt.Sprintf("${file:%s}", filepath.Join(credentialPath, config.Telemetries.Metrics.Name))
 
-		otelConfig.Exporters[exporterId] = map[string]interface{}{
-			"endpoint": config.Telemetries.Metrics.Endpoint,
-			"headers": map[string]interface{}{
-				"Authorization": fmt.Sprintf("Bearer %s", exporterCredential),
-			},
+		exporter, err := otelCollectorExporter(credentialPath, "metrics", config.Telemetries.Metrics)
+		if err != nil {
+			return "", err
 		}
+		otelConfig.Exporters[exporterId] = exporter
 	default:
 		return "", fmt.Errorf("invalid metrics provider: %s", config.Telemetries.Metrics.Provider)
 	}
@@ -947,7 +996,7 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 				config.Telemetries.Traces.Name, strings.Join(missing, ", "))
 		}
 
-		tls := kratosClientTLS(credentialPath, config.Telemetries.Traces.Name)
+		tls := clientCertTLS(credentialPath, config.Telemetries.Traces.Name)
 		// The client cert pair is enough for the Kratos traces gateway, which uses
 		// public CA roots. caFile is optional, and a blank CA file stops the
 		// collector from starting, so it is used only when the file has content.
@@ -981,14 +1030,12 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
-		exporterCredential = fmt.Sprintf("${file:%s}", filepath.Join(credentialPath, config.Telemetries.Traces.Name))
 
-		otelConfig.Exporters[exporterId] = map[string]interface{}{
-			"endpoint": config.Telemetries.Traces.Endpoint,
-			"headers": map[string]interface{}{
-				"Authorization": fmt.Sprintf("Bearer %s", exporterCredential),
-			},
+		exporter, err := otelCollectorExporter(credentialPath, "traces", config.Telemetries.Traces)
+		if err != nil {
+			return "", err
 		}
+		otelConfig.Exporters[exporterId] = exporter
 	default:
 		return "", fmt.Errorf("invalid traces provider: %s", config.Telemetries.Traces.Provider)
 	}
