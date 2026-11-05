@@ -508,6 +508,68 @@ func TestBuildCatalogFromResolvedInventoryRejectsPinDrift(t *testing.T) {
 	}
 }
 
+func TestBuildCatalogFromResolvedInventoryUsesRenderedPylon(t *testing.T) {
+	for _, recorded := range []bool{true, false} {
+		t.Run(fmt.Sprintf("recorded=%t", recorded), func(t *testing.T) {
+			repo := initTestGitRepo(t)
+			files := testCatalogPinSources()
+			files["deploy/stacks/self-managed/global.yaml.gotmpl"] = `image: {{ printf "%s/%s/pylon:%s" $host $repo $tag }}`
+			source := commitTestStackSource(t, repo, "1.2.3", files)
+			inventory := testCatalogResolvedInventory(t, source)
+			if !recorded {
+				var artifacts []resolvedInventoryArtifact
+				for _, artifact := range inventory.Artifacts {
+					if artifact.Name != "pylon" {
+						artifacts = append(artifacts, artifact)
+					}
+				}
+				inventory.Artifacts = artifacts
+			}
+			snapshot, err := loadStackSourceSnapshot(repo, source, effectiveStackPinSourcePaths(effectiveStackPins))
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog, err := buildCatalogFromResolvedStackInventory(inventory, snapshot, testCatalog())
+			if !recorded {
+				if err == nil || !strings.Contains(err.Error(), "resolved 0 definitions for pylon") {
+					t.Fatalf("missing rendered and literal Pylon: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			pylon, found := catalog.findArtifactByNameAndType("pylon", ArtifactTypeImage)
+			if !found || pylon.Version != "3.4.5" {
+				t.Fatalf("rendered Pylon = %+v, found %t", pylon, found)
+			}
+			if err := validateStackSourceSnapshot(repo, catalog); err != nil {
+				t.Fatalf("generated source snapshot must pass offline validation: %v", err)
+			}
+		})
+	}
+}
+
+func TestCatalogInventoryIncludesSelectedSamba(t *testing.T) {
+	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
+	inventory := testCatalogResolvedInventory(t, source)
+	inventory.Artifacts = append(inventory.Artifacts, resolvedInventoryArtifact{
+		Type: "container-image", Name: "samba", Repository: "nvcr.io/nvidia/nvcf/samba",
+		Version: "1.2.3", Reference: "nvcr.io/nvidia/nvcf/samba:1.2.3",
+		Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "nvca-operator"}},
+	})
+	artifacts, err := catalogArtifactsFromResolvedStackInventory(inventory, &Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, artifact := range artifacts {
+		if artifact.Name == "samba" && artifact.Type == ArtifactTypeImage && artifact.Version == "1.2.3" {
+			return
+		}
+	}
+	t.Fatal("selected Samba image was omitted from the catalog")
+}
+
 func TestBuildCatalogFromResolvedInventoryValidatesStackPinsByType(t *testing.T) {
 	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
 	inventory := testCatalogResolvedInventory(t, source)
