@@ -61,10 +61,10 @@ spec:
           args:
             - -c
             - /scripts/deploy.sh {{ include "nvcf-openbao.namespace" . }} {{ $serverFullname }} helm
-          {{- with (include "nvcf-openbao.kubectlEnv" .) }}
           env:
-            {{- . | nindent 12 }}
-          {{- end }}
+            {{- include "nvcf-openbao.kubectlEnv" . | nindent 12 }}
+            - name: JWT_PLUGIN_LIFECYCLE_MODE
+              value: {{ include "nvcf-openbao.jwtLifecycleMode" . | quote }}
           volumeMounts:
             - name: init-script
               readOnly: true
@@ -123,3 +123,5 @@ data:
     {{- .Files.Get "scripts/utils.sh" | nindent 4 }}
   log.sh: |-
     {{- .Files.Get "scripts/log.sh" | nindent 4 }}
+  jwt-plugin.sh: |-
+    {{- .Files.Get "scripts/utils/jwt-plugin.sh" | nindent 4 }}

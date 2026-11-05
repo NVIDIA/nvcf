@@ -127,11 +127,16 @@ jobs:
       - name: Run observability Helmfile profile tests
         run: make -C deploy/stacks/observability test
 
+      - name: Test chart image defaults and ordinary overrides
+        env:
+          NVCF_IMAGE_CATALOG_E2E: "1"
+        run: go test -C tools/docs-version-sync -run '^TestImageCatalogCharts/openbao$' -count=1
+
       - name: Test OpenBao auto-unseal retry behavior
         run: bash deploy/helm/openbao/tests/auto-unseal-sidecar.sh
 
-      - name: Test OpenBao plugin catalog refresh hook
-        run: bash deploy/helm/openbao/tests/plugin-catalog-refresh-hook.sh
+      - name: Test OpenBao versioned JWT lifecycle
+        run: bash deploy/helm/openbao/tests/jwt-plugin-lifecycle.sh
 
       - name: Check for uncommitted helm dependency artifacts
         run: |

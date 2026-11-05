@@ -156,3 +156,21 @@ go vet -C tools/docs-version-sync ./...
 The operation is complete when the offline sync check, current-release check,
 and full documentation check pass, and the generated diff contains only the
 expected catalog and documentation updates.
+
+## Chart image settings
+
+The openbao wrapper exposes image coordinates in its native values. Use ordinary
+Helm values files to override registry, repository and tag fields, including
+mirrors with different repository names. The image index is used by CI; Helm
+consumes the existing values keys directly.
+
+Run the maintenance chart's defaults, indirect-image coverage and override tests:
+
+```sh
+NVCF_IMAGE_CATALOG_E2E=1 go test -C tools/docs-version-sync -run '^TestImageCatalogCharts/openbao$' -count=1
+```
+
+The test downloads dependencies in an isolated copy and Helm configuration.
+It checks last-file precedence and tag/digest overrides. Successful rendering
+does not establish that an image is published or that its security fixes have
+been qualified.
