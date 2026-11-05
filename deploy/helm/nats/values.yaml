@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Catalog paths are consumed by docs-version-sync images, not by Helm.
+# CI indexes the prefilled image settings below. Helm consumes those settings
+# directly; override them with ordinary values files.
 thirdPartyImages:
   natsServer: nats.container.image
   natsReloader: nats.reloader.image

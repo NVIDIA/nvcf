@@ -14,8 +14,9 @@
 # limitations under the License.
 
 ---
-# NVCF server and migration builds retain their owning image releases.
-# Catalog paths are consumed by docs-version-sync images, not by Helm.
+# CI indexes the prefilled image settings below. Helm consumes those settings
+# directly; override them with ordinary values files. NVCF builds retain
+# their owning image releases.
 ownedImages:
   cassandraServer: cassandra.image
   cassandraMigrations: cassandra.migrations.image
@@ -33,10 +34,8 @@ cassandra:
     defaultStorageClass: ""
 
   image:
-    # registry: must be supplied in additional values
-    # repository: must be supplied in additional values
-    registry: ""
-    repository: ""
+    registry: nvcr.io
+    repository: nvidia/nvcf/cassandra
     tag: 5.0.9-nv-2.0.6
     pullPolicy: IfNotPresent
 
@@ -235,10 +234,8 @@ cassandra:
 
   migrations:
     image:
-      # registry: must be supplied in additional values
-      # repository: must be supplied in additional values
-      registry: ""
-      repository: ""
+      registry: nvcr.io
+      repository: nvidia/nvcf/nvcf-cassandra-migrations
       tag: 0.19.2
       pullPolicy: Always
 

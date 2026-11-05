@@ -4,8 +4,6 @@
 package main
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,97 +78,6 @@ func TestImageCatalogCoverageIncludesIndirectImages(t *testing.T) {
 	}
 }
 
-func TestImageMirrorOverridesRequireCompleteVerifiedMappings(t *testing.T) {
-	images := []catalogImage{
-		{ID: "server", Path: "server.image", Reference: "upstream.example/server:v1", split: true},
-		{ID: "solver", Path: "dependency.acmesolver.image", Reference: "upstream.example/solver:v2", digest: true},
-	}
-	raw := []byte("images:\n  server:\n    source: upstream.example/server:v1\n    destination: mirror.example:5000/renamed/server:v1\n  solver:\n    source: upstream.example/solver:v2\n    destination: mirror.example:5000/renamed/solver:v2\n")
-	var verified []string
-	verify := func(source, destination string) error {
-		verified = append(verified, source+" -> "+destination)
-		return nil
-	}
-	overrides, err := generateImageMirrorOverrides(images, raw, verify)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server, _ := imageCatalogValue(overrides, "server.image")
-	solver, _ := imageCatalogValue(overrides, "dependency.acmesolver.image")
-	if server["registry"] != "mirror.example:5000" || server["repository"] != "renamed/server" ||
-		solver["repository"] != "mirror.example:5000/renamed/solver" || solver["registry"] != "" ||
-		len(verified) != 2 {
-		t.Fatalf("unexpected overrides: %#v; verification: %v", overrides, verified)
-	}
-	for _, invalid := range [][]byte{
-		[]byte("images: {}"),
-		[]byte(strings.ReplaceAll(string(raw), "upstream.example/server:v1", "upstream.example/server:stale")),
-		[]byte(strings.ReplaceAll(string(raw), "mirror.example:5000/renamed/server:v1", "unqualified/server:v1")),
-		append(append([]byte{}, raw...), []byte("---\nimages: {}\n")...),
-		[]byte(strings.ReplaceAll(string(raw), "source:", "unexpected:")),
-	} {
-		if _, err := generateImageMirrorOverrides(images, invalid, verify); err == nil {
-			t.Errorf("accepted invalid mapping %s", invalid)
-		}
-	}
-	if _, err := generateImageMirrorOverrides(images, raw, func(string, string) error {
-		return errors.New("platform digests differ")
-	}); err == nil || !strings.Contains(err.Error(), "platform digests differ") {
-		t.Fatalf("verification error was lost: %v", err)
-	}
-}
-
-func TestImageMirrorPreservesDigestInputShapes(t *testing.T) {
-	digest := "sha256:" + strings.Repeat("a", 64)
-	for _, test := range []struct {
-		name   string
-		split  bool
-		digest bool
-	}{
-		{"split", true, false},
-		{"full", false, true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			image := catalogImage{ID: "server", Path: "image", Reference: "source.example/server:v1@" + digest, split: test.split, digest: test.digest}
-			raw := []byte("images:\n  server:\n    source: " + image.Reference + "\n    destination: mirror.example/renamed:v1@" + digest + "\n")
-			values, err := generateImageMirrorOverrides([]catalogImage{image}, raw, func(string, string) error { return nil })
-			if err != nil {
-				t.Fatal(err)
-			}
-			node := values["image"].(map[string]any)
-			if test.digest && (node["digest"] != digest || node["tag"] != "v1") {
-				t.Fatalf("digest fields lost: %#v", node)
-			}
-			if test.split && node["tag"] != "v1@"+digest {
-				t.Fatalf("tag@digest lost: %#v", node)
-			}
-		})
-	}
-}
-
-func TestImageMirrorRequiresUnambiguousPlatformIndexes(t *testing.T) {
-	valid := func(architecture, digest string) map[string]any {
-		return map[string]any{"digest": digest, "platform": map[string]any{"os": "linux", "architecture": architecture}}
-	}
-	amd64 := valid("amd64", "sha256:"+strings.Repeat("a", 64))
-	arm64 := valid("arm64", "sha256:"+strings.Repeat("b", 64))
-	for _, test := range []struct {
-		entries []map[string]any
-		valid   bool
-	}{
-		{[]map[string]any{amd64, arm64}, true},
-		{[]map[string]any{amd64}, false},
-		{[]map[string]any{amd64, arm64, arm64}, false},
-		{[]map[string]any{amd64, valid("arm64", "invalid")}, false},
-	} {
-		raw, _ := json.Marshal(map[string]any{"manifests": test.entries})
-		_, err := decodeImageMirrorPlatforms(raw)
-		if (err == nil) != test.valid {
-			t.Errorf("platform entries %+v: %v", test.entries, err)
-		}
-	}
-}
-
 func TestImageCatalogCharts(t *testing.T) {
 	if os.Getenv("NVCF_IMAGE_CATALOG_E2E") != "1" {
 		t.Skip("set NVCF_IMAGE_CATALOG_E2E=1 to render the four real charts with Helm")
@@ -187,8 +94,8 @@ func TestImageCatalogCharts(t *testing.T) {
 	}{
 		{"nats", "nats", 3, "{}"},
 		{"cert-manager", "cert-manager", 5, "{}"},
-		{"openbao", "openbao/helm", 4, "openbao:\n  server:\n    image: {registry: source.example, repository: nvcf/openbao}\n  migrations:\n    image: {registry: source.example, repository: nvcf/migrations}\n  injector:\n    image: {registry: source.example, repository: nvcf/injector}\n    agentImage: {registry: source.example, repository: nvcf/openbao}\n"},
-		{"cassandra", "cassandra/helm", 2, "cassandra:\n  image: {registry: source.example, repository: nvcf/cassandra}\n  migrations:\n    image: {registry: source.example, repository: nvcf/migrations}\n"},
+		{"openbao", "openbao/helm", 4, "{}"},
+		{"cassandra", "cassandra/helm", 2, "{}"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			chart := filepath.Join(t.TempDir(), "chart")
@@ -215,27 +122,48 @@ func TestImageCatalogCharts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Every indexed image must be visible in the wrapper values,
+			// rather than requiring an operator to discover dependency defaults.
+			rawDefaults, err := os.ReadFile(filepath.Join(chart, "values.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defaults := imageCatalogFixture(t, string(rawDefaults))
+			defaults.AppVersions = sourceSnapshot.AppVersions
+			prefilled, err := resolveChartImageCatalog(defaults)
+			if err != nil {
+				t.Fatalf("wrapper image defaults are incomplete: %v", err)
+			}
+			if len(prefilled) != len(images) {
+				t.Fatal("wrapper and effective image catalogs differ")
+			}
+			for i, image := range images {
+				if prefilled[i].Reference != image.Reference {
+					t.Fatalf("%s wrapper default %s differs from effective image %s", image.ID, prefilled[i].Reference, image.Reference)
+				}
+			}
 			if len(images) != test.count {
 				t.Fatalf("catalog has %d identities, want %d", len(images), test.count)
 			}
 			if err := checkChartImageCoverage(images, sourceSnapshot.Manifest); err != nil {
 				t.Fatal(err)
 			}
-			mappings := make(map[string]imageMirrorMapping)
+			// Use ordinary Helm values, without a mapping file or generator.
+			overrides := make(map[string]any)
+			want := make(map[string]string)
 			for _, image := range images {
 				parsed, err := parseResolvedImageReference(image.Reference)
 				if err != nil {
 					t.Fatal(err)
 				}
-				mappings[image.ID] = imageMirrorMapping{
-					Source:      image.Reference,
-					Destination: "mirror.example:5000/renamed/" + strings.ToLower(image.ID) + ":" + parsed.Version + "@sha256:" + strings.Repeat("a", 64),
+				repository := "renamed/" + strings.ToLower(image.ID)
+				digest := "sha256:" + strings.Repeat("a", 64)
+				fields := map[string]any{"registry": "mirror.example:5000", "repository": repository, "tag": parsed.Version + "@" + digest}
+				if image.digest {
+					fields = map[string]any{"registry": "", "repository": "mirror.example:5000/" + repository, "tag": parsed.Version, "digest": digest}
 				}
-			}
-			raw, _ := yaml.Marshal(map[string]any{"images": mappings})
-			overrides, err := generateImageMirrorOverrides(images, raw, func(string, string) error { return nil })
-			if err != nil {
-				t.Fatal(err)
+				setTestImageValues(t, overrides, image.Path, fields)
+				want[image.ID] = "mirror.example:5000/" + repository + ":" + parsed.Version + "@" + digest
 			}
 			overridePath := filepath.Join(t.TempDir(), "mirror.yaml")
 			encoded, _ := yaml.Marshal(overrides)
@@ -250,13 +178,18 @@ func TestImageCatalogCharts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := checkImageMirrorDestinations(images, mirrored, raw); err != nil {
-				t.Fatal(err)
+			for _, image := range mirrored {
+				if image.Reference != want[image.ID] {
+					t.Fatalf("%s override: got %s, want %s", image.ID, image.Reference, want[image.ID])
+				}
+				if !strings.Contains(string(mirrorSnapshot.Manifest), image.Reference) {
+					t.Fatalf("%s override did not reach a workload or indirect image setting", image.ID)
+				}
 			}
 			if err := checkChartImageCoverage(mirrored, mirrorSnapshot.Manifest); err != nil {
 				t.Fatal(err)
 			}
-			// Values supplied after the generated profile remain explicit
+			// Values supplied after a registry profile remain explicit
 			// operator overrides, including the indirect solver/agent paths.
 			selected := images[0]
 			explicitFields, _ := imageCatalogValue(overrides, selected.Path)
@@ -266,9 +199,7 @@ func TestImageCatalogCharts(t *testing.T) {
 			}
 			explicitPath := filepath.Join(t.TempDir(), "explicit.yaml")
 			explicit := make(map[string]any)
-			if err := setImageCatalogOverride(explicit, selected.Path, explicitFields); err != nil {
-				t.Fatal(err)
-			}
+			setTestImageValues(t, explicit, selected.Path, explicitFields)
 			encoded, _ = yaml.Marshal(explicit)
 			if err := os.WriteFile(explicitPath, encoded, 0o600); err != nil {
 				t.Fatal(err)
@@ -286,6 +217,39 @@ func TestImageCatalogCharts(t *testing.T) {
 			}
 			if err := checkChartImageCoverage(overridden, overrideSnapshot.Manifest); err != nil {
 				t.Fatal(err)
+			}
+			if test.name == "nats" {
+				for _, fields := range []map[string]any{
+					{"fullImageName": "explicit.example/customer/box:custom"},
+					{"registry": "explicit.example", "repository": "customer/box", "digest": "sha256:" + strings.Repeat("b", 64)},
+				} {
+					values := make(map[string]any)
+					setTestImageValues(t, values, "nats.natsBox.container.image", fields)
+					encoded, _ := yaml.Marshal(values)
+					path := filepath.Join(t.TempDir(), "native-image-override.yaml")
+					if err := os.WriteFile(path, encoded, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					rendered, err := renderImageChart(chart, []string{path})
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := "explicit.example/customer/box@" + fmt.Sprint(fields["digest"])
+					if full, ok := fields["fullImageName"].(string); ok {
+						want = full
+					}
+					actual, err := extractResolvedImages(rendered.Manifest)
+					if err != nil {
+						t.Fatal(err)
+					}
+					found := false
+					for _, image := range actual {
+						found = found || image.Reference == want
+					}
+					if !found {
+						t.Fatalf("native NATS image override %s did not reach the box workload", want)
+					}
+				}
 			}
 			if test.name == "openbao" {
 				for _, skew := range []string{
@@ -329,4 +293,16 @@ func registerImageCatalogRepositories(t *testing.T, chart string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func setTestImageValues(t *testing.T, values map[string]any, path string, fields map[string]any) {
+	t.Helper()
+	keys := strings.Split(path, ".")
+	for _, key := range keys[:len(keys)-1] {
+		if values[key] == nil {
+			values[key] = make(map[string]any)
+		}
+		values = values[key].(map[string]any)
+	}
+	values[keys[len(keys)-1]] = fields
 }

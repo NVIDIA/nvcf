@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -44,90 +43,6 @@ const imageCatalogProbe = "{{- $versions := dict \"\" .Chart.AppVersion -}}\n" +
 	"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: nvcf-image-catalog-probe\n" +
 	"data:\n  values: {{ toJson .Values | quote }}\n" +
 	"  appVersions: {{ toJson $versions | quote }}\n"
-
-func runImageCatalog(args []string) error {
-	if len(args) == 0 || (args[0] != "inspect" && args[0] != "mirror") {
-		return fmt.Errorf("usage: images inspect|mirror --chart DIR [-f VALUES] [--mapping FILE]")
-	}
-	flags := flag.NewFlagSet("images "+args[0], flag.ContinueOnError)
-	chart := flags.String("chart", "", "unpacked chart, with dependencies built")
-	mapping := flags.String("mapping", "", "source/destination image mapping for mirror")
-	certDirectory := flags.String("registry-cert-dir", "", "skopeo registry CA/client certificate directory")
-	var values []string
-	flags.Func("f", "values file; repeat in Helm precedence order", func(value string) error {
-		absolute, err := filepath.Abs(value)
-		values = append(values, absolute)
-		return err
-	})
-	if err := flags.Parse(args[1:]); err != nil {
-		return err
-	}
-	if *chart == "" || flags.NArg() != 0 || (args[0] == "inspect" && (*mapping != "" || *certDirectory != "")) ||
-		(args[0] == "mirror" && *mapping == "") {
-		return fmt.Errorf("specify --chart and valid images %s flags", args[0])
-	}
-	snapshot, err := renderImageChart(*chart, values)
-	if err != nil {
-		return err
-	}
-	images, err := resolveChartImageCatalog(snapshot)
-	if err != nil {
-		return err
-	}
-	if err := checkChartImageCoverage(images, snapshot.Manifest); err != nil {
-		return err
-	}
-	if args[0] == "inspect" {
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(images)
-	}
-	raw, err := os.ReadFile(*mapping)
-	if err != nil {
-		return fmt.Errorf("read --mapping: %w", err)
-	}
-	overrides, err := generateImageMirrorOverrides(images, raw, func(source, destination string) error {
-		return verifyImageMirror(source, destination, *certDirectory)
-	})
-	if err != nil {
-		return err
-	}
-	// Verify that the actual templates honor every generated override before
-	// writing any output. A chart-specific fallback must never escape the mirror.
-	temporary, err := os.CreateTemp("", "nvcf-image-overrides-*.yaml")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temporary.Name())
-	data, err := yaml.Marshal(overrides)
-	if err != nil {
-		temporary.Close()
-		return err
-	}
-	if _, err = temporary.Write(data); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	mirrored, err := renderImageChart(*chart, append(values, temporary.Name()))
-	if err != nil {
-		return fmt.Errorf("render mirrored chart: %w", err)
-	}
-	expected, err := resolveChartImageCatalog(mirrored)
-	if err != nil {
-		return err
-	}
-	if err := checkChartImageCoverage(expected, mirrored.Manifest); err != nil {
-		return fmt.Errorf("mirrored chart: %w", err)
-	}
-	if err := checkImageMirrorDestinations(images, expected, raw); err != nil {
-		return err
-	}
-	_, err = os.Stdout.Write(data)
-	return err
-}
 
 func renderImageChart(chart string, values []string) (imageChartSnapshot, error) {
 	directory, err := os.MkdirTemp("", "nvcf-image-catalog-")

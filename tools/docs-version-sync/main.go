@@ -32,9 +32,6 @@ func main() {
 }
 
 func run(args []string) error {
-	if len(args) > 0 && args[0] == "images" {
-		return runImageCatalog(args[1:])
-	}
 	if len(args) > 0 && args[0] == "umbrella" {
 		return runUmbrella(args[1:])
 	}

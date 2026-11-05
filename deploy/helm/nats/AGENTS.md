@@ -1,7 +1,8 @@
 # NATS wrapper chart
 
-Keep image versions in the existing values. Catalog entries reference those
-paths. Preserve server, reloader and box overrides and auth-callout secrets.
+Keep prefilled images in the existing values. The catalog index is for CI;
+Helm consumes the referenced settings directly. Preserve server, reloader
+and box overrides and auth-callout secrets.
 
 Run from the repository root:
 
@@ -10,5 +11,5 @@ make -C deploy/helm/nats test
 NVCF_IMAGE_CATALOG_E2E=1 go test -C tools/docs-version-sync -run '^TestImageCatalogCharts/nats$' -count=1
 ```
 
-The catalog test renders source and mirror values without a cluster.
+The image test renders defaults and ordinary Helm overrides without a cluster.
 Follow root QA guidance before live installation.

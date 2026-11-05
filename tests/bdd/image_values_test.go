@@ -27,34 +27,34 @@ import (
 	"nvcf-bdd/steps"
 )
 
-// TestChartImageCatalogMirroring runs real registry verification and Helm renders.
-func TestChartImageCatalogMirroring(t *testing.T) {
+// TestChartImageValues runs direct Helm upgrades against an isolated QA cluster.
+func TestChartImageValues(t *testing.T) {
 	if testing.Short() {
-		t.Skip("registry verification skipped under -short")
+		t.Skip("live Helm upgrades skipped under -short")
 	}
-	runLiveFeature(t, "chart-image-mirroring.feature")
+	runLiveFeature(t, "chart-image-values.feature")
 }
 
-// TestChartImageCatalogMirroringWiring verifies the feature uses existing steps.
-func TestChartImageCatalogMirroringWiring(t *testing.T) {
+// TestChartImageValuesWiring verifies the feature uses existing steps.
+func TestChartImageValuesWiring(t *testing.T) {
 	t.Setenv("REPO_ROOT", "/repo")
-	t.Setenv("IMAGE_CATALOG_TOOL", "/tools/docs-version-sync")
-	t.Setenv("IMAGE_CATALOG_QA_ROOT", "/qa")
-	t.Setenv("IMAGE_CATALOG_MIRROR_PREFIX", "fixture-mirror.example")
+	t.Setenv("IMAGE_VALUES_CHART_ROOT", "/charts")
+	t.Setenv("IMAGE_VALUES_QA_ROOT", "/qa")
+	t.Setenv("IMAGE_VALUES_MIRROR_PREFIX", "fixture-mirror.example")
 	runner := newFakeRunner(nil)
 	runner.respond = func(string) (harness.Result, bool) {
-		return harness.Result{ExitCode: 0, Stdout: "registry: fixture-mirror.example"}, true
+		return harness.Result{ExitCode: 0, Stdout: "fixture-mirror.example/renamed/server:v1"}, true
 	}
 	suite := newWiringSuite(t, runner)
 	scenario := steps.NewScenarioContext(suite)
 	status := godog.TestSuite{
-		Name: "chart-image-mirroring-wiring",
+		Name: "chart-image-values-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
 			steps.RegisterAll(ctx, scenario)
 		},
 		Options: &godog.Options{
 			Format: "progress",
-			Paths:  []string{mustResolveFeaturePath(t, "chart-image-mirroring.feature")},
+			Paths:  []string{mustResolveFeaturePath(t, "chart-image-values.feature")},
 			Strict: true,
 			Output: io.Discard,
 		},

@@ -13,8 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Catalog paths preserve the separate injector and injected-agent identities.
-# NVCF rebuilds remain owned images with their own release provenance.
+# CI indexes the prefilled image settings below. Helm consumes those settings
+# directly; override them with ordinary values files. NVCF rebuilds retain
+# their owning release provenance.
 thirdPartyImages:
   vaultInjector: openbao.injector.image
 ownedImages:
@@ -62,8 +63,8 @@ openbao:
     # Requires an image with NVCF_KUBECTL_MINOR support ("1.36" or "1.37").
     kubectlMinor: ""
     image:
-      registry: ""
-      repository: ""
+      registry: nvcr.io
+      repository: nvidia/nvcf/nvcf-openbao-migrations
       tag: 0.23.1
       pullPolicy: IfNotPresent
     issuerDiscovery:
@@ -90,8 +91,8 @@ openbao:
         memory: 512Mi
 
     image:
-      registry: ""
-      repository: ""
+      registry: nvcr.io
+      repository: nvidia/nvcf/nvcf-openbao
       tag: 2.6.3-nv-1.3.7
       pullPolicy: IfNotPresent
 
@@ -290,12 +291,12 @@ openbao:
         cpu: 250m
         memory: 256Mi
     image:
-      registry: ""
-      repository: ""
+      registry: docker.io
+      repository: hashicorp/vault-k8s
       tag: 1.7.4
       pullPolicy: IfNotPresent
     agentImage:
-      registry: ""
-      repository: ""
+      registry: nvcr.io
+      repository: nvidia/nvcf/nvcf-openbao
       tag: 2.6.3-nv-1.3.7
       pullPolicy: IfNotPresent

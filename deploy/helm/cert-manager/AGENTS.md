@@ -1,8 +1,8 @@
 # cert-manager wrapper chart
 
-Preserve vendored defaults. The wrapper catalog references all five image
-paths, including the controller's indirect ACME solver. Tags fall back to
-the dependency chart appVersion.
+Expose all five image settings in the wrapper values, including the indirect
+ACME solver. Empty tags inherit the vendored chart appVersion. The catalog
+index is for CI; Helm consumes the referenced settings directly.
 
 Run from the repository root:
 
@@ -11,6 +11,6 @@ helm lint deploy/helm/cert-manager
 NVCF_IMAGE_CATALOG_E2E=1 go test -C tools/docs-version-sync -run '^TestImageCatalogCharts/cert-manager$' -count=1
 ```
 
-The catalog test renders source and mirror values without a cluster.
-Follow root QA guidance before live installation. Keep external-controller
+The image test renders defaults and ordinary Helm overrides without a cluster.
+Follow root QA guidance before live installation. Preserve external-controller
 mode and explicit repository/tag/digest overrides.
