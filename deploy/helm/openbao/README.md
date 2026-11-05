@@ -13,6 +13,31 @@ The chart is designed to provide:
   and migrations
 - Opinionated defaults for HA, injector enablement, and operational hooks
 
+## JWT plugin lifecycle
+
+The bridge server image supplies declarative plugin registration at
+`/openbao/plugin-config`; its entrypoint loads that directory on server startup.
+Set `openbao.jwtPluginLifecycle.mode` for the deployment stage:
+
+- `legacy` (default): retains the refresh hook for published pre-bridge images.
+  Preflight rejects versioned images before changing the release.
+- `bridge`: checks existing mount compatibility without rewriting the catalog.
+  Defers migrations. Keep hooks enabled and rotate every member before enabling
+  versioned mount creation. Upgrades only.
+- `versioned`: checks image compatibility and pins new signing mounts to the
+  target version from the server image. Use for fresh bridge installations
+  and after an existing deployment completes its bridge migration.
+
+The lifecycle driver can check and tune mounts independently of Helm hooks.
+The migration Job rechecks catalog readiness after rollout because the active
+member can change after preflight. Its init container also supplies the server
+image's version manifest to migrations.
+
+Publish and qualify the matching bridge server and migrations images before
+advancing chart or stack image pins. Existing deployments need the staged
+[JWT plugin upgrade procedure](https://github.com/dsx-ai-factory/nvcf/blob/4de46cb8d26d5b65a2a0e1c1ae76fbde00565085/docs/self-managed/runbooks/openbao-jwt-plugin-upgrade.md),
+including the explicit old version and a later cleanup release.
+
 ## Prerequisites
 
 - Kubernetes cluster compatible with the bundled upstream OpenBao chart
@@ -52,6 +77,15 @@ openbao:
       registry: nvcr.io
       repository: <your-org>/nvcf-openbao
 ```
+
+The injector Deployment uses `openbao.injector.image` (`oss-vault-k8s`). The
+Vault Agent sidecars it creates use `openbao.injector.agentImage`. The
+self-managed stack selects `nvcf-openbao` for both the agent and server; the
+auto-unseal sidecar also uses the server image. The chart checks that their
+tags match. The shipped stack selects no third-party Vault Agent image.
+Standalone installs supply the registries and repositories shown above.
+Operators who select a separate agent image own its toolchain and CA bundle
+verification.
 
 ## Installation
 

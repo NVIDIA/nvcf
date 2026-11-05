@@ -312,6 +312,27 @@ func collectResolvedImages(node *yaml.Node, images map[string]parsedImageReferen
 				}
 				images[image.Reference] = image
 			}
+			if (key.Value == "args" || key.Value == "command") && value.Kind == yaml.SequenceNode {
+				for _, argument := range value.Content {
+					if argument.Kind != yaml.ScalarNode {
+						continue
+					}
+					name, reference, found := strings.Cut(argument.Value, "=")
+					if !found || !strings.HasPrefix(name, "--") || !strings.HasSuffix(name, "-image") {
+						continue
+					}
+					image, err := parseResolvedImageReference(reference)
+					if err != nil {
+						return fmt.Errorf("image argument %s: %w", name, err)
+					}
+					images[image.Reference] = image
+				}
+			}
+			if key.Value == "env" {
+				if err := collectResolvedAgentEnvironment(value, images); err != nil {
+					return err
+				}
+			}
 			if err := collectResolvedImages(value, images); err != nil {
 				return err
 			}
@@ -540,4 +561,28 @@ func compareResolvedArtifactSources(left, right resolvedArtifactSource) int {
 		return strings.Compare(left.Plane, right.Plane)
 	}
 	return strings.Compare(left.Release, right.Release)
+}
+
+func collectResolvedAgentEnvironment(node *yaml.Node, images map[string]parsedImageReference) error {
+	if node.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for _, entry := range node.Content {
+		var variable struct {
+			Name  string `yaml:"name"`
+			Value string `yaml:"value"`
+		}
+		if err := entry.Decode(&variable); err != nil {
+			return fmt.Errorf("decode agent environment: %w", err)
+		}
+		if variable.Name != "AGENT_INJECT_VAULT_IMAGE" {
+			continue
+		}
+		image, err := parseResolvedImageReference(variable.Value)
+		if err != nil {
+			return fmt.Errorf("AGENT_INJECT_VAULT_IMAGE: %w", err)
+		}
+		images[image.Reference] = image
+	}
+	return nil
 }
