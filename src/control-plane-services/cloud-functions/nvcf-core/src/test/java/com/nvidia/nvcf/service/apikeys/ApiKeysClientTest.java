@@ -54,9 +54,9 @@ class ApiKeysClientTest {
         var staticProperties = new StaticClientApiKeysProperties();
         staticProperties.setToken("test-token");
         client = new ApiKeysClient(
-                server.baseUrl(), EVALUATION_URI, "apiKey",
-                LLM_EVALUATION_URI, "llmKey",
-                ACCOUNT_RATE_LIMIT_EVALUATION_URI, "tiered_rate_key",
+                server.baseUrl(), EVALUATION_URI, "key",
+                LLM_EVALUATION_URI,
+                ACCOUNT_RATE_LIMIT_EVALUATION_URI, "account",
                 "unused", "unused", "unused", "unused",
                 Optional.of(staticProperties), WebClient.builder(), new JsonMapper());
     }
@@ -78,7 +78,7 @@ class ApiKeysClientTest {
     @Test
     void fetchApiKeyValidationResult_usesGenericEvaluation() {
         stubResponse(EVALUATION_URI, """
-                {"input":{"apiKey":"key-1"}}
+                {"input":{"key":"key-1"}}
                 """, """
                 {"namespace":"nvcf","rule_name":"apikey.allow",
                  "result":{"allowed":true,"ncaId":"nca-1","ownerId":"owner-1","policy":{}}}
@@ -90,7 +90,7 @@ class ApiKeysClientTest {
     @Test
     void fetchApiKeyValidationResult_forbiddenWhenNotAllowed() {
         stubResponse(EVALUATION_URI, """
-                {"input":{"apiKey":"key-1"}}
+                {"input":{"key":"key-1"}}
                 """, """
                 {"namespace":"nvcf","rule_name":"apikey.allow","result":{"allowed":false}}
                 """);
@@ -102,7 +102,7 @@ class ApiKeysClientTest {
     @Test
     void fetchApiKeyValidationResult_forbiddenWhenResultAbsent() {
         stubResponse(EVALUATION_URI, """
-                {"input":{"apiKey":"key-1"}}
+                {"input":{"key":"key-1"}}
                 """, """
                 {"namespace":"nvcf","rule_name":"apikey.allow"}
                 """);
@@ -114,7 +114,7 @@ class ApiKeysClientTest {
     @Test
     void fetchLlmApiKeyValidationResult_usesLlmEvaluation() {
         stubResponse(LLM_EVALUATION_URI, """
-                {"input":{"llmKey":"key-1"}}
+                {"input":{"key":"key-1"}}
                 """, """
                 {"namespace":"nvcf","rule_name":"apikey.llm_allow",
                  "result":{"allowed":true,"ncaId":"nca-1","ownerId":"owner-1","policy":{},
@@ -130,7 +130,7 @@ class ApiKeysClientTest {
     @Test
     void fetchTieredRateLimit_returnsRates() {
         stubResponse(ACCOUNT_RATE_LIMIT_EVALUATION_URI, """
-                {"input":{"tiered_rate_key":"nca-1"}}
+                {"input":{"account":"nca-1"}}
                 """, """
                 {"namespace":"nvcf","rule_name":"apikey.account_rate_limit",
                  "result":{"inputTokenRateLimit":"1000-M","outputTokenRateLimit":"500-M"}}
@@ -143,7 +143,7 @@ class ApiKeysClientTest {
     @Test
     void fetchTieredRateLimit_returnsNoLimitWhenResultAbsent() {
         stubResponse(ACCOUNT_RATE_LIMIT_EVALUATION_URI, """
-                {"input":{"tiered_rate_key":"nca-1"}}
+                {"input":{"account":"nca-1"}}
                 """, """
                 {"namespace":"nvcf","rule_name":"apikey.account_rate_limit"}
                 """);
