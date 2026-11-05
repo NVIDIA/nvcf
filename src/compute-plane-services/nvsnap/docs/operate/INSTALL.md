@@ -24,7 +24,7 @@ is described in [ARCHITECTURE.md](../ARCHITECTURE.md#1-what-nvsnap-is-and-what-a
 - [Troubleshooting](#troubleshooting)
   - [Agent pods stuck in `ImagePullBackOff`](#agent-pods-stuck-in-imagepullbackoff)
   - [Agent DaemonSet shows 0/0, or pods stuck in `Pending`](#agent-daemonset-shows-00-or-pods-stuck-in-pending)
-  - [nvsnap-server external IP is `<pending>` forever](#nvsnap-server-external-ip-is-pending-forever)
+  - [Reaching nvsnap-server](#reaching-nvsnap-server)
   - [Restored pods start cold](#restored-pods-start-cold)
 - [Where things live after install](#where-things-live-after-install)
 <!-- /toc -->
@@ -99,7 +99,7 @@ pod is prepared for capture or restore, and every pod starts cold.
 | `agent.election.enabled` | `false` | One downloader per hash when a chart starts many workers (cachedir only) |
 | `agent.l2.storageClass` | | The StorageClass of the per-checkpoint volume pair; empty keeps checkpoints on their nodes |
 | `agent.auth.enabled`, `agent.auth.mode` | `false`, `permissive` | Bearer-token checks on the agent API. Turn on, run `permissive` until no unauthenticated calls are counted, then `required` |
-| `server.service.type` | `LoadBalancer` | `ClusterIP` for port-forward access |
+| `server.service.type` | `ClusterIP` | Reach the server with `kubectl port-forward`. `LoadBalancer` renders only with `server.service.annotations` that make it internal |
 
 ## Turning nvsnap off for some or all pods
 
@@ -150,11 +150,13 @@ kubectl get nodes -L nvidia.com/gpu.present,cloud.google.com/gke-gpu,feature.nod
 Replace `agent.nodeAffinity` (and, for tainted nodes, `agent.tolerations`)
 with ones that match your GPU nodes, in a values file passed with `-f`.
 
-### nvsnap-server external IP is `<pending>` forever
+### Reaching nvsnap-server
 
-The cluster has no LoadBalancer controller. Use
-`--set server.service.type=ClusterIP` and
+The server's Service is `ClusterIP`, so it has no external IP. Use
 `kubectl -n nvsnap-system port-forward svc/nvsnap-server 8080:8080`.
+A `LoadBalancer` renders only with `server.service.annotations` that make
+it internal on your cloud; without them `helm template` and `helm upgrade`
+fail.
 
 ### Restored pods start cold
 
