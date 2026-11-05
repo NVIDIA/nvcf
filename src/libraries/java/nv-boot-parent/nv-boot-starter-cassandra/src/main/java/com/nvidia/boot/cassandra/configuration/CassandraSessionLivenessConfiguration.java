@@ -90,19 +90,24 @@ public class CassandraSessionLivenessConfiguration {
 
     static boolean freshSessionSucceeds(ObjectProvider<CqlSessionBuilder> sessionBuilders,
                                         ObjectProvider<DriverConfigLoader> configLoaders) {
-        var builder = sessionBuilders.getIfAvailable();
-        if (builder == null) {
-            return false;
-        }
-        var configLoader = configLoaders.getIfUnique();
-        if (configLoader != null) {
-            builder.withConfigLoader(probeConfigLoader(configLoader));
-        }
-        // The probe shares the application session's name and meter IDs, and closing a session
-        // removes its meters. A private registry keeps the application's driver metrics intact.
-        try (var fresh = builder.withMetricRegistry(new SimpleMeterRegistry()).build()) {
-            fresh.execute(HEALTH_QUERY);
-            return true;
+        // A probe that cannot be set up proves nothing about the application session, so it
+        // counts as a failed probe, which never restarts the pod.
+        try {
+            var builder = sessionBuilders.getIfAvailable();
+            if (builder == null) {
+                return false;
+            }
+            var configLoader = configLoaders.getIfUnique();
+            if (configLoader != null) {
+                builder.withConfigLoader(probeConfigLoader(configLoader));
+            }
+            // The probe shares the application session's name and meter IDs, and closing a
+            // session removes its meters. A private registry keeps the application's driver
+            // metrics intact.
+            try (var fresh = builder.withMetricRegistry(new SimpleMeterRegistry()).build()) {
+                fresh.execute(HEALTH_QUERY);
+                return true;
+            }
         } catch (RuntimeException e) {
             log.debug("New Cassandra session could not connect", e);
             return false;

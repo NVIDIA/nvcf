@@ -68,6 +68,34 @@ class CassandraSessionLivenessConfigurationTest {
     }
 
     @Test
+    void reportsDownWhenTheSessionStaysBrokenAndANewSessionWorks() {
+        var brokenSession = session();
+        when(brokenSession.execute(any(Statement.class)))
+                .thenThrow(new IllegalStateException("session is broken"));
+        var builder = mock(CqlSessionBuilder.class);
+        when(builder.withMetricRegistry(any())).thenReturn(builder);
+        when(builder.build()).thenReturn(mock(CqlSession.class));
+        contextRunner.withPropertyValues("app.cassandra.session-liveness.grace-period=0s")
+                .withBean(CqlSession.class, () -> brokenSession)
+                .withBean(CqlSessionBuilder.class, () -> builder)
+                .run(context -> {
+                    var indicator = context.getBean(CassandraSessionLivenessIndicator.class);
+                    indicator.evaluate();
+                    assertThat(indicator.health().getStatus()).isEqualTo(Status.DOWN);
+                });
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void probeSetupFailureCountsAsAFailedProbe() {
+        var builders = (ObjectProvider<CqlSessionBuilder>) mock(ObjectProvider.class);
+        when(builders.getIfAvailable()).thenThrow(new IllegalStateException("no unique builder"));
+
+        assertThat(CassandraSessionLivenessConfiguration.freshSessionSucceeds(
+                builders, mock(ObjectProvider.class))).isFalse();
+    }
+
+    @Test
     void reportsUpWithoutAUniqueSession() {
         contextRunner.run(context -> {
             var indicator = context.getBean(CassandraSessionLivenessIndicator.class);

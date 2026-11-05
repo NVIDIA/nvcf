@@ -101,6 +101,26 @@ class CassandraSessionLivenessIndicatorTest {
         clock.advance(Duration.ofMinutes(2));
         indicator.evaluate();
         assertThat(indicator.health().getStatus()).isEqualTo(Status.UP);
+
+        clock.advance(GRACE.minusMinutes(2));
+        indicator.evaluate();
+        assertThat(indicator.health().getStatus()).isEqualTo(Status.DOWN);
+    }
+
+    @Test
+    void scheduledCheckReportsDownWhenSessionStaysStuck() throws InterruptedException {
+        var scheduled = new CassandraSessionLivenessIndicator(
+                () -> false, () -> true, Duration.ZERO, Duration.ofMillis(10));
+        try {
+            var deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (scheduled.health().getStatus() != Status.DOWN) {
+                assertThat(System.nanoTime()).as("scheduled check reported DOWN")
+                        .isLessThan(deadline);
+                Thread.sleep(10);
+            }
+        } finally {
+            scheduled.destroy();
+        }
     }
 
     private static final class MutableClock extends Clock {
