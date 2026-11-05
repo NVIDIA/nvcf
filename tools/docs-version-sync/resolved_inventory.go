@@ -420,6 +420,15 @@ func collectResolvedCollectorEnvironment(node *yaml.Node, images map[string]pars
 			return fmt.Errorf("decode collector environment: %w", err)
 		}
 		switch variable.Name {
+		case "AGENT_INJECT_VAULT_IMAGE":
+			image, err := parseResolvedImageReference(variable.Value)
+			if err != nil {
+				return fmt.Errorf("AGENT_INJECT_VAULT_IMAGE: %w", err)
+			}
+			image.Indirect = true
+			if existing, exists := images[image.Reference]; !exists || existing.Indirect {
+				images[image.Reference] = image
+			}
 		case "OTEL_COLLECTOR_IMAGE_REPO":
 			repository = variable.Value
 		case "OTEL_COLLECTOR_IMAGE_TAG":

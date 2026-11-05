@@ -1748,6 +1748,7 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 		key  string
 		want string
 	}{
+		{key: "llmRequestRouter.kubernetes.advertisedHostnameTemplate", want: strconv.Quote("{pod_name}.llm-request-router-region-b-headless.nvcf.svc.cluster.local")},
 		{key: "llmRequestRouter.backendRouter.enabled", want: "true"},
 		{key: "llmRequestRouter.serviceAccount.create", want: "false"},
 		{key: "llmRequestRouter.pki.enabled", want: "false"},
@@ -1813,11 +1814,14 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 	if err != nil {
 		t.Fatalf("resolve multi-region environment: %v", err)
 	}
+	if err := dsl.MatchYAMLSubtree(environmentPath, "addons.llm.requestRouter.grpcTls.dnsNames",
+		"- region-b-watch.nvcf.svc.cluster.local", dsl.MatchExact); err != nil {
+		t.Fatalf("additional Gateway TLS DNS names must form a dense list: %v", err)
+	}
 	for _, expectation := range []struct {
 		key  string
 		want string
 	}{
-		{key: "addons.llm.requestRouter.grpcTls.dnsNames[1]", want: "region-b-watch.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.dnsNames[2]", want: "region-b-watch.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.dnsNames[3]", want: "*.llm-request-router-region-b-headless.nvcf.svc.cluster.local"},
 	} {
@@ -2367,7 +2371,15 @@ func seedUpstreamImageRenderOutput(t *testing.T, repoRoot string) {
 	t.Helper()
 	manifests := map[string]string{
 		"01-nats/templates/nats.yaml": `# Source: helm-nvcf-nats/templates/nkey-secret.yaml
+image: docker.io/synadia/nats-server:fixture-tag
 image: docker.io/natsio/nats-server-config-reloader:fixture-tag
+image: docker.io/natsio/nats-box:fixture-tag
+`,
+		"01-cert-manager/templates/cert-manager.yaml": `image: nvcr.io/nvidia/nvcf/cert-manager-controller:fixture-tag
+image: nvcr.io/nvidia/nvcf/cert-manager-webhook:fixture-tag
+image: nvcr.io/nvidia/nvcf/cert-manager-cainjector:fixture-tag
+image: nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:fixture-tag
+--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:fixture-tag
 `,
 		"02-cassandra/templates/cassandra.yaml": "image: nvcf-cassandra-migrations:latest\n",
 		"03-api/templates/api.yaml":             "image: docker.io/alpine/k8s:fixture-tag\n",
@@ -2395,12 +2407,21 @@ spec:
   dnsNames:
     - llm-request-router.nvcf.svc.cluster.local
 worker-address: llm-request-router-backend-router.nvcf.svc.cluster.local:50071
-env:
-  - name: ADDONS_LLM_ENABLED
-    value: "true"
-  - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
-    value: "nvcf.svc.cluster.local"
 image: nvcr.io/test-org/test-team/nvcf-openbao-migrations:fixture-tag
+---
+kind: Job
+metadata:
+  name: openbao-server-migrations
+spec:
+  template:
+    spec:
+      containers:
+        - name: bao-migrations
+          env:
+            - name: ADDONS_LLM_ENABLED
+              value: "true"
+            - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
+              value: nvcf.svc.cluster.local
 `
 	filePath := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "out", "01-pki", "templates", "pki.yaml")
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {

@@ -17,6 +17,7 @@
 package com.nvidia.nvcf.service.instance;
 
 import com.nvidia.boot.exceptions.NotFoundException;
+import com.nvidia.boot.exceptions.UpstreamException;
 import com.nvidia.nvcf.icms.client.IcmsClient;
 import com.nvidia.nvcf.icms.client.IcmsStubService.GetInstancesResponse.InstanceRequest;
 import com.nvidia.nvcf.icms.client.IcmsStubService.Instance;
@@ -184,7 +185,10 @@ public class InstanceService {
             UUID deploymentId) {
         try {
             icmsClient.deleteInstancesByDeploymentId(ncaId, deploymentId);
-        } catch (NotFoundException e) {
+        } catch (UpstreamException e) {
+            if (!(e.getCause() instanceof NotFoundException)) {
+                throw e;
+            }
             // ignored. if the deployment id is not valid it's just as good as deleted.
             log.warn(MESG_SKIP_UNKNOWN_DEPLOYMENT, functionVersionId, deploymentId);
         }

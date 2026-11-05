@@ -23,6 +23,7 @@ import static com.nvidia.nvcf.util.NvcfConstants.SCOPE_LLM_CHECK_WORKER;
 import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.boot.exceptions.UnauthorizedException;
+import com.nvidia.nvcf.configuration.exceptions.FunctionDegradedException;
 import com.nvidia.nvcf.grpc.auth.SecurityExpression;
 import com.nvidia.nvcf.proto.llm_gateway.AuthLlmInvokeRequest;
 import com.nvidia.nvcf.proto.llm_gateway.AuthLlmInvokeResponse;
@@ -41,7 +42,9 @@ import com.nvidia.nvcf.service.serviceaccount.ServiceAccountService;
 import com.nvidia.nvcf.service.token.GrpcAuthService;
 import com.nvidia.nvcf.service.token.GrpcTokenService;
 import com.nvidia.nvcf.service.token.GrpcTokenService.NvcfIssuedToken.TokenType;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
@@ -114,8 +117,17 @@ public class GrpcLlmService extends LlmGatewayImplBase {
             throw new BadRequestException(mesg);
         }
         var ncaId = accountService.getNcaId(authentication);
-        var functions = functionInvocationValidationService.lookupAndValidateAccess(
-                authentication, ncaId, functionId, null);
+        final List<FunctionContext> functions;
+        try {
+            functions = functionInvocationValidationService.lookupAndValidateAccess(
+                    authentication, ncaId, functionId, null);
+        } catch (FunctionDegradedException e) {
+            // Not UNAVAILABLE: the gateway reserves that for auth-service outages.
+            responseObserver.onError(Status.FAILED_PRECONDITION
+                                             .withDescription(e.getBody().getDetail())
+                                             .asRuntimeException());
+            return;
+        }
 
         var first = functions.getFirst();
         var functionModels = functionMapperService.toFunctionModels(

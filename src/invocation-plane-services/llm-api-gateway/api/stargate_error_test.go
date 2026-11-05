@@ -102,6 +102,12 @@ func TestUpstreamErrorEnvelopes(t *testing.T) {
 			wantStatus: http.StatusBadRequest, wantMessage: "P3: commas are not allowed",
 		},
 		{
+			name:   "no ready backends",
+			status: http.StatusServiceUnavailable, routerCode: "no_ready_backends",
+			body:       `{"error":"no ready backends","code":"no_ready_backends"}`,
+			wantStatus: http.StatusServiceUnavailable, wantMessage: "no ready backends",
+		},
+		{
 			name:   "overloaded",
 			status: http.StatusServiceUnavailable, routerCode: "overloaded_error",
 			body:       `{"error":{"code":"overloaded_error","message":"Inference capacity is temporarily unavailable.","param":"","type":"overloaded_error"}}`,
@@ -248,10 +254,7 @@ func TestUpstreamErrorEnvelopes(t *testing.T) {
 					require.Equal(t, tc.wantStatus, rec.Code, rec.Body.String())
 					require.Equal(t, echo.MIMEApplicationJSON, rec.Header().Get(echo.HeaderContentType))
 					require.Equal(t, "request-a", rec.Header().Get(HeaderRequestID))
-					if endpoint.path != "/v1/chat/completions" {
-						// Proxy endpoints keep upstream headers; chat completions never relayed them.
-						require.Equal(t, "2", rec.Header().Get("Retry-After"))
-					}
+					require.Equal(t, "2", rec.Header().Get("Retry-After"))
 					require.Empty(t, rec.Header().Values("X-Stargate-Error-Code"))
 
 					switch {

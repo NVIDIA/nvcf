@@ -53,3 +53,21 @@ func TestUpstreamErrorMessageIsBounded(t *testing.T) {
 		t.Fatalf("short message = %q", short)
 	}
 }
+
+func TestUpstreamStreamErrorMessageIsBounded(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("a", maxUpstreamErrorMessageBytes) + "b"
+	upstreamErr := upstreamStreamError(`{"error":{"message":"` + long + `"}}`)
+	if upstreamErr == nil {
+		t.Fatal("error event not detected")
+	}
+	if upstreamErr.Message != long[:maxUpstreamErrorMessageBytes] {
+		t.Fatalf("message length = %d, want the first %d bytes", len(upstreamErr.Message), maxUpstreamErrorMessageBytes)
+	}
+	// The request log gets Error(), which, like UpstreamError, carries no upstream text:
+	// engine error events can echo request content.
+	if got, want := upstreamErr.Error(), ErrStreamIncomplete.Error()+": upstream error event"; got != want {
+		t.Fatalf("log text has %d bytes, want %q", len(got), want)
+	}
+}

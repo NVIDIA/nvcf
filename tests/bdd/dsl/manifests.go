@@ -114,6 +114,96 @@ func RenderedManifestsContainResource(root string, resource KubernetesResource) 
 	return fmt.Errorf("rendered manifests in %q do not contain Kubernetes resource %s/%s", root, resource.Kind, resource.Name)
 }
 
+// RenderedWorkloadEnvEquals compares one literal environment value in exactly
+// one named workload and container, without depending on YAML quotation style.
+func RenderedWorkloadEnvEquals(root string, resource KubernetesResource, container, variable, expected string) error {
+	root = Interpolate(root)
+	resource.Kind, resource.Name = Interpolate(resource.Kind), Interpolate(resource.Name)
+	container, variable, expected = Interpolate(container), Interpolate(variable), Interpolate(expected)
+	if strings.TrimSpace(root) == "" || resource.Kind == "" || resource.Name == "" || container == "" || variable == "" {
+		return fmt.Errorf("render directory, workload, container, and environment variable must be non-empty")
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("inspect rendered manifests directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("rendered manifests path is not a directory")
+	}
+	matches := 0
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if !entry.Type().IsRegular() || (ext != ".yaml" && ext != ".yml") {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read rendered manifest: %w", err)
+		}
+		decoder := yaml.NewDecoder(bytes.NewReader(body))
+		for {
+			var manifest map[string]any
+			if err := decoder.Decode(&manifest); err != nil {
+				if err == io.EOF {
+					return nil
+				}
+				return fmt.Errorf("rendered manifest %q contains invalid YAML", path)
+			}
+			metadata, _ := manifest["metadata"].(map[string]any)
+			if manifest["kind"] != resource.Kind || metadata["name"] != resource.Name {
+				continue
+			}
+			matches++
+			podSpec, supported := renderedWorkloadPodSpec(manifest)
+			if !supported {
+				return fmt.Errorf("unsupported workload kind %q", resource.Kind)
+			}
+			if err := renderedContainerEnvEquals(podSpec, container, variable, expected); err != nil {
+				return fmt.Errorf("rendered workload %s/%s: %w", resource.Kind, resource.Name, err)
+			}
+		}
+	})
+	if err != nil {
+		return err
+	}
+	if matches != 1 {
+		return fmt.Errorf("expected exactly one rendered workload %s/%s, found %d", resource.Kind, resource.Name, matches)
+	}
+	return nil
+}
+
+func renderedContainerEnvEquals(podSpec map[string]any, container, variable, expected string) error {
+	containers, _ := podSpec["containers"].([]any)
+	containerMatches, variableMatches := 0, 0
+	for _, item := range containers {
+		candidate, _ := item.(map[string]any)
+		if candidate["name"] != container {
+			continue
+		}
+		containerMatches++
+		env, _ := candidate["env"].([]any)
+		for _, item := range env {
+			entry, _ := item.(map[string]any)
+			if entry["name"] != variable {
+				continue
+			}
+			variableMatches++
+			value, literal := entry["value"].(string)
+			_, fromReference := entry["valueFrom"]
+			if !literal || fromReference || value != expected {
+				return fmt.Errorf("container %q environment variable %q does not equal the expected literal string", container, variable)
+			}
+		}
+	}
+	if containerMatches != 1 || variableMatches != 1 {
+		return fmt.Errorf("expected one container %q and one environment variable %q, found %d containers and %d variables", container, variable, containerMatches, variableMatches)
+	}
+	return nil
+}
+
 // RenderedWorkloadImagesAreValid parses rendered Kubernetes workloads below
 // root and rejects container images with no repository name. Kubernetes
 // rejects references such as ":0.8.3" and "@sha256:..." as InvalidImageName.

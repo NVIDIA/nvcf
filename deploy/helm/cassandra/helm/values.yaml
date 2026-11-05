@@ -14,6 +14,13 @@
 # limitations under the License.
 
 ---
+# CI indexes the prefilled image settings below. Helm consumes those settings
+# directly; override them with ordinary values files. NVCF builds retain
+# their owning image releases.
+ownedImages:
+  cassandraServer: cassandra.image
+  cassandraMigrations: cassandra.migrations.image
+
 cassandra:
   # Namespace to deploy chart resources. Defaults to the release namespace.
   namespace: ""
@@ -27,11 +34,9 @@ cassandra:
     defaultStorageClass: ""
 
   image:
-    # registry: must be supplied in additional values
-    # repository: must be supplied in additional values
-    registry: ""
-    repository: ""
-    tag: 5.0.9-nv-2.0.6
+    registry: nvcr.io
+    repository: nvidia/nvcf/cassandra
+    tag: 5.0.9-nv-2.0.7
     pullPolicy: IfNotPresent
 
   replicaCount: 3
@@ -229,11 +234,9 @@ cassandra:
 
   migrations:
     image:
-      # registry: must be supplied in additional values
-      # repository: must be supplied in additional values
-      registry: ""
-      repository: ""
-      tag: 0.19.2
+      registry: nvcr.io
+      repository: nvidia/nvcf/nvcf-cassandra-migrations
+      tag: 0.19.4
       pullPolicy: Always
 
   dbUser:

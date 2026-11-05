@@ -2051,6 +2051,24 @@ func TestRenderedManifestsShouldContainAcceptsExplicitMarkers(t *testing.T) {
 	}
 }
 
+func TestRenderedWorkloadEnvShouldEqual(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	renderDir := filepath.Join(sc.Suite.Config.RepoRoot, "out", "rendered")
+	if err := os.MkdirAll(renderDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "kind: Job\nmetadata:\n  name: migrations\nspec:\n  template:\n    spec:\n      containers:\n        - name: migrate\n          env:\n            - name: ALLOWED_DOMAINS\n              value: example.invalid\n"
+	if err := os.WriteFile(filepath.Join(renderDir, "job.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := sc.renderedWorkloadEnvShouldEqual("Job", "migrations", "out/rendered", "migrate", "ALLOWED_DOMAINS", "example.invalid"); err != nil {
+		t.Fatalf("assert rendered environment: %v", err)
+	}
+	if len(fake.runs) != 0 {
+		t.Fatal("render assertion unexpectedly invoked a command")
+	}
+}
+
 func TestRenderedManifestsUnderMatchingDirectoriesShouldContainAcceptsExplicitMarkers(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	renderDir := filepath.Join(sc.Suite.Config.RepoRoot, "out", "rendered", "01-nats", "templates")

@@ -843,9 +843,26 @@ Host header routing only works with plaintext HTTP traffic. Without TLS/SNI spoo
 
 When using tools that support custom Host headers (like the NVCF CLI or curl), specify the expected hostname:
 
+<Warning>
+Admin Issuer Proxy is a bootstrap helper. `POST /v1/admin/keys` issues an
+admin-scoped token without authenticating callers or checking their permission
+to obtain one. Before exposing this endpoint to untrusted callers, configure
+authentication and authorization at your gateway or an upstream proxy.
+An HTTPRoute does not configure these controls by itself. Use the Gateway
+controller and identity provider that fit your deployment.
+
+You can disable the issuer or only its Gateway route. See
+[Disabling Admin Issuer Proxy](./control-plane-operations.md#disabling-admin-issuer-proxy)
+for configuration, CLI impacts, and removal steps for existing installations.
+
+</Warning>
+
+The following plaintext HTTP example is for a trusted development environment.
+It demonstrates routing and does not configure authentication.
+
 ```bash
 # Example: curl with Host header override
-curl -H "Host: api-keys.a1b2c3d4.us-west-2.elb.amazonaws.com" \
+curl -X POST -H "Host: api-keys.a1b2c3d4.us-west-2.elb.amazonaws.com" \
   http://a1b2c3d4.us-west-2.elb.amazonaws.com/v1/admin/keys
 ```
 

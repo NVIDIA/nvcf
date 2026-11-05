@@ -9,6 +9,7 @@ Run from the repository root:
 ```sh
 sh infra/openbao/scripts/test-semver.sh
 sh infra/openbao/scripts/test-runtime-packages.sh
+sh infra/openbao/tests/verify-runtime-ca-test.sh
 python3 -B -m unittest discover -s infra/openbao/tests
 bash deploy/helm/openbao/tests/jwt-plugin-lifecycle.sh
 bash migrations/openbao/tests/jwt-plugin-version-test.sh
@@ -22,8 +23,8 @@ verify the built image. Check both architectures before release.
 
 Keep the legacy image digest and old catalog version aligned with the
 published pre-bridge image shipped by the chart. Preserve its plugin bytes;
-rebuilding the old source changes the stored catalog digest. Compare server
-and plugin executable hashes with the published image before claiming catalog
+rebuilding the old source changes the stored catalog digest. Compare the
+legacy plugin executable hash with the published image before claiming catalog
 compatibility. Keep chart configuration and migration defaults aligned with
 the image. Bump the target catalog version when changing its source or build
 inputs.

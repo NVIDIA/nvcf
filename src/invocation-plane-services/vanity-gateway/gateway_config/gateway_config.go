@@ -968,7 +968,7 @@ func SetupConfigWithConfigPath(path string) (rc.ReloadableConfig[GatewayConfig],
 	return SetupConfigWithConfigPathAndTimeout(path, 0)
 }
 
-func SetupConfigWithConfigPathAndTimeout(path string, loadTimeout time.Duration) (rc.ReloadableConfig[GatewayConfig], error) {
+func SetupConfigWithConfigPathAndTimeout(path string, loadTimeout time.Duration, extraOpts ...rc.ConfigOption[GatewayConfig]) (rc.ReloadableConfig[GatewayConfig], error) {
 	opts := []rc.ConfigOption[GatewayConfig]{
 		rc.WithUnmarshalFunc(unmarshalGatewayConfig),
 		rc.WithValidateFunc(func(c *GatewayConfig) error {
@@ -982,6 +982,8 @@ func SetupConfigWithConfigPathAndTimeout(path string, loadTimeout time.Duration)
 	if loadTimeout > 0 {
 		opts = append(opts, rc.WithInitialLoadTimeout[GatewayConfig](loadTimeout))
 	}
+
+	opts = append(opts, extraOpts...)
 
 	config, err := rc.SetupConfig[GatewayConfig](path,
 		opts...)

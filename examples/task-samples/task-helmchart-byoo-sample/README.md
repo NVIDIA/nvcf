@@ -6,6 +6,8 @@ Helm chart that deploys the [Task BYOO Sample](../task-byoo-sample/) container a
 
 Build and push the `task-byoo-sample` container to an OCI registry your self-hosted NVCF cluster can access. See [task-byoo-sample/README.md](../task-byoo-sample/README.md) for the build, push, and BYOO configuration flow.
 
+Set `image.repository` and `image.tag` in `task-helmchart-byoo/values.yaml` to that image. Build it from this repository rather than reusing an older prebuilt image. NVCF sets `OTEL_EXPORTER_OTLP_<SIGNAL>_PROTOCOL=http/protobuf`, and sample builds that predate `http/protobuf` support exit at startup with `Invalid OTLP protocol`.
+
 ## Package and upload the chart
 
 ```bash

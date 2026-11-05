@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	echo "github.com/labstack/echo/v4"
 	"go.opentelemetry.io/otel/attribute"
@@ -32,6 +33,9 @@ import (
 	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
+
+// NVCF auth returns FailedPrecondition when a version is DEGRADED and none is ACTIVE.
+const modelNotReadyRetryAfterSeconds = 30
 
 type InvocationAuthClient interface {
 	AuthorizeInvocation(
@@ -82,6 +86,9 @@ func NewNVCFAuthMiddleware(client InvocationAuthClient) echo.MiddlewareFunc {
 				span.RecordError(err)
 				span.SetStatus(otelcodes.Error, "nvcf auth failed")
 				span.End()
+				if status.Code(err) == codes.FailedPrecondition {
+					gc.Response().Header().Set("Retry-After", strconv.Itoa(modelNotReadyRetryAfterSeconds))
+				}
 				return nvcfAuthHTTPError(err)
 			}
 			span.End()
@@ -180,6 +187,8 @@ func nvcfAuthHTTPError(err error) error {
 		return echo.NewHTTPError(http.StatusGatewayTimeout, "authentication timed out")
 	case codes.Unavailable:
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication service unavailable")
+	case codes.FailedPrecondition:
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "model temporarily unavailable")
 	default:
 		return echo.NewHTTPError(http.StatusBadGateway, "authentication failed")
 	}

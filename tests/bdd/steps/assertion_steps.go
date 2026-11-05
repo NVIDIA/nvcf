@@ -51,6 +51,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^Helm release "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should contain values:$`, sc.helmReleaseShouldContainValues)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain:$`, sc.renderedManifestsShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain Kubernetes resource "([^"/]+)/([^"]+)"$`, sc.renderedManifestsShouldContainKubernetesResource)
+	ctx.Step(`^rendered workload "([^"/]+)/([^"]+)" in "([^"]*)" container "([^"]*)" environment variable "([^"]*)" should equal "([^"]*)"$`, sc.renderedWorkloadEnvShouldEqual)
 	ctx.Step(`^the rendered workloads in "([^"]*)" should have valid container images$`, sc.renderedWorkloadsShouldHaveValidContainerImages)
 	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
@@ -289,6 +290,11 @@ func (sc *ScenarioContext) renderedManifestsShouldContainKubernetesResource(path
 		sc.resolvePath(dsl.Interpolate(path)),
 		dsl.KubernetesResource{Kind: kind, Name: name},
 	)
+}
+
+func (sc *ScenarioContext) renderedWorkloadEnvShouldEqual(kind, name, path, container, variable, expected string) error {
+	return dsl.RenderedWorkloadEnvEquals(sc.resolvePath(dsl.Interpolate(path)),
+		dsl.KubernetesResource{Kind: kind, Name: name}, container, variable, expected)
 }
 
 // renderedWorkloadsShouldHaveValidContainerImages delegates manifest parsing

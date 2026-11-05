@@ -2,6 +2,18 @@
 
 This is a script that validates the byoo metrics and labels are correct.
 
+## Workload images
+
+The `scripts/deploy_*.sh` scripts and `scripts/values-function.yaml` pin prebuilt workloads: `byoo-test:0.11`, `byoo-validation-0.5.tgz`, and `task_byoo_sample:0.0.9`. These builds predate `http/protobuf` support. NVCA now sets `OTEL_EXPORTER_OTLP_<SIGNAL>_PROTOCOL=http/protobuf`, the OTLP spec value, and these builds exit at startup when they receive it.
+
+Rebuild the workloads and update the pinned references before you run these scripts:
+
+- Build the task image from `examples/task-samples/task-byoo-sample` and update `TASK_CONTAINER_IMAGE`.
+- Package the task chart from `examples/task-samples/task-helmchart-byoo-sample` with its `image` values pointing at that build, and update `TASK_HELM_CHART`.
+- Rebuild the function image with an OTLP exporter setup that accepts `http/protobuf`. Update `FUNCTION_CONTAINER_IMAGE` and the image in `scripts/values-function.yaml`, and repackage the `byoo-validation` chart if it pins an older image. If the repackaged chart gets a new version or URI, update `FUNCTION_HELM_CHART` in both `scripts/deploy_function_gfn_helm.sh` and `scripts/deploy_function_non-gfn_helm.sh`.
+
+The scripts pull every workload from a registry. Before you run them, push each rebuilt image to the registry in its reference and publish each repackaged chart to its chart repository.
+
 ## Usage
 
 ### Start Instance (optional)

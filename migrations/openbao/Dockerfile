@@ -1,5 +1,5 @@
 ARG ALPINE_VERSION=3.23
-ARG GO_IMAGE=golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+ARG GO_IMAGE=golang:1.27.3-alpine3.23@sha256:8a5046497cda39860b832ffdbe8dd66018a0f05bb01352f533a36e7e2ced66a0
 ARG KUBECTL_GO_IMAGE=golang:1.26.10-alpine3.23@sha256:34414731924cf2263160f0021f5cf6e1807382d85248f7cb419d4187b96d5e43
 ARG BAO_VERSION=2.6.3
 ARG BAO_RUNTIME_SHA256=sha256:a60afafda36337abe833c4a63894bf1095098f29abea4091e7e555a33dd52889
@@ -150,7 +150,8 @@ LABEL org.opencontainers.image.source="https://github.com/dsx-ai-factory/nvcf" \
 # image receives fixes published after the upstream OpenBao release.
 USER root
 RUN apk upgrade --no-cache && \
-    apk add --no-cache 'brotli-libs>=1.2.1-r0' openssl uuidgen curl bash jq
+    apk add --no-cache 'brotli-libs>=1.2.1-r0' 'ca-certificates>=20261020-r0' \
+      'ca-certificates-bundle>=20261020-r0' openssl uuidgen curl bash jq
 
 COPY --from=bao-builder --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao
 COPY --from=jwker-builder /out/jwker /usr/local/bin/jwker
