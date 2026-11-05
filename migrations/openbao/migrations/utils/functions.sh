@@ -578,8 +578,6 @@ function generate_jwt_secret_role() {
   local scopes=$4
   local issuer_override=${5:-""}
 
-  local quoted_scopes=$(sed 's/\([^,]*\)/"\1"/g' <<< "$scopes")
-
   local issuer="http://${target_service_name}.${target_service_account_namespace}.svc.cluster.local"
   if [[ -n "${issuer_override}" ]]; then
     issuer="${issuer_override}"
@@ -593,7 +591,7 @@ function generate_jwt_secret_role() {
     --arg issuer     "${issuer}" \
     --arg client     "${client_service_name}" \
     --arg target     "${target_service_name}" \
-    --argjson scopes "[${quoted_scopes}]" \
-    '{issuer: $issuer, claims: {azp: $client, aud: [$client, ("s:" + $target)], scopes: $scopes, sub: $client}}')
+    --arg scopes "${scopes}" \
+    '{issuer: $issuer, claims: {azp: $client, aud: [$client, ("s:" + $target)], scopes: (if $scopes == "" then [] else ($scopes | split(",") | map(select(length > 0))) end), sub: $client}}')
   echo "$role_json"
 }
