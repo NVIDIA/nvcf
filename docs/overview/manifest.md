@@ -9,6 +9,11 @@ registry setup.
 location for that exact artifact. Bundled charts are included in their stack
 packages.
 
+Stack archives, inventories and images are published separately. Download every
+selected stack archive and verify the required images before scheduling an
+upgrade. An available inventory or image does not establish package availability;
+do not substitute another stack version to bypass a pending download.
+
 ## Artifacts overview
 
 The tables group the selected artifacts by deployment plane and type. Optional

@@ -9,16 +9,94 @@ deployments.
 When to use: upgrading from Self-Managed 1.0.1 or earlier to 1.0.8 or later
 versions, if you run tasks. Otherwise, skip this section.
 
-Task image names and registry wiring changed on this path. Use the target
-stack combination selected by your upgrade guide.
+Task image names and registry wiring changed on this path. Before maintenance:
 
-1. Before maintenance, render the target and resolve the Tasks ConfigMap's
-   `nvct.sidecars` image references, including `NVCT_SIDECARS_HOSTNAME` and
-   `NVCT_SIDECARS_REPOSITORY`.
-1. Use the target's released inventory and the
-   [image mirroring guide](../overview/image-mirroring.md) to mirror the exact
-   init and worker images, including required architectures, to those paths.
-   Verify pulls on every affected compute cluster and record each result.
+1. Select the images from the target's [manifest](../overview/manifest.md).
+   The [Self-Managed 1.0.8 inventory](https://github.com/dsx-ai-factory/nvcf/releases/download/deploy/stacks/self-managed/v1.0.8/nvcf-self-managed-stack-inventory.json)
+   selects `nvcr.io/nvidia/nvcf/nvcf-worker-init-oss:1.2.4` and
+   `nvcr.io/nvidia/nvcf/nvcf-worker-task-oss:1.1.6`. For another target, use
+   that release's inventory.
+1. Render the target with your registry settings. Resolve the paths below,
+   then [mirror both images](../overview/image-mirroring.md#pulling-images)
+   to those paths, preserving each required architecture.
+1. Run the pull check below on every affected compute cluster and node pool.
+   Continue only when both images succeed. Package availability is a separate
+   prerequisite; an image or inventory does not provide the stack archive.
+
+<Accordion title="Resolve the target image paths">
+
+Use Bash, `jq` and Mike Farah's `yq` v4. Set `TASK_RENDER` to the target render's
+`helm-nvcf-nvct-api/templates` directory. Its `configmap-remote-config.yaml` contains
+`nvct-api-remote-config`; `configmap-env.yaml` contains `nvct-api-env` by default.
+These commands use the rendered files, including any configured name overrides.
+
+```bash
+set -euo pipefail
+TASK_RENDER="/absolute/path/to/target-render/helm-nvcf-nvct-api/templates"
+TASK_HOST=$(yq -r '.data.NVCT_SIDECARS_HOSTNAME // ""' "$TASK_RENDER/configmap-env.yaml")
+TASK_REPOSITORY=$(yq -r '.data.NVCT_SIDECARS_REPOSITORY // ""' "$TASK_RENDER/configmap-env.yaml")
+TASK_IMAGES=$(yq -er '.data["nvct-api.yaml"]' "$TASK_RENDER/configmap-remote-config.yaml" |
+  yq -o=json '.nvct.sidecars | [."init-container", ."utils-container"]' |
+  jq -er --arg host "$TASK_HOST" --arg repo "$TASK_REPOSITORY" '
+    def resolve($key; $value):
+      if contains($key) then
+        if $value == "" then error("Missing registry setting: " + $key)
+        else split($key) | join($value) end
+      else . end;
+    map(if type != "string" or length == 0 then error("Missing task image") else . end |
+      resolve("${nvct.sidecars.hostname}"; $host) |
+      resolve("${nvct.sidecars.repository}"; $repo) |
+      if contains("${") then error("Unresolved task image: " + .) else . end) | .[]')
+printf '%s\n' "$TASK_IMAGES"
+```
+
+The two output lines are the init and task worker destinations. Compare their
+names and tags or digests with the selected inventory before copying images.
+
+</Accordion>
+
+<Accordion title="Verify pulls from a compute node">
+
+Keep `TASK_IMAGES` from the previous commands. Select an existing task namespace,
+node, service account and the pull secrets intended for the target registry.
+Repeat for each node pool and architecture in each compute cluster. Add the
+task's tolerations to the probe spec if the node has `NoExecute` taints.
+
+```bash
+set -euo pipefail
+COMPUTE_KUBECONFIG="/absolute/path/to/compute-kubeconfig"
+COMPUTE_CONTEXT="compute-context"
+TASK_NAMESPACE="existing-task-namespace"
+TASK_NODE="existing-task-node"
+TASK_SERVICE_ACCOUNT="task-service-account"
+TASK_PULL_SECRETS='[{"name":"task-registry-secret"}]'
+kt() {
+  kubectl --kubeconfig "$COMPUTE_KUBECONFIG" --context "$COMPUTE_CONTEXT" \
+    -n "$TASK_NAMESPACE" "$@"
+}
+while IFS= read -r image; do
+  pod=$(jq -cn --arg image "$image" --arg node "$TASK_NODE" \
+    --arg sa "$TASK_SERVICE_ACCOUNT" --argjson secrets "$TASK_PULL_SECRETS" '{
+      apiVersion: "v1", kind: "Pod", metadata: {generateName: "task-image-check-"},
+      spec: {nodeName: $node, serviceAccountName: $sa, imagePullSecrets: $secrets,
+        automountServiceAccountToken: false, restartPolicy: "Never", activeDeadlineSeconds: 120,
+        securityContext: {runAsNonRoot: true, seccompProfile: {type: "RuntimeDefault"}},
+        containers: [{name: "check", image: $image, imagePullPolicy: "Always", args: ["--help"],
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}}]}}
+    ' | kt create -f - -o jsonpath='{.metadata.name}')
+  printf 'Checking %s with pod %s\n' "$image" "$pod"
+  kt wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" --timeout=150s
+  kt get "pod/$pod" -o jsonpath='{.spec.nodeName}{" "}{.status.containerStatuses[0].imageID}{"\n"}'
+  kt delete "pod/$pod"
+done <<< "$TASK_IMAGES"
+```
+
+The probe uses `--help` because these images have no shell. Record the cluster,
+node and image digests. On failure, inspect `kt describe "pod/$pod"`, correct
+access or image selection, and repeat. Delete that probe after collecting its
+evidence. This check verifies image pulls, not task execution.
+
+</Accordion>
 
 ## Deployments stuck after a NATS restart
 
