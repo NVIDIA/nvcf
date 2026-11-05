@@ -149,8 +149,8 @@ curl -sS -X POST "http://${GATEWAY_ADDR}/v1/chat/completions" \
 
 When `stream` is `true`, the gateway relays server-sent events. When `stream` is false or omitted, the gateway returns the final JSON response from the upstream service.
 
-For a non-streaming request, the upstream container must return an
-OpenAI-compatible chat completion. For example:
+For a non-streaming request, the gateway returns an OpenAI-compatible chat
+completion. For example:
 
 ```json
 {
@@ -176,9 +176,11 @@ OpenAI-compatible chat completion. For example:
 }
 ```
 
-For streaming requests, the upstream container returns OpenAI-compatible SSE
-chunks and terminates with `data: [DONE]`. The gateway relays the upstream
-response; it does not synthesize model output or token usage.
+The gateway requests a stream from the upstream container for both streaming
+and non-streaming requests, and builds the non-streaming response from it. The
+container must return OpenAI-compatible SSE chunks and end every stream with
+`data: [DONE]`. The gateway relays the upstream response; it does not
+synthesize model output or token usage.
 
 The upstream stream fails when it ends before `data: [DONE]`, the connection
 fails, the gateway request timeout expires, or the upstream sends an error
