@@ -19,6 +19,7 @@ package envutil
 
 import (
 	"encoding/base64"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -88,9 +89,42 @@ func EncodeEnvB64(envs map[string]string) string {
 	for _, k := range keys {
 		sb.WriteString(k)
 		sb.WriteString("=")
-		sb.WriteString(envs[k])
+		sb.WriteString(encodeEnvValue(envs[k]))
 		sb.WriteString("\n")
 	}
 
 	return base64.StdEncoding.EncodeToString([]byte(sb.String()))
+}
+
+// encodeEnvValue mirrors the function API encoder (IcmsClient.encodeEnvironmentValue).
+// A value with an ISO control character is emitted in Go double-quoted form so a line
+// break cannot forge a second KEY=value entry; EnvDecoderText reverses it with
+// strconv.Unquote. A value with no control character is returned unchanged, so values
+// without control characters stay byte-identical.
+func encodeEnvValue(value string) string {
+	if !strings.ContainsFunc(value, isISOControl) {
+		return value
+	}
+
+	var sb strings.Builder
+	sb.WriteByte('"')
+	for _, r := range value {
+		switch {
+		case r == '"' || r == '\\':
+			sb.WriteByte('\\')
+			sb.WriteRune(r)
+		case isISOControl(r):
+			sb.WriteString(fmt.Sprintf(`\u%04x`, r))
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	sb.WriteByte('"')
+	return sb.String()
+}
+
+// isISOControl reports whether r is an ISO control character, matching Java's
+// Character.isISOControl: the C0 range U+0000-U+001F and the C1 range U+007F-U+009F.
+func isISOControl(r rune) bool {
+	return r <= 0x1f || (r >= 0x7f && r <= 0x9f)
 }

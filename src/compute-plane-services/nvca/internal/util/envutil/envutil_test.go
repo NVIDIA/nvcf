@@ -158,6 +158,60 @@ func TestEncodeDecodeRoundtrip(t *testing.T) {
 	}
 }
 
+// The encoded literals match IcmsClient.encodeEnvironmentValue in nvcf-core and the
+// decoder cases in icms-translate common. Keeping both producers byte-identical is the
+// point of #3157: NVCA re-encodes overridden environments and must not re-open the
+// worker env injection that the function API closed.
+func TestEncodeEnvB64_QuotesControlCharacters(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string // the KEY= portion after the key, before the trailing newline
+	}{
+		{"no control character stays unquoted", "nvcr.io/x:v1", "nvcr.io/x:v1"},
+		{"equals sign stays unquoted", "abc=def", "abc=def"},
+		{"line feed is quoted", "a\nEXTRA=1", `"a\u000aEXTRA=1"`},
+		{"carriage return and tab are quoted", "a\rb\tc", `"a\u000db\u0009c"`},
+		{"backslash and quote are escaped", "a\\b\"c\n", `"a\\b\"c\u000a"`},
+		{"C1 control character is quoted", "a\u0085b", `"a\u0085b"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := base64.StdEncoding.DecodeString(EncodeEnvB64(map[string]string{"KEY": tt.value}))
+			require.NoError(t, err)
+			assert.Equal(t, "KEY="+tt.want+"\n", string(raw))
+
+			// The decoder reverses the encoding back to the original value, as one entry.
+			decoded, err := common.DecodeEnvironmentB64(
+				EncodeEnvB64(map[string]string{"KEY": tt.value}), common.EnvDecoderText)
+			require.NoError(t, err)
+			assert.Equal(t, map[string]string{"KEY": tt.value}, decoded)
+		})
+	}
+}
+
+// ApplyEnvOverrides is the path #3157 fixes: it decodes, applies overrides, and
+// re-encodes. A control character in an untouched value must survive as one entry.
+func TestApplyEnvOverrides_PreservesControlCharEncoding(t *testing.T) {
+	// The function API encodes this value quoted; the decoder unquotes it on the way in.
+	envB64 := EncodeEnvB64(map[string]string{
+		"FIRST":                    "1",
+		"INFERENCE_CONTAINER_ARGS": "a\nEXTRA=injected",
+	})
+
+	result, err := ApplyEnvOverrides(envB64, map[string]string{"NEW": "value"})
+	require.NoError(t, err)
+
+	decoded, err := common.DecodeEnvironmentB64(result, common.EnvDecoderText)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"FIRST":                    "1",
+		"INFERENCE_CONTAINER_ARGS": "a\nEXTRA=injected",
+		"NEW":                      "value",
+	}, decoded)
+}
+
 func TestRawEnvB64Format(t *testing.T) {
 	// Test that we can decode actual EnvironmentB64 format from ICMS
 	rawEnv := "FOO=bar\nBAZ=qux\n"
