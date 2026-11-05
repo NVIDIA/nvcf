@@ -23,6 +23,9 @@ selection. Changes below are relative to docs edition 1.0.2.
 - Preserves existing readable secret-file ownership during non-root ESS refresh.
 - Processes new NVCA requests after a restarted stream reuses a sequence
   number, and fixes NATS authentication reconnect and account selection.
+- Replaces legacy task-worker references with published init and task images.
+  Follow the [task image prerequisites](../../docs/self-managed/upgrade-recovery.md#task-worker-images)
+  when upgrading a deployment that runs tasks.
 - Includes ICMS reconnect and instance-event fixes and an opt-in legacy
   lookup backfill. Pylon allows queued LLM requests more time for first output.
 - Adds upstream image override support for NATS, cert-manager and the Vault
