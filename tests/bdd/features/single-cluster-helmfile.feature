@@ -88,6 +88,8 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | llm-api-gateway           | nvcf                 |
         | vanity-gateway            | nvcf                 |
 
+      When I successfully run command "kubectl --context k3d-ncp-local --namespace cassandra-system wait --for=condition=complete job/cassandra-initialize-cluster --timeout=10m"
+
       Then these Gateway API routes should be accepted and resolved using context "k3d-ncp-local" within "2m":
         | kind      | name           | namespace            | parent    |
         | HTTPRoute | vanity-gateway | envoy-gateway-system | shared-gw |
