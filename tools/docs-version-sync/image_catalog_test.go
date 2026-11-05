@@ -312,6 +312,25 @@ func TestImageCatalogCharts(t *testing.T) {
 				}
 			}
 			if test.name == "openbao" {
+				for _, image := range []string{
+					"",
+					"mirror.example/openbao",
+					"mirror.example:5000/openbao",
+					"mirror.example:5000/openbao:",
+					"mirror.example:5000/openbao@sha256:" + strings.Repeat("a", 64),
+				} {
+					t.Run("untagged sidecar "+image, func(t *testing.T) {
+						values := fmt.Sprintf("openbao:\n  server:\n    extraContainers:\n      - name: auto-unseal-sidecar\n        image: %q\n", image)
+						path := filepath.Join(t.TempDir(), "untagged-sidecar.yaml")
+						if err := os.WriteFile(path, []byte(values), 0o600); err != nil {
+							t.Fatal(err)
+						}
+						_, err := renderImageChart(chart, []string{valuesPath, overridePath, path})
+						if err == nil || !strings.Contains(err.Error(), "auto-unseal sidecar image requires an explicit tag") {
+							t.Fatalf("sidecar image %q did not fail the explicit-tag guard: %v", image, err)
+						}
+					})
+				}
 				for _, skew := range []string{
 					"openbao:\n  injector:\n    agentImage:\n      tag: incompatible\n",
 					"openbao:\n  server:\n    extraContainers:\n      - name: auto-unseal-sidecar\n        image: mirror.example:5000/server:incompatible\n",
