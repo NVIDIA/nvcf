@@ -74,10 +74,13 @@ openbao:
       annotations:
         eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/openbao-unseal
 EOF
+# An indented first line sets a block scalar's indentation; it must survive.
+yq -i '.openbao.server.ha.raft.config = "  ui = true\n" + .openbao.server.ha.raft.config' "$environment_file"
 values="$work_dir/set.yaml"
 render_values "$values"
 assert_yaml_value "$values" '.openbao.server.autoUnseal.enabled' true "set: autoUnseal.enabled"
-assert_yaml_value "$values" '.openbao.server.ha.raft.config | test("seal \"awskms\"")' true "set: raft config carries the seal stanza"
+assert_yaml_value "$values" '.openbao.server.ha.raft.config' "$(yq -r '.openbao.server.ha.raft.config' "$environment_file")" \
+  "set: raft config must arrive unchanged"
 assert_yaml_value "$values" '.openbao.server.serviceAccount.annotations."eks.amazonaws.com/role-arn"' \
   arn:aws:iam::111122223333:role/openbao-unseal "set: serviceAccount annotations"
 for key in extraContainers volumes volumeMounts; do

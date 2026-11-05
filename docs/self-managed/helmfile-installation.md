@@ -482,9 +482,13 @@ openbao:
 
 - With `autoUnseal.enabled`, the stack also drops the Shamir unseal sidecar and its Secret volume.
 - `ha.raft.config` replaces the chart's whole Raft config, so it must also carry the `storage` and `listener` blocks. Copy it from the chart's [auto-unseal example](https://github.com/NVIDIA/nvcf/blob/main/deploy/helm/openbao/helm/values-autounseal.yaml.example), which has the default config with an AWS KMS seal, and change only the `seal` stanza.
-- Give the `openbao-server` service account in `vault-system` the provider's rights on the key. For AWS KMS that is `kms:Encrypt`, `kms:Decrypt`, and `kms:DescribeKey`, for example through an EKS Pod Identity association. IRSA and other workload identity setups annotate the account through `openbao.server.serviceAccount.annotations`, such as `eks.amazonaws.com/role-arn`.
+- Give the `openbao-server` service account in `vault-system` the provider's rights on the key. For AWS KMS that is `kms:Encrypt`, `kms:Decrypt`, and `kms:DescribeKey`, for example through an EKS Pod Identity association. For IRSA or GKE Workload Identity, annotate the account through `openbao.server.serviceAccount.annotations`, such as `eks.amazonaws.com/role-arn`.
 - After the first install, the init hook leaves every recovery share in the Secret `openbao-server-recovery-keys`. Export the shares, give them to separate custodians, and delete the Secret.
-- Do not set or remove these values on an installed cluster as a plain upgrade. The StatefulSet uses `OnDelete`, so nothing changes at apply, but each pod restarted afterwards stays sealed until it is unsealed with `-migrate`, and it still reports Ready while sealed. On a cluster first installed with auto-unseal, removing them brings back a volume for an unseal Secret that was never created, so restarted pods cannot start. Change the seal of an installed cluster through OpenBao seal migration, one pod at a time.
+
+<Warning>
+Set auto-unseal only on a new install. On an installed cluster, `helmfile apply` with these values succeeds and changes nothing yet, because the OpenBao StatefulSet uses `OnDelete`. Each OpenBao pod restarted later, for example by a node drain, comes up sealed and waits for a seal migration. A sealed pod still reports Ready, so further drains can take OpenBao below Raft quorum. On a cluster first installed with auto-unseal, removing these values brings back a volume for an unseal Secret that was never created, so restarted pods cannot start. Change the seal of an installed cluster only through OpenBao seal migration, one pod at a time.
+
+</Warning>
 
 #### `helm` and `image` Configuration
 

@@ -541,8 +541,7 @@ openbao:
       {{- /* Replaces the chart's whole Raft config; auto-unseal adds its seal stanza here. */}}
       {{- with dig "openbao" "server" "ha" "raft" "config" "" .Values }}
       raft:
-        config: |
-          {{- . | nindent 10 }}
+        {{- toYaml (dict "config" .) | nindent 8 }}
       {{- end }}
     {{- with dig "openbao" "server" "annotations" dict .Values }}
     annotations:
