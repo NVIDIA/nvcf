@@ -61,7 +61,7 @@ class TaskImageChecks(unittest.TestCase):
                 }, hostname=hostname, repository=repository)
                 self.assertNotEqual(result.returncode, 0)
 
-    def run_probe(self, wait_status):
+    def run_probe(self, wait_status, phase="Succeeded"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             command = block_containing(RECOVERY, "TASK_PULL_SECRETS=")
@@ -73,7 +73,12 @@ kubectl() {
       cat >> "$POD_LOG"
       printf '%s\n' 'task-image-check-test'
       ;;
-    *'wait '*) return "$WAIT_STATUS" ;;
+    *'wait '*)
+      case "$*" in
+        *containerStatuses*imageID*) return "$WAIT_STATUS" ;;
+        *status.phase*Succeeded*) test "$POD_PHASE" = Succeeded ;;
+        *) return 99 ;;
+      esac ;;
     *'get pod/'*) printf '%s\n' 'node-a sha256:pulled' ;;
     *'delete pod/'*) ;;
     *) return 99 ;;
@@ -81,7 +86,7 @@ kubectl() {
 }
 '''
             env = {**os.environ, "CALL_LOG": str(root / "calls"),
-                   "POD_LOG": str(root / "pods"), "WAIT_STATUS": str(wait_status),
+                   "POD_LOG": str(root / "pods"), "WAIT_STATUS": str(wait_status), "POD_PHASE": phase,
                    "TASK_IMAGES": "mirror.example/init:4\nmirror.example/task:5"}
             result = subprocess.run(["bash", "-euo", "pipefail", "-c", stub + command],
                                     env=env, capture_output=True, text=True)
@@ -107,7 +112,7 @@ kubectl() {
             self.assertEqual(container["imagePullPolicy"], "Always")
             self.assertEqual(container["args"], ["--help"])
             self.assertNotIn("command", container)
-        self.assertEqual(sum("wait --for=jsonpath={.status.phase}=Succeeded" in c for c in calls), 2)
+        self.assertEqual(sum("wait --for=jsonpath={.status.containerStatuses[0].imageID}" in c for c in calls), 2)
         self.assertEqual(sum("delete pod/task-image-check-test" in c for c in calls), 2)
 
     def test_failed_pull_stops_before_next_image_and_preserves_probe(self):
@@ -115,6 +120,13 @@ kubectl() {
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(pods), 1)
         self.assertFalse(any("delete " in call for call in calls))
+
+    def test_pulled_image_does_not_require_application_success(self):
+        for phase in ("Running", "Failed"):
+            with self.subTest(phase=phase):
+                result, calls, _ = self.run_probe(0, phase=phase)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(sum("delete pod/" in call for call in calls), 2)
 
 
 if __name__ == "__main__":

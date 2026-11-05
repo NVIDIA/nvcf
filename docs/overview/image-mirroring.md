@@ -246,10 +246,12 @@ export COMPUTE_STACK_VERSION="1.0.5"
 export OBSERVABILITY_STACK_VERSION="1.0.0"
 
 # Download a specific control-plane stack version
-# Publication pending: nvcf-self-managed-stack 1.0.10 is not yet available for download.
+ngc registry resource download-version \
+  "nvidia/nvcf/nvcf-self-managed-stack:${STACK_VERSION}"
 
 # Download a specific compute-plane stack version
-# Publication pending: nvcf-compute-plane-stack 1.0.5 is not yet available for download.
+ngc registry resource download-version \
+  "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}"
 
 # Download a specific observability stack version
 ngc registry resource download-version \
@@ -267,7 +269,13 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-self-managed-stack 1.0.10 is not yet available for download.
+# Set the version
+export VERSION="1.0.10"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-self-managed-stack:${VERSION}" && \
+   mkdir -p nvcf-self-managed-stack && \
+   tar -xzf nvcf-self-managed-stack_v${VERSION}/nvcf-self-managed-stack-${VERSION}.tar.gz -C nvcf-self-managed-stack && \
+   rm -rf nvcf-self-managed-stack_v${VERSION}
 ```
 
 {/*docs-version-sync:END image-mirroring-stack-snippet*/}
@@ -286,7 +294,13 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-compute-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-compute-plane-stack 1.0.5 is not yet available for download.
+# Set the version
+export COMPUTE_VERSION="1.0.5"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_VERSION}" && \
+   mkdir -p nvcf-compute-plane-stack && \
+   tar -xzf nvcf-compute-plane-stack_v${COMPUTE_VERSION}/nvcf-compute-plane-stack-${COMPUTE_VERSION}.tar.gz -C nvcf-compute-plane-stack && \
+   rm -rf nvcf-compute-plane-stack_v${COMPUTE_VERSION}
 ```
 
 {/*docs-version-sync:END image-mirroring-compute-stack-snippet*/}
@@ -340,7 +354,7 @@ Download and extract:
 
 ```bash
 # Set the version
-export VERSION="1.16.2"
+export VERSION="1.16.8"
 
 # Set your platform (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64)
 export PLATFORM="linux-amd64"

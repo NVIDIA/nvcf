@@ -85,7 +85,7 @@ while IFS= read -r image; do
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}}]}}
     ' | kt create -f - -o jsonpath='{.metadata.name}')
   printf 'Checking %s with pod %s\n' "$image" "$pod"
-  kt wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" --timeout=150s
+  kt wait --for=jsonpath='{.status.containerStatuses[0].imageID}' "pod/$pod" --timeout=150s
   kt get "pod/$pod" -o jsonpath='{.spec.nodeName}{" "}{.status.containerStatuses[0].imageID}{"\n"}'
   kt delete "pod/$pod"
 done <<< "$TASK_IMAGES"
@@ -94,7 +94,9 @@ done <<< "$TASK_IMAGES"
 The probe uses `--help` because these images have no shell. Record the cluster,
 node and image digests. On failure, inspect `kt describe "pod/$pod"`, correct
 access or image selection, and repeat. Delete that probe after collecting its
-evidence. This check verifies image pulls, not task execution.
+evidence. A nonempty `imageID` proves the runtime resolved the image. The container may
+still be running or exit unsuccessfully; neither outcome invalidates the pull
+check. This does not verify task execution.
 
 </Accordion>
 

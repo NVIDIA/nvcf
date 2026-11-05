@@ -10,6 +10,13 @@ version for the authoritative list of parameters and defaults:
 
 </Warning>
 
+Image tags in the override examples describe the selected stack combination.
+The Compute Plane package passes its credential-helper tag through
+`global.nvcaOperator.selfManaged.imageCredHelper.imageTag`; the selected
+package sets `0.11.3`. A standalone chart can have an older default. Set the
+example override explicitly when using that image outside the stack, and
+check the rendered backend configuration before applying.
+
 ## How Values Are Structured
 
 The chart values are organized into two layers:

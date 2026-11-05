@@ -166,7 +166,7 @@ publications:
     registry: public-images
   - name: nvcf-cli
     type: resource
-    version: 1.16.2
+    version: 1.16.8
     registry: public-resources
   - name: nvcf-state-metrics-service
     type: image
@@ -281,22 +281,56 @@ publications:
     version: 1.18.3
     registry: public-helm
     chart_format: http
+  - name: nvcf-self-managed-stack
+    type: resource
+    version: 1.0.10
+    registry: public-resources
+  - name: nvcf-cassandra-migrations
+    type: image
+    version: 0.17.8
+    registry: public-images
+  - name: nvcf-openbao-migrations
+    type: image
+    version: 0.19.11
+    registry: public-images
+  - name: helm-nvcf-nats
+    type: chart
+    version: 0.8.6
+    registry: public-helm
+    chart_format: http
+  - name: helm-nvcf-cert-manager
+    type: chart
+    version: 0.2.0
+    registry: public-helm
+    chart_format: http
+  - name: cassandra
+    type: image
+    version: 5.0.9-nv-2.0.7
+    registry: public-images
+  - name: nvcf-openbao
+    type: image
+    version: 2.6.3-nv-1.3.9
+    registry: public-images
+  - name: helm-nvcf-cassandra
+    type: chart
+    version: 0.21.4
+    registry: public-helm
+    chart_format: http
+  - name: helm-nvcf-openbao-server
+    type: chart
+    version: 0.32.9
+    registry: public-helm
+    chart_format: http
+  - name: nvcf-compute-plane-stack
+    type: resource
+    version: 1.0.5
+    registry: public-resources
 version_overrides:
   - name: nvcf-cli
     type: resource
-    version: 1.16.2
+    version: 1.16.8
     source: independent source release; not pinned by stack
-publication_pending:
-  - cassandra
-  - helm-nvcf-cassandra
-  - helm-nvcf-cert-manager
-  - helm-nvcf-nats
-  - helm-nvcf-openbao-server
-  - nvcf-cassandra-migrations
-  - nvcf-compute-plane-stack
-  - nvcf-openbao
-  - nvcf-openbao-migrations
-  - nvcf-self-managed-stack
+publication_pending: []
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
@@ -902,7 +936,7 @@ manifest:
     - artifact_id: nvcf-otel-collector-image
       plane: compute
       kind: service-image
-      requirement: required
+      requirement: optional
       description: Collects compute-plane workload telemetry.
       github_url: https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector
     - artifact_id: nvcf-worker-task-oss
@@ -920,7 +954,7 @@ manifest:
     - artifact_id: nvcf_worker_niclls
       plane: control
       kind: service-image
-      requirement: optional
+      requirement: required
       description: Runs Low Latency Streaming workers.
     - artifact_id: samba
       plane: compute
@@ -1671,7 +1705,7 @@ supplemental_artifacts:
   - name: nvcf-cli
     type: resource
     registry: public-resources
-    version: 1.16.2
+    version: 1.16.8
   - name: nvcf-compute-plane-stack
     type: resource
     registry: public-resources
