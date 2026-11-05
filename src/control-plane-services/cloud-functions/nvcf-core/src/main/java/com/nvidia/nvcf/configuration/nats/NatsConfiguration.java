@@ -247,6 +247,20 @@ public class NatsConfiguration {
             return jetStreamManagements[nextIndex()];
         }
 
+        /**
+         * jnats closes a connection after the same authentication error twice, even with
+         * unlimited reconnects, and this pool never replaces it, so only a restart recovers.
+         */
+        public boolean anyClosed() {
+            for (Connection connection : connections) {
+                if (connection.getStatus() == Status.CLOSED) {
+                    log.warn("closed nats connection {}", connection.getServerInfo());
+                    return true;
+                }
+            }
+            return false;
+        }
+
         public boolean healthy() {
             for (Connection connection : connections) {
                 if (connection.getStatus() != Status.CONNECTED) {

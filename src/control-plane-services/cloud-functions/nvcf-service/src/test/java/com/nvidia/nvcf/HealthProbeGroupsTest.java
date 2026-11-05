@@ -39,7 +39,8 @@ import org.springframework.core.io.ClassPathResource;
 /**
  * Kubernetes restarts a container whose liveness probe fails. Cassandra and NATS
  * are shared by every replica, so they must only gate readiness. Liveness fails
- * only when the cassandraSession contributor reports a session stuck after an outage.
+ * only when the cassandraSession contributor reports a session stuck after an outage,
+ * or natsLiveness reports a closed NATS connection.
  */
 class HealthProbeGroupsTest {
 
@@ -49,6 +50,11 @@ class HealthProbeGroupsTest {
 
     private static ApplicationContextRunner contextRunner(
             Status cassandra, Status nats, Status cassandraSession) {
+        return contextRunner(Status.UP, cassandra, nats, cassandraSession, Status.UP);
+    }
+
+    private static ApplicationContextRunner contextRunner(Status livenessState, Status cassandra,
+            Status nats, Status cassandraSession, Status natsLiveness) {
         return new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(HealthEndpointAutoConfiguration.class))
                 .withInitializer(context -> {
@@ -63,13 +69,26 @@ class HealthProbeGroupsTest {
                 })
                 .withBean(HealthContributorRegistry.class, () -> {
                     var registry = new DefaultHealthContributorRegistry();
-                    register(registry, "livenessState", Status.UP);
+                    register(registry, "livenessState", livenessState);
                     register(registry, "readinessState", Status.UP);
                     register(registry, "cassandra", cassandra);
                     register(registry, "nats", nats);
                     register(registry, "cassandraSession", cassandraSession);
+                    register(registry, "natsLiveness", natsLiveness);
                     return registry;
                 });
+    }
+
+    @Test
+    void livenessGoesDownWhenLivenessStateIsDown() {
+        contextRunner(Status.DOWN, Status.UP, Status.UP, Status.UP, Status.UP).run(context ->
+                assertEquals(Status.DOWN, status(context, "liveness")));
+    }
+
+    @Test
+    void livenessGoesDownWhenNatsConnectionIsClosed() {
+        contextRunner(Status.UP, Status.DOWN, Status.DOWN, Status.UP, Status.DOWN).run(context ->
+                assertEquals(Status.DOWN, status(context, "liveness")));
     }
 
     @Test

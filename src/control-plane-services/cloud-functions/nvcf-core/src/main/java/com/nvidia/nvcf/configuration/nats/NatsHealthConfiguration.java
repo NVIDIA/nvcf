@@ -25,6 +25,7 @@ import org.springframework.boot.health.autoconfigure.contributor.CompositeHealth
 import org.springframework.boot.health.contributor.AbstractHealthIndicator;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthContributor;
+import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -54,6 +55,18 @@ public class NatsHealthConfiguration extends
     @Bean
     HealthContributor natsHealthContributor(Map<String, FixedNatsPool> connections) {
         return createContributor(connections);
+    }
+
+    /**
+     * The {@code natsLiveness} contributor for the liveness group. It fails only when a pooled
+     * connection is closed; a reconnecting connection stays UP, so a NATS outage does not restart
+     * the pod.
+     */
+    @Bean
+    HealthIndicator natsLivenessHealthIndicator(Map<String, FixedNatsPool> connections) {
+        return () -> connections.values().stream().anyMatch(FixedNatsPool::anyClosed)
+                ? Health.down().withDetail("nats", "connection closed").build()
+                : Health.up().build();
     }
 
 }
