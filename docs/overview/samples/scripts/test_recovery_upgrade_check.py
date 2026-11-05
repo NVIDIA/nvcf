@@ -180,7 +180,10 @@ kubectl() {
             cli = root / "cli"
             cli.write_text("""#!/usr/bin/env bash
 printf '%s|%s\\n' "${KUBECONFIG:-}" "$*" >> "$CALL_LOG"
-case "$*" in *'profile export') exit "$EXPORT_STATUS" ;; esac
+case "$*" in
+  *' init') exit 97 ;;
+  *'profile export') exit "$EXPORT_STATUS" ;;
+esac
 """)
             cli.chmod(0o755)
             env = {**os.environ, "NVCF_CLI": str(cli),
@@ -207,6 +210,7 @@ kubectl() {
             calls = call_log.read_text().splitlines()
             self.assertEqual(len(calls), 3 if export_status == 0 else 2)
             self.assertEqual(result.returncode, export_status)
+            self.assertTrue(calls[0].endswith(' refresh'))
             self.assertTrue(all(f'--config {env["NVCF_CLI_CONFIG"]}' in call for call in calls))
             self.assertTrue(calls[1].startswith(env["CONTROL_KUBECONFIG"] + "|"))
             self.assertIn('--control-plane-stack ' + env["TARGET_CONTROL"], calls[1])
