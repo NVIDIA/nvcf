@@ -69,6 +69,9 @@ const (
 	// cacheDirVolumeName is the rox PVC (restore) / emptyDir (capture)
 	// mounted at m.CacheDir.
 	cacheDirVolumeName = "nvsnap-cachedir"
+	// CacheDirVolumeName is cacheDirVolumeName for the agent, which
+	// captures a fallback pod's cachedir from it (criu_fallback.go).
+	CacheDirVolumeName = cacheDirVolumeName
 
 	// cacheRWVolumeName is the writable emptyDir that shadows the cache
 	// subtree (<CacheDir>/cache) on restore. The rox is RO, but the
@@ -227,6 +230,29 @@ func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []Pat
 	if !elected && pod.Labels[CaptureLabel] != "true" {
 		return nil
 	}
+	return m.cacheDirPatches(pod)
+}
+
+// fallbackCacheDirPatches is the cachedir of a fallback pod of a CRIU
+// cluster whose model is not in a model volume (criu_fallback.go): the
+// decoration a labelled pod gets without CRIU, with the model under the
+// cachedir, and the fallback's capture and seed. The configuration is
+// opted in already, so no label is needed.
+func (m *Mutator) fallbackCacheDirPatches(pod *corev1.Pod, fb CRIUFallback) []PatchOp {
+	if m.CacheDir == "" {
+		return nil
+	}
+	patches := m.cacheDirPatches(pod)
+	if patches == nil {
+		return nil
+	}
+	main := pod.Spec.Containers[m.MainContainer]
+	return append(patches, m.fallbackPatches(pod, &main, fb)...)
+}
+
+// cacheDirPatches injects the cache/model env vars and an emptyDir at
+// m.CacheDir into the main container; nil when it cannot or need not.
+func (m *Mutator) cacheDirPatches(pod *corev1.Pod) []PatchOp {
 	if m.MainContainer < 0 || m.MainContainer >= len(pod.Spec.Containers) {
 		return nil
 	}

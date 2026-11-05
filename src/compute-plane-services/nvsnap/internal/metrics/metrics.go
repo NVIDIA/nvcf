@@ -62,6 +62,15 @@ var (
 		Help:      "Total restore operations by status and workload type.",
 	}, []string{"status", "workload_type", "namespace"})
 
+	// RestoreCapturedAddressTotal counts what restores did with the captured
+	// pod address (docs/design/RESTORE-POD-ADDRESS.md): applied, unchanged,
+	// or skipped and why.
+	RestoreCapturedAddressTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "restore_captured_address_total",
+		Help:      "Restores by what they did with the captured pod address.",
+	}, []string{"result"})
+
 	RestoreDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Name:      "restore_duration_seconds",
@@ -154,6 +163,7 @@ func RegisterAgent() {
 			CheckpointDuration,
 			CheckpointSize,
 			RestoreTotal,
+			RestoreCapturedAddressTotal,
 			RestoreDuration,
 			ActiveOperations,
 			CRIUDumpDuration,

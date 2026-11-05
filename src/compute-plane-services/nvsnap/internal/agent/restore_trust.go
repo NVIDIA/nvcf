@@ -343,6 +343,7 @@ func (c *criuAutoRestorer) restoreRefusal(ctx context.Context, pod *corev1.Pod) 
 // forgetPod drops what the restorer keeps about a pod that is gone.
 func (c *criuAutoRestorer) forgetPod(pod *corev1.Pod) {
 	c.dropRestoreRecord(pod.UID)
+	c.forgetFallback(pod.UID)
 	prefix := string(pod.UID) + "\x00"
 	c.verdicts.Range(func(k, _ any) bool {
 		if strings.HasPrefix(k.(string), prefix) {

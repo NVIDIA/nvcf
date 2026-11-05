@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -107,6 +108,50 @@ func TestBundleTarRoundTrip(t *testing.T) {
 		if resp.StatusCode == http.StatusOK {
 			t.Errorf("%s served", bad)
 		}
+	}
+}
+
+// A fetched version digests the same as the served one under the agent's
+// umask: modes it would strip (group write on 0775) are kept, so the
+// fetch passes the recorded digest.
+func TestBundleTarKeepsModesPastUmask(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	src := bundleAgent(t)
+	stageVersion(t, src, "bbbb", 0)
+	dir := filepath.Join(src.bundleVersionsDir(), "bbbb")
+	if err := os.Mkdir(filepath.Join(dir, "plugins"), 0o775); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"cuda-checkpoint", "plugins/cuda_plugin.so"} {
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(p), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{"plugins", "cuda-checkpoint", "plugins/cuda_plugin.so"} {
+		if err := os.Chmod(filepath.Join(dir, p), 0o775); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := bundleDigest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := writeBundleTar(&buf, dir); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := readBundleTar(&buf, dst); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"plugins", "cuda-checkpoint", "plugins/cuda_plugin.so"} {
+		if st, err := os.Stat(filepath.Join(dst, p)); err != nil || st.Mode().Perm() != 0o775 {
+			t.Errorf("%s: mode %v %v, want 0775", p, st.Mode().Perm(), err)
+		}
+	}
+	if got, err := bundleDigest(dst); err != nil || got != want {
+		t.Errorf("fetched digest %s %v, want the served one %s", got, err, want)
 	}
 }
 

@@ -102,6 +102,20 @@ agent:
   # saves it whole, so the checkpoint grows by that much. Empty is 1 TiB.
   criuGhostLimit: ""
 
+  # Give a restored pod the pod address it had when it was captured, on its
+  # loopback and translated to its new address at its edge, so sockets the
+  # engine opens after the restore can still use it (NCCL opens peer
+  # connections lazily, on first use, bound to the captured address). Skipped
+  # when another pod has that address. docs/design/RESTORE-POD-ADDRESS.md.
+  restoreCapturedAddress: false
+
+  # Run the GPU tool, which suspends and resumes a workload's GPU state
+  # around a CRIU capture and restore, with the workload's uid and gid and
+  # only CAP_SYS_PTRACE instead of as root: the tool loads the workload's
+  # libcuda and libraries from the workload's image.
+  # docs/design/TOOLS-OUTSIDE-THE-WORKLOAD.md, "The GPU tool as the workload".
+  gpushareToolAsWorkload: false
+
   # Namespace label naming the tenant a namespace belongs to: a label your
   # platform stamps with the account or tenant id, one namespace users
   # cannot edit (NVCF: nca-id). Captures and caches are shared only between
@@ -365,6 +379,9 @@ agent:
   #   criuCaptureOptIn:
   #     - label: function-id
   #       values: ["<function id>"]
+  # An entry without values opts in every pod carrying the label, for
+  # example every NVCF function of the cluster:
+  #     - label: function-id
   criuCaptureOptIn: []
 
   # Extra env injected verbatim into the agent container. The chart
@@ -474,6 +491,47 @@ agent:
       peerBuckets: []     # other clusters' buckets, probed on pull miss
       pollInterval: 30s   # auto-pull poller cadence; 0 disables the poller
       serviceAccount: ""  # GCP Workload-Identity SA email (gcs provider)
+
+  # Rails tier of the restore fetch: a node that lacks a checkpoint copies
+  # it from nodes that hold it over their RDMA NICs with bedrock-peer,
+  # before the shared-filesystem, L2 and HTTP peer tiers. Each node taking
+  # part gets one rails pod, in the release namespace, deleted once no copy
+  # needs it: it serves the node's checkpoints to every copy from it and
+  # runs the node's own copies, so a node sends and receives at once. It
+  # claims every RDMA NIC of its node through DRA. A copy whose pods cannot
+  # start (no NIC or memory free) falls through to the next tier. Needs the
+  # resource.k8s.io/v1 API and a DRA driver that publishes the NICs.
+  # See internal/agent/rails_fetch.go.
+  rails:
+    enabled: false
+    # bedrock-peer image, pinned by digest.
+    image: nvcr.io/0651155215864979/ncp-dev/bedrock-peer@sha256:5246153dbda46047c1986444bfc7a329ccfb300bb4d9d1af7a031bcd2a2c190f
+    # DeviceClass of the RDMA NICs; the claim takes every one on the node.
+    deviceClass: roce.networking.k8s.aws
+    # Shared secret both ends present. Leave empty to have the chart
+    # generate one and keep it across upgrades.
+    secret: ""
+    port: 9890
+    connections: 32
+    # Most source nodes one copy reads from.
+    maxSources: 2
+    # Smallest checkpoint copied over the rails. A smaller one goes to the
+    # HTTP peers, which move it before a rails pod would have started.
+    minSize: 16Gi
+    # Fetches one node's serve pod serves at once. Each adds about 115 MB
+    # to the serve pod's ~9 GB of registered buffers.
+    serveMaxFetchers: 4
+    # Requests and limits. A node's rails pod serves and fetches, and gets
+    # the larger of the two (here 32 CPUs, 64Gi), not their sum. It runs
+    # beside the workload, so it is capped.
+    serve:
+      cpu: "16"
+      memory: 32Gi
+    fetch:
+      cpu: "32"
+      memory: 64Gi
+    # Share of the checkpoint filesystem a copy must leave free.
+    keepFreePercent: 10
 
 # ─── NvSnap Server (REST API + UI) ───────────────────────────────────────
 

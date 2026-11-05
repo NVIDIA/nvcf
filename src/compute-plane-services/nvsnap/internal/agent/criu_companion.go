@@ -38,6 +38,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -397,7 +398,18 @@ func (c *criuAutoRestorer) considerCompanionPlaceholder(ctx context.Context, pod
 	if !isCompanion(pod) || pod.Annotations[webhook.CRIURestoredAnnotation] != "" || pod.DeletionTimestamp != nil {
 		return
 	}
-	if time.Since(pod.CreationTimestamp.Time) < companionPlaceholderWait {
+	why := ""
+	if time.Since(pod.CreationTimestamp.Time) >= companionPlaceholderWait {
+		why = fmt.Sprintf("companion placeholder not restored after %s", companionPlaceholderWait)
+	} else if pods, err := c.a.kubeClient.CoreV1().Pods(pod.Namespace).List(ctx, metav1.ListOptions{}); err == nil {
+		// A GPU pod of the same rollout admitted cold (no group restore
+		// took it, its model volume not ready): the instance does not
+		// restore, and the wait would only hold the companion back.
+		if rank := rankAdmittedCold(pod, pods.Items); rank != "" {
+			why = fmt.Sprintf("its instance's GPU pod %s was admitted cold, so the instance does not restore", rank)
+		}
+	}
+	if why == "" {
 		return
 	}
 	if _, busy := c.attempted.LoadOrStore("companion/"+string(pod.UID), struct{}{}); busy {
@@ -405,8 +417,34 @@ func (c *criuAutoRestorer) considerCompanionPlaceholder(ctx context.Context, pod
 	}
 	key := pod.Annotations[webhook.CRIUGroupAnnotation]
 	log := c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "criuGroup": key})
-	c.failGroup(ctx, pod, key, false, fmt.Errorf("companion placeholder not restored after %s", companionPlaceholderWait), log)
+	c.failGroup(ctx, pod, key, false, errors.New(why), log)
 }
+
+// rankAdmittedCold returns a GPU pod of companion's namespace that its
+// rollout admitted cold, or "": one created with or after the companion
+// placeholder (a rank already running blocks a companion's admission;
+// criuCompanionAdmits), not being deleted, and not taken by a group
+// restore. A rank the restore took carries the group annotation, restored
+// or not.
+func rankAdmittedCold(companion *corev1.Pod, pods []corev1.Pod) string {
+	since := companion.CreationTimestamp.Add(-companionRolloutSkew)
+	for i := range pods {
+		p := &pods[i]
+		if p.DeletionTimestamp != nil || !hasGPU(p) || p.Annotations[webhook.CRIUGroupAnnotation] != "" {
+			continue
+		}
+		if p.CreationTimestamp.Time.Before(since) {
+			continue
+		}
+		return p.Name
+	}
+	return ""
+}
+
+// companionRolloutSkew is how much earlier than a companion placeholder a
+// GPU pod of the same rollout may have been created: a controller creates
+// an instance's pods within moments of one another.
+const companionRolloutSkew = 2 * time.Minute
 
 // peersHandler lists the peers of a pod's established TCP connections that
 // it opened, or of all of them with direction=both, for the agent that

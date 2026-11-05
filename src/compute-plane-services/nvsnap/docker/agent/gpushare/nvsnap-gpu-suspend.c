@@ -32,8 +32,21 @@ SPDX-License-Identifier: Apache-2.0
  *                 holder (suspend) it asks the holder; otherwise (after
  *                 stop + CRIU restore, or full-save) it freezes every thread
  *                 except the restore thread itself, SIGCONTs, restores.
+ *   open          After resume --hold-gate: let the pids' GPU launches through.
  *   gpus [FILE]   Print (or write to FILE) the UUIDs of the GPUs visible here.
  *
+ * --hold-gate (resume after stop + CRIU restore): the pids run, but their
+ * GPU launches wait in libnvsnap_gpushare's gate until `open`. Multi-node
+ * NVLink: open once every node has resumed. A node that launches first
+ * writes to multicast memory (NCCL NVLS) that another node has not bound
+ * again yet; those writes are lost and the kernels waiting for them spin.
+ * A library that predates it resumes as without it.
+ * --clock-at NS (resume after stop + CRIU restore): NS is the CLOCK_MONOTONIC
+ * CRIU dumped. Thaw only once the pids' clock (in their time namespace) has
+ * reached it, so that no thread sees its clock behind the dump, nor the
+ * restore count as time it ran (a peer it last heard from then is not
+ * taken for dead). The restore's own budget must let the clock start far
+ * enough behind.
  * --cache DIR (suspend, resume): node-local cache of the chunk store (e.g. on
  * NVMe; same layout): saved chunks are copied into it, and loads read it
  * first. A load does not fill it (that would slow the restore down):
@@ -51,6 +64,14 @@ SPDX-License-Identifier: Apache-2.0
  * --gpu-map FILE (resume/restore/full-restore): FILE holds the `gpus` output
  * from where the checkpoint was taken; GPU i in FILE is restored onto the
  * i-th GPU visible here (e.g. a new pod got different physical GPUs).
+ *
+ * NVSNAP_GPUSHARE_RESUME_DIAG (resume; diagnostic): after "resume", before
+ * the threads run, "delay:S" waits S seconds, "imp" makes every process read
+ * every mapping of another process's allocation, "all" those and every
+ * allocation it shares (what NVSNAP_GPUSHARE_VERIFY=1 reads at resume),
+ * "none" nothing. Each process logs the wall-clock time ("touch"), to order
+ * the nodes' resumes. Read from this tool's environment, so one capture can
+ * be restored under each.
  *
  * Why suspend: a CHECKPOINTED process has its pinned host buffers unmapped
  * too, but its CPU threads still run. Any CPU access to those buffers
@@ -258,6 +279,9 @@ static int visible_gpus(CUuuid *out, int max)
 #define MAX_GPUS 64
 static const char *gpu_map_file;
 static const char *store_dir, *ckpt_dir, *cache_dir, *fabric_dir;
+static int hold_gate;  /* --hold-gate */
+static long long clock_at = -1;  /* --clock-at, ns */
+static int resume_held(const int *pids, int n);
 
 static int do_restore(int pid)
 {
@@ -556,7 +580,8 @@ static void thaw_all(struct frozen *fz, int n)
 /* ── Shared GPU memory (libnvsnap_gpushare control socket) ─────────────── */
 
 /* Send cmd to pid's control thread. Returns 1 if pid has none (it shares
- * no GPU memory), 0 on "ok", -2 on "busy" (retry), -1 on error. */
+ * no GPU memory), 0 on "ok", -2 on "busy" (retry), -3 if its library
+ * predates cmd, -1 on error. */
 static int ctl(int pid, const char *cmd)
 {
     struct sockaddr_un a = { .sun_family = AF_UNIX };
@@ -578,11 +603,13 @@ static int ctl(int pid, const char *cmd)
                pid, cmd, pid, pid, cl == sizeof(cr) ? cr.pid : -1);
         return -1;
     }
-    /* "release"/"load" move the saved GPU memory: allow for slow disks. */
+    /* "release"/"load" move the saved GPU memory: allow for slow disks.
+     * "open" waits at most 2 s for the state lock: a pid silent for longer
+     * is stuck or dying, and the restore should fail now. */
     int slow = !strncmp(cmd, "release", 7) || !strncmp(cmd, "load", 4);
-    struct timeval tv = { slow ? 3600 : 120, 0 };
+    struct timeval tv = { slow ? 3600 : !strcmp(cmd, "open") ? 10 : 120, 0 };
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    char rep[256] = "err no reply (timeout)";
+    char rep[GPUSHARE_REPLY_MAX] = "err no reply (timeout)";
     if (send(s, cmd, strlen(cmd) + 1, MSG_NOSIGNAL) < 0) snprintf(rep, sizeof(rep), "err send: %s", strerror(errno));
     else {
         ssize_t r = recv(s, rep, sizeof(rep) - 1, 0);
@@ -592,6 +619,7 @@ static int ctl(int pid, const char *cmd)
     close(s);
     printf("pid=%d %s: %s\n", pid, cmd, rep);
     if (!strncmp(rep, "err busy", 8)) return -2;
+    if (!strcmp(rep, "err unknown command")) return -3;
     return strncmp(rep, "ok", 2) ? -1 : 0;
 }
 
@@ -680,6 +708,22 @@ static void send_numa(const int *pids, int n)
     }
 }
 
+/* NVSNAP_GPUSHARE_RESUME_DIAG (see the top). Best effort: an older
+ * libnvsnap_gpushare answers "err unknown command" and resumes as before. */
+static void resume_diag(const int *pids, int n)
+{
+    const char *d = getenv("NVSNAP_GPUSHARE_RESUME_DIAG");
+    if (!d || !*d) return;
+    int is_delay = !strncmp(d, "delay:", 6), delay = is_delay ? atoi(d + 6) : 0;
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "touch %.16s", is_delay ? "none" : d);
+    for (int i = 0; i < n; i++) ctl(pids[i], cmd);
+    if (delay > 0) {
+        printf("resume diag: waiting %d s before the threads run\n", delay);
+        sleep(delay);
+    }
+}
+
 static int remap_all(const int *pids, int n)
 {
     char load[512] = "load", remap[600] = "remap";
@@ -695,7 +739,45 @@ static int remap_all(const int *pids, int n)
     int r = ctl_all_par(pids, n, load);
     if (r >= 0 && fabric_dir) r = fabric_exchange(pids, n, remap, sizeof(remap));
     if (r >= 0) r = ctl_all(pids, n, remap);
-    return r < 0 ? r : ctl_all(pids, n, "resume");
+    if (r >= 0 && hold_gate) r = resume_held(pids, n);
+    else if (r >= 0) r = ctl_all(pids, n, "resume");
+    if (r >= 0) resume_diag(pids, n);
+    return r;
+}
+
+/* --hold-gate: "resume hold" each pid; a library that predates it resumes
+ * and opens its gate at once, as before. */
+static int resume_held(const int *pids, int n)
+{
+    int count = 0;
+    for (int i = 0; i < n; i++) {
+        int r = ctl(pids[i], "resume hold");
+        if (r == -3) r = ctl(pids[i], "resume");
+        if (r < 0) return r;
+        count += r == 0;
+    }
+    return count;
+}
+
+/* open: after resume --hold-gate, let every pid's launches through, all at
+ * once, so that a pid that does not answer holds no other. A library that
+ * predates "open" opened its gate at resume. */
+static int open_all(const int *pids, int n)
+{
+    struct ctl_job *j = calloc(n, sizeof(*j));
+    pthread_t *t = calloc(n, sizeof(*t));
+    int bad = 0;
+    for (int i = 0; i < n; i++) {
+        j[i] = (struct ctl_job){ pids[i], "open", -1 };
+        if (pthread_create(&t[i], NULL, ctl_thread, &j[i]) != 0) ctl_thread(&j[i]), t[i] = 0;
+    }
+    for (int i = 0; i < n; i++) {
+        if (t[i]) pthread_join(t[i], NULL);
+        if (j[i].r < 0 && j[i].r != -3) bad++;
+    }
+    free(j);
+    free(t);
+    return bad ? -1 : 0;
 }
 
 /* Multi-node NVLink: memory shared across nodes is imported by fabric
@@ -846,12 +928,56 @@ static int wait_all_stopped(int pid)
     return -1;
 }
 
+/* A process's CLOCK_MONOTONIC offset (its time namespace's), in ns. */
+static int mono_offset(const char *pid, long long *ns)
+{
+    char path[64], name[32];
+    long long sec, nsec;
+    snprintf(path, sizeof(path), "/proc/%s/timens_offsets", pid);
+    FILE *f = fopen(path, "re");
+    if (!f) return -1;
+    int r = -1;
+    while (r < 0 && fscanf(f, "%31s %lld %lld", name, &sec, &nsec) == 3)
+        if (strcmp(name, "monotonic") == 0) *ns = sec * 1000000000LL + nsec, r = 0;
+    fclose(f);
+    return r;
+}
+
+/* --clock-at: how far pid's CLOCK_MONOTONIC is from clock_at now, in ns
+ * (as CRIU's timens_wait_dumped_clocks: ours, less our offset, plus its). */
+static int clock_behind(int pid, long long *ns)
+{
+    char p[16];
+    long long self, its;
+    struct timespec ts;
+    snprintf(p, sizeof(p), "%d", pid);
+    if (mono_offset("self", &self) < 0 || mono_offset(p, &its) < 0) {
+        fprintf(stderr, "pid=%d --clock-at: timens_offsets: %s\n", pid, strerror(errno));
+        return -1;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    *ns = clock_at - (ts.tv_sec * 1000000000LL + ts.tv_nsec - self + its);
+    return 0;
+}
+
+static void wait_clock(int pid)
+{
+    long long d;
+    if (clock_behind(pid, &d) < 0) return;  /* checked before the freeze */
+    printf("pid=%d clock %.3fs %s the dump\n", pid, (d < 0 ? -d : d) / 1e9, d > 0 ? "behind" : "past");
+    if (d <= 0) return;
+    struct timespec w = { d / 1000000000LL, d % 1000000000LL };
+    while (nanosleep(&w, &w) != 0 && errno == EINTR) {}
+}
+
 /* Resume without a holder: pids are CHECKPOINTED and possibly SIGSTOPped
  * (after stop + CRIU restore). Freeze everything but the restore threads,
  * SIGCONT, restore + unlock, thaw. */
 static int resume_unheld(const int *pids, int n)
 {
     if (load_api() < 0) return -1;
+    long long d;
+    if (clock_at >= 0 && clock_behind(pids[0], &d) < 0) return -1;
     struct frozen *fz = calloc(n, sizeof(*fz));
     int rc = -1;
     for (int i = 0; i < n; i++)
@@ -872,6 +998,7 @@ static int resume_unheld(const int *pids, int n)
     rc = 0;
 out:
     if (rc == 0) {
+        if (clock_at >= 0) wait_clock(pids[0]);  /* every pid is in one time namespace */
         thaw_all(fz, n);
         printf("thawed all pids\n");
     } else {
@@ -1105,8 +1232,11 @@ static int resume(const int *pids, int n, unsigned timeout_s)
 {
     char hp[256];
     state_path(hp, sizeof(hp), pids[0], "holder");
-    if (state_exists(hp))
+    if (state_exists(hp)) {
+        if (hold_gate) printf("--hold-gate: not for an in-place resume; launches go through at once\n");
+        if (clock_at >= 0) printf("--clock-at: not for an in-place resume; ignored\n");
         return signal_holder(pids, SIGUSR1, timeout_s);
+    }
     return resume_unheld(pids, n);
 }
 
@@ -1365,6 +1495,7 @@ static void usage(const char *prog)
         "         suspend      (full-save + freeze CPU threads until resume)\n"
         "         stop         (after suspend: leave pids SIGSTOPped for CRIU dump)\n"
         "         resume       (restore + unlock all, then thaw)\n"
+        "         open         (after resume --hold-gate: let the pids' GPU launches through)\n"
         "         gpus [FILE]  (print or write the visible GPU UUIDs, for --gpu-map)\n"
         "--timeout-ms N: lock timeout per pid (default 10000, 0 = wait forever)\n"
         "--gpu-map FILE: restore GPUs listed in FILE onto the GPUs visible here\n"
@@ -1373,6 +1504,9 @@ static void usage(const char *prog)
         "--cache DIR: (suspend, resume) node-local cache of the chunk store\n"
         "--fabric-map DIR: (suspend, resume) multi-node NVLink: after load, write the new\n"
         "         fabric handles to DIR/out and wait for DIR/in, all nodes' out merged\n"
+        "--hold-gate: (resume after CRIU restore) thaw with GPU launches held until open\n"
+        "--clock-at NS: (resume after CRIU restore) thaw once the pids' CLOCK_MONOTONIC\n"
+        "         reaches NS, the value CRIU dumped\n"
         "Cache:   cache-prefetch STORE CKPT-DIR CACHE | cache-gc CACHE MAX-GiB\n"
         "Multi-GPU: pass all ranks in one call, e.g.:\n"
         "  %s full-save 503 504 505 508\n", prog, prog);
@@ -1386,8 +1520,15 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0); /* keep stdout/stderr ordered in logs */
 
     while (argi + 1 < argc && strncmp(argv[argi], "--", 2) == 0) {
+        if (strcmp(argv[argi], "--hold-gate") == 0) {
+            hold_gate = 1;
+            argi++;
+            continue;
+        }
         if (strcmp(argv[argi], "--timeout-ms") == 0)
             timeout_ms = (unsigned)strtoul(argv[argi + 1], NULL, 10);
+        else if (strcmp(argv[argi], "--clock-at") == 0)
+            clock_at = strtoll(argv[argi + 1], NULL, 10);
         else if (strcmp(argv[argi], "--gpu-map") == 0)
             gpu_map_file = argv[argi + 1];
         else if (strcmp(argv[argi], "--store") == 0)
@@ -1446,6 +1587,11 @@ int main(int argc, char **argv)
     }
     if (strcmp(action, "resume") == 0) {
         failures = resume(pids, n, 600) < 0;
+        free(pids);
+        return failures;
+    }
+    if (strcmp(action, "open") == 0) {
+        failures = open_all(pids, n) < 0;
         free(pids);
         return failures;
     }

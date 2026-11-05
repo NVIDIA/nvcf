@@ -1,0 +1,50 @@
+{{- if .Values.agent.rails.enabled }}
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Rails tier of the restore fetch (internal/agent/rails_fetch.go): the
+# claim template and the secret of the bedrock-peer serve and fetch pods
+# the agent creates in this namespace.
+#
+# Every RDMA NIC of the pod's node, for the length of one copy.
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: nvsnap-rails
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.labels" . | nindent 4 }}
+spec:
+  spec:
+    devices:
+      requests:
+        - name: rails
+          exactly:
+            deviceClassName: {{ .Values.agent.rails.deviceClass | quote }}
+            allocationMode: All
+---
+# The secret both ends present (BEDROCK_PEER_SECRET): a serve pod refuses a
+# fetch without it. Generated once and kept across upgrades, as the agent
+# token is (templates/agent-token-secret.yaml): a rotation mid-copy would
+# fail that copy.
+{{- $ns := .Release.Namespace }}
+{{- $existing := lookup "v1" "Secret" $ns "nvsnap-rails" }}
+{{- $secret := "" }}
+{{- if .Values.agent.rails.secret }}
+{{-   $secret = .Values.agent.rails.secret | b64enc }}
+{{- else if and $existing $existing.data $existing.data.secret }}
+{{-   $secret = $existing.data.secret }}
+{{- else }}
+{{-   $secret = randAlphaNum 48 | b64enc }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nvsnap-rails
+  namespace: {{ $ns }}
+  labels:
+    {{- include "nvsnap.labels" . | nindent 4 }}
+type: Opaque
+data:
+  secret: {{ $secret }}
+{{- end }}

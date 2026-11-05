@@ -50,6 +50,7 @@ where the files column says.
 | `nvsnap.io/cache-volume` | `CacheVolumeAnnotation` (internal/webhook/cache_volume.go)<br>`cacheVolumeAnnotation` (internal/agent/modelvolume_controller.go) | Names the emptyDir volume holding the cache. |
 | `nvsnap.io/capture` | `CaptureLabel` (internal/webhook/mutate.go)<br>`DefaultCaptureLabel` (internal/rootfsonly/watcher.go)<br>`rootfsCaptureLabel` (internal/server/server.go) | Is the pod-label key the agent watches for capture candidates. |
 | `nvsnap.io/capture-hash` | `CMAnnotationHash` (internal/checkpointstore/cmregistry.go) | Is the full sha256 hex; annotations have a per-object 256KiB total cap so 64 chars is fine. |
+| `nvsnap.io/checkpoint` | `railsAnnoCheckpoint` (internal/agent/rails_fetch.go) |  |
 | `nvsnap.io/checkpoint-on-warm` | `CheckpointOnWarmAnnotation` (internal/podtimings/podtimings.go) | Is the annotation key NVCA's Hook A stamps for Cold pods so Hook B's reconciler knows to capture them after readiness. |
 | `nvsnap.io/ckpt-size` | `annCkptSize` (internal/server/manifests.go) |  |
 | `nvsnap.io/cold-start` | `ColdStartAnnotation` (internal/election/election.go) | Is stamped on a follower whose leader failed; the pod is recreated by its controller and re-admitted. |
@@ -97,8 +98,13 @@ where the files column says.
 | `nvsnap.io/path` | `annPath` (internal/server/manifests.go) |  |
 | `nvsnap.io/per-capture` | inline: internal/checkpointstore/percapture_pvc.go, internal/checkpointstore/promoter_shared.go, internal/checkpointstore/promoter_snapshot.go |  |
 | `nvsnap.io/port` | `annPort` (internal/server/manifests.go) |  |
+| `nvsnap.io/rails-for` | `railsLabelFor` (internal/agent/rails_fetch.go) |  |
+| `nvsnap.io/rails-serves` | `railsLabelServes` (internal/agent/rails_serve.go) | Names, on a serve pod, the node it serves. |
+| `nvsnap.io/rails-sources` | `railsAnnoSources` (internal/agent/rails_serve.go) | Lists, on a fetch pod, the nodes it reads from (railsLabelValue of each, comma-separated). |
+| `nvsnap.io/rails-wanted-until` | `railsAnnoWantedUntil` (internal/agent/rails_serve.go) | Keeps a serve pod until a fetcher that is waiting for it has created its fetch pod. |
 | `nvsnap.io/restore-failure-threshold` | inline: internal/manifests/restore.go |  |
 | `nvsnap.io/restore-from` | `RestoreFromAnnotation` (internal/podtimings/podtimings.go)<br>`RestoreFromAnnotation` (internal/webhook/mutate.go) | Is the annotation key NVCA's Hook A stamps to tell NvSnap's restore webhook which checkpoint to inject. |
+| `nvsnap.io/restored` | inline: internal/webhook/criu_restore.go |  |
 | `nvsnap.io/role` | `RoleAnnotation` (internal/election/election.go)<br>`ViewRoleLabel` (internal/modelvolume/modelvolume.go) | Records the admission decision: leader, follower or restore. |
 | `nvsnap.io/short-hash` | `CMLabelShortHash` (internal/checkpointstore/cmregistry.go) | Is the 32-char short hash (128 bits), suitable for label selectors. |
 | `nvsnap.io/source-engine` | `LabelSourceEngine` (internal/checkpointstore/cmregistry.go) | Is the engine type ("vllm", "sglang", "trtllm", "nim"). |
@@ -141,6 +147,7 @@ binary.
 | `NVSNAP_DEFAULT_CAPTURE_PATH` | yes | internal/agent/checkpoint.go, internal/agent/nim_backend.go |
 | `NVSNAP_DISABLE_CUDA` |  | internal/agent/checkpoint.go |
 | `NVSNAP_FSSTORE_PATH` |  | cmd/agent/main.go |
+| `NVSNAP_GPUSHARE_RESUME_DIAG` |  | internal/agent/gpushare.go |
 | `NVSNAP_L2_FETCH_WORKERS` |  | internal/agent/l2_copy.go |
 | `NVSNAP_L2_NAMESPACE` | yes | cmd/agent/main.go |
 | `NVSNAP_L2_SNAPSHOT_CLASS` | yes | cmd/agent/main.go |
@@ -162,6 +169,8 @@ binary.
 | `NVSNAP_PREP_POLL` |  | cmd/nvsnap-mount-prep/main.go |
 | `NVSNAP_PREWARM` |  | cmd/agent/main.go, cmd/nvsnap-helper/main.go, cmd/nvsnap-rootfs-restore/prewarm.go |
 | `NVSNAP_PREWARM_DIR` |  | cmd/nvsnap-rootfs-restore/main.go |
+| `NVSNAP_RAILS_IMAGE` |  | cmd/agent/main.go |
+| `NVSNAP_RAILS_NAMESPACE` |  | cmd/agent/main.go |
 | `NVSNAP_REPLAY_EMPTYDIR_MAX_BYTES` |  | internal/agent/replay_mounts.go |
 | `NVSNAP_REPLAY_MOUNTS` |  | internal/agent/replay_mounts.go |
 | `NVSNAP_REPLICATION_HOME_BUCKET` | yes | cmd/agent/main.go |

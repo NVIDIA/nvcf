@@ -464,6 +464,10 @@ type Mutator struct {
 	// configuration key (criu_group.go). Nil: multi-pod instances are not
 	// restored with CRIU.
 	CRIUGroups func(ctx context.Context, namespace, cacheURI string) (CRIUGroup, bool)
+	// CRIUFallback returns why a configuration CRIU cannot serve falls
+	// back to the caches, and the cachedir capture of the pod's rank
+	// (criu_fallback.go). Nil: none does.
+	CRIUFallback func(ctx context.Context, namespace, cacheURI string, ordinal int) (CRIUFallback, bool)
 	// CRIUScope returns the tenant scope of a namespace, the value a CRIU
 	// capture records under checkpointstore.CRIUScopeMetaKey. Nil: the
 	// scope is the namespace itself.
@@ -614,9 +618,19 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	var injectPatches []PatchOp
 	// The identity of the spec as received, before any patch below.
 	injectPatches = append(injectPatches, m.admittedConfigPatches(pod)...)
+	// A configuration CRIU cannot serve falls back to the caches; one that
+	// does not start under the gpushare library goes without it.
+	fallback, isFallback := m.criuFallback(ctx, pod)
+	if isFallback {
+		ctx = withCRIUFallback(ctx, fallback)
+		m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "reason": fallback.Reason, "capture": fallback.Capture}).
+			Info("CRIU fallback: the configuration falls back to the cachedir")
+	}
 	// gpushare placement is independent of every other decision below and
 	// rides along with whichever patches they return.
-	injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
+	if !isFallback || fallback.Reason != FallbackGPUShareFailed {
+		injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
+	}
 	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
 	injectPatches = append(injectPatches, m.dynamoNamespacePatches(ctx, pod)...)
 	injectPatches = append(injectPatches, m.livenessBudgetPatches(ctx, pod)...)
@@ -652,7 +666,11 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		// engine funnels its caches there and the agent captures that dir.
 		// No-op when cachedir mode is off. (Restore pods get the rox mount
 		// + env from the cachedir restore path below, not this.)
-		injectPatches = append(injectPatches, m.cacheDirCapturePatches(pod)...)
+		if isFallback {
+			injectPatches = append(injectPatches, m.fallbackCacheDirPatches(pod, fallback)...)
+		} else {
+			injectPatches = append(injectPatches, m.cacheDirCapturePatches(pod)...)
+		}
 		// Return whatever model-volume + cachedir-capture produced (may be
 		// nil, which is fine — pod admitted unchanged).
 		if len(injectPatches) > 0 {

@@ -251,6 +251,8 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		if criuIsDefault() {
 			// Helm instances restore from their group captures.
 			mut.CRIUGroups = a.lookupCRIUGroupFor
+			// A configuration CRIU cannot serve falls back to the caches.
+			mut.CRIUFallback = a.criuFallbackFor
 			mut.CRIUGroupAdmits = a.criuGroupAdmits
 			mut.CRIUCompanionAdmits = a.criuCompanionAdmits
 			mut.CRIUCompanionSlot = a.claimCompanionSlot
