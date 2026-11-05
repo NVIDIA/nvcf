@@ -346,7 +346,7 @@ cassandra:
   resourcesPreset: "xlarge"
   migrations:
     image:
-      tag: 0.17.7
+      tag: 0.17.8
   # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
   # The default image name is `cassandra` under global.image.repository.
   # Override here when pulling from a registry that uses a different path or tag.
@@ -376,21 +376,25 @@ certManager:
   # installed outside this stack; that external installation must still
   # provide ServiceAccount/cert-manager in the cert-manager namespace.
   enabled: true
-  # The ACME solver defaults to quay.io/jetstack/cert-manager-acmesolver.
-  # Set acmesolver.image.repository when the deployment uses a private mirror.
+  # All five images default to quay.io/jetstack at the chart-owned version.
+  # Set each component image.repository when using a private mirror.
   # acmesolver:
   #   image:
   #     repository: nvcr.io/YOUR_ORG/YOUR_TEAM/cert-manager-acmesolver
-  #     tag: "v1.20.2"
+  #     tag: "" # Inherit the selected chart version.
 
 openbao:
   enabled: true
+  # Existing installations must complete the chart's staged JWT plugin upgrade.
+  # Select bridge for the member rollout before switching to versioned mode.
+  # jwtPluginLifecycle:
+  #   mode: bridge
   migrations:
     # Empty uses the image's client. Select "1.36" for Kubernetes 1.35.
     # LLS, LLM PKI and UI hooks inherit this unless individually overridden.
     kubectlMinor: ""
     image:
-      tag: "0.19.10"
+      tag: "0.19.11"
     issuerDiscovery:
       enabled: false
   injector:
@@ -432,9 +436,8 @@ addons:
   # When enabled, configures OpenBao secrets for TURN service and deploys HMAC rotation CronJob
   lls:
     enabled: false
-    hmacRotation:
-      image:
-        tag: "0.19.10"
+    # HMAC rotation inherits openbao.migrations.image.tag unless overridden.
+    hmacRotation: {}
 
   # LLM addon: gateway + request router (stargate) for LLM function invocation
   llm:
@@ -611,9 +614,8 @@ addons:
   # Disabled by default
   nvcfUi:
     enabled: false
-    openbaoMigrations:
-      image:
-        tag: "0.19.10"
+    # UI migrations inherit openbao.migrations.image.tag unless overridden.
+    openbaoMigrations: {}
 
 stateMetrics:
   enabled: true

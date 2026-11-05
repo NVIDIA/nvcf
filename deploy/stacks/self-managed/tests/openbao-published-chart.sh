@@ -138,4 +138,21 @@ migrations_image="$(yq -r '
 test "$migrations_image" = "$expected_migrations_image" ||
   fail "published OpenBao chart rendered migrations image $migrations_image, expected $expected_migrations_image"
 
+# Existing releases must be able to stage the bridge rollout without running
+# versioned migrations before every member has been rotated.
+yq '.openbao.jwtPluginLifecycle.mode = "bridge"' "$openbao_values" > "$work_dir/bridge-values.yaml"
+helm template openbao-server "$published_chart" --is-upgrade \
+  --namespace vault-system --values "$work_dir/bridge-values.yaml" > "$work_dir/bridge-manifest.yaml"
+test "$(yq ea -r '[select(.kind == "Job") | .spec.template.spec.containers[] | select(.name == "bao-migrations")] | length' "$work_dir/bridge-manifest.yaml")" = 0 ||
+  fail "bridge upgrade must defer the migration Job"
+yq ea -r 'select(.kind == "Job") | .spec.template.spec.containers[] | select(.name == "preflight") | .args[]' "$work_dir/bridge-manifest.yaml" |
+  grep -q 'jwt-plugin-lifecycle bridge-preflight' ||
+  fail "bridge upgrade must run the lifecycle preflight"
+if helm template openbao-server "$published_chart" --namespace vault-system \
+  --values "$work_dir/bridge-values.yaml" > "$work_dir/bridge-install.log" 2>&1; then
+  fail "bridge mode must reject a fresh installation"
+fi
+grep -q 'JWT bridge mode is for existing releases' "$work_dir/bridge-install.log" ||
+  fail "bridge installation failed for an unexpected reason"
+
 echo "openbao-published-chart: all checks passed"

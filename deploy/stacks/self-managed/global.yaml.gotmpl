@@ -84,66 +84,38 @@ cassandra:
 # cert-manager subchart image overrides. The helm-nvcf-cert-manager wrapper
 # passes these through to the upstream cert-manager subchart under the
 # `cert-manager` key. Explicit component repositories bypass global.image;
-# unset values retain the existing mirror and upstream solver defaults.
+# unset values retain upstream repositories and the selected chart versions.
+{{- $certManagerValues := dict }}
+{{- with .Values.global.imagePullSecrets }}
+{{- $_ := set $certManagerValues "global" (dict "imagePullSecrets" .) }}
+{{- end }}
+{{- range $component := list "controller" "webhook" "cainjector" "acmesolver" "startupapicheck" }}
+{{- $input := dig "certManager" $component "image" dict $.Values }}
+{{- if eq $component "controller" }}
+{{- $input = dig "certManager" "image" dict $.Values }}
+{{- end }}
+{{- $image := dict }}
+{{- range $key := list "repository" "tag" "digest" "pullPolicy" }}
+{{- with index $input $key }}
+{{- $_ := set $image $key . }}
+{{- end }}
+{{- end }}
+{{- if $image }}
+{{- if eq $component "controller" }}
+{{- $_ := set $certManagerValues "image" $image }}
+{{- else }}
+{{- $_ := set $certManagerValues $component (dict "image" $image) }}
+{{- end }}
+{{- end }}
+{{- end }}
 cert-manager:
-  {{- if .Values.global.imagePullSecrets }}
-  global:
-    imagePullSecrets:
-      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
-  {{- end }}
-  image:
-    repository: {{ dig "certManager" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-controller" .Values.global.image.registry .Values.global.image.repository) | quote }}
-    {{- range $key := list "tag" "digest" "pullPolicy" }}
-    {{- with dig "certManager" "image" $key "" $.Values }}
-    {{ $key }}: {{ . | quote }}
-    {{- end }}
-    {{- end }}
-  webhook:
-    image:
-      repository: {{ dig "certManager" "webhook" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-webhook" .Values.global.image.registry .Values.global.image.repository) | quote }}
-      {{- range $key := list "tag" "digest" "pullPolicy" }}
-      {{- with dig "certManager" "webhook" "image" $key "" $.Values }}
-      {{ $key }}: {{ . | quote }}
-      {{- end }}
-      {{- end }}
-  cainjector:
-    image:
-      repository: {{ dig "certManager" "cainjector" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-cainjector" .Values.global.image.registry .Values.global.image.repository) | quote }}
-      {{- range $key := list "tag" "digest" "pullPolicy" }}
-      {{- with dig "certManager" "cainjector" "image" $key "" $.Values }}
-      {{ $key }}: {{ . | quote }}
-      {{- end }}
-      {{- end }}
-  {{- $acmeSolverRepository := dig "certManager" "acmesolver" "image" "repository" "" .Values }}
-  {{- $acmeSolverTag := dig "certManager" "acmesolver" "image" "tag" "" .Values }}
-  {{- $acmeSolverDigest := dig "certManager" "acmesolver" "image" "digest" "" .Values }}
-  {{- $acmeSolverPullPolicy := dig "certManager" "acmesolver" "image" "pullPolicy" "" .Values }}
-  {{- if or $acmeSolverRepository $acmeSolverTag $acmeSolverDigest $acmeSolverPullPolicy }}
-  acmesolver:
-    image:
-      {{- with $acmeSolverRepository }}
-      repository: {{ . }}
-      {{- end }}
-      {{- with $acmeSolverTag }}
-      tag: {{ . | quote }}
-      {{- end }}
-      {{- with $acmeSolverDigest }}
-      digest: {{ . | quote }}
-      {{- end }}
-      {{- with $acmeSolverPullPolicy }}
-      pullPolicy: {{ . }}
-      {{- end }}
-  {{- end }}
-  startupapicheck:
-    image:
-      repository: {{ dig "certManager" "startupapicheck" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-startupapicheck" .Values.global.image.registry .Values.global.image.repository) | quote }}
-      {{- range $key := list "tag" "digest" "pullPolicy" }}
-      {{- with dig "certManager" "startupapicheck" "image" $key "" $.Values }}
-      {{ $key }}: {{ . | quote }}
-      {{- end }}
-      {{- end }}
+  {{- toYaml $certManagerValues | nindent 2 }}
 
 openbao:
+  {{- with dig "openbao" "jwtPluginLifecycle" dict .Values }}
+  jwtPluginLifecycle:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   global:
     imagePullSecrets:
@@ -970,9 +942,7 @@ sis:
       image:
         registry: {{ .Values.global.image.registry }}
         repository: {{ .Values.global.image.repository }}/nvcf-openbao-migrations
-        {{- if dig "addons" "lls" "hmacRotation" "image" "tag" "" .Values }}
-        tag: {{ dig "addons" "lls" "hmacRotation" "image" "tag" "" .Values }}
-        {{- end }}
+        tag: {{ dig "addons" "lls" "hmacRotation" "image" "tag" "" .Values | default .Values.openbao.migrations.image.tag | quote }}
 
   env:
     # Observability
@@ -1431,9 +1401,8 @@ llmRequestRouter:
   {{- if $managedIssuer }}
   {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
   {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
-       PKI tag, then the OpenBao migrations tag, and finally the compatible
-       stack default so a normal environment need not duplicate chart values. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.10" }}
+       PKI tag, then the shared OpenBao migrations tag. */ -}}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" "" .Values | default .Values.openbao.migrations.image.tag }}
   pki:
     enabled: true
     kubectlMinor: {{ dig "addons" "llm" "pki" "kubectlMinor" "" .Values | toString | default (dig "openbao" "migrations" "kubectlMinor" "" .Values) | quote }}
@@ -1555,7 +1524,7 @@ vanityGateway:
 {{/* openbao-migrations image tag: 0.19.5 is the floor. An operator may pin a
      newer tag via addons.nvcfUi.openbaoMigrations.image.tag, but anything older
      than the floor falls back to the stack default. */}}
-{{- $nvcfUiOpenbaoMigrationsTag := "0.19.10" }}
+{{- $nvcfUiOpenbaoMigrationsTag := .Values.openbao.migrations.image.tag }}
 {{- $nvcfUiMigrationsTagOverride := dig "addons" "nvcfUi" "openbaoMigrations" "image" "tag" "" .Values }}
 {{- if and $nvcfUiMigrationsTagOverride (not (regexMatch "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" $nvcfUiMigrationsTagOverride)) }}
 {{- fail "addons.nvcfUi.openbaoMigrations.image.tag must be a valid OCI image tag" }}
