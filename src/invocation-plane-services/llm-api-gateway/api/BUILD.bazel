@@ -93,6 +93,7 @@ go_test(
     srcs = [
         "auth_middleware_test.go",
         "body_limit_test.go",
+        "chat_stream_failure_test.go",
         "decision_backend_error_test.go",
         "decision_body_test.go",
         "decision_error_test.go",
@@ -106,6 +107,7 @@ go_test(
         "last_cluster_keys_test.go",
         "last_cluster_test.go",
         "messages_handler_test.go",
+        "messages_stream_failure_test.go",
         "middleware_telemetry_test.go",
         "middleware_test.go",
         "model_ids_test.go",

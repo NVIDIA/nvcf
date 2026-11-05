@@ -147,10 +147,10 @@ curl -sS -X POST "http://${GATEWAY_ADDR}/v1/chat/completions" \
   }'
 ```
 
-When `stream` is `true`, the gateway relays server-sent events. When `stream` is false or omitted, the gateway returns the final JSON response from the upstream service.
+When `stream` is `true`, the gateway relays server-sent events. When `stream` is false or omitted, the gateway returns one JSON chat completion.
 
-For a non-streaming request, the upstream container must return an
-OpenAI-compatible chat completion. For example:
+For a non-streaming request, the gateway returns an OpenAI-compatible chat
+completion. For example:
 
 ```json
 {
@@ -176,9 +176,19 @@ OpenAI-compatible chat completion. For example:
 }
 ```
 
-For streaming requests, the upstream container returns OpenAI-compatible SSE
-chunks and terminates with `data: [DONE]`. The gateway relays the upstream
-response; it does not synthesize model output or token usage.
+The gateway always sends `stream: true` to the upstream container, also when
+the client asks for a non-streaming response. The container must return
+OpenAI-compatible SSE chunks and end every stream with `data: [DONE]`. The
+gateway relays the upstream response; it does not synthesize model output or
+token usage.
+
+The upstream stream fails when it ends before `data: [DONE]`, the connection
+fails, the gateway request timeout expires, or the upstream sends an error
+event such as `data: {"error":{...}}`. A non-streaming client receives HTTP 502.
+A streaming client already has HTTP 200, so the stream ends with this event
+instead of `data: [DONE]`, with the upstream message when there is one:
+`data: {"error":{"message":"upstream stream ended before completion","type":"server_error","param":null,"code":null}}`.
+The gateway records these failures as 502.
 
 ### Routing checks versus token-generation tests
 
@@ -210,7 +220,7 @@ The gateway requires the routed model to declare `/v1/responses` in `llmConfig.u
 
 For upstream compatibility, the gateway sends native Responses requests to the router as streaming requests. If the client requested streaming, the gateway relays SSE. If the client requested a non-streaming response, the gateway consumes the upstream SSE stream and returns the terminal Responses JSON object.
 
-If the upstream stream closes without a `response.completed`, `response.failed`, or `response.incomplete` event, a non-streaming client receives HTTP 502. A streaming client has already received HTTP 200, so the gateway ends the stream with a `response.failed` event whose `error.code` is `server_error`. This also applies when the upstream connection fails during a streaming response. The gateway records these cases as 502 in its logs and metrics.
+The gateway treats the upstream stream as failed when it closes without a `response.completed`, `response.failed`, or `response.incomplete` event, when the upstream connection fails, or when the upstream sends an `error` event before a terminal event. A non-streaming client receives HTTP 502. A streaming client has already received HTTP 200, so the gateway ends the stream with a `response.failed` event whose `error.code` is `server_error`. The gateway does not relay an upstream `error` event; its message becomes the `response.failed` message. The gateway records these cases as 502 in its logs and metrics.
 
 ### Embeddings
 
@@ -449,6 +459,18 @@ requires a positive `max_tokens` and a non-empty `messages` array. The backend
 validates content blocks, tools, thinking settings, and beta feature support.
 Upstream status codes and SSE event bytes pass through. Backend error bodies
 use the Anthropic error envelope, as described below.
+
+A streaming response must end with `message_stop`. The upstream stream fails
+when it ends without `message_stop`, the connection fails, or the gateway
+request timeout expires. A streaming client already has HTTP 200, so the
+gateway ends the stream with this event:
+`event: error` and
+`data: {"type":"error","error":{"type":"api_error","message":"upstream stream ended before completion"},"request_id":"<id>"}`.
+If the stream stops inside an event, the gateway first closes that event with
+a `ping` event, which clients skip. A whole upstream `error` event passes
+through unchanged. If it is cut, the gateway adds its own error event after the
+`ping`. A non-streaming or compressed response gets no added bytes. The
+gateway records these failures as 502.
 
 The gateway preserves `anthropic-version`, all `anthropic-beta` values,
 `Content-Type`, `Accept`, `User-Agent`, and W3C trace headers. NVCF sets
