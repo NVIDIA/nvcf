@@ -45,6 +45,53 @@ func TestImageCatalogResolveDefaultsAndOwnership(t *testing.T) {
 	}
 }
 
+// TestImageCatalogResolvesNativeImagePrecedence distinguishes NATS digest/full
+// references from cert-manager's support for a tag and digest together.
+func TestImageCatalogResolvesNativeImagePrecedence(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	for _, test := range []struct {
+		name   string
+		values string
+		want   string
+	}{
+		{
+			name:   "nats full reference",
+			values: "thirdPartyImages: {server: nats.container.image}\nnats:\n  container:\n    image: {registry: stale.example, repository: ignored, tag: stale, digest: " + digest + ", fullImageName: selected.example/nats:custom}\n",
+			want:   "selected.example/nats:custom",
+		},
+		{
+			name:   "nats digest precedes tag",
+			values: "thirdPartyImages: {server: nats.container.image}\nnats:\n  container:\n    image: {registry: selected.example, repository: nats, tag: stale, digest: " + digest + "}\n",
+			want:   "selected.example/nats@" + digest,
+		},
+		{
+			name:   "cert-manager tag and digest",
+			values: "thirdPartyImages: {server: cert-manager.image}\ncert-manager:\n  imageRegistry: selected.example\n  imageNamespace: team\n  image: {name: controller, tag: fixture, digest: " + digest + "}\n",
+			want:   "selected.example/team/controller:fixture@" + digest,
+		},
+		{
+			name:   "invalid nats full reference",
+			values: "thirdPartyImages: {server: nats.container.image}\nnats:\n  container:\n    image: {registry: source.example, repository: nats, tag: fixture, fullImageName: missing-tag}\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			images, err := resolveChartImageCatalog(imageCatalogFixture(t, test.values))
+			if test.want == "" {
+				if err == nil {
+					t.Fatal("expected invalid full reference to fail")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(images) != 1 || images[0].Reference != test.want {
+				t.Fatalf("image precedence: got %+v, want %s", images, test.want)
+			}
+		})
+	}
+}
+
 // TestImageCatalogRejectsInvalidDeclarations requires complete, uniquely indexed images.
 func TestImageCatalogRejectsInvalidDeclarations(t *testing.T) {
 	for _, input := range []string{
@@ -238,6 +285,13 @@ func TestImageCatalogCharts(t *testing.T) {
 					}
 					rendered, err := renderImageChart(chart, []string{path})
 					if err != nil {
+						t.Fatal(err)
+					}
+					catalog, err := resolveChartImageCatalog(rendered)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := checkChartImageCoverage(catalog, rendered.Manifest); err != nil {
 						t.Fatal(err)
 					}
 					want := "explicit.example/customer/box@" + fmt.Sprint(fields["digest"])

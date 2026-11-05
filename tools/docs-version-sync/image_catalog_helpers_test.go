@@ -171,18 +171,29 @@ func imageCatalogString(node map[string]any, key string) string {
 	return value
 }
 
-// resolveCatalogImage accounts for split image fields and cert-manager's
-// repository, namespace and appVersion defaults.
+// resolveCatalogImage follows NATS full-reference/digest precedence and
+// cert-manager's repository, namespace and appVersion defaults.
 func resolveCatalogImage(snapshot imageChartSnapshot, path string, node map[string]any) (catalogImage, error) {
 	registry := imageCatalogString(node, "registry")
 	repository := imageCatalogString(node, "repository")
 	tag := imageCatalogString(node, "tag")
 	digest := imageCatalogString(node, "digest")
+	root := strings.Split(path, ".")[0]
+	if root == "nats" {
+		if full := imageCatalogString(node, "fullImageName"); full != "" {
+			if _, err := parseResolvedImageReference(full); err != nil {
+				return catalogImage{}, err
+			}
+			return catalogImage{Reference: full, split: true}, nil
+		}
+		if digest != "" {
+			tag = ""
+		}
+	}
 	_, split := node["registry"]
 	fullRepository := false
 	// cert-manager composes missing repository/tag fields from subchart values
 	// and appVersion. Keep those defaults owned by the vendored dependency.
-	root := strings.Split(path, ".")[0]
 	parent, _ := snapshot.Values[root].(map[string]any)
 	if _, hasImageRegistry := parent["imageRegistry"]; hasImageRegistry {
 		fullRepository = true
