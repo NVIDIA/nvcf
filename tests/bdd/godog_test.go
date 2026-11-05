@@ -2407,12 +2407,21 @@ spec:
   dnsNames:
     - llm-request-router.nvcf.svc.cluster.local
 worker-address: llm-request-router-backend-router.nvcf.svc.cluster.local:50071
-env:
-  - name: ADDONS_LLM_ENABLED
-    value: "true"
-  - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
-    value: "nvcf.svc.cluster.local"
 image: nvcr.io/test-org/test-team/nvcf-openbao-migrations:fixture-tag
+---
+kind: Job
+metadata:
+  name: openbao-server-migrations
+spec:
+  template:
+    spec:
+      containers:
+        - name: bao-migrations
+          env:
+            - name: ADDONS_LLM_ENABLED
+              value: "true"
+            - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
+              value: nvcf.svc.cluster.local
 `
 	filePath := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "out", "01-pki", "templates", "pki.yaml")
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
