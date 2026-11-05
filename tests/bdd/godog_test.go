@@ -1449,6 +1449,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if status != 0 {
 		t.Fatalf("godog suite status = %d\n%s", status, out.String())
 	}
+	assertFunctionDeploymentsWaitForICMSCapacity(t, suite.Runner.(*fakeRunner).runs)
 	environmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd.yaml")
 	for _, assertion := range []struct {
 		key  string

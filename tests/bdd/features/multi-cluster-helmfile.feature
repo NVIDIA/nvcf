@@ -357,6 +357,12 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | --health-port    | 8000    |
         | --health-timeout | PT30S   |
 
+      # Undeploy returns before ICMS receives released capacity in a heartbeat.
+      And I successfully run command:
+        """
+        python3 tests/bdd/scripts/wait-icms-capacity.py --url http://sis.localhost:8080/v1/accounts/nvcf-default/clusters --state-file "${HOME}/.nvcf-cli.nvcf-cli-local.state" --cluster ncp-local-compute-1 --gpu H100 --region us-west-1 --instance-type NCP.GPU.H100_1x --minimum-available 1 --timeout 600 --interval 5
+        """
+
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
         | --gpu           | H100                |
@@ -395,6 +401,12 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | --health-port        | 8000       |
         | --health-timeout     | PT30S      |
 
+      # Undeploy returns before ICMS receives released capacity in a heartbeat.
+      And I successfully run command:
+        """
+        python3 tests/bdd/scripts/wait-icms-capacity.py --url http://sis.localhost:8080/v1/accounts/nvcf-default/clusters --state-file "${HOME}/.nvcf-cli.nvcf-cli-local.state" --cluster ncp-local-compute-1 --gpu H100 --region us-west-1 --instance-type NCP.GPU.H100_1x --minimum-available 1 --timeout 600 --interval 5
+        """
+
       When I run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function deploy create --backend ncp-local-compute-1 --gpu H100 --instance-type NCP.GPU.H100_1x --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900
@@ -420,6 +432,12 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | --health-uri         | /health    |
         | --health-port        | 8000       |
         | --health-timeout     | PT30S      |
+
+      # Undeploy returns before ICMS receives released capacity in a heartbeat.
+      And I successfully run command:
+        """
+        python3 tests/bdd/scripts/wait-icms-capacity.py --url http://sis.localhost:8080/v1/accounts/nvcf-default/clusters --state-file "${HOME}/.nvcf-cli.nvcf-cli-local.state" --cluster ncp-local-compute-1 --gpu H100 --region us-west-1 --instance-type NCP.GPU.H100_1x --minimum-available 1 --timeout 600 --interval 5
+        """
 
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
@@ -456,6 +474,12 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | --health-uri      | /       |
         | --health-port     | 8001    |
         | --health-timeout  | PT30S   |
+
+      # Undeploy returns before ICMS receives released capacity in a heartbeat.
+      And I successfully run command:
+        """
+        python3 tests/bdd/scripts/wait-icms-capacity.py --url http://sis.localhost:8080/v1/accounts/nvcf-default/clusters --state-file "${HOME}/.nvcf-cli.nvcf-cli-local.state" --cluster ncp-local-compute-1 --gpu H100 --region us-west-1 --instance-type NCP.GPU.H100_1x --minimum-available 1 --timeout 600 --interval 5
+        """
 
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
@@ -502,6 +526,12 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | --llm-model      | name=openai-compatible-sample,uris=/v1/chat/completions\|/v1/responses\|/v1/embeddings,routingMethod=round_robin |
 
       And the function selected by NVCF CLI is undeployed at scenario teardown
+
+      # Undeploy returns before ICMS receives released capacity in a heartbeat.
+      And I successfully run command:
+        """
+        python3 tests/bdd/scripts/wait-icms-capacity.py --url http://sis.localhost:8080/v1/accounts/nvcf-default/clusters --state-file "${HOME}/.nvcf-cli.nvcf-cli-local.state" --cluster ncp-local-compute-1 --gpu H100 --region us-west-1 --instance-type NCP.GPU.H100_1x --minimum-available 1 --timeout 600 --interval 5
+        """
 
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
