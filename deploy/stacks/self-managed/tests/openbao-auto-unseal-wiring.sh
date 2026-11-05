@@ -84,7 +84,18 @@ assert_yaml_value "$values" '.openbao.server.ha.raft.config' "$(yq -r '.openbao.
 assert_yaml_value "$values" '.openbao.server.serviceAccount.annotations."eks.amazonaws.com/role-arn"' \
   arn:aws:iam::111122223333:role/openbao-unseal "set: serviceAccount annotations"
 for key in extraContainers volumes volumeMounts; do
-  assert_yaml_value "$values" ".openbao.server.$key" "[]" "set: autoUnseal.enabled must empty $key"
+  assert_yaml_value "$values" ".openbao.server.$key | tag + \" \" + (length | tostring)" "!!seq 0" \
+    "set: autoUnseal.enabled must empty $key"
+done
+
+# 3. Explicitly off: autoUnseal is forwarded, but the Shamir sidecar and its
+#    unseal volume stay, since the chart still takes the Shamir path.
+printf 'openbao:\n  server:\n    autoUnseal:\n      enabled: false\n' >"$environment_file"
+values="$work_dir/off.yaml"
+render_values "$values"
+assert_yaml_value "$values" '.openbao.server.autoUnseal.enabled' false "off: autoUnseal.enabled"
+for key in extraContainers volumes volumeMounts; do
+  assert_yaml_value "$values" ".openbao.server.$key" null "off: $key must keep the chart default"
 done
 
 echo "openbao-auto-unseal-wiring: OK"
