@@ -1,20 +1,17 @@
-# AGENTS.md - cassandra chart
+# Cassandra chart
 
-Native Helm chart subtree. Shared chart rules live in `deploy/helm/AGENTS.md`.
+Native chart in `helm/`, paired with `migrations/cassandra`.
+The release service is `helm-nvcf-cassandra`.
 
-## Chart Facts
+Run from the repository root:
 
-- Subproject id: `cassandra`
-- Chart name: `helm-nvcf-cassandra`
-- Chart directory: `helm`
-- CI values: `tools/ci/helm-validate-values/cassandra.yaml`
-- Release service name: `helm-nvcf-cassandra`
-
-## Validate
-
-```bash
-tools/ci/validate-helm-chart helm \
+```sh
+helm lint deploy/helm/cassandra/helm \
   -f tools/ci/helm-validate-values/cassandra.yaml
+make -C deploy/helm/cassandra test
 ```
 
-This chart pairs with the migration image source at `migrations/cassandra`.
+Keep the selected Cassandra runtime and migration schema compatible with the
+maintenance line. Declare image settings in `ownedImages` and test ordinary
+values-file overrides. Derive expected defaults from values instead of copying
+version literals into tests. Use the existing Helm template style and ASCII text.

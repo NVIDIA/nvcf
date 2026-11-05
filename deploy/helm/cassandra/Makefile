@@ -118,3 +118,7 @@ prepare-local: deps
 		echo '{"auths":{"nvcr.io":{"auth":"<PUT_YOUR_AUTH_HERE>"}}}' > ${DOCKER_CONFIG_JSON}; \
 	fi
 	@echo "[prepare-local] Successfully prepared local environment"
+
+.PHONY: test
+test:
+	bash tests/image-overrides.sh
