@@ -17,7 +17,7 @@ source in `src/`; the Envoy configuration is rendered by the chart.
 | Port | Protocol | Purpose |
 | --- | --- | --- |
 | 10443 | UDP, HTTP/3 | grpc-proxy worker tunnels. TLS for `*.<workerDomain>` terminates here and is re-encrypted to the grpc-proxy pod on its HTTP/3 port. |
-| 10084 | TCP, HTTP/1 over TLS | invocation-service worker callbacks. Forward-proxy requests and CONNECT tunnels, allowed only to `<dashed-pod-ip>.<serviceName>.<namespace>.svc.<clusterDomain>:<port>`. TLS for `*.<workerDomain>` unless `invocation.tls.enabled` is false. Forward-proxy requests reach the pod over a separate TLS session unless `invocation.upstream.tls.enabled` is false. |
+| 10084 | TCP, HTTP/1 over TLS | invocation-service worker callbacks. Forward-proxy requests (the worker callback path only) and CONNECT tunnels (unless `invocation.connect.enabled` is false), allowed only to `<dashed-pod-ip>.<serviceName>.<namespace>.svc.<clusterDomain>:<port>`. TLS for `*.<workerDomain>` unless `invocation.tls.enabled` is false. Forward-proxy requests reach the pod over a separate TLS session unless `invocation.upstream.tls.enabled` is false. |
 | 8081 | TCP | Probe listener. Serves only `/ready`; not exposed by any Service. |
 | 9902 | TCP | Metrics listener. Serves only `/stats/prometheus`, through the `<fullname>-metrics` ClusterIP Service. |
 | 9901 | TCP | Envoy admin, on `127.0.0.1` only. Not configurable. |
@@ -47,8 +47,9 @@ CA in one step can fail callbacks with an unknown CA error for up to a minute.
 
 ## invocation-service TLS
 
-An invocation callback uses two separate TLS sessions. The worker's TLS ends at
-Envoy, and Envoy opens its own TLS to the pod.
+An invocation callback has a TLS session from the worker to Envoy. Unless
+`invocation.upstream.tls.enabled` is false, Envoy then opens its own, separate
+TLS session to the pod.
 
 | Session | Client | Server certificate | Client verifies with | Controlled by |
 | --- | --- | --- | --- | --- |
@@ -72,9 +73,24 @@ its plaintext port. Use it only where the network between Envoy and the pod is
 trusted, and set `invocation.port: 8080` with it. The render fails when the
 port and the switch disagree.
 
-A CONNECT request is still a raw TCP tunnel: Envoy does not read it, and the
-worker runs its own TLS to the pod through it, so that worker needs the pod's
-CA. `invocation.upstream.tls.enabled` does not affect CONNECT.
+The default `invocation.upstream.tls.caSecret` is Secret
+`invocation-service-worker-tls`, key `ca.crt`. It is the Secret the
+invocation-service chart issues its worker certificate under when the release
+is named `invocation-service` (`invocation.workerTls.tls.secretName` in that
+chart overrides it). Set `caSecret.name` to the same name as that Secret. The
+self-managed stack names the Secret once and passes the same value to both
+charts.
+
+Forward-proxy requests are routed only for the worker callback path,
+`/v2/nvcf/worker/request-attach`, as an exact match. The pod's worker port also
+serves the rest of the invocation API, so any other path gets a 404.
+
+A CONNECT request is a raw TCP tunnel: Envoy does not read it and cannot
+restrict its path, and the worker runs its own TLS to the pod through it, so
+that worker needs the pod's CA. `invocation.upstream.tls.enabled` does not
+affect CONNECT. `invocation.connect.enabled` (default true) turns CONNECT
+tunnels off. The stack sets it to false, because it advertises only `http://`
+targets. Leave it on for workers older than worker-utils 1.3.2.
 
 ## Destination trust boundary
 

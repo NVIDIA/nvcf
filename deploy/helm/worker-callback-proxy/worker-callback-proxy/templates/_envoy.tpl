@@ -240,15 +240,21 @@ static_resources:
                   idle_timeout: {{ $t.invocationIdle }}
                   max_connection_duration: {{ $t.invocationMaxConnectionDuration }}
                 http_protocol_options: {}
+                {{- if $c.invocation.connect.enabled }}
                 http2_protocol_options: { allow_connect: true }
                 upgrade_configs:
                   - upgrade_type: CONNECT
+                {{- end }}
                 route_config:
                   name: invocation_worker
                   virtual_hosts:
                     - name: invocation_worker
                       domains: ["*"]
                       routes:
+                        {{- if $c.invocation.connect.enabled }}
+                        # A raw TCP tunnel to the pod. Envoy does not read what
+                        # the worker sends through it, so it cannot restrict the
+                        # path. Turn it off with invocation.connect.enabled.
                         - match:
                             connect_matcher: {}
                             headers:
@@ -262,12 +268,15 @@ static_resources:
                               - upgrade_type: CONNECT
                                 connect_config: {}
                             timeout: 0s
+                        {{- end }}
                         # http:// callback targets arrive as absolute-form
                         # forward-proxy requests, not CONNECT. The worker's TLS
                         # ends here; with upstream TLS Envoy opens its own
-                        # session to the pod and verifies it.
+                        # session to the pod and verifies it. Only the worker
+                        # callback path is routed: the pod's worker port also
+                        # serves the rest of the invocation API.
                         - match:
-                            prefix: "/"
+                            path: /v2/nvcf/worker/request-attach
                             headers:
                               - name: ":authority"
                                 string_match:
@@ -356,7 +365,7 @@ static_resources:
                     path_config_source:
                       path: /etc/envoy/config/sds_grpc_proxy_ca.yaml
   {{- end }}
-  {{- if $c.invocation.enabled }}
+  {{- if include "workerCallbackProxy.invocationPlainCluster" . }}
     - name: invocation_pods
       connect_timeout: {{ $t.connect }}
       lb_policy: CLUSTER_PROVIDED

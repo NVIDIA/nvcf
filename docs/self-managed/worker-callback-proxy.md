@@ -19,8 +19,8 @@ forwards each one to the pod that holds the request.
   sends a forward-proxy request through the session. The proxy then opens its
   own TLS session to the pod's 8443 listener and verifies the pod certificate
   against the stack CA and the pod name. The worker never sees the pod
-  certificate. The proxy forwards only addresses of that form. It can read the
-  callback, as it can for gRPC.
+  certificate. The proxy forwards only addresses of that form, and only the
+  worker callback path. It can read the callback, as it can for gRPC.
 - **gRPC functions:** grpc-proxy serves HTTP/3 callbacks and hands the worker
   `https://<dashed-pod-ip>.<workerDomain>`. DNS resolves that name to the
   proxy. The worker verifies the proxy's `*.<workerDomain>` certificate, and
@@ -86,23 +86,61 @@ forwards each one to the pod that holds the request.
 
 ## Certificates and CAs
 
-Every callback uses two TLS sessions that never share a certificate:
+A callback uses a TLS session from the worker to the proxy. From the proxy to
+the pod it uses a second, separate TLS session, unless you send plain HTTP to
+the invocation-service pod (below). The two sessions never share a certificate:
 
 | Session | Client | Server certificate | Client verifies with | Set by |
 | --- | --- | --- | --- | --- |
 | Worker to proxy (HTTP on TCP 10084, gRPC on UDP 443) | Worker | Proxy frontend certificate for `*.<workerDomain>` | The worker's CA bundle: the stack CA for the default issuer, its system roots for a public certificate | `workerCallbackProxy.tls.frontend` |
-| Proxy to invocation-service pod (TCP 8443) | Proxy | Pod certificate for `*.invocation.nvcf.svc.cluster.local`, issued by the stack CA | The stack CA bundle in the pod certificate Secret, and the pod name | `workerCallbackProxy.invocation.upstreamTls.enabled` |
-| Proxy to grpc-proxy pod (UDP 10084) | Proxy | Pod certificate for `*.grpc-headless.nvcf.svc.cluster.local`, issued by the stack CA | The stack CA bundle in the pod certificate Secret, and the pod name | Always on |
+| Proxy to invocation-service pod (TCP 8443) | Proxy | Pod certificate for `*.invocation.nvcf.svc.cluster.local`, issued by the stack CA | `ca.crt` of Secret `invocation-service-worker-tls`, and the pod name | `workerCallbackProxy.invocation.upstreamTls.enabled` |
+| Proxy to grpc-proxy pod (UDP 10084) | Proxy | Pod certificate for `*.grpc-headless.nvcf.svc.cluster.local`, issued by the stack CA | `ca.crt` of Secret `grpc-proxy-worker-tls`, and the pod name | Always on |
 
 The pod certificates always come from the stack CA. Only the frontend
 certificate is a choice, and workers never see the pod certificates, so workers
 never need their CA.
 
+### Pod certificate Secrets
+
+The proxy reads the CA that verifies each pod from the Secret that holds that
+pod's certificate:
+
+| Pod | Secret (default) | Key | Where the name is set |
+| --- | --- | --- | --- |
+| invocation-service | `invocation-service-worker-tls` | `ca.crt` | The stack names the Secret once and passes the same name to the invocation-service certificate and to the proxy (`invocation.upstream.tls.caSecret.name`), so the two cannot differ |
+| grpc-proxy | `grpc-proxy-worker-tls` | `ca.crt` | The grpc-proxy chart's default name for its worker certificate. The proxy chart's `grpcProxy.caSecret` defaults to it. |
+
+You do not set these in the stack. They matter when you use the proxy chart on
+its own or want to inspect a certificate. Envoy reloads the CA when the Secret
+changes, so a rotated CA needs no restart.
+
+### Plain HTTP to the invocation-service pod
+
 To send plain HTTP from the proxy to the invocation-service pod, set
 `workerCallbackProxy.invocation.upstreamTls.enabled: false`. The stack then
 uses the pod's plaintext port 8080 and does not turn on its worker TLS
-listener. Use this only where the network between the proxy and the pod is
-trusted. The worker's session to the proxy stays TLS, and gRPC is not affected.
+listener. The HTTP callback then has one TLS session, from the worker to the
+proxy. Use this only where the network between the proxy and the pod is
+trusted. gRPC is not affected.
+
+### Callback path and CONNECT
+
+The proxy routes a forward-proxy callback only to the worker callback path,
+`/v2/nvcf/worker/request-attach`, because the pod's worker port also serves the
+rest of the invocation API. A request for any other path gets a 404.
+
+The stack gives workers `http://` targets, which workers send as forward-proxy
+requests, so it turns CONNECT tunnels off. A CONNECT tunnel is a raw TCP
+connection to the pod that the proxy cannot read or restrict, and the worker
+runs its own TLS session through it, so that worker needs the stack CA. Turn
+CONNECT back on only for workers older than worker-utils 1.3.2:
+
+```yaml
+workerCallbackProxy:
+  invocation:
+    connect:
+      enabled: true
+```
 
 ## Use a public certificate on the proxy
 

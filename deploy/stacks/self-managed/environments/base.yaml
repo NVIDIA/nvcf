@@ -874,6 +874,14 @@ workerCallbackProxy:
       # the pod certificate against the stack CA. false: Envoy sends plain HTTP
       # to the pod on 8080, only for a trusted network between them.
       enabled: true
+    connect:
+      # CONNECT is a raw TCP tunnel to the pod that Envoy cannot read or
+      # restrict, and the worker runs its own TLS through it. The stack gives
+      # workers only http:// targets, which they send as forward-proxy
+      # requests, so it is off. Set true only for workers older than
+      # worker-utils 1.3.2. Forward-proxy requests reach only the worker
+      # callback path.
+      enabled: false
   # replicaCount defaults to the chart value (2).
   # replicaCount: 2
   # Workers in another cluster reach Envoy through this Service, so expose it,

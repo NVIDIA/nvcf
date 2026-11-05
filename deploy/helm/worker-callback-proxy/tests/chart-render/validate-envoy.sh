@@ -31,12 +31,13 @@ plain_container="worker-callback-proxy-plain-${suffix}"
 wrong_ca_container="worker-callback-proxy-wrongca-${suffix}"
 bad_upstream="worker-callback-proxy-bad-upstream-${suffix}"
 bad_envoy="worker-callback-proxy-bad-envoy-${suffix}"
+nc_envoy="worker-callback-proxy-noconnect-${suffix}"
 tls_upstream="worker-callback-proxy-tls-upstream-${suffix}"
 network="worker-callback-proxy-${suffix}"
 ca_volume="worker-callback-proxy-ca-${suffix}"
 
 cleanup() {
-  docker rm -f "${container}" "${idle_container}" "${upstream}" "${tls_container}" "${tls_upstream}" "${plain_container}" "${wrong_ca_container}" "${bad_upstream}" "${bad_envoy}" >/dev/null 2>&1 || true
+  docker rm -f "${container}" "${idle_container}" "${upstream}" "${tls_container}" "${tls_upstream}" "${plain_container}" "${wrong_ca_container}" "${bad_upstream}" "${bad_envoy}" "${nc_envoy}" >/dev/null 2>&1 || true
   docker network rm "${network}" >/dev/null 2>&1 || true
   docker volume rm -f "${ca_volume}" >/dev/null 2>&1 || true
   rm -rf "${work_dir}"
@@ -198,8 +199,10 @@ invocation_status() {
 # An allowed absolute-form request reaches the route; the pod name does not
 # resolve here, so the dynamic forward proxy answers 503.
 pod_host="10-0-0-1.invocation.nvcf.svc.cluster.local:8080"
-[[ "$(invocation_status "http://${pod_host}/v1/x" "${pod_host}")" == "503" ]] ||
+[[ "$(invocation_status "http://${pod_host}/v2/nvcf/worker/request-attach" "${pod_host}")" == "503" ]] ||
   fail "absolute-form request to an allowed pod did not reach the route"
+[[ "$(invocation_status "http://${pod_host}/v2/nvcf/pexec/functions/x" "${pod_host}")" == "404" ]] ||
+  fail "a request to a path other than the worker callback path was routed to the pod"
 [[ "$(invocation_status "http://other.example.com/x" "other.example.com")" == "404" ]] ||
   fail "absolute-form request to another host was not rejected"
 echo "ok: absolute-form invocation requests are routed by host"
@@ -264,7 +267,7 @@ import http.server, ssl, time
 class H(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     def do_GET(self):
-        if self.path == "/stream":
+        if "mode=stream" in self.path:
             self.send_response(200)
             self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
@@ -322,7 +325,7 @@ echo "ok: the invocation listener refuses plaintext and other pod ports"
 # and opens its own TLS to the pod. The worker sends an absolute-form http://
 # request (no CONNECT) and never sees the pod certificate, so it needs no CA
 # for the pod. Envoy verifies the pod with the invocation CA.
-fwd_out="$(worker_get "https://${proxy_host}:10084" "http://${tls_pod}:8443/ping" || true)"
+fwd_out="$(worker_get "https://${proxy_host}:10084" "http://${tls_pod}:8443/v2/nvcf/worker/request-attach" || true)"
 [[ "${fwd_out}" == "pong" ]] ||
   fail "a forward-proxy callback did not reach the TLS pod through Envoy's own TLS session: ${fwd_out}"
 echo "ok: forward-proxy callbacks run TLS to Envoy and a separate verified TLS to the pod"
@@ -339,7 +342,7 @@ done
 wrong_ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${network}\").IPAddress}}" "${wrong_ca_container}")"
 wrong_out="$(docker run --rm --network "${network}" --add-host "${proxy_host}:${wrong_ip}" \
   -v "${work_dir}/ca:/ca:ro" "${CURL_IMAGE}" -sS --max-time 10 \
-  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt "http://${tls_pod}:8443/ping" 2>&1 || true)"
+  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt "http://${tls_pod}:8443/v2/nvcf/worker/request-attach" 2>&1 || true)"
 [[ "${wrong_out}" != *pong* ]] ||
   fail "Envoy accepted a pod certificate that the invocation CA did not sign"
 echo "ok: Envoy refuses a pod certificate from another CA"
@@ -350,7 +353,7 @@ head -c 1048576 /dev/zero | tr '\0' a >"${work_dir}/body.txt"
 chmod a+r "${work_dir}/body.txt"
 post_out="$(docker run --rm --network "${network}" --add-host "${proxy_host}:${envoy_ip}" \
   -v "${work_dir}/ca:/ca:ro" -v "${work_dir}/body.txt:/body.txt:ro" "${CURL_IMAGE}" -sS --max-time 20 \
-  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt -X POST --data-binary @/body.txt "http://${tls_pod}:8443/upload" 2>&1 || true)"
+  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt -X POST --data-binary @/body.txt "http://${tls_pod}:8443/v2/nvcf/worker/request-attach" 2>&1 || true)"
 [[ "${post_out}" == "len=1048576" ]] || fail "a 1 MiB POST callback did not reach the TLS pod intact: ${post_out}"
 echo "ok: POST callbacks (1 MiB body) run through Envoy's own TLS session"
 
@@ -358,7 +361,7 @@ echo "ok: POST callbacks (1 MiB body) run through Envoy's own TLS session"
 # reads for three seconds sees only the first if Envoy forwards chunks as they arrive.
 stream_out="$(docker run --rm --network "${network}" --add-host "${proxy_host}:${envoy_ip}" \
   -v "${work_dir}/ca:/ca:ro" "${CURL_IMAGE}" -sN --max-time 3 \
-  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt "http://${tls_pod}:8443/stream" 2>&1 || true)"
+  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt "http://${tls_pod}:8443/v2/nvcf/worker/request-attach?mode=stream" 2>&1 || true)"
 [[ "${stream_out}" == *first* && "${stream_out}" != *second* ]] ||
   fail "a streamed response was buffered instead of forwarded as it arrived: ${stream_out}"
 echo "ok: streamed responses are forwarded chunk by chunk"
@@ -387,6 +390,37 @@ done
 bad_envoy_ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${network}\").IPAddress}}" "${bad_envoy}")"
 bad_out="$(docker run --rm --network "${network}" --add-host "${proxy_host}:${bad_envoy_ip}" \
   -v "${work_dir}/ca:/ca:ro" "${CURL_IMAGE}" -sS --max-time 10 \
-  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt "http://${bad_pod}:8443/ping" 2>&1 || true)"
+  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt "http://${bad_pod}:8443/v2/nvcf/worker/request-attach" 2>&1 || true)"
 [[ "${bad_out}" != *pong* ]] || fail "Envoy accepted a pod certificate that the right CA signed but that names another host"
 echo "ok: Envoy refuses a pod certificate from the right CA that does not match the pod name"
+
+# Only the worker callback path reaches the pod: its worker port also serves the
+# rest of the invocation API.
+other_code="$(docker run --rm --network "${network}" --add-host "${proxy_host}:${envoy_ip}" \
+  -v "${work_dir}/ca:/ca:ro" "${CURL_IMAGE}" -s -o /dev/null -w '%{http_code}' --max-time 10 \
+  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt "http://${tls_pod}:8443/v2/nvcf/pexec/functions/x" 2>&1 || true)"
+[[ "${other_code}" == "404" ]] || fail "a request to another invocation API path was not refused: ${other_code}"
+echo "ok: only the worker callback path is routed to the pod"
+
+# With CONNECT off the forward-proxy callback still works and a CONNECT tunnel
+# is refused.
+extract_config no-connect --set workerCallbackProxy.invocation.connect.enabled=false
+run_envoy "${work_dir}/no-connect" --rm --mode validate >"${work_dir}/no-connect.log" 2>&1 ||
+  fail "Envoy rejected the config with CONNECT off: $(tail -5 "${work_dir}/no-connect.log")"
+run_envoy "${work_dir}/no-connect" \
+  "-d --name ${nc_envoy} --network ${network} --add-host ${tls_pod}:${tls_upstream_ip}" >/dev/null
+for _ in $(seq 1 30); do
+  docker exec "${nc_envoy}" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081' 2>/dev/null && break
+  sleep 1
+done
+nc_ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${network}\").IPAddress}}" "${nc_envoy}")"
+nc_get() {
+  docker run --rm --network "${network}" --add-host "${proxy_host}:${nc_ip}" \
+    -v "${work_dir}/ca:/ca:ro" "${CURL_IMAGE}" -sS --max-time 10 \
+    --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt --cacert /ca/ca_one.crt "$1" 2>&1
+}
+[[ "$(nc_get "http://${tls_pod}:8443/v2/nvcf/worker/request-attach" || true)" == "pong" ]] ||
+  fail "the forward-proxy callback failed with CONNECT off"
+connect_out="$(nc_get "https://${tls_pod}:8443/ping" || true)"
+[[ "${connect_out}" != *pong* ]] || fail "a CONNECT tunnel was accepted with invocation.connect.enabled false"
+echo "ok: with CONNECT off, forward-proxy callbacks work and CONNECT tunnels are refused"

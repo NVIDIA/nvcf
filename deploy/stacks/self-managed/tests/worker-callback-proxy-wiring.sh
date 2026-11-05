@@ -134,6 +134,8 @@ test "$(yq -r '.invocation.workerTls.tls.certificate.issuerRef.name' "$i")" = "n
   fail "invocation: expected the OpenBao service PKI issuer"
 test "$(yq -r '.invocation.env.WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS' "$i")" = "http://invocation.nvcf.svc.cluster.local:8443" ||
   fail "invocation: the advertised target must use the http scheme, so workers send forward-proxy requests, on the pod TLS port"
+pod_secret="$(yq -r '.invocation.workerTls.tls.secretName' "$i")"
+test -n "$pod_secret" && test "$pod_secret" != "null" || fail "invocation: the pod certificate Secret must be named explicitly"
 
 inv_manifest="$work_dir/inv-manifest.yaml"
 helm template invocation-service "$helm_dir/http-invocation/nvcf-invocation-service" --namespace nvcf --values "$i" >"$inv_manifest" ||
@@ -153,6 +155,10 @@ test "$(yq -r '.workerCallbackProxy.tls.frontend.certificate.issuerRef.name' "$w
 test "$(yq -r '.workerCallbackProxy.tls.frontend.existingSecret // ""' "$w")" = "" || fail "proxy: no frontend Secret by default"
 test "$(yq -r '[.workerCallbackProxy.invocation.upstream.tls.enabled, .workerCallbackProxy.invocation.port] | join(",")' "$w")" = "true,8443" ||
   fail "proxy: expected a separate TLS session to the pod on 8443 by default"
+test "$(yq -r '.workerCallbackProxy.invocation.connect.enabled' "$w")" = "false" ||
+  fail "proxy: CONNECT tunnels must be off by default, because the stack advertises only http:// targets"
+test "$(yq -r '.workerCallbackProxy.invocation.upstream.tls.caSecret.name' "$w")" = "$pod_secret" ||
+  fail "proxy: Envoy must read the CA from the Secret the invocation-service pod certificate is issued under ($pod_secret)"
 test "$(yq -r '.workerCallbackProxy.topologySpreadConstraints[0].whenUnsatisfiable' "$w")" = "ScheduleAnyway" ||
   fail "proxy: expected HA zone spread"
 
@@ -209,6 +215,17 @@ render_values invocation-service "$work_dir/inv-frontend-issuer.yaml"
 test "$(yq -r '.invocation.workerTls.tls.certificate.issuerRef.name' "$work_dir/inv-frontend-issuer.yaml")" = "nvcf-openbao-pki" ||
   fail "invocation: the pod certificate must stay on the stack CA when the frontend issuer changes"
 
+echo "== CONNECT tunnels can be turned back on =="
+{ enabled_env preferred; cat <<'EOF'
+  invocation:
+    connect:
+      enabled: true
+EOF
+} | write_env
+render_values worker-callback-proxy "$work_dir/wcp-connect.yaml"
+test "$(yq -r '.workerCallbackProxy.invocation.connect.enabled' "$work_dir/wcp-connect.yaml")" = "true" ||
+  fail "proxy: invocation.connect.enabled must reach the chart"
+
 echo "== plain HTTP from Envoy to the invocation pod =="
 { enabled_env preferred; cat <<'EOF'
   invocation:
@@ -223,6 +240,8 @@ test "$(yq -r '.invocation.env.WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS' "$work
 render_values worker-callback-proxy "$work_dir/wcp-plain.yaml"
 test "$(yq -r '[.workerCallbackProxy.invocation.upstream.tls.enabled, .workerCallbackProxy.invocation.port] | join(",")' "$work_dir/wcp-plain.yaml")" = "false,8080" ||
   fail "proxy: expected plain HTTP to the pod on 8080"
+test "$(yq -r '.workerCallbackProxy.invocation.upstream.tls.caSecret // ""' "$work_dir/wcp-plain.yaml")" = "" ||
+  fail "proxy: no invocation CA Secret without upstream TLS"
 helm template worker-callback-proxy "$test_helm_dir/worker-callback-proxy/worker-callback-proxy" --namespace nvcf --values "$work_dir/wcp-plain.yaml" >"$work_dir/wcp-plain-manifest.yaml" ||
   fail "proxy chart must render with plain upstream stack values"
 
@@ -349,5 +368,13 @@ assert_render_fails fixed-self-address "invocation.env.WORKER_STREAM_PROPERTIES_
 EOF
 } | write_env
 assert_render_fails string-upstream-tls "workerCallbackProxy.invocation.upstreamTls.enabled must be a YAML boolean"
+
+{ enabled_env preferred; cat <<'EOF'
+  invocation:
+    connect:
+      enabled: "true"
+EOF
+} | write_env
+assert_render_fails string-connect "workerCallbackProxy.invocation.connect.enabled must be a YAML boolean"
 
 echo "worker-callback-proxy-wiring: ok"

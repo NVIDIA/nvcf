@@ -55,5 +55,11 @@ public snapshot rules.
   invocation-service pod names and `auto_san_validation` checks the pod
   certificate against that name. Do not set `allow_insecure_cluster_options`
   on it or remove the `invocation_pod_ca` SDS secret.
+- The forward-proxy route matches the exact path
+  `/v2/nvcf/worker/request-attach`. The pod's worker port also serves the rest
+  of the invocation API, so do not widen it to a prefix.
+- A CONNECT tunnel is a raw TCP tunnel that Envoy cannot read or restrict.
+  `invocation.connect.enabled` defaults to true so older workers keep working;
+  the stack turns it off. Keep it that way.
 - Never commit certificates or private keys. `bin/` is ignored for local
   renders.

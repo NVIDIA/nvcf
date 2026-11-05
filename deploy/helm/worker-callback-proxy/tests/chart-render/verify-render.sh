@@ -173,6 +173,33 @@ expect_eq "invocation CA Secret" "$(pod "${m}" '.volumes[] | select(.name == "in
 expect_eq "invocation CA SDS watches its mount" \
   "$(q "${m}" 'select(.kind == "ConfigMap") | .data["sds_invocation_ca.yaml"]' | yq -r '.resources[0].validation_context.watched_directory.path')" \
   "$(pod "${m}" '.containers[0].volumeMounts[] | select(.name == "invocation-ca") | .mountPath')"
+# The pod's worker port serves the whole invocation API, so the forward-proxy
+# route matches only the worker callback path, exactly.
+invocation_paths() {
+  envoy "$1" '[.static_resources.listeners[] | select(.name == "invocation_worker_tcp") | .. | select(has("route")) | .match | select(has("path") or has("prefix")) | (.path // ("prefix:" + .prefix))] | join(",")'
+}
+expect_eq "forward-proxy route matches only the worker callback path" "$(invocation_paths "${m}")" "/v2/nvcf/worker/request-attach"
+connect_routes() {
+  envoy "$1" '[.static_resources.listeners[] | select(.name == "invocation_worker_tcp") | .. | select(has("connect_matcher"))] | length'
+}
+expect_eq "CONNECT is on by default" "$(connect_routes "${m}")" "1"
+# CONNECT off: no CONNECT route or upgrade on the listener, and the plain
+# cluster only the CONNECT route used goes away.
+m_nc="${tmp_dir}/connect-off.yaml"
+render --set workerCallbackProxy.invocation.connect.enabled=false > "${m_nc}"
+check_wiring "${m_nc}"
+expect_eq "no CONNECT route" "$(connect_routes "${m_nc}")" "0"
+expect_eq "no CONNECT upgrade on the listener" \
+  "$(envoy "${m_nc}" '[.static_resources.listeners[] | select(.name == "invocation_worker_tcp") | .. | select(has("upgrade_type"))] | length')" "0"
+expect_eq "no CONNECT: forward-proxy route is kept" "$(invocation_paths "${m_nc}")" "/v2/nvcf/worker/request-attach"
+expect_eq "no CONNECT: the plain pod cluster is gone" \
+  "$(envoy "${m_nc}" '[.static_resources.clusters[] | select(.name == "invocation_pods")] | length')" "0"
+expect_eq "no CONNECT: the TLS pod cluster stays" \
+  "$(envoy "${m_nc}" '[.static_resources.clusters[] | select(.name == "invocation_pods_tls")] | length')" "1"
+render --set workerCallbackProxy.invocation.connect.enabled=false \
+  --set workerCallbackProxy.invocation.upstream.tls.enabled=false --set workerCallbackProxy.invocation.port=8080 > "${tmp_dir}/connect-off-plain.yaml"
+expect_eq "no CONNECT with plain upstream: forward-proxy still uses the plain cluster" \
+  "$(envoy "${tmp_dir}/connect-off-plain.yaml" '[.static_resources.clusters[] | select(.name == "invocation_pods")] | length')" "1"
 expect_eq "drain time" "$(pod "${m}" '.containers[0].args | .[(to_entries[] | select(.value == "--drain-time-s") | .key) + 1]')" "30"
 expect_eq "access log format" "$(envoy "${m}" '[.. | select(has("json_format")) | .json_format.x_request_id] | unique | .[]')" \
   "%REQ(X-REQUEST-ID)%"

@@ -79,6 +79,13 @@
                 "enabled": { "type": "boolean" }
               }
             },
+            "connect": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            },
             "upstream": {
               "type": "object",
               "additionalProperties": false,

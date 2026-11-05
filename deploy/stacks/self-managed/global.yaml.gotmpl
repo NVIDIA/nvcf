@@ -856,6 +856,17 @@ natsAuthCalloutService:
 {{- fail "workerCallbackProxy.invocation.upstreamTls.enabled must be a YAML boolean, true or false" }}
 {{- end }}
 {{- $workerCallbackProxyInvocationPort := ternary 8443 8080 $workerCallbackProxyInvocationUpstreamTls }}
+{{- /* The invocation-service pod certificate Secret. The invocation-service
+       chart issues it under this name and Envoy reads its CA from the same
+       name, so one value keeps the two from drifting. */}}
+{{- $workerCallbackProxyInvocationPodSecret := "invocation-service-worker-tls" }}
+{{- /* CONNECT is a raw TCP tunnel Envoy cannot read or restrict. The stack
+       advertises only http:// targets, which workers send as forward-proxy
+       requests, so it is off unless an older worker needs it. */}}
+{{- $workerCallbackProxyInvocationConnect := dig "workerCallbackProxy" "invocation" "connect" "enabled" false .Values }}
+{{- if not (kindIs "bool" $workerCallbackProxyInvocationConnect) }}
+{{- fail "workerCallbackProxy.invocation.connect.enabled must be a YAML boolean, true or false" }}
+{{- end }}
 {{- $workerCallbackProxyDomain := "" }}
 {{- if $workerCallbackProxyEnabled }}
 {{- $workerCallbackProxyDomain = dig "workerCallbackProxy" "workerDomain" "" .Values | toString | trim | lower }}
@@ -1235,6 +1246,7 @@ invocation:
     enabled: true
     advertise: true
     tls:
+      secretName: {{ $workerCallbackProxyInvocationPodSecret | quote }}
       certificate:
         enabled: true
         issuerRef:
@@ -1532,9 +1544,16 @@ workerCallbackProxy:
           group: {{ dig "group" "cert-manager.io" $frontendIssuer | quote }}
   invocation:
     port: {{ $workerCallbackProxyInvocationPort }}
+    connect:
+      enabled: {{ $workerCallbackProxyInvocationConnect }}
     upstream:
       tls:
         enabled: {{ $workerCallbackProxyInvocationUpstreamTls }}
+        {{- if $workerCallbackProxyInvocationUpstreamTls }}
+        caSecret:
+          name: {{ $workerCallbackProxyInvocationPodSecret | quote }}
+          key: ca.crt
+        {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}

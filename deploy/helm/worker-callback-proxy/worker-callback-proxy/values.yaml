@@ -67,6 +67,14 @@ workerCallbackProxy:
       # ends here. Workers then use https://<name>.<workerDomain>:<port> as the
       # proxy address and validate the frontend certificate.
       enabled: true
+    # CONNECT tunnels: a raw TCP tunnel to the pod, through which the worker
+    # runs its own TLS session and so needs the pod's CA. Envoy cannot read or
+    # restrict what goes through it. Workers that send http:// targets as
+    # forward-proxy requests (worker-utils 1.3.2 or later) do not use it, so turn
+    # it off once no older worker needs it. Forward-proxy requests are routed
+    # only for the worker callback path, /v2/nvcf/worker/request-attach.
+    connect:
+      enabled: true
     upstream:
       tls:
         # Envoy opens its own TLS session to the pod for forward-proxy

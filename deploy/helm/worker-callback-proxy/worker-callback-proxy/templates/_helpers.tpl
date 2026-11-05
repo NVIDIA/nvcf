@@ -102,6 +102,15 @@ forward-proxy callbacks.
 {{- if and $c.invocation.enabled $c.invocation.upstream.tls.enabled -}}true{{- end -}}
 {{- end -}}
 
+{{/*
+"true" when something routes to the plain invocation_pods cluster: CONNECT
+tunnels, or forward-proxy requests when upstream TLS is off.
+*/}}
+{{- define "workerCallbackProxy.invocationPlainCluster" -}}
+{{- $c := .Values.workerCallbackProxy -}}
+{{- if and $c.invocation.enabled (or $c.invocation.connect.enabled (not $c.invocation.upstream.tls.enabled)) -}}true{{- end -}}
+{{- end -}}
+
 {{- define "workerCallbackProxy.invocationAuthorityRegex" -}}
 {{- $c := .Values.workerCallbackProxy -}}
 {{- $ns := default .Release.Namespace $c.invocation.namespace -}}
