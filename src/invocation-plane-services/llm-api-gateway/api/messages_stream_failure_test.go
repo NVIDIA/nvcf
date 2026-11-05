@@ -48,6 +48,9 @@ func TestMessagesFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 		{name: "ends with message_stop", upstreamBody: messagesTestSSE},
 		{name: "message_stop then [DONE]", upstreamBody: messagesTestSSE + "data: [DONE]\n\n"},
 		{name: "event over the usage buffer limit", upstreamBody: largeEvent + messagesTestSSE},
+		// message_stop ends the stream, so a later read failure does not change it.
+		{name: "connection drops after message_stop", upstreamBody: messagesTestSSE, dropMidway: true},
+		{name: "gateway timeout after message_stop", upstreamBody: messagesTestSSE, stall: true},
 		{name: "clean end without message_stop", upstreamBody: withoutStop, wantAdded: "error", want502: true},
 		{name: "clean end mid event", upstreamBody: withoutStop + cutEvent, wantAdded: "\n" + messagesStreamPing + "error", want502: true},
 		{name: "clean end mid event after CRLF line", upstreamBody: withoutStop + "event: content_block_delta\r\n", wantAdded: messagesStreamPing + "error", want502: true},

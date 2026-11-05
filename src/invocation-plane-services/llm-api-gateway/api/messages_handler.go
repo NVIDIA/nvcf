@@ -243,9 +243,12 @@ func failMessagesRelay(c *GatewayContext, relay *messagesRelayWriter, observer *
 	case observer.failed:
 		// The client already has the upstream error event.
 		return failure.SetInternal(errors.Join(&provider.UpstreamStreamError{}, readErr))
+	case observer.stream && !observer.encoded && observer.stopped:
+		// message_stop ended the stream; a later read error does not change it.
+		return nil
 	case readErr != nil:
 		cause = fmt.Errorf("%w: read messages stream: %w", provider.ErrStreamIncomplete, readErr)
-	case observer.stream && !observer.encoded && !observer.stopped:
+	case observer.stream && !observer.encoded:
 		cause = fmt.Errorf("%w: messages stream ended before message_stop", provider.ErrStreamIncomplete)
 	default:
 		return nil
