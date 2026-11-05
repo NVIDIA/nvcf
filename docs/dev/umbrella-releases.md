@@ -190,6 +190,13 @@ go run -C tools/docs-version-sync . umbrella docs-prepare \
 
 Review the prose against the selected combination. The tool seeds the catalog
 from the product's reviewed source and embeds the immutable product manifest.
+The selected docs commit also supplies `fern/navigation.yml` and its pages.
+Fern does not filter pages by the version numbers in their titles. Review the
+prepared navigation and release notes for the selected product. For example,
+include the 1.0.4 upgrade procedure in the 1.0.4 edition; include a guide to a
+later release only when that edition intentionally documents the supported
+outgoing upgrade. A linked guide does not change the edition's selected stacks.
+
 Commit the prepared files on `docs/versions/X.Y.Z` and push that branch after
 verifying its protection rules. Record the resulting full commit SHA.
 

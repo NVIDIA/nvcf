@@ -309,6 +309,14 @@ branch.
   pins that chart, such as `helm-nvca-operator` in the compute-plane
   stack.
 
+For an upgrade-sensitive service, its object-form `deploys` entry can set
+`manual_bump_reason`. The bumper reports that reason and leaves the pins
+unchanged; the dependency remains in the chart inventory. OpenBao server,
+agent, and migration pins use this policy because they must match the JWT
+plugin lifecycle mode. Change those pins together in a reviewed upgrade using
+the [JWT plugin procedure](../self-managed/runbooks/openbao-jwt-plugin-upgrade.md).
+Do not change the lifecycle mode automatically to accommodate a new image.
+
 When a bump changes anything under `deploy/stacks/nvcf-compute-plane`,
 the workflow renders that stack's golden fixtures again with
 `tools/ci/refresh-compute-plane-goldens` and commits them on top of the

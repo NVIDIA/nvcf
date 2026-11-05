@@ -219,6 +219,26 @@ for the JSON schema, algorithm behavior, and tuning fields. See
 [LLM Request Router Load Balancing](../../../docs/self-managed/llm-request-router-load-balancing.md)
 for stack ownership, trusted headers, rollout checks, and troubleshooting.
 
+## PKI migration client
+
+The optional PKI hook uses the migration image tag in
+`llmRequestRouter.pki.image.tag`. Set its registry and repository for your
+installation; an explicit tag override remains supported.
+
+`llmRequestRouter.pki.kubectlMinor` defaults to an empty string, which uses
+the image's default kubectl client. The migration image supports `"1.36"`
+and `"1.37"`. For Kubernetes 1.35, select the compatible client:
+
+```yaml
+llmRequestRouter:
+  pki:
+    kubectlMinor: "1.36"
+```
+
+The chart rejects other selectors when the PKI hook is enabled. Custom
+migration images must support `NVCF_KUBECTL_MINOR` to use an explicit selector.
+This setting does not enable the PKI hook; `pki.enabled` remains opt-in.
+
 ## Local Render
 
 ```bash

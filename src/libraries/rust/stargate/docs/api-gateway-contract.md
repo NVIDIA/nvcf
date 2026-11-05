@@ -119,6 +119,8 @@ Supported:
 POST /v1/chat/completions
 POST /v1/responses
 POST /v1/embeddings
+POST /v1/decisions
+POST /v1/systemone
 ```
 
 Required headers:
@@ -195,6 +197,8 @@ Body rules:
 - `/v1/chat/completions` and `/v1/responses` must be valid JSON with
   `"stream": true`.
 - `/v1/embeddings` must be valid JSON and does not need `stream`.
+- `/v1/decisions` and `/v1/systemone` (beta) must be valid JSON and do not
+  need `stream`. Responses are not streamed.
 
 ## Responses
 
@@ -206,14 +210,25 @@ Stargate forwards upstream status, body, and allowed headers, then adds:
 
 Treat them as internal unless the public API chooses to expose them.
 
+Every error that Stargate or Pylon generates carries
+`x-stargate-error-code`. A non-2xx response without it came from the model
+server and is relayed unchanged, including after Stargate exhausts its
+retries.
+
 Common errors:
 
-| Status | Meaning | Gateway behavior |
-| --- | --- | --- |
-| `400` | Missing/invalid contract input. | Do not retry unchanged. |
-| `404` + `no_eligible_candidates` | Unknown or unregistered local target. | Retry only when a recent discovery response may have raced a local route change. |
-| `413` | Replay body too large. | Do not retry unchanged. |
-| `502/503/504` | Transport, upstream, retry, or active-backend failure. | Treat as serving failure. |
+| Status | `x-stargate-error-code` | Meaning | Gateway behavior |
+| --- | --- | --- | --- |
+| `400` | `invalid_request` | Missing/invalid contract input, or a body Pylon rejects. | Do not retry unchanged. |
+| `400` | routing expression class | Invalid `x-routing-method`. | Do not retry unchanged. |
+| `404` | `no_eligible_candidates` | Unknown or unregistered local target. | Retry only when a recent discovery response may have raced a local route change. |
+| `413` | `request_too_large` | Replay body too large. | Do not retry unchanged. |
+| `500` | `internal_error` | Stargate could not build the response. | Treat as serving failure. |
+| `502` | `upstream_unreachable` | Tunnel or transport failure. | Treat as serving failure. |
+| `503` | `no_available_backend` | No backend could take the request. | Treat as serving failure. |
+| `503` | `overloaded_error` | Capacity or admission rejection. | Treat as serving failure. |
+| `503` | `local_connect_failure` | Pylon could not connect to its model server. | Treat as serving failure. |
+| `503` | `model_generation_unavailable` | Pylon has not admitted the model generation. | Treat as serving failure. |
 
 Stargate strips pylon retry metadata before returning downstream:
 `x-stargate-retryable`, `x-stargate-retry-reason`,

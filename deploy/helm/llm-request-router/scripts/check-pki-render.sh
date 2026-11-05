@@ -517,4 +517,72 @@ assert_allowed_domains_case "name that ends with the domain but is not a subdoma
 assert_allowed_domains_case "bare domain, which the role refuses to issue" \
   fail "llm-request-router-headless.nvcf.svc.cluster.local" "llm-request-router-headless.nvcf.svc.cluster.local"
 
+# Exercise the migration image default independently of the router appVersion.
+# Read the expected tag from chart values so patch releases do not duplicate pins.
+migration_tag="$(yq -r '.llmRequestRouter.pki.image.tag' ./llm-request-router/values.yaml)"
+[ -n "${migration_tag}" ] && [ "${migration_tag}" != "null" ] || fail "migration image tag is empty"
+migration_selector='select(.kind == "Job" and .metadata.name == "addons-llm-migrations")'
+migration_container="${migration_selector} | .spec.template.spec.containers[0]"
+
+render_migration_case() {
+  helm template llm-request-router "${migration_chart:-./llm-request-router}" \
+    --namespace nvcf \
+    --set llmRequestRouter.image.repository=stargate \
+    --set llmRequestRouter.pki.enabled=true \
+    --set-string llmRequestRouter.pki.allowedDomains=cluster.local \
+    --set llmRequestRouter.pki.image.repository=mirror/openbao-migrations \
+    "$@"
+}
+
+migration_manifest="${tmp_dir}/migration.yaml"
+render_migration_case > "${migration_manifest}"
+[ "$(yq -rN "${migration_container} | .image" "${migration_manifest}")" = "mirror/openbao-migrations:${migration_tag}" ] || fail "migration image default changed"
+[ -z "$(yq -rN "${migration_container} | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "${migration_manifest}")" ] || fail "default selector must use the image default"
+
+# Older saved values do not contain the new selector. Reusing them must keep
+# the image default, including when Helm removes an explicit null value.
+cp -R ./llm-request-router "${tmp_dir}/legacy-chart"
+yq -i 'del(.llmRequestRouter.pki.kubectlMinor)' "${tmp_dir}/legacy-chart/values.yaml"
+(
+  migration_chart="${tmp_dir}/legacy-chart"
+  render_migration_case
+) > "${migration_manifest}"
+[ -z "$(yq -rN "${migration_container} | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "${migration_manifest}")" ] || fail "missing selector must use the image default"
+render_migration_case --set llmRequestRouter.pki.kubectlMinor=null > "${migration_manifest}"
+[ -z "$(yq -rN "${migration_container} | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "${migration_manifest}")" ] || fail "null selector must use the image default"
+for invalid in false 0; do
+  if render_migration_case --set "llmRequestRouter.pki.kubectlMinor=${invalid}" > /dev/null 2> "${tmp_dir}/invalid-client.err"; then
+    fail "unsupported falsy migration client selector rendered"
+  fi
+  grep -Fq 'llmRequestRouter.pki.kubectlMinor must be empty, 1.36, or 1.37' "${tmp_dir}/invalid-client.err" || fail "missing falsy selector validation"
+done
+
+for minor in 1.36 1.37; do
+  render_migration_case \
+    --set-string "llmRequestRouter.pki.kubectlMinor=${minor}" \
+    --set-string llmRequestRouter.pki.image.registry=registry.example.com \
+    > "${migration_manifest}"
+  [ "$(yq -rN "${migration_container} | .image" "${migration_manifest}")" = "registry.example.com/mirror/openbao-migrations:${migration_tag}" ] || fail "migration registry override changed"
+  [ "$(yq -rN "${migration_container} | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value" "${migration_manifest}")" = "${minor}" ] || fail "migration client selector changed"
+  [ "$(yq -rN "${migration_container} | .env[] | select(.name == \"NVCF_KUBECTL_MINOR\") | .value | tag" "${migration_manifest}")" = '!!str' ] || fail "migration client selector must be a string"
+done
+
+render_migration_case \
+  --set-string llmRequestRouter.pki.image.tag=custom \
+  > "${migration_manifest}"
+[ "$(yq -rN "${migration_container} | .image" "${migration_manifest}")" = "mirror/openbao-migrations:custom" ] || fail "migration image tag override changed"
+
+if render_migration_case --set-string llmRequestRouter.pki.kubectlMinor=1.35 \
+  > /dev/null 2> "${tmp_dir}/invalid-client.err"; then
+  fail "unsupported migration client selector rendered"
+fi
+grep -Fq 'llmRequestRouter.pki.kubectlMinor must be empty, 1.36, or 1.37' \
+  "${tmp_dir}/invalid-client.err" || fail "missing migration client selector validation"
+
+# A disabled hook must not validate settings that it will not use.
+render_migration_case \
+  --set llmRequestRouter.pki.enabled=false \
+  --set-string llmRequestRouter.pki.kubectlMinor=1.35 > "${migration_manifest}"
+[ -z "$(yq -rN "${migration_selector} | .metadata.name" "${migration_manifest}")" ] || fail "disabled migration hook rendered"
+
 echo "PKI render checks passed"

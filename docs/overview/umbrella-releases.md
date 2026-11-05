@@ -114,8 +114,9 @@ deploy/stacks/observability/
 ```
 
 An umbrella archive also contains a root `VERSION`, `manifest.json`, `README.md`,
-`LICENSE` and `NOTICE`. Each stack directory's `VERSION` is its independently released
-version. Packages include configuration and secret templates. Customer
+`LICENSE` and `NOTICE`. Verify each stack's release identity against its published
+inventory; historical stack `VERSION` files can repeat older values. Packages
+include configuration and secret templates. Customer
 credentials, external charts and images, and the CLI binary are separate.
 Install `nvcf-cli` separately when using registration
 or CLI-assisted operations. Pass its existing stack-path options explicitly;

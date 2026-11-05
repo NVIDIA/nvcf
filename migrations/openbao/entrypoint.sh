@@ -87,6 +87,9 @@ fi
 
 export BAO_ADDR="$SCHEME://$LEADER_ADDRESS"
 
+# Validate versioned deployment input before any migration changes state.
+jwt_plugin_version >/dev/null || exit 1
+
 # Now that BAO_ADDR is set, initialize the mount lists
 initialize_mount_lists
 

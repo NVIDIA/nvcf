@@ -36,6 +36,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 )
 
 const (
@@ -159,6 +160,7 @@ func (r *ValidatorSummaryReconciler) Start(ctx context.Context) error {
 		informers.WithTweakListOptions(func(opts *metav1.ListOptions) {
 			opts.FieldSelector = fieldSelector
 		}),
+		informers.WithTransform(k8sutil.StripManagedFields),
 	)
 	informer := factory.Core().V1().ConfigMaps().Informer()
 
@@ -195,6 +197,7 @@ func (r *ValidatorSummaryReconciler) Start(ctx context.Context) error {
 		informers.WithTweakListOptions(func(opts *metav1.ListOptions) {
 			opts.FieldSelector = fmt.Sprintf("metadata.name=%s", r.resetConfigMapName)
 		}),
+		informers.WithTransform(k8sutil.StripManagedFields),
 	)
 	resetInformer := resetFactory.Core().V1().ConfigMaps().Informer()
 	if _, err := resetInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
