@@ -158,6 +158,7 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	c.considerCompanionPlaceholder(ctx, pod)
 	c.considerRestored(ctx, pod)
 	c.considerRestoredCondition(ctx, pod)
+	c.considerColdStart(ctx, pod)
 	c.considerRestoredStacks(ctx, pod)
 	c.observePodReady(ctx, pod)
 	if !c.admitted(ctx, pod) {
@@ -305,25 +306,7 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod string, uid type
 	default:
 		log.WithError(err).Error("CRIU auto-restore failed; its capture was verified, so it is kept and the replacement restores from it again")
 	}
-	a.disposeFailedPlaceholder(context.WithoutCancel(ctx), ns, pod, container, log)
-}
-
-// disposeFailedPlaceholder gets placeholder ns/pod, whose restore failed,
-// going again. Deleting it leaves its replacement to its controller; a pod
-// nothing recreates would just be gone, so it starts its workload cold in
-// place instead, and is deleted only when it cannot.
-func (a *Agent) disposeFailedPlaceholder(ctx context.Context, ns, pod, container string, log *logrus.Entry) {
-	if _, keep := a.keepPodNothingRecreates(ctx, ns, pod, nil); keep {
-		err := a.coldStartInPlace(ctx, ns, pod, container, log)
-		if err == nil {
-			log.Warn("CRIU auto-restore failed in a pod nothing would recreate; its workload started cold in place")
-			return
-		}
-		log.WithError(err).Error("CRIU auto-restore failed in a pod nothing would recreate, and it cannot start cold in place; deleting it")
-	}
-	if err := a.deletePodRetrying(ctx, ns, pod, ""); err != nil {
-		log.WithError(err).Error("CRIU auto-restore: could not delete the failed pod")
-	}
+	a.disposeFailedPlaceholder(context.WithoutCancel(ctx), ns, pod, uid, container, log)
 }
 
 func (a *Agent) criuFailedNamespace() string {
@@ -438,11 +421,11 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 		// ... the library of the bundle version the pod ran with.
 		m.SourcePodMeta[webhook.BundleMeta] = id
 	}
-	if argv := a.containerColdArgv(ctx, req.Namespace, req.PodName, req.ContainerName); len(argv) > 0 {
+	if entry := a.containerColdEntrypoint(ctx, req.Namespace, req.PodName, req.ContainerName); len(entry) > 0 {
 		// A placeholder whose restore fails, in a pod nothing would
 		// recreate, starts the workload in place with it.
-		if b, err := json.Marshal(argv); err == nil {
-			m.SourcePodMeta[webhook.ColdArgvMeta] = string(b)
+		if b, err := json.Marshal(entry); err == nil {
+			m.SourcePodMeta[webhook.ColdEntrypointMeta] = string(b)
 		}
 	}
 	if req.CaptureID != "" {

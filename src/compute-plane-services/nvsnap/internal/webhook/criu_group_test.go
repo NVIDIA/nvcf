@@ -221,3 +221,49 @@ func TestCRIUGroupRestore_PlaceholderWithoutTheModelStartsCold(t *testing.T) {
 		t.Errorf("created %d download Job(s) for a restore", len(jobs.Items))
 	}
 }
+
+// A one-pod capture restores alone: its placeholder runs its init
+// containers like a lone placeholder's, and gets the entrypoint the capture
+// recorded, with its own args, to start cold in place. A rank of a larger
+// group still skips the init containers that only wait on its peers.
+func TestCRIUGroupRestore_OnePodGroupStartsLikeALonePod(t *testing.T) {
+	withInits := func(p *corev1.Pod) *corev1.Pod {
+		p.Spec.Containers[0].Command = nil
+		p.Spec.Containers[0].Args = []string{"--port", "$(PORT)"}
+		p.Spec.InitContainers = []corev1.Container{{Name: "wait-for-leader", Image: "busybox", Command: []string{"sh", "-c", "until nc leader 80; do sleep 1; done"}}}
+		return p
+	}
+	entry := `["/opt/start.sh"]`
+
+	one := CRIUGroup{Checkpoints: []string{"r0__1"}, Nodes: []string{"n0"}, ColdEntrypoints: []string{entry}}
+	m, _ := groupMutator(t, one, "")
+	pod := withInits(lwsRank("0"))
+	pod.Annotations[lwsSizeAnnotation] = "1"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := applyPatches(t, pod, patches)
+	if got.Annotations[CRIURestoreAnnotation] != "r0__1" {
+		t.Fatalf("not admitted as the restore placeholder: %v", got.Annotations)
+	}
+	want := []string{"--cold-start", ColdStartMarker, "--", "/opt/start.sh", "--port", "$(PORT)"}
+	if c := got.Spec.Containers[0]; !reflect.DeepEqual(c.Args, want) {
+		t.Errorf("args = %v, want %v", c.Args, want)
+	}
+	if c := got.Spec.InitContainers[0]; len(c.Command) > 0 && c.Command[0] == HelperBin {
+		t.Error("a one-pod group skipped its init container")
+	}
+
+	two := CRIUGroup{Checkpoints: []string{"r0__1", "r1__1"}, Nodes: []string{"n0", "n1"}, ColdEntrypoints: []string{entry, entry}}
+	m, _ = groupMutator(t, two, "")
+	pod = withInits(lwsRank("1"))
+	patches, err = m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = applyPatches(t, pod, patches)
+	if c := got.Spec.InitContainers[0]; len(c.Command) == 0 || c.Command[0] != HelperBin {
+		t.Errorf("a rank of a two-pod group runs its wait on its leader: %v", c.Command)
+	}
+}

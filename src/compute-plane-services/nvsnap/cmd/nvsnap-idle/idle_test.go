@@ -95,71 +95,79 @@ func buildIdle(t *testing.T) string {
 	return bin
 }
 
-// A failed restore in a pod nothing would recreate starts the workload in
-// place: SIGUSR1 makes the placeholder exec its command, in the same
-// process, and leaves the marker so a restarted container starts it at once.
+// A placeholder given a cold start idles until its marker exists; the agent
+// creates the marker and kills it, and the restarted container execs the
+// workload as its init, with its arguments intact, and again on every later
+// restart.
 func TestIdleColdStart(t *testing.T) {
 	bin := buildIdle(t)
 	dir := t.TempDir()
 	marker, out := filepath.Join(dir, "cold-start"), filepath.Join(dir, "out")
 	workload := []string{"/bin/sh", "-c", `echo "$0 $1" > ` + out + `; exec sleep 30`, "a b", "c"}
+	args := append([]string{"--cold-start", marker, "--"}, workload...)
 
-	cmd := exec.CommandContext(t.Context(), bin, append([]string{"--cold-start", marker, "--"}, workload...)...) //nolint:gosec // runs the program under test
-	if err := cmd.Start(); err != nil {
+	idle := exec.CommandContext(t.Context(), bin, args...) //nolint:gosec // runs the program under test
+	if err := idle.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
-	pid := cmd.Process.Pid
-	time.Sleep(200 * time.Millisecond)
-	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("the marker exists before the signal")
-	}
+	time.Sleep(300 * time.Millisecond)
 	if _, err := os.Stat(out); err == nil {
-		t.Fatal("the workload started before the signal")
+		t.Fatal("the workload started without the marker")
 	}
-
-	_ = cmd.Process.Signal(syscall.SIGUSR1)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if b, _ := os.ReadFile(out); strings.TrimSpace(string(b)) == "a b c" {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+	if b, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", idle.Process.Pid)); strings.TrimSpace(string(b)) != "nvsnap-idle" {
+		t.Errorf("without the marker it runs %q, want the idle program", b)
 	}
-	if b, _ := os.ReadFile(out); strings.TrimSpace(string(b)) != "a b c" {
-		t.Fatalf("the workload did not start with its arguments intact: %q", b)
-	}
-	if _, err := os.Stat(marker); err != nil {
-		t.Errorf("no marker after the cold start: %v", err)
-	}
-	// Exec, not a child: the workload is the same process.
-	if b, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid)); strings.TrimSpace(string(b)) != "sleep" {
-		t.Errorf("pid %d runs %q, want the workload in place", pid, b)
-	}
-
-	// A restarted container finds the marker and starts the workload at once.
-	_ = os.Remove(out)
-	again := exec.CommandContext(t.Context(), bin, append([]string{"--cold-start", marker, "--"}, workload...)...) //nolint:gosec // runs the program under test
-	if err := again.Start(); err != nil {
+	// What the agent does: the marker, then a kill of the container's init.
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = again.Process.Kill(); _ = again.Wait() }()
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(out); err == nil {
-			return
+	_ = idle.Process.Kill()
+	_ = idle.Wait()
+
+	for restart := range 2 {
+		_ = os.Remove(out)
+		c := exec.CommandContext(t.Context(), bin, args...) //nolint:gosec // runs the program under test
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
 		}
-		time.Sleep(50 * time.Millisecond)
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if b, _ := os.ReadFile(out); strings.TrimSpace(string(b)) == "a b c" {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if b, _ := os.ReadFile(out); strings.TrimSpace(string(b)) != "a b c" {
+			t.Fatalf("restart %d: the workload did not start with its arguments intact: %q", restart, b)
+		}
+		// Exec, not a child: the workload is the container's init.
+		if b, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", c.Process.Pid)); strings.TrimSpace(string(b)) != "sleep" {
+			t.Errorf("restart %d: pid %d runs %q, want the workload in place", restart, c.Process.Pid, b)
+		}
+		_ = c.Process.Kill()
+		_ = c.Wait()
 	}
-	t.Error("a restart with the marker present did not start the workload")
 }
 
-// SIGTERM still stops a placeholder that may cold start, without starting it.
+// A workload that cannot be started is reported, not idled over.
+func TestIdleColdStartExecFailure(t *testing.T) {
+	bin := buildIdle(t)
+	marker := filepath.Join(t.TempDir(), "cold-start")
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := exec.CommandContext(t.Context(), bin, "--cold-start", marker, "--", "/nonexistent/workload").Run() //nolint:gosec // runs the program under test
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 127 {
+		t.Errorf("want exit 127, got %v", err)
+	}
+}
+
+// SIGTERM stops a placeholder that may cold start, without starting it.
 func TestIdleColdStartStopsOnTerm(t *testing.T) {
 	bin := buildIdle(t)
 	dir := t.TempDir()
-	marker := filepath.Join(dir, "cold-start")
-	cmd := exec.CommandContext(t.Context(), bin, "--cold-start", marker, "--", "/bin/sh", "-c", "touch "+filepath.Join(dir, "ran")) //nolint:gosec // runs the program under test
+	cmd := exec.CommandContext(t.Context(), bin, "--cold-start", filepath.Join(dir, "cold-start"), "--", "/bin/sh", "-c", "touch "+filepath.Join(dir, "ran")) //nolint:gosec // runs the program under test
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -170,9 +178,6 @@ func TestIdleColdStartStopsOnTerm(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "ran")); err == nil {
 		t.Error("the workload ran on SIGTERM")
-	}
-	if _, err := os.Stat(marker); err == nil {
-		t.Error("SIGTERM left a marker")
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"k8s.io/apimachinery/pkg/types"
@@ -145,7 +146,7 @@ func parseCRIUGroup(key string, data map[string]string) (webhook.CRIUGroup, bool
 		return webhook.CRIUGroup{}, false
 	}
 	g := webhook.CRIUGroup{Key: key, GPUShare: data["gpushare"] == "true", VerifyNamespace: verifyNamespace(data),
-		Checkpoints: make([]string, size), Nodes: make([]string, size), Companion: make([]bool, size), Containers: make([]string, size), Bundles: make([]string, size)}
+		Checkpoints: make([]string, size), Nodes: make([]string, size), Companion: make([]bool, size), Containers: make([]string, size), Bundles: make([]string, size), ColdEntrypoints: make([]string, size)}
 	for i := range size {
 		g.Checkpoints[i] = data[fmt.Sprintf("checkpoint.%d", i)]
 		if g.Checkpoints[i] == "" {
@@ -155,6 +156,7 @@ func parseCRIUGroup(key string, data map[string]string) (webhook.CRIUGroup, bool
 		g.Companion[i] = data[fmt.Sprintf("companion.%d", i)] == "true"
 		g.Containers[i] = data[fmt.Sprintf("container.%d", i)]
 		g.Bundles[i] = data[fmt.Sprintf("bundle.%d", i)]
+		g.ColdEntrypoints[i] = data[fmt.Sprintf("coldEntrypoint.%d", i)]
 	}
 	return g, true
 }
@@ -509,6 +511,15 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	cctx, cancel := context.WithTimeout(ctx, criuGroupCaptureTimeout)
 	defer cancel()
 	t0 := time.Now()
+	// Read while the ranks run: a capture stops them.
+	entrypoints := make([]string, len(ranks))
+	for i, r := range ranks {
+		if entry := c.a.containerColdEntrypoint(ctx, r.Namespace, r.Name, gpuContainer(r)); len(entry) > 0 {
+			if b, jerr := json.Marshal(entry); jerr == nil {
+				entrypoints[i] = string(b)
+			}
+		}
+	}
 	results, stopped, err := c.checkpointInstance(cctx, ranks, companions, companionContainers, log)
 	data := record.Data
 	if err != nil {
@@ -536,6 +547,9 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 				data[fmt.Sprintf("container.%d", i)] = companionContainers[members[i].Name]
 			} else {
 				data[fmt.Sprintf("container.%d", i)] = gpuContainer(members[i])
+				if entrypoints[i] != "" {
+					data[fmt.Sprintf("coldEntrypoint.%d", i)] = entrypoints[i]
+				}
 			}
 		}
 		if c.a.gpushareEnabledFor(ranks[0]) {

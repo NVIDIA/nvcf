@@ -186,5 +186,5 @@ func (c *criuAutoRestorer) failRestored(ctx context.Context, pod *corev1.Pod, re
 	if container == "" {
 		container = pod.Annotations[webhook.CRIURestoreContainerAnnotation]
 	}
-	c.a.disposeFailedPlaceholder(ctx, pod.Namespace, pod.Name, container, log)
+	c.a.disposeFailedPlaceholder(ctx, pod.Namespace, pod.Name, pod.UID, container, log)
 }

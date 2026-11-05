@@ -379,21 +379,28 @@ keys and request data.
 | An agent rollout during a capture | Captures do not start until every agent runs one revision; an agent that restarts mid-capture fails it (section 8) | `criu_group_guard.go` `agentsSettled`; `criu_group_recover.go` `recoverInterruptedCaptures` |
 
 A lone placeholder's idle program is given the workload's argv: the pod's
-own command and args, or, for an image that names its entrypoint, the argv the
-runtime started the captured container with (its OCI spec's `process.args`,
-recorded on the capture as `cold_argv`). To start cold in place the agent marks
-the pod `nvsnap.io/criu-cold-started`, signals the idle program (`SIGUSR1`),
-which execs the workload as the container's init, and sets the restored
-condition so the workload's own readiness probe decides. The idle program
-leaves a marker on the pod's restore work volume, so a container restart starts
-the workload at once. A placeholder admitted without the argv (an older
-webhook) cannot, and is deleted as before. The liveness and startup probes the
-placeholder dropped stay dropped for that pod (`internal/agent/cold_start.go`,
-`cmd/nvsnap-idle`). A lone placeholder runs all of the pod's init containers,
-so a cold start in place has what they set up. A group placeholder skips the
-init containers that would only wait on the instance's peers, and keeps every
-one whose output something running in the pod reads, directly or through
-another kept init (`internal/webhook/criu_restore.go` `initsToKeep`).
+own command and args, or, for an image that names its entrypoint, the
+entrypoint the runtime started the captured container with (recorded on the
+capture as `cold_entrypoint`) and the pod's own args, which the kubelet
+expands for this pod. To start cold in place the agent checks the pod and
+container are still the failed placeholder's, writes a marker on the pod's
+restore work volume, marks the pod `nvsnap.io/criu-cold-started`, and kills
+the container's init. That ends the container's pid namespace, including any
+processes a restore that failed late left running; the container restarts,
+and the idle program, finding the marker, execs the workload as its init, on
+this and every later restart. The restored condition is set so the
+workload's own readiness probe decides. Each step can be repeated, so an
+agent that stops half way is finished by the next. A placeholder admitted
+without the argv (an older webhook), a pod whose containers share one pid
+namespace, and a pod whose containers are never restarted cannot, and are
+deleted as before. The liveness and startup probes the placeholder dropped
+stay dropped for that pod (`internal/agent/cold_start.go`,
+`cmd/nvsnap-idle`). A lone placeholder, and a one-pod capture with no
+companions, runs all of the pod's init containers, so a cold start in place
+has what they set up. A rank of a larger group skips the init containers
+that would only wait on the instance's peers, and keeps every one whose
+output something running in the pod reads, directly or through another kept
+init (`internal/webhook/criu_restore.go` `initsToKeep`).
 
 ## 11. Platform integration (NVCF and NVCA)
 

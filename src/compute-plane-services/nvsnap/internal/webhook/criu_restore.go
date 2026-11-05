@@ -50,12 +50,12 @@ const (
 	// restores on the node use the same images.
 	RestoreWorkMountPath = "/nvsnap-restore-work"
 
-	// ColdArgvMeta is the capture record key holding, as a JSON list, the
-	// argv the source container's runtime started it with (its OCI spec's
-	// process.args: the image entrypoint and command with the pod's
-	// overrides applied). A placeholder in a pod nothing would recreate
-	// starts it in place when its restore fails.
-	ColdArgvMeta = "cold_argv"
+	// ColdEntrypointMeta is the capture record key holding, as a JSON
+	// list, what the source container's runtime ran ahead of the pod's own
+	// args: the image entrypoint, and its command when the pod gives no
+	// args. A placeholder in a pod nothing would recreate starts it, with
+	// its own args, in place when its restore fails.
+	ColdEntrypointMeta = "cold_entrypoint"
 	// ColdStartMarker is where the placeholder's idle program records a
 	// cold start, on the work volume, which outlives the container: a
 	// restarted container starts the workload at once.
@@ -294,20 +294,28 @@ func (m *Mutator) criuPlaceholderPatches(pod *corev1.Pod, checkpointID string, m
 
 // ColdArgv returns the argv container c starts its workload with, as the
 // pod would without nvsnap: its own command and args when it names a
-// command, else what the capture record man saw the runtime start (the
-// image entrypoint lives in the image, not the pod). Nil when neither is
-// known; the placeholder then cannot start cold in place.
+// command, else the image entrypoint the capture record man saw the runtime
+// start (the entrypoint lives in the image, not the pod) and c's own args.
+// The args are passed as written: the kubelet expands their $(VAR)
+// references for this pod. Nil when neither is known; the placeholder then
+// cannot start cold in place.
 func ColdArgv(c *corev1.Container, man checkpointstore.Manifest) []string {
-	if len(c.Command) > 0 && c.Command[0] != IdleBin {
-		return append(append([]string{}, c.Command...), c.Args...)
-	}
-	var argv []string
-	if raw := man.SourcePodMeta[ColdArgvMeta]; raw != "" {
-		if err := json.Unmarshal([]byte(raw), &argv); err != nil || len(argv) == 0 || argv[0] == "" || argv[0] == IdleBin {
+	if len(c.Command) > 0 {
+		if c.Command[0] == IdleBin {
 			return nil
 		}
+		return append(append([]string{}, c.Command...), c.Args...)
 	}
-	return argv
+	raw := man.SourcePodMeta[ColdEntrypointMeta]
+	if raw == "" {
+		return nil
+	}
+	var entry []string
+	if err := json.Unmarshal([]byte(raw), &entry); err != nil || len(entry) == 0 || entry[0] == "" || entry[0] == IdleBin {
+		return nil
+	}
+	argv := make([]string, 0, len(entry)+len(c.Args))
+	return append(append(argv, entry...), c.Args...)
 }
 
 // restoredGatePatches adds the CRIURestoredCondition readiness gate.

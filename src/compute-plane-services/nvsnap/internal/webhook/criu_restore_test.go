@@ -607,7 +607,7 @@ func TestCRIURestore_StoreReadOnlyAndWorkVolumeReserved(t *testing.T) {
 // it cannot start cold in place.
 func TestCRIURestore_PlaceholderKnowsItsColdStart(t *testing.T) {
 	recorded := criuCaptureRecord()
-	recorded.SourcePodMeta[ColdArgvMeta] = `["/opt/nim/start.sh","--port","8000"]`
+	recorded.SourcePodMeta[ColdEntrypointMeta] = `["/opt/nim/start.sh"]`
 	for _, tc := range []struct {
 		name    string
 		command []string
@@ -617,7 +617,11 @@ func TestCRIURestore_PlaceholderKnowsItsColdStart(t *testing.T) {
 	}{
 		{"pod command and args", []string{"vllm"}, []string{"serve", "m"}, criuCaptureRecord(), []string{"vllm", "serve", "m"}},
 		{"pod command wins over the record", []string{"vllm"}, nil, recorded, []string{"vllm"}},
-		{"entrypoint image: the recorded argv", nil, []string{"--port", "8000"}, recorded, []string{"/opt/nim/start.sh", "--port", "8000"}},
+		{"entrypoint image: the recorded entrypoint and the pod's args", nil, []string{"--port", "8000"}, recorded, []string{"/opt/nim/start.sh", "--port", "8000"}},
+		// The kubelet expands $(VAR) in the placeholder's own args, for
+		// this pod: the source pod's values are never reused.
+		{"entrypoint image, args with references", nil, []string{"--bind=$(POD_IP)"}, recorded, []string{"/opt/nim/start.sh", "--bind=$(POD_IP)"}},
+		{"entrypoint image, no args", nil, nil, recorded, []string{"/opt/nim/start.sh"}},
 		{"entrypoint image, nothing recorded", nil, []string{"--port", "8000"}, criuCaptureRecord(), nil},
 		{"entrypoint image, no args, nothing recorded", nil, nil, criuCaptureRecord(), nil},
 	} {
@@ -652,7 +656,7 @@ func TestColdArgv_RejectsBadRecords(t *testing.T) {
 	c := &corev1.Container{Name: "inference"}
 	for _, raw := range []string{`not json`, `[]`, `[""]`, `["` + IdleBin + `"]`} {
 		man := criuCaptureRecord()
-		man.SourcePodMeta[ColdArgvMeta] = raw
+		man.SourcePodMeta[ColdEntrypointMeta] = raw
 		if got := ColdArgv(c, man); got != nil {
 			t.Errorf("%s: got %v, want nil", raw, got)
 		}
