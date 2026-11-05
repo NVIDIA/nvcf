@@ -42,9 +42,7 @@ public class AuthzRequestValidator {
 
     public PolicyEvaluationRequestVo validate(
             String namespace, String ruleName, AuthzRequest request) {
-        assertValidRuleName(ruleName);
-
-        if (ruleName.equals(nakProperties.getTieredRateLimitRuleName())) {
+        if (ruleName != null && ruleName.equals(nakProperties.getTieredRateLimitRuleName())) {
             resolveAudienceServiceId(namespace);
             return PolicyEvaluationRequestVo.builder()
                     .namespace(namespace)
@@ -52,6 +50,8 @@ public class AuthzRequestValidator {
                     .tieredRateKey(getTieredRateKey(request))
                     .build();
         }
+
+        assertValidRuleName(ruleName);
 
         IntrospectionRequest introspectionRequest = IntrospectionRequest.builder()
                 .key(getApiKey(request))

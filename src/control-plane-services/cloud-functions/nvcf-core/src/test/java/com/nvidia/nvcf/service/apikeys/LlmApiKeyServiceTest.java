@@ -33,7 +33,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 class LlmApiKeyServiceTest {
 
     @Mock
-    private LlmApiKeyClient llmApiKeyClient;
+    private ApiKeysClient apiKeysClient;
 
     private static ApiKeyValidationResult result(String ncaId) {
         return new ApiKeyValidationResult(
@@ -48,41 +48,41 @@ class LlmApiKeyServiceTest {
     @Test
     void resolveForLlmInvocation_cachesRepeatedRequestsForSameKey() {
         var result = result("nca-1");
-        when(llmApiKeyClient.fetchApiKeyValidationResult("key-1")).thenReturn(result);
-        var llmApiKeyService = new LlmApiKeyService(llmApiKeyClient);
+        when(apiKeysClient.fetchLlmApiKeyValidationResult("key-1")).thenReturn(result);
+        var llmApiKeyService = new LlmApiKeyService(apiKeysClient);
 
         var first = llmApiKeyService.resolveForLlmInvocation("key-1");
         var second = llmApiKeyService.resolveForLlmInvocation("key-1");
 
         assertThat(first).isEqualTo(result);
         assertThat(second).isEqualTo(result);
-        verify(llmApiKeyClient, times(1)).fetchApiKeyValidationResult("key-1");
+        verify(apiKeysClient, times(1)).fetchLlmApiKeyValidationResult("key-1");
     }
 
     @Test
     void resolveForLlmInvocation_loadsDistinctKeysIndependently() {
         var resultForKey1 = result("nca-1");
         var resultForKey2 = result("nca-2");
-        when(llmApiKeyClient.fetchApiKeyValidationResult("key-1")).thenReturn(resultForKey1);
-        when(llmApiKeyClient.fetchApiKeyValidationResult("key-2")).thenReturn(resultForKey2);
-        var llmApiKeyService = new LlmApiKeyService(llmApiKeyClient);
+        when(apiKeysClient.fetchLlmApiKeyValidationResult("key-1")).thenReturn(resultForKey1);
+        when(apiKeysClient.fetchLlmApiKeyValidationResult("key-2")).thenReturn(resultForKey2);
+        var llmApiKeyService = new LlmApiKeyService(apiKeysClient);
 
         assertThat(llmApiKeyService.resolveForLlmInvocation("key-1")).isEqualTo(resultForKey1);
         assertThat(llmApiKeyService.resolveForLlmInvocation("key-2")).isEqualTo(resultForKey2);
         // repeat key-1 to prove it's still independently cached, not clobbered by key-2's load
         assertThat(llmApiKeyService.resolveForLlmInvocation("key-1")).isEqualTo(resultForKey1);
 
-        verify(llmApiKeyClient, times(1)).fetchApiKeyValidationResult("key-1");
-        verify(llmApiKeyClient, times(1)).fetchApiKeyValidationResult("key-2");
+        verify(apiKeysClient, times(1)).fetchLlmApiKeyValidationResult("key-1");
+        verify(apiKeysClient, times(1)).fetchLlmApiKeyValidationResult("key-2");
     }
 
     @Test
     void resolveForLlmInvocation_fallsBackToBackupCacheWhenUpstreamUnreachable() {
         var result = result("nca-1");
-        when(llmApiKeyClient.fetchApiKeyValidationResult("key-1"))
+        when(apiKeysClient.fetchLlmApiKeyValidationResult("key-1"))
                 .thenReturn(result)
                 .thenThrow(new UpstreamException("NAK unreachable"));
-        var llmApiKeyService = new LlmApiKeyService(llmApiKeyClient);
+        var llmApiKeyService = new LlmApiKeyService(apiKeysClient);
 
         // populates both the primary and the backup cache
         assertThat(llmApiKeyService.resolveForLlmInvocation("key-1")).isEqualTo(result);
@@ -91,14 +91,14 @@ class LlmApiKeyServiceTest {
         llmApiKeyService.invalidatePrimaryCache();
 
         assertThat(llmApiKeyService.resolveForLlmInvocation("key-1")).isEqualTo(result);
-        verify(llmApiKeyClient, times(2)).fetchApiKeyValidationResult("key-1");
+        verify(apiKeysClient, times(2)).fetchLlmApiKeyValidationResult("key-1");
     }
 
     @Test
     void resolveForLlmInvocation_throwsWhenUnreachableAndNotInBackupCache() {
-        when(llmApiKeyClient.fetchApiKeyValidationResult("key-1"))
+        when(apiKeysClient.fetchLlmApiKeyValidationResult("key-1"))
                 .thenThrow(new UpstreamException("NAK unreachable"));
-        var llmApiKeyService = new LlmApiKeyService(llmApiKeyClient);
+        var llmApiKeyService = new LlmApiKeyService(apiKeysClient);
 
         assertThatThrownBy(() -> llmApiKeyService.resolveForLlmInvocation("key-1"))
                 .isInstanceOf(UpstreamException.class);
