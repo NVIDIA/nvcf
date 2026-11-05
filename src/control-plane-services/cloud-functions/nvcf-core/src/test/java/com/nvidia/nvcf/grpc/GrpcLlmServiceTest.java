@@ -258,7 +258,7 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
         setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
                     List.of(new Resource("account-functions", "*")),
                     List.of(SCOPE_INVOKE_FUNCTION), true, null);
-        MockApiKeysServer.setTieredRateLimitResponse(new RateLimitAttributes("2000-M", "500-M"));
+        MockApiKeysServer.setTieredRateLimitResponse(TEST_NCA_ID, new RateLimitAttributes("2000-M", "500-M"));
         var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
         var clientToken = "nvapi-stg-some-key";
 
@@ -275,7 +275,7 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
         setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
         setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
         saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
-        MockApiKeysServer.setTieredRateLimitResponse(new RateLimitAttributes("5000-M", "1000-M"));
+        MockApiKeysServer.setTieredRateLimitResponse(TEST_NCA_ID, new RateLimitAttributes("5000-M", "1000-M"));
         var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
         var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
                                                           List.of(SCOPE_INVOKE_FUNCTION), 100);
@@ -299,7 +299,7 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
                     List.of(new Resource("account-functions", "*")),
                     List.of(SCOPE_INVOKE_FUNCTION), true,
                     new RateLimitAttributes("5000-M", "1000-M"));
-        MockApiKeysServer.setTieredRateLimitResponse(new RateLimitAttributes("2000-M", "500-M"));
+        MockApiKeysServer.setTieredRateLimitResponse(TEST_NCA_ID, new RateLimitAttributes("2000-M", "500-M"));
         var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
         var clientToken = "nvapi-stg-some-key";
 
@@ -339,7 +339,7 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
         setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
         setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
         saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
-        MockApiKeysServer.setTieredRateLimitResponse(new RateLimitAttributes("5000-M", malformed));
+        MockApiKeysServer.setTieredRateLimitResponse(TEST_NCA_ID, new RateLimitAttributes("5000-M", malformed));
         var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
         var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
                                                           List.of(SCOPE_INVOKE_FUNCTION), 100);
@@ -355,7 +355,7 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
         setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
         setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
         saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
-        MockApiKeysServer.setTieredRateLimitResponse(new RateLimitAttributes(null, null));
+        MockApiKeysServer.setTieredRateLimitResponse(TEST_NCA_ID, new RateLimitAttributes(null, null));
         var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
         var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
                                                           List.of(SCOPE_INVOKE_FUNCTION), 100);

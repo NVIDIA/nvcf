@@ -21,9 +21,11 @@ import static com.github.tomakehurst.wiremock.client.WireMock.equalToJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.nvcf.configuration.staticclientauth.StaticClientAuthConfiguration.StaticClientApiKeysProperties;
 import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult.RateLimitAttributes;
 import java.util.Optional;
@@ -37,6 +39,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 class ApiKeysClientTest {
 
+    private static final String EVALUATION_URI = "/v1/namespaces/nvcf/evaluations/apikey.allow";
     private static final String LLM_EVALUATION_URI = "/v1/namespaces/nvcf/evaluations/apikey.llm_allow";
     private static final String ACCOUNT_RATE_LIMIT_EVALUATION_URI =
             "/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit";
@@ -51,7 +54,7 @@ class ApiKeysClientTest {
         var staticProperties = new StaticClientApiKeysProperties();
         staticProperties.setToken("test-token");
         client = new ApiKeysClient(
-                server.baseUrl(), "/v1/namespaces/nvcf/evaluations/apikey.allow", "apiKey",
+                server.baseUrl(), EVALUATION_URI, "apiKey",
                 LLM_EVALUATION_URI, "llmKey",
                 ACCOUNT_RATE_LIMIT_EVALUATION_URI, "tiered_rate_key",
                 "unused", "unused", "unused", "unused",
@@ -70,6 +73,42 @@ class ApiKeysClientTest {
                                                    .withHeader(HttpHeaders.CONTENT_TYPE,
                                                                MediaType.APPLICATION_JSON_VALUE)
                                                    .withBody(responseBody)));
+    }
+
+    @Test
+    void fetchApiKeyValidationResult_usesGenericEvaluation() {
+        stubResponse(EVALUATION_URI, """
+                {"input":{"apiKey":"key-1"}}
+                """, """
+                {"namespace":"nvcf","rule_name":"apikey.allow",
+                 "result":{"allowed":true,"ncaId":"nca-1","ownerId":"owner-1","policy":{}}}
+                """);
+
+        assertThat(client.fetchApiKeyValidationResult("key-1").ncaId()).isEqualTo("nca-1");
+    }
+
+    @Test
+    void fetchApiKeyValidationResult_forbiddenWhenNotAllowed() {
+        stubResponse(EVALUATION_URI, """
+                {"input":{"apiKey":"key-1"}}
+                """, """
+                {"namespace":"nvcf","rule_name":"apikey.allow","result":{"allowed":false}}
+                """);
+
+        assertThatThrownBy(() -> client.fetchApiKeyValidationResult("key-1"))
+                .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    void fetchApiKeyValidationResult_forbiddenWhenResultAbsent() {
+        stubResponse(EVALUATION_URI, """
+                {"input":{"apiKey":"key-1"}}
+                """, """
+                {"namespace":"nvcf","rule_name":"apikey.allow"}
+                """);
+
+        assertThatThrownBy(() -> client.fetchApiKeyValidationResult("key-1"))
+                .isInstanceOf(ForbiddenException.class);
     }
 
     @Test

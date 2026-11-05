@@ -83,9 +83,9 @@ public class ApiKeysClient {
             String llmEvaluationUri,
             @Value("${nvcf.llm-api-keys.request-property-name:apiKey}")
             String llmRequestPropertyName,
-            @Value("${nvcf.account-rate-limit.evaluation-uri:/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit}")
+            @Value("${nvcf.account-token-rate-limit.evaluation-uri:/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit}")
             String accountRateLimitEvaluationUri,
-            @Value("${nvcf.account-rate-limit.request-property-name:tiered_rate_key}")
+            @Value("${nvcf.account-token-rate-limit.request-property-name:tiered_rate_key}")
             String accountRateLimitRequestPropertyName,
             @Value("${spring.security.oauth2.client.registration.api-keys.client-id}")
             String clientId,
@@ -146,8 +146,8 @@ public class ApiKeysClient {
 
     private ApiKeyValidationResult validate(String uri, String propertyName, String apiKey) {
         return evaluate(uri, propertyName, apiKey)
-                .map(apiKeysResponse -> jsonMapper.convertValue(apiKeysResponse.getResult(),
-                                                                ApiKeyValidationResult.class))
+                .mapNotNull(apiKeysResponse -> jsonMapper.convertValue(apiKeysResponse.getResult(),
+                                                                       ApiKeyValidationResult.class))
                 .filter(ApiKeyValidationResult::valid)
                 .switchIfEmpty(Mono.error(() -> new ForbiddenException("Authorization failed")))
                 .block();
@@ -163,17 +163,17 @@ public class ApiKeysClient {
                                    .build())
                 .retrieve()
                 .onStatus(HttpStatusCode::is4xxClientError, response -> {
-                    log.error("4xx error from NAK: {}", response.statusCode());
+                    log.error("4xx error from NAK for {}: {}", uri, response.statusCode());
                     return response.createException();
                 })
                 .onStatus(HttpStatusCode::is5xxServerError, response -> {
-                    log.error("Error response code from NAK: {}", response.statusCode());
+                    log.error("Error response code from NAK for {}: {}", uri, response.statusCode());
                     return Mono.error(new UpstreamException("NAK returned 5xx error"));
                 })
                 .bodyToMono(ApiKeyValidationResponse.class)
                 .retryWhen(RETRY_SPEC)
                 .switchIfEmpty(
-                        Mono.error(() -> new UpstreamException("No response from NAK")));
+                        Mono.error(() -> new UpstreamException("No response from NAK for " + uri)));
     }
 
 }
