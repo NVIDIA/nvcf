@@ -6,8 +6,9 @@
 # server Service never public by default. Runs only when nvsnap or this
 # workflow changes.
 #
-# If this fails on your change, run the same check locally (needs helm;
-# `helm dependency build` fetches the subcharts once):
+# If this fails on your change, run the same check locally (needs helm,
+# the subchart repos added as in the "Fetch" step, and one
+# `helm dependency build`):
 #
 #   helm dependency build src/compute-plane-services/nvsnap/deploy/helm/nvsnap
 #   bash src/compute-plane-services/nvsnap/scripts/test-helm-chart.sh
@@ -59,7 +60,16 @@ jobs:
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
       - name: Fetch the chart's subcharts
-        run: helm dependency build src/compute-plane-services/nvsnap/deploy/helm/nvsnap
+        run: |
+          set -euo pipefail
+          # helm dependency build resolves each dependency's repository URL
+          # through a configured repo; register the ones Chart.yaml names.
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+          helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm dependency build src/compute-plane-services/nvsnap/deploy/helm/nvsnap
 
       - name: Run the chart checks
         run: bash src/compute-plane-services/nvsnap/scripts/test-helm-chart.sh
