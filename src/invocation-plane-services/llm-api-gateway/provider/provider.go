@@ -40,12 +40,12 @@ var ErrStreamIncomplete = errors.New("upstream stream incomplete")
 type UpstreamStreamError struct {
 	// Message is the upstream error message; empty when the event has no string message.
 	Message string
-	Raw     json.RawMessage
 }
 
 func (e *UpstreamStreamError) Error() string {
-	// The upstream controls the event size, so the log text is capped like the message.
-	return fmt.Sprintf("%s: upstream error event: %s", ErrStreamIncomplete, truncateMessage(string(e.Raw)))
+	// Like UpstreamError, the log text carries no upstream text: engine error
+	// events can echo request content. The client still gets Message.
+	return fmt.Sprintf("%s: upstream error event", ErrStreamIncomplete)
 }
 
 func (e *UpstreamStreamError) Unwrap() error {

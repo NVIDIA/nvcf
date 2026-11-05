@@ -1025,7 +1025,7 @@ func upstreamStreamError(payload string) *UpstreamStreamError {
 	if len(event.Error) == 0 || bytes.Equal(event.Error, []byte("null")) {
 		return nil
 	}
-	return &UpstreamStreamError{Message: UpstreamErrorMessage([]byte(payload)), Raw: event.Error}
+	return &UpstreamStreamError{Message: UpstreamErrorMessage([]byte(payload))}
 }
 
 func (p *StargateProvider) readStream(

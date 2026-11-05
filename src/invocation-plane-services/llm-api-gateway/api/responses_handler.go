@@ -484,10 +484,7 @@ func (s *nativeResponsesStream) captureUpstreamError(eventType string, block []b
 		return false
 	}
 	_, data, _ := splitNativeResponsesSSEBlock(block)
-	s.upstreamError = &provider.UpstreamStreamError{
-		Message: provider.UpstreamErrorMessage([]byte(data)),
-		Raw:     json.RawMessage(data),
-	}
+	s.upstreamError = &provider.UpstreamStreamError{Message: provider.UpstreamErrorMessage([]byte(data))}
 	return true
 }
 
