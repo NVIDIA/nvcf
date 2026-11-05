@@ -74,6 +74,9 @@ var (
 	MaxSQSBatchPull           = newFeatureFlag("MaxSQSBatchPull", newBool(true))
 	CordonMaintenance         = newFeatureFlag("CordonMaintenance", newBool(false))
 	CordonAndDrainMaintenance = newFeatureFlag("CordonAndDrainMaintenance", newBool(false))
+	// NodeCordonSignal lets a worker learn that its node was cordoned. NVCA annotates the worker pods on a
+	// cordoned node and the pod webhook mounts that annotation as a file through a downward API volume.
+	NodeCordonSignal = newFeatureFlag("NodeCordonSignal", newBool(false))
 	// AckTaskRequestAfterPodsScheduled instructs the agent to only acknowledge ICMS requests with ICMS
 	// and delete queue messages after all NVCT task pods have been accepted by the cluster's scheduler.
 	AckTaskRequestAfterPodsScheduled = newFeatureFlag("AckTaskRequestAfterPodsScheduled", newBool(false))

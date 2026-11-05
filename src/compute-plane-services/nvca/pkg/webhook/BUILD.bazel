@@ -85,6 +85,7 @@ go_test(
         "helm_persistent_storage_webhook_test.go",
         "helm_storage_webhook_test.go",
         "miniservice_mutating_webhook_test.go",
+        "miniservice_node_state_test.go",
         "nvca_mutating_webhook_test.go",
         "pod_affinity_test.go",
         "pod_nodeaffinity_webhook_test.go",
