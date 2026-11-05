@@ -29,6 +29,12 @@ write_values() {
 
 printf '{}\n' > "$environment_file"
 write_values "$work_dir/default.yaml"
+# Image identities remain explicit even when global.image points at a mirror.
+for path in container natsBox.container; do
+  assert_equal "$(yq -r ".nats.$path.image.registry" "$work_dir/default.yaml")" docker.io "$path upstream registry"
+done
+assert_equal "$(yq -r '.nats.natsBox.container.image.repository' "$work_dir/default.yaml")" natsio/nats-box 'upstream box repository'
+
 assert_equal "$(yq '.nats.natsBox.podTemplate' "$work_dir/default.yaml")" null 'no unconditional box policy'
 # Exercise the documented environment block, not a second copy of its pins.
 awk '/^### Use upstream NATS images/{section=1; next} section && /^```yaml$/{block=1; next} block && /^```$/{exit} block' "$manifest" > "$environment_file"

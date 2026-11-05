@@ -254,7 +254,7 @@ nats:
     image:
       registry: docker.io
       repository: synadia/nats-server
-      tag: "2.14.6-alpine3.22"
+      tag: "2.14.9-alpine3.22"
     merge:
       securityContext:
         runAsNonRoot: true
@@ -312,14 +312,15 @@ nats:
     #     secretName: nats-server-tls   # cert-manager-issued; SAN = external NATS hostname
   # Image overrides for the NATS config reloader. The reloader is not
   # republished under the public nvidia/nvcf catalog, so it defaults to its
-  # upstream source, docker.io/natsio/nats-server-config-reloader:0.24.0.
-  # Leave these unset unless you have mirrored the image into your own
+  # upstream source, docker.io/natsio/nats-server-config-reloader:0.25.0.
+  # The stack pins the patched tag before a newer wrapper is consumed.
+  # Leave registry and repository unset unless you have mirrored it into your own
   # registry, in which case set registry and repository together:
   # reloader:
   #   image:
   #     registry: <your-registry>
   #     repository: <your-repository>/nats-server-config-reloader
-  #     tag: "0.24.0"
+  #     tag: "0.25.0"
   # PDB: the upstream NATS chart enables a disruption budget by default.
   # Override here to disable it or adjust the minAvailable threshold.
   podDisruptionBudget:
