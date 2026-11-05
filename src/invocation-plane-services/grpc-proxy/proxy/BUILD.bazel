@@ -89,6 +89,7 @@ go_test(
     srcs = [
         "connection_logging_test.go",
         "director_test.go",
+        "health_test.go",
         "hijack_test.go",
         "info_test.go",
         "lifecycle_events_test.go",
@@ -109,6 +110,7 @@ go_test(
         "@com_github_gorilla_websocket//:websocket",
         "@com_github_hellofresh_health_go_v5//:health-go",
         "@com_github_jellydator_ttlcache_v3//:ttlcache",
+        "@com_github_nats_io_nats_go//:nats_go",
         "@com_github_prometheus_client_golang//prometheus/testutil",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
