@@ -158,3 +158,29 @@ At runtime the image provides:
 - `/openbao/plugins/vault-plugin-secrets-jwt-v<version>` - explicit old and target commands from the version manifest
 - `/openbao/plugin-config/jwt.hcl` - declarative version registration with binary hashes
 - `/usr/local/bin/jwt-plugin-lifecycle` - state checks, explicit mount tuning, and gated catalog cleanup
+
+## Targeted Raft leadership transfer
+
+Servers built from this source expose an operator endpoint for checking each
+member after a JWT plugin transition. Older images do not have this endpoint;
+use a published, qualified server image that includes it before changing an
+upgrade procedure.
+
+```bash
+bao write sys/storage/raft/transfer-leadership server_id=<existing-voter-id>
+```
+
+The caller needs `update` and `sudo` on this path in the root namespace.
+The target must be a different, healthy voter in current Autopilot state.
+Raft catches it up before requesting an election. Unknown, non-voting and
+unhealthy targets are rejected.
+The request never changes membership or falls back to a different target.
+Raft's transfer wait uses its configured election timeout. A timed-out transfer
+may still complete; recheck leadership before further actions. An HTTP success
+means the Raft transfer completed, not that OpenBao active setup is ready.
+
+Poll the target's local `sys/leader` response for `is_self: true`, then require
+healthy Autopilot state and unchanged voters before issuing a JWT. Stop on a
+failed request or unmet checks. A standby response can be forwarded and does
+not verify that member's running plugin. Retain the existing per-member
+version, SHA and JWT signature checks at every transition.

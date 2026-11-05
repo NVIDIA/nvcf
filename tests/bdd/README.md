@@ -200,6 +200,22 @@ go test -run '^TestOpenBaoJWTPluginLifecycle$' -timeout 15m -v
 The `-short` suite runs a separate fake-runner wiring check. It does not
 validate an OpenBao deployment.
 
+`TestOpenBaoRaftLeadership` uses the test image built above with a new
+container. It checks three Raft voters through old-version pin,
+target tune, rollback and re-upgrade. Every final server must become active,
+report the selected plugin version and SHA, and sign with the original key.
+It also checks unchanged membership and denied operator requests.
+
+```sh
+export OPENBAO_RAFT_TEST_CONTAINER="nvcf-raft-$OPENBAO_JWT_TEST_ID"
+docker run -d --name "$OPENBAO_RAFT_TEST_CONTAINER" --network none "$OPENBAO_JWT_TEST_IMAGE"
+go test -count=1 -run '^TestOpenBaoRaftLeadership$' -timeout 20m -v
+```
+
+The fixture hosts three independent server processes with separate Raft data
+in one disposable container. This does not qualify a full Kubernetes stack
+upgrade or replace the release-specific upgrade rehearsal.
+
 ### BYOO features
 
 `byoo-render.feature` renders the compute-plane stack for each observability

@@ -1,0 +1,234 @@
+--- /dev/null
++++ b/physical/raft/leadership_transfer.go
+@@ -0,0 +1,82 @@
++// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
++// SPDX-License-Identifier: MPL-2.0
++
++package raft
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"time"
++
++	metrics "github.com/hashicorp/go-metrics/compat"
++	"github.com/hashicorp/raft"
++	autopilot "github.com/hashicorp/raft-autopilot"
++)
++
++// ErrInvalidLeadershipTransfer indicates that the target or cluster is unsuitable.
++var ErrInvalidLeadershipTransfer = errors.New("invalid leadership transfer")
++
++// TransferLeadership requests a healthy existing voter without changing membership.
++// Raft bounds the transfer by its election timeout and catches the target up before
++// requesting an election. Core's existing lost-leadership path performs HA teardown.
++func (b *RaftBackend) TransferLeadership(ctx context.Context, target string) error {
++	defer metrics.MeasureSince([]string{"raft-storage", "transfer-leadership"}, time.Now())
++	b.l.RLock()
++	defer b.l.RUnlock()
++	if err := ctx.Err(); err != nil {
++		return err
++	}
++	if b.raft == nil {
++		return errors.New("raft storage is not initialized")
++	}
++	if b.raft.State() != raft.Leader {
++		return raft.ErrNotLeader
++	}
++	if b.autopilot == nil {
++		return ErrRaftAutopilotNotInitialized
++	}
++	configuration := b.raft.GetConfiguration()
++	if err := configuration.Error(); err != nil {
++		return err
++	}
++	address, err := leadershipTransferTarget(raft.ServerID(b.localID), raft.ServerID(target), configuration.Configuration(), b.autopilot.GetState())
++	if err != nil {
++		return err
++	}
++	if err := ctx.Err(); err != nil {
++		return err
++	}
++	b.logger.Info("transferring raft leadership", "target_id", target)
++	if err := b.raft.LeadershipTransferToServer(raft.ServerID(target), address).Error(); err != nil {
++		metrics.IncrCounter([]string{"raft-storage", "transfer-leadership", "error"}, 1)
++		return fmt.Errorf("raft leadership transfer to %q failed: %w", target, err)
++	}
++	metrics.IncrCounter([]string{"raft-storage", "transfer-leadership", "success"}, 1)
++	return nil
++}
++
++func leadershipTransferTarget(local, target raft.ServerID, config raft.Configuration, state *autopilot.State) (raft.ServerAddress, error) {
++	if target == "" || target == local {
++		return "", fmt.Errorf("%w: target must be a different existing voter", ErrInvalidLeadershipTransfer)
++	}
++	var address raft.ServerAddress
++	for _, server := range config.Servers {
++		if server.ID == target && server.Suffrage == raft.Voter {
++			address = server.Address
++		}
++	}
++	if address == "" {
++		return "", fmt.Errorf("%w: target is not an existing voter", ErrInvalidLeadershipTransfer)
++	}
++	if state == nil || !state.Healthy || state.Leader != local {
++		return "", fmt.Errorf("%w: healthy current-leader Autopilot state is required", ErrInvalidLeadershipTransfer)
++	}
++	leader, follower := state.Servers[local], state.Servers[target]
++	if leader == nil || follower == nil || !follower.Health.Healthy || follower.Server.NodeStatus != autopilot.NodeAlive || !follower.HasVotingRights() || follower.Server.Address != address {
++		return "", fmt.Errorf("%w: target is not a healthy voter in current Autopilot state", ErrInvalidLeadershipTransfer)
++	}
++	// Autopilot samples can lag ongoing writes. Raft checks its live replication
++	// index and catches the target up before sending TimeoutNow.
++	return address, nil
++}
+--- /dev/null
++++ b/physical/raft/leadership_transfer_test.go
+@@ -0,0 +1,70 @@
++// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
++// SPDX-License-Identifier: MPL-2.0
++
++package raft
++
++import (
++	"context"
++	"testing"
++
++	"github.com/hashicorp/raft"
++	autopilot "github.com/hashicorp/raft-autopilot"
++	"github.com/stretchr/testify/require"
++)
++
++func TestLeadershipTransferTarget(t *testing.T) {
++	for _, name := range []string{"valid third voter", "empty", "self", "unknown", "nonvoter", "missing health", "unhealthy cluster", "stale leader", "missing target", "unhealthy target", "dead target", "healthy lagging voter", "address changed", "not promoted"} {
++		t.Run(name, func(t *testing.T) {
++			cfg := raft.Configuration{Servers: []raft.Server{{ID: "node0", Address: "0:8201", Suffrage: raft.Voter}, {ID: "node1", Address: "1:8201", Suffrage: raft.Voter}, {ID: "node2", Address: "2:8201", Suffrage: raft.Voter}}}
++			state := &autopilot.State{Healthy: true, Leader: "node0", Servers: map[raft.ServerID]*autopilot.ServerState{}}
++			for _, s := range cfg.Servers {
++				state.Servers[s.ID] = &autopilot.ServerState{Server: autopilot.Server{ID: s.ID, Address: s.Address, NodeStatus: autopilot.NodeAlive}, State: autopilot.RaftVoter, Health: autopilot.ServerHealth{Healthy: true}, Stats: autopilot.ServerStats{LastTerm: 5, LastIndex: 40}}
++			}
++			target := raft.ServerID("node2")
++			switch name {
++			case "empty":
++				target = ""
++			case "self":
++				target = "node0"
++			case "unknown":
++				target = "unknown"
++			case "nonvoter":
++				cfg.Servers[2].Suffrage = raft.Nonvoter
++			case "missing health":
++				state = nil
++			case "unhealthy cluster":
++				state.Healthy = false
++			case "stale leader":
++				state.Leader = "node1"
++			case "missing target":
++				delete(state.Servers, "node2")
++			case "unhealthy target":
++				state.Servers["node2"].Health.Healthy = false
++			case "dead target":
++				state.Servers["node2"].Server.NodeStatus = autopilot.NodeFailed
++			case "healthy lagging voter":
++				state.Servers["node2"].Stats.LastIndex = 39
++			case "address changed":
++				state.Servers["node2"].Server.Address = "old:8201"
++			case "not promoted":
++				state.Servers["node2"].State = autopilot.RaftNonVoter
++			}
++			address, err := leadershipTransferTarget("node0", target, cfg, state)
++			if name == "valid third voter" || name == "healthy lagging voter" {
++				require.NoError(t, err)
++				require.Equal(t, raft.ServerAddress("2:8201"), address)
++			} else {
++				require.ErrorIs(t, err, ErrInvalidLeadershipTransfer)
++				require.Empty(t, address)
++			}
++		})
++	}
++}
++
++func TestLeadershipTransferUninitializedAndCanceled(t *testing.T) {
++	b := &RaftBackend{}
++	require.ErrorContains(t, b.TransferLeadership(context.Background(), "node2"), "not initialized")
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	require.ErrorIs(t, b.TransferLeadership(ctx, "node2"), context.Canceled)
++}
+--- a/vault/logical_system_raft.go
++++ b/vault/logical_system_raft.go
+@@ -36,6 +36,21 @@
+ // raftStoragePaths returns paths for use when raft is the storage mechanism.
+ func (b *SystemBackend) raftStoragePaths() []*framework.Path {
+ 	return []*framework.Path{
++		{
++			Pattern: "storage/raft/transfer-leadership",
++			Fields: map[string]*framework.FieldSchema{
++				"server_id": {Type: framework.TypeString, Description: "ID of the healthy existing voter to become leader."},
++			},
++			Operations: map[logical.Operation]framework.OperationHandler{
++				logical.UpdateOperation: &framework.PathOperation{
++					Callback:                  b.handleRaftTransferLeadership,
++					Summary:                   "Transfer leadership to a healthy existing Raft voter without changing membership.",
++					ForwardPerformanceStandby: true,
++				},
++			},
++			HelpSynopsis:    "Transfer leadership to a healthy existing Raft voter.",
++			HelpDescription: "Requires sudo in the root namespace. Verify the target's local sys/leader response and cluster health after the request; Raft transfer completion does not prove OpenBao active setup has finished.",
++		},
+ 		{
+ 			Pattern: "storage/raft/bootstrap/answer",
+ 
+--- /dev/null
++++ b/vault/logical_system_raft_transfer.go
+@@ -0,0 +1,39 @@
++// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
++// SPDX-License-Identifier: MPL-2.0
++
++package vault
++
++import (
++	"context"
++	"errors"
++
++	"github.com/openbao/openbao/helper/namespace"
++	"github.com/openbao/openbao/physical/raft"
++	"github.com/openbao/openbao/sdk/v2/framework"
++	"github.com/openbao/openbao/sdk/v2/logical"
++)
++
++func (b *SystemBackend) handleRaftTransferLeadership(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
++	ns, err := namespace.FromContext(ctx)
++	if err != nil {
++		return nil, err
++	}
++	if ns.ID != namespace.RootNamespaceID {
++		return nil, logical.ErrPermissionDenied
++	}
++	target := data.Get("server_id").(string)
++	if len(target) == 0 || len(target) > maxServerIDLength {
++		return logical.ErrorResponse("a valid server_id is required"), logical.ErrInvalidRequest
++	}
++	backend := b.Core.GetRaftBackend()
++	if backend == nil {
++		return logical.ErrorResponse("raft storage is not in use"), logical.ErrInvalidRequest
++	}
++	if err := backend.TransferLeadership(ctx, target); err != nil {
++		if errors.Is(err, raft.ErrInvalidLeadershipTransfer) {
++			return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
++		}
++		return nil, err
++	}
++	return nil, nil
++}
+--- a/vault/logical_system.go
++++ b/vault/logical_system.go
+@@ -65,6 +65,7 @@
+ 
+ 		PathsSpecial: &logical.Paths{
+ 			Root: []string{
++				"storage/raft/transfer-leadership",
+ 				"auth/*",
+ 				"remount",
+ 				"audit",

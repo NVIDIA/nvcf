@@ -43,3 +43,15 @@ The final image requires Alpine `ca-certificates` and
 `scripts/test-runtime-packages.sh` with `RUNTIME_IMAGE` to verify the installed
 packages, check that the affected emSign root is absent from Go-loaded CA paths,
 and inspect the server and target plugin binaries copied into the image.
+
+## Local server patch
+
+`patches/0001-targeted-raft-leadership.patch` adds the authenticated
+`sys/storage/raft/transfer-leadership` endpoint. It uses Raft's existing
+`LeadershipTransferToServer` operation and the normal HA teardown path.
+It does not change the Raft dependency, voter configuration or JWT binaries.
+The patch retains MPL-2.0 licensing. Modified source is distributed here.
+
+The build applies the patch with zero fuzz, runs its target-validation tests,
+and stamps `+nvcf.raft-transfer` into the server version. The upstream archive
+checksum and source commit above remain the unmodified input identity.

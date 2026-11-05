@@ -148,6 +148,36 @@ cluster health after each transfer. Stop if a transfer or check fails, or if
 leadership cannot be transferred to an unchecked member. Do not proceed based
 on a status response forwarded from a standby.
 
+For a qualified bridge release that includes `storage/raft/transfer-leadership`,
+check the current active first, then target each remaining unchecked voter.
+Earlier images lack this endpoint;
+do not substitute an unqualified image. Use `bao operator raft list-peers` to
+match the target ID and address to its pod. The caller needs `update` and
+`sudo` on this path in the root namespace.
+
+```bash
+TARGET_ID=<unchecked-voter-id>
+TARGET_POD=<matching-pod-name>
+bao_admin bao write sys/storage/raft/transfer-leadership server_id="$TARGET_ID" || exit 1
+BAO_POD=$TARGET_POD
+active=false
+for attempt in $(seq 1 60); do
+  if bao_admin env BAO_CLIENT_TIMEOUT=2s bao read -format=json sys/leader |
+      jq -e '.data.is_self == true' >/dev/null; then
+    active=true
+    break
+  fi
+  sleep 1
+done
+test "$active" = true || { echo 'Target did not become active; stop' >&2; exit 1; }
+```
+
+Require healthy Autopilot state and unchanged voters, then perform the version,
+SHA and JWT checks above. A successful transfer request alone is insufficient.
+If the request fails, stop and recheck leadership; a timed-out transfer may
+still complete. Do not fall back to repeated untargeted step-down, member
+removal or sealing a healthy server.
+
 ```bash
 bao_admin jwt-plugin-lifecycle pin-old
 ```

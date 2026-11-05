@@ -1,0 +1,15 @@
+OpenBao v2.6.3
+
+The server is built from OpenBao under the Mozilla Public License 2.0
+(MPL-2.0). Local modifications are distributed in patches/ and described in
+OPENBAO_PROVENANCE.md. Their SPDX headers retain MPL-2.0 licensing.
+
+Upstream source:
+https://github.com/openbao/openbao/tree/63a65e6b907589dbb952c371a70260a065bf8bd7
+
+License text:
+https://www.mozilla.org/en-US/MPL/2.0/
+
+The builder uses GNU patch 2.8 (GPL-3.0-or-later) to apply the source patch.
+This build tool is not copied into the runtime image.
+https://www.gnu.org/software/patch/

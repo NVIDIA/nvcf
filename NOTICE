@@ -13,6 +13,7 @@ The following third-party licenses are included in this repository:
     deploy/helm/openbao/NOTICE
     deploy/stacks/stargate-dev/benchmark/NOTICE
     infra/cassandra/NOTICE
+    infra/openbao/NOTICE
     infra/openbao/plugins/vault-plugin-secrets-jwt/NOTICE
     migrations/cassandra/NOTICE
     src/compute-plane-services/byoo-otel-collector/NOTICE

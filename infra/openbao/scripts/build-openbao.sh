@@ -58,12 +58,15 @@ tar -xJf "$archive" --strip-components=1 -C "$source_dir"
 
 (
   cd "$source_dir"
+  patch --batch --forward --fuzz=0 -p1 < "$repo_root/patches/0001-targeted-raft-leadership.patch"
+
   GOTOOLCHAIN="$go_toolchain" GOFLAGS=-mod=mod go get \
     "golang.org/x/crypto@${x_crypto_version}" \
     "google.golang.org/grpc@${grpc_version}" \
     "github.com/moby/go-archive@${go_archive_version}"
   GOTOOLCHAIN="$go_toolchain" GOFLAGS=-mod=mod go mod tidy
   GOTOOLCHAIN="$go_toolchain" GOFLAGS=-mod=mod go mod verify
+  GOTOOLCHAIN="$go_toolchain" CGO_ENABLED=0 GOFLAGS=-mod=mod go test ./physical/raft -run '^TestLeadershipTransfer' -count=1
 
   if [ -n "${TARGETARCH:-}" ]; then
     arches=$TARGETARCH
@@ -77,7 +80,7 @@ tar -xJf "$archive" --strip-components=1 -C "$source_dir"
       -buildvcs=false \
       -trimpath \
       -tags ui \
-      -ldflags "-s -w -X github.com/openbao/openbao/version.fullVersion=${bao_version} -X github.com/openbao/openbao/version.GitCommit=${bao_source_commit} -X github.com/openbao/openbao/version.CommitDate=${bao_commit_date}" \
+      -ldflags "-s -w -X github.com/openbao/openbao/version.fullVersion=${bao_version} -X github.com/openbao/openbao/version.VersionMetadata=nvcf.raft-transfer -X github.com/openbao/openbao/version.GitCommit=${bao_source_commit} -X github.com/openbao/openbao/version.CommitDate=${bao_commit_date}" \
       -o "$output_dir/bao-linux-${arch}" \
       .
     chmod 555 "$output_dir/bao-linux-${arch}"

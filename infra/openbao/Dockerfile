@@ -29,8 +29,9 @@ ARG BAO_SOURCE_COMMIT
 ARG BAO_SOURCE_SHA256
 ARG GO_VERSION
 ARG TARGETARCH
-RUN apk add --no-cache curl xz
+RUN apk add --no-cache curl xz patch
 COPY scripts/build-openbao.sh scripts/verify-openbao.sh scripts/semver.sh /usr/local/bin/
+COPY patches/ /usr/local/patches/
 RUN BAO_VERSION="${BAO_VERSION}" \
     BAO_SOURCE_COMMIT="${BAO_SOURCE_COMMIT}" \
     BAO_SOURCE_SHA256="${BAO_SOURCE_SHA256}" \

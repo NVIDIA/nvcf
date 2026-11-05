@@ -13,3 +13,9 @@ and unseals file-backed test servers inside that container. It preserves data
 across layout changes; it never manages host containers or cluster resources.
 The operator actions and assertions are in
 `tests/bdd/features/openbao-jwt-plugin-lifecycle.feature`.
+
+`runtime-raft.sh` prepares three isolated Raft servers and replaces standbys
+before the former active. `runtime-raft-bao.sh` selects one server and its
+private test credential. Keep assertions in
+`tests/bdd/features/openbao-raft-leadership.feature`, including local leader
+identity, unchanged voters, plugin versions and signatures after each tune.
