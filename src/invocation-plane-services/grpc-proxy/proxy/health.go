@@ -25,11 +25,19 @@ import (
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/hellofresh/health-go/v5"
-	"github.com/nats-io/nats.go"
 	pb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
-func healthManager(nvcfApiHost string, nc *nats.Conn) (*health.Health, error) {
+// natsConnState is the part of invocation.ConnState the probes read. Reading it
+// never takes the NATS connection's lock, which nats.go holds through each
+// reconnect attempt, so a probe answers within its timeout while NATS is
+// reconnecting.
+type natsConnState interface {
+	Connected() bool
+	Closed() bool
+}
+
+func healthManager(nvcfApiHost string, natsState natsConnState) (*health.Health, error) {
 	nvcfFqdn, err := grpcSafeUrl(nvcfApiHost)
 	if err != nil {
 		return nil, err
@@ -65,9 +73,8 @@ func healthManager(nvcfApiHost string, nc *nats.Conn) (*health.Health, error) {
 		Name:    "nats",
 		Timeout: 5 * time.Second,
 		Check: func(context.Context) error {
-			status := nc.Status()
-			if status != nats.CONNECTED {
-				return fmt.Errorf("nats connection not connected: %s", status)
+			if !natsState.Connected() {
+				return fmt.Errorf("nats connection not connected")
 			}
 			return nil
 		},
@@ -78,9 +85,9 @@ func healthManager(nvcfApiHost string, nc *nats.Conn) (*health.Health, error) {
 // connection is closed: nats.go never reopens a closed connection, so a restart
 // is the only recovery. nvcf-api and a reconnecting NATS connection are left
 // to readiness, so their outages do not restart the pod.
-func livenessHandler(nc *nats.Conn) http.Handler {
+func livenessHandler(natsState natsConnState) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if nc.IsClosed() {
+		if natsState.Closed() {
 			http.Error(w, "nats connection closed", http.StatusServiceUnavailable)
 			return
 		}

@@ -21,46 +21,36 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/nats-io/nats.go"
-	"github.com/stretchr/testify/require"
-
-	"nvcf-grpc-proxy/proxy/internal/test"
+	"github.com/stretchr/testify/assert"
 )
 
+type fakeNatsState struct {
+	connected bool
+	closed    bool
+}
+
+func (s fakeNatsState) Connected() bool { return s.connected }
+func (s fakeNatsState) Closed() bool    { return s.closed }
+
 // /livez must stay up while NATS is connected or reconnecting, and fail only
-// once the connection is closed and a restart is the only recovery.
+// once the connection is closed and a restart is the only recovery. That the
+// state is read without the connection's lock is tested with ConnState in the
+// invocation package.
 func TestLivenessFailsOnlyWhenNatsIsClosed(t *testing.T) {
-	server, err := test.NewFakeNatsServer(test.NatsAcceptThenDrop)
-	require.NoError(t, err)
-
-	nc, err := nats.Connect(server.URL,
-		nats.Token(test.FakeNatsToken),
-		nats.MaxReconnects(-1),
-		nats.ReconnectWait(10*time.Millisecond),
-		nats.ReconnectJitter(0, 0))
-	require.NoError(t, err)
-	t.Cleanup(nc.Close)
-
-	livez := httptest.NewServer(livenessHandler(nc))
-	t.Cleanup(livez.Close)
-	get := func() int {
-		response, err := http.Get(livez.URL + "/livez")
-		require.NoError(t, err)
-		_ = response.Body.Close()
-		return response.StatusCode
+	for _, tc := range []struct {
+		name  string
+		state fakeNatsState
+		want  int
+	}{
+		{name: "connected", state: fakeNatsState{connected: true}, want: http.StatusOK},
+		{name: "reconnecting", state: fakeNatsState{}, want: http.StatusOK},
+		{name: "closed", state: fakeNatsState{closed: true}, want: http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			livenessHandler(tc.state).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/livez", nil))
+			assert.Equal(t, tc.want, recorder.Code)
+		})
 	}
-
-	require.Equal(t, http.StatusOK, get())
-
-	// The server drops the connection and stops listening, so the client keeps
-	// reconnecting.
-	require.NoError(t, server.Close())
-	require.Eventually(t, func() bool { return nc.Status() == nats.RECONNECTING },
-		5*time.Second, 10*time.Millisecond, "status %s", nc.Status())
-	require.Equal(t, http.StatusOK, get())
-
-	nc.Close()
-	require.Equal(t, http.StatusServiceUnavailable, get())
 }

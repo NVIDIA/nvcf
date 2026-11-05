@@ -57,6 +57,7 @@ type rateLimiter interface {
 
 type FunctionInvoker struct {
 	nc                  *nats.Conn
+	natsState           *ConnState
 	js                  jetstream.JetStream
 	nvcfClient          pb.ProxyClient
 	connectPaths        ConnectPaths
@@ -69,7 +70,7 @@ type FunctionInvoker struct {
 	workStreams *ttlcache.Cache[string, jetstream.Stream]
 }
 
-func NewFunctionInvoker(nc *nats.Conn, nvcfClient pb.ProxyClient, connectPaths ConnectPaths, jetstreamPlacementTag, region string, geoLookup geoLookuper, rateLimit rateLimiter) (*FunctionInvoker, error) {
+func NewFunctionInvoker(nc *nats.Conn, natsState *ConnState, nvcfClient pb.ProxyClient, connectPaths ConnectPaths, jetstreamPlacementTag, region string, geoLookup geoLookuper, rateLimit rateLimiter) (*FunctionInvoker, error) {
 	js, err := jetstream.New(nc)
 	if err != nil {
 		return nil, err
@@ -88,6 +89,7 @@ func NewFunctionInvoker(nc *nats.Conn, nvcfClient pb.ProxyClient, connectPaths C
 
 	return &FunctionInvoker{
 		nc:                  nc,
+		natsState:           natsState,
 		js:                  js,
 		nvcfClient:          nvcfClient,
 		connectPaths:        connectPaths,
@@ -265,7 +267,7 @@ func (f *FunctionInvoker) startNewSession(ctx context.Context, conn net.Conn, re
 	subject := f.requestStreamSubject(functionVersion.FunctionVersionId, requestId)
 	publishCtx, cancelPublish := context.WithTimeout(ctx, publishTimeout)
 	defer cancelPublish()
-	if err = waitConnected(publishCtx, f.nc); err == nil {
+	if err = waitConnected(publishCtx, f.natsState); err == nil {
 		_, err = f.js.PublishMsg(publishCtx, &nats.Msg{
 			Subject: subject,
 			Header:  otelHeaders(ctx),
@@ -349,7 +351,7 @@ func (f *FunctionInvoker) tryRegionForLLS(ctx context.Context, region string, re
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	if err := waitConnected(ctx, f.nc); err != nil {
+	if err := waitConnected(ctx, f.natsState); err != nil {
 		return err
 	}
 	subject := llsRequestSubject(region, functionVersion.FunctionVersionId, requestId)
@@ -369,7 +371,7 @@ func (f *FunctionInvoker) joinExistingSession(ctx context.Context, requestId uui
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, publishTimeout)
 	defer cancel()
-	if err := waitConnected(waitCtx, f.nc); err != nil {
+	if err := waitConnected(waitCtx, f.natsState); err != nil {
 		return fmt.Errorf("failed to publish function invocation request to nats: %w", err)
 	}
 	subject := reconnectSubject(requestId)
@@ -392,22 +394,24 @@ const publishTimeout = 5 * time.Second
 // reconnectPollInterval is how often waitConnected checks the connection.
 const reconnectPollInterval = 50 * time.Millisecond
 
-// waitConnected returns once nc is connected, or with an error once ctx ends or
-// the connection is closed. The connection buffers nothing while reconnecting
-// (see connectOptions), so publishers wait here rather than queue a message that
-// would go out after they gave up. Retrying the publish itself instead would
-// leak a response handler for every failed request.
-func waitConnected(ctx context.Context, nc *nats.Conn) error {
-	for !nc.IsConnected() {
-		if nc.IsClosed() {
+// waitConnected returns once the connection is up, or with an error once ctx
+// ends or the connection is closed. Dispatches, work items and session joins call
+// it before publishing, so they are not queued in the reconnect buffer and sent
+// after an outage to callers that have given up. It reads ConnState, so it never
+// waits on the connection's lock and always honours ctx.
+func waitConnected(ctx context.Context, state *ConnState) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("waiting for nats connection: %w", err)
+		}
+		if state.Closed() {
 			return nats.ErrConnectionClosed
 		}
-		SleepWithContext(ctx, reconnectPollInterval)
-		if ctx.Err() != nil {
-			return fmt.Errorf("nats connection %s: %w", nc.Status(), ctx.Err())
+		if state.Connected() {
+			return nil
 		}
+		SleepWithContext(ctx, reconnectPollInterval)
 	}
-	return nil
 }
 
 func otelHeaders(ctx context.Context) nats.Header {
