@@ -85,7 +85,10 @@ go_test(
         "validator_config_parity_test.go",
         "validatortag_test.go",
     ],
-    data = glob(["testdata/**"]) + ["//:nvcf-cli-stacks"],
+    data = glob(["testdata/**"]) + [
+        "//:nvcf-cli-stacks",
+        "//src/compute-plane-services/nvca/internal/clustervalidator:rbac_inventory.yaml",
+    ],
     embed = [":selfhosted"],
     deps = [
         "//src/clis/nvcf-cli/internal/client",

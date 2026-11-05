@@ -248,8 +248,8 @@ func TestRunClusterValidator_RBACNameCollisionIsNotAdopted(t *testing.T) {
 }
 
 // validatorRBACInventory is the validator's RBAC inventory, which lists every
-// request it makes by check set. Bazel stages only this package's data, so
-// there the test reads the checked-in copy instead.
+// request it makes by check set. Bazel stages it as this test's data. Where it
+// is not reachable, the test reads the checked-in copy instead.
 var (
 	validatorRBACInventory = filepath.Join("..", "..", "..", "..", "compute-plane-services", "nvca", "internal",
 		"clustervalidator", "rbac_inventory.yaml")
