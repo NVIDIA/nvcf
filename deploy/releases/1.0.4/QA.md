@@ -2,8 +2,7 @@
 
 Use branch `release-nvcf/1.0.4` and its assembled candidate to qualify this patch
 before customer publication. [manifest.json](manifest.json) selects three
-independently released stacks. The candidate remains unqualified until this
-complete combination passes QA.
+independently released stacks.
 
 ```sh
 git clone --branch release-nvcf/1.0.4 --single-branch https://github.com/NVIDIA/nvcf.git nvcf-1.0.4-qa
@@ -33,9 +32,8 @@ with the results rather than treating it as validation of the default pins.
 Record the candidate commit, workflow run, environment, and results in #2074.
 The comparison baseline is documentation edition 1.0.2: Self-Managed 1.0.1,
 Compute Plane 1.0.0, and Observability 1.0.0. The earlier QA branch selected
-Self-Managed 1.0.2 and Compute Plane 1.0.1; that earlier approval does not qualify
-this updated combination. The complete component and chart delta is tracked
-in #2823.
+Self-Managed 1.0.2 and Compute Plane 1.0.1. The complete component and chart
+delta is tracked in #2823.
 
 Qualify fresh single- and multi-cluster installation, function/task/LLM BDDs,
 non-root workloads, ESS secret delivery and rotation, and the supported
@@ -45,6 +43,17 @@ Samba, and collector paths. Samba 1.0.9 fixes startup ownership of the shared
 task directory. Verify that non-root Helm tasks create their results directory
 and finish successfully. Record any resource overrides used by QA.
 
+This refresh adds the approved Cassandra/OpenBao trust-store and toolchain
+patches, upstream NATS and cert-manager images, and Kubernetes helper alignment.
+Check default image pulls and explicit private-mirror overrides. Retain the
+compatible-client selection when testing Kubernetes 1.35.
+
+Existing OpenBao installations require the
+[staged JWT plugin upgrade](https://github.com/dsx-ai-factory/nvcf/blob/4de46cb8d26d5b65a2a0e1c1ae76fbde00565085/docs/self-managed/runbooks/openbao-jwt-plugin-upgrade.md).
+Select `openbao.jwtPluginLifecycle.mode: bridge` for the member rollout, then
+complete the documented transition before selecting `versioned`. Exercise
+secret injection, renewal and rollback. Fresh installs use `versioned`.
+
 Land stack fixes in their owning maintenance branches and let their automatic
 releases complete. Then update this branch's manifest to consume the selected
 released versions. Candidate CI validates their inventories and assembles the
@@ -53,8 +62,8 @@ combination for retesting. It does not publish a customer release.
 After approval of the final candidate, release engineering publishes the three
 selected stack resources and umbrella 1.0.4. Keep that publication on hold
 until QA completes. Track the selected combination in #2492 and remaining
-release work in #2432. Later CVEs, state-metrics changes, heavier Cassandra and
-OpenBao upgrades, and documentation site activation remain deferred.
+release work in #2432. Unselected CVE fixes, state-metrics changes, broader
+chart consistency work and documentation site activation remain deferred.
 
 Do not merge this combined branch wholesale into main or a stack maintenance
 branch: it intentionally selects three independent release lines.
