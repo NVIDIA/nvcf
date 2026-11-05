@@ -166,6 +166,8 @@ pub async fn app(
             },
         ))
         .layer(trace_layer.clone())
+        // outermost so it also covers responses from the timeout and panic layers
+        .layer(axum_mw::from_fn(routes::error_source_middleware))
         .with_state(app_state.clone());
 
     // using a full router instead of a handler function so the metrics layer can be attached
@@ -192,6 +194,7 @@ pub async fn app(
             },
         ))
         .layer(trace_layer)
+        .layer(axum_mw::from_fn(routes::error_source_middleware))
         .with_state(app_state);
 
     let host_router = Router::new()

@@ -29,7 +29,10 @@ use tower::{Service, ServiceExt};
 
 // Typically you'd place this in the same module or a dedicated macros module:
 macro_rules! hydrate_fixtures {
-    ($response_headers:expr) => {{
+    ($response_headers:expr) => {
+        hydrate_fixtures!($response_headers, StatusCode::OK)
+    };
+    ($response_headers:expr, $status:expr) => {{
         // The curly braces inside the macro body let us return an expression (a block).
         // This block can contain multiple statements and a final expression.
         let (_localstack, nats, mock_nvcf_api, config) = fixtures().await;
@@ -43,7 +46,7 @@ macro_rules! hydrate_fixtures {
                 function_version_id: VERSION_ID_1,
                 instance_id: INSTANCE_ID.into(),
             },
-            Box::new(CustomHeadersWorkHandler::new($response_headers)),
+            Box::new(CustomHeadersWorkHandler::new($response_headers).with_status($status)),
             PublishMode::Attach(app.clone()),
         )
         .await?
@@ -179,6 +182,80 @@ async fn test_reqid_returned_for_empty_response_headers() -> anyhow::Result<()> 
     }
     assert_eq!(exposed_headers, vec!["nvcf-reqid"]);
     assert!(response.headers().get("nvcf-reqid").is_some());
+
+    Ok(())
+}
+
+fn spoofed_error_source_headers() -> http::HeaderMap {
+    http::HeaderMap::from_iter(vec![
+        (
+            http::header::HeaderName::from_static("nvcf-error-source"),
+            HeaderValue::from_static("invocation_service"),
+        ),
+        (
+            http::header::HeaderName::from_static("nvcf-error-source"),
+            HeaderValue::from_static("worker"),
+        ),
+    ])
+}
+
+fn pexec_request(api_key: &str) -> anyhow::Result<http::Request<Body>> {
+    Ok(axum::http::Request::builder()
+        .method(Method::POST)
+        .uri(format!(
+            "/v2/nvcf/pexec/functions/{FUNCTION_ID}/versions/{VERSION_ID_1}"
+        ))
+        .header(http::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .body(Body::from("a body"))?)
+}
+
+fn error_source_values(response: &http::Response<Body>) -> Vec<String> {
+    response
+        .headers()
+        .get_all("nvcf-error-source")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn test_error_source_not_set_on_success() -> anyhow::Result<()> {
+    // Worker-supplied copies must not leak through on a successful response.
+    let (mut app, _fixtures_guard) = hydrate_fixtures!(spoofed_error_source_headers());
+
+    let response = app.call(pexec_request(API_KEY)?).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(error_source_values(&response).is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_error_source_worker_for_relayed_worker_error() -> anyhow::Result<()> {
+    // The worker claims invocation_service and worker; only the authoritative
+    // value stamped by the invocation service may remain.
+    let (mut app, _fixtures_guard) = hydrate_fixtures!(
+        spoofed_error_source_headers(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+
+    let response = app.call(pexec_request(API_KEY)?).await?;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(error_source_values(&response), vec!["worker"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_error_source_invocation_service_for_service_error() -> anyhow::Result<()> {
+    let (mut app, _fixtures_guard) = hydrate_fixtures!(spoofed_error_source_headers());
+
+    let response = app.call(pexec_request("not-a-valid-key")?).await?;
+
+    assert!(!response.status().is_success());
+    assert_eq!(error_source_values(&response), vec!["invocation_service"]);
 
     Ok(())
 }

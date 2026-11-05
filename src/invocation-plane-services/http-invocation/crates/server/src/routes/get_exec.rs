@@ -18,6 +18,7 @@ use crate::nvcf_api::NVCFService;
 use crate::routes::app_error::AppError;
 use crate::routes::get_pexec::pexec_status;
 use crate::routes::post_exec::InvokeFunctionResponse;
+use crate::routes::WorkerResponse;
 use crate::settings::AppConfig;
 use crate::worker_streams::WorkerStreamService;
 use axum::extract::{Extension, Path, State};
@@ -35,7 +36,14 @@ pub async fn exec_status(
     State(worker_stream_service): State<Arc<WorkerStreamService>>,
     State(app_config): State<Arc<AppConfig>>,
     Extension(Authorization(bearer)): Extension<Authorization<Bearer>>,
-) -> Result<(StatusCode, Json<InvokeFunctionResponse>), AppError> {
+) -> Result<
+    (
+        StatusCode,
+        Option<Extension<WorkerResponse>>,
+        Json<InvokeFunctionResponse>,
+    ),
+    AppError,
+> {
     let response = pexec_status(
         request_id,
         nvcf_service,

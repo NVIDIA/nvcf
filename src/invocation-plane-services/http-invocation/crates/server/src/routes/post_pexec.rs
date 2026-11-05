@@ -37,6 +37,7 @@ use crate::routes::{
     input_asset_header::InputAssetHeader,
     nvcf_status_header::NVCFStatusHeader,
     tlb::FunctionId,
+    WorkerResponse,
 };
 use crate::s3::{Error, S3Service};
 use crate::settings::AppConfig;
@@ -506,7 +507,10 @@ pub(crate) async fn handle_streaming_response(
     let mut response = select! {
         biased;
         response = attach_response_rx => {
-            response?
+            let mut response = response?;
+            // marks the status as worker-produced for the error source layer
+            response.extensions_mut().insert(WorkerResponse);
+            response
         }
         _ = tokio::time::sleep(poll_duration + Duration::from_secs(2)) => {
             gateway_timeout_response(function_id, request_id)

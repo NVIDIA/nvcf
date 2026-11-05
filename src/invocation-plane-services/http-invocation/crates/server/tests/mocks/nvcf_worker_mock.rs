@@ -386,6 +386,7 @@ impl WorkHandler for DefaultWorkHandler {
 
 pub struct CustomHeadersWorkHandler {
     headers: http::HeaderMap,
+    status: StatusCode,
 }
 
 #[async_trait]
@@ -396,7 +397,7 @@ impl WorkHandler for CustomHeadersWorkHandler {
         request: &WorkerInvokeFunctionRequest,
     ) -> anyhow::Result<()> {
         let mut builder = http::Response::builder()
-            .status(StatusCode::OK)
+            .status(self.status)
             .header(CONTENT_TYPE, "text/event-stream");
         for header in &self.headers {
             builder = builder.header(header.0.clone(), header.1.clone());
@@ -410,7 +411,15 @@ impl WorkHandler for CustomHeadersWorkHandler {
 
 impl CustomHeadersWorkHandler {
     pub fn new(headers: http::HeaderMap) -> Self {
-        Self { headers }
+        Self {
+            headers,
+            status: StatusCode::OK,
+        }
+    }
+
+    pub fn with_status(mut self, status: StatusCode) -> Self {
+        self.status = status;
+        self
     }
 }
 
