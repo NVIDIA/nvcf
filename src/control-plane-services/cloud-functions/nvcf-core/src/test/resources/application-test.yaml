@@ -221,8 +221,6 @@ nvcf:
       enabled: true
   api-keys:
     base-url: http://localhost:9093
-  account-rate-limit:
-    base-url: http://localhost:9112
   # Off by default; tests enable it to cover the JWT and API-key lookup paths.
   account-token-rate-limit-enabled: true
   account:

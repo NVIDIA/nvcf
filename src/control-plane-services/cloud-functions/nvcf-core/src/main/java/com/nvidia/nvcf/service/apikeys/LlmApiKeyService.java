@@ -40,7 +40,7 @@ public class LlmApiKeyService {
             "NAK is not reachable and ApiKeyValidationResult is not in backup cache anymore - '{}'";
     private static final String MESG_VALIDATION_RESULT = "LLM ApiKey validation result: '{}'";
 
-    private final LlmApiKeyClient llmApiKeyClient;
+    private final ApiKeysClient apiKeysClient;
     private final LoadingCache<String, ApiKeyValidationResult> cache = Caffeine.newBuilder()
             .maximumSize(512).expireAfterWrite(Duration.ofMinutes(1))
             .scheduler(Scheduler.systemScheduler())
@@ -52,7 +52,7 @@ public class LlmApiKeyService {
 
     private ApiKeyValidationResult fetchApiKeyValidationResult(String apiKey) {
         try {
-            var result = llmApiKeyClient.fetchApiKeyValidationResult(apiKey);
+            var result = apiKeysClient.fetchLlmApiKeyValidationResult(apiKey);
             log.debug(MESG_VALIDATION_RESULT, result);
             backupCache.put(apiKey, result);
             return result;

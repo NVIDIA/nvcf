@@ -23,6 +23,7 @@ import com.github.benmanes.caffeine.cache.Scheduler;
 import com.google.common.annotations.VisibleForTesting;
 import com.nvidia.boot.exceptions.UpstreamException;
 import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult.RateLimitAttributes;
+import com.nvidia.nvcf.service.apikeys.ApiKeysClient;
 import java.time.Duration;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -39,7 +40,7 @@ public class AccountRateLimitService {
     private static final String MESG_TIERED_RATE_LIMIT = "Tiered rate limit for ncaId '{}': '{}'";
     private static final RateLimitAttributes NO_RATE_LIMIT = new RateLimitAttributes(null, null);
 
-    private final AccountRateLimitClient accountRateLimitClient;
+    private final ApiKeysClient apiKeysClient;
     private final boolean tieredRateLimitEnabled;
     private final LoadingCache<String, RateLimitAttributes> tieredRateLimitCache =
             Caffeine.newBuilder()
@@ -54,15 +55,15 @@ public class AccountRateLimitService {
 
     // Off by default: the lookup fails closed, so enable only where the policy evaluation exists.
     public AccountRateLimitService(
-            AccountRateLimitClient accountRateLimitClient,
+            ApiKeysClient apiKeysClient,
             @Value("${nvcf.account-token-rate-limit-enabled:false}") boolean tieredRateLimitEnabled) {
-        this.accountRateLimitClient = accountRateLimitClient;
+        this.apiKeysClient = apiKeysClient;
         this.tieredRateLimitEnabled = tieredRateLimitEnabled;
     }
 
     private RateLimitAttributes fetchTieredRateLimit(String ncaId) {
         try {
-            var result = accountRateLimitClient.fetchTieredRateLimit(ncaId);
+            var result = apiKeysClient.fetchTieredRateLimit(ncaId);
             log.debug(MESG_TIERED_RATE_LIMIT, ncaId, result);
             tieredRateLimitBackupCache.put(ncaId, result);
             return result;

@@ -39,6 +39,8 @@ import tools.jackson.databind.json.JsonMapper;
 public class MockApiKeysServer {
 
     private static final JsonMapper OBJECT_MAPPER = new JsonMapper();
+    private static final String TIERED_RATE_LIMIT_PATH =
+            "/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit";
     @Getter
     private static WireMockServer mockApiKeysServer;
 
@@ -92,8 +94,6 @@ public class MockApiKeysServer {
              ncaId, ncaId, ownerId, resources, scopes, allowed, accountTokenRateLimit);
     }
 
-    // Same WireMockServer as apikey.allow, different path - LlmApiKeyClient defaults to
-    // ApiKeysClient's own base-url.
     @SneakyThrows
     public static void setLlmApiKeyValidationResponse(
             String ncaId,
@@ -156,8 +156,27 @@ public class MockApiKeysServer {
         setApiKeyValidationResponse(ncaId, ownerNcaId, ownerId, resources, scopes, true);
     }
 
+    @SneakyThrows
+    public static void setTieredRateLimitResponse(ApiKeyValidationResult.RateLimitAttributes rateLimit) {
+        var response = new ApiKeyValidationResponse("nvcf", "apikey.account_rate_limit", rateLimit);
+        byte[] responseBytes = OBJECT_MAPPER.writeValueAsBytes(response);
+        mockApiKeysServer.stubFor(
+                post(urlPathEqualTo(TIERED_RATE_LIMIT_PATH))
+                        .willReturn(aResponse().withStatus(200)
+                                            .withHeader(HttpHeaders.CONTENT_TYPE,
+                                                        MediaType.APPLICATION_JSON_VALUE)
+                                            .withBody(responseBytes)));
+    }
+
+    public static void setTieredRateLimitUnavailable() {
+        mockApiKeysServer.stubFor(
+                post(urlPathEqualTo(TIERED_RATE_LIMIT_PATH))
+                        .willReturn(aResponse().withStatus(503)));
+    }
+
     public static void resetToDefault() {
         setResponse(TEST_NCA_ID, TEST_OWNER_ID, List.of(), List.of());
         setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID, List.of(), List.of(), true, null);
+        setTieredRateLimitResponse(new ApiKeyValidationResult.RateLimitAttributes(null, null));
     }
 }

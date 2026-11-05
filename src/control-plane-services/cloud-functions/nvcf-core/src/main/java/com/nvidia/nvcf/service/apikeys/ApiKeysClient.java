@@ -61,6 +61,10 @@ public class ApiKeysClient {
     private final JsonMapper jsonMapper;
     private final String evaluationUri;
     private final String requestPropertyName;
+    private final String llmEvaluationUri;
+    private final String llmRequestPropertyName;
+    private final String accountRateLimitEvaluationUri;
+    private final String accountRateLimitRequestPropertyName;
 
     // We could have used OAuth2AuthorizedClientManager and relied on Spring Security to
     // pick up the configuration properties using ClientRegistrationRepository directly. However,
@@ -75,6 +79,14 @@ public class ApiKeysClient {
             String evaluationUri,
             @Value("${nvcf.api-keys.request-property-name:apiKey}")
             String requestPropertyName,
+            @Value("${nvcf.llm-api-keys.evaluation-uri:/v1/namespaces/nvcf/evaluations/apikey.llm_allow}")
+            String llmEvaluationUri,
+            @Value("${nvcf.llm-api-keys.request-property-name:apiKey}")
+            String llmRequestPropertyName,
+            @Value("${nvcf.account-rate-limit.evaluation-uri:/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit}")
+            String accountRateLimitEvaluationUri,
+            @Value("${nvcf.account-rate-limit.request-property-name:tiered_rate_key}")
+            String accountRateLimitRequestPropertyName,
             @Value("${spring.security.oauth2.client.registration.api-keys.client-id}")
             String clientId,
             @Value("${spring.security.oauth2.client.registration.api-keys.client-secret}")
@@ -86,6 +98,10 @@ public class ApiKeysClient {
             JsonMapper jsonMapper) {
         this.evaluationUri = evaluationUri;
         this.requestPropertyName = requestPropertyName;
+        this.llmEvaluationUri = llmEvaluationUri;
+        this.llmRequestPropertyName = llmRequestPropertyName;
+        this.accountRateLimitEvaluationUri = accountRateLimitEvaluationUri;
+        this.accountRateLimitRequestPropertyName = accountRateLimitRequestPropertyName;
         this.jsonMapper = jsonMapper;
         var authFilter = oauthFilter(staticClientApiKeysProperties, webClientBuilder,
                                      clientId, clientSecret, scope, tokenUri);
@@ -111,12 +127,39 @@ public class ApiKeysClient {
     }
 
     public ApiKeyValidationResult fetchApiKeyValidationResult(String apiKey) {
+        return validate(evaluationUri, requestPropertyName, apiKey);
+    }
+
+    // LLM-invocation-specific evaluation; its result also carries the account token rate limit.
+    public ApiKeyValidationResult fetchLlmApiKeyValidationResult(String apiKey) {
+        return validate(llmEvaluationUri, llmRequestPropertyName, apiKey);
+    }
+
+    // Unlike the API-key rules, an empty/absent result means no tier configured, not forbidden.
+    public ApiKeyValidationResult.RateLimitAttributes fetchTieredRateLimit(String ncaId) {
+        return evaluate(accountRateLimitEvaluationUri, accountRateLimitRequestPropertyName, ncaId)
+                .mapNotNull(response -> jsonMapper.convertValue(
+                        response.getResult(), ApiKeyValidationResult.RateLimitAttributes.class))
+                .defaultIfEmpty(new ApiKeyValidationResult.RateLimitAttributes(null, null))
+                .block();
+    }
+
+    private ApiKeyValidationResult validate(String uri, String propertyName, String apiKey) {
+        return evaluate(uri, propertyName, apiKey)
+                .map(apiKeysResponse -> jsonMapper.convertValue(apiKeysResponse.getResult(),
+                                                                ApiKeyValidationResult.class))
+                .filter(ApiKeyValidationResult::valid)
+                .switchIfEmpty(Mono.error(() -> new ForbiddenException("Authorization failed")))
+                .block();
+    }
+
+    private Mono<ApiKeyValidationResponse> evaluate(String uri, String propertyName, String value) {
         return webClient
                 .post()
-                .uri(evaluationUri)
+                .uri(uri)
                 .accept(MediaType.APPLICATION_JSON)
                 .bodyValue(ApiKeyValidationRequest.builder()
-                                   .jsonField(requestPropertyName, apiKey)
+                                   .jsonField(propertyName, value)
                                    .build())
                 .retrieve()
                 .onStatus(HttpStatusCode::is4xxClientError, response -> {
@@ -130,12 +173,7 @@ public class ApiKeysClient {
                 .bodyToMono(ApiKeyValidationResponse.class)
                 .retryWhen(RETRY_SPEC)
                 .switchIfEmpty(
-                        Mono.error(() -> new UpstreamException("No response from NAK")))
-                .map(apiKeysResponse -> jsonMapper.convertValue(apiKeysResponse.getResult(),
-                                                                ApiKeyValidationResult.class))
-                .filter(ApiKeyValidationResult::valid)
-                .switchIfEmpty(Mono.error(() -> new ForbiddenException("Authorization failed")))
-                .block();
+                        Mono.error(() -> new UpstreamException("No response from NAK")));
     }
 
 }

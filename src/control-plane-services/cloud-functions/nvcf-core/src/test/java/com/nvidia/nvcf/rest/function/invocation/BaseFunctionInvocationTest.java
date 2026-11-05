@@ -70,7 +70,6 @@ import com.nvidia.nvcf.service.function.FunctionMapperService;
 import com.nvidia.nvcf.service.token.GrpcTokenService;
 import com.nvidia.nvcf.util.MockApiKeysServer;
 import com.nvidia.nvcf.util.MockEssServer;
-import com.nvidia.nvcf.util.MockAccountRateLimitServer;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.stub.MetadataUtils;
@@ -158,9 +157,6 @@ public class BaseFunctionInvocationTest {
     @Value("${nvcf.api-keys.base-url}")
     private String apiKeysBaseUrl;
 
-    @Value("${nvcf.account-rate-limit.base-url}")
-    private String accountRateLimitBaseUrl;
-
     @Value("${nvcf.request.timeout}")
     protected Duration defaultWaitDuration;
 
@@ -182,7 +178,6 @@ public class BaseFunctionInvocationTest {
 
         MockEssServer.start(essBaseUrl);
         MockApiKeysServer.start(apiKeysBaseUrl);
-        MockAccountRateLimitServer.start(accountRateLimitBaseUrl);
         MockCasServer.start(authnBaseUrl, casBaseUrl);
         MockNgcContainerRegistryServer.start(ngcContainerRegistryUrl);
 
@@ -195,7 +190,6 @@ public class BaseFunctionInvocationTest {
         testAccountService.cleanupAccountsClientsAndRegistries();
         MockEssServer.stop();
         MockApiKeysServer.stop();
-        MockAccountRateLimitServer.stop();
         MockCasServer.stop();
         MockNgcContainerRegistryServer.stop();
         log.info("{}: Completed running tests", this.getClass().getSimpleName());
@@ -205,9 +199,6 @@ public class BaseFunctionInvocationTest {
     void reset() {
         testCommonService.reset();
         MockApiKeysServer.resetToDefault();
-        // a test that stubs MockAccountRateLimitServer to a non-default response (e.g. unavailable) must
-        // not leave that stub live for the next test
-        MockAccountRateLimitServer.resetToDefault();
         testAccountService.deleteAccount(TEST_PUBLIC_FUNCTION_NCA_ID);
         testQueueService.clearQueues();
     }

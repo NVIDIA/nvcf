@@ -14,9 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.nvidia.nvcf.service.accountratelimit;
+package com.nvidia.nvcf.service.apikeys;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.equalToJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,12 +35,14 @@ import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
 import tools.jackson.databind.json.JsonMapper;
 
-class AccountRateLimitClientTest {
+class ApiKeysClientTest {
 
-    private static final String EVALUATION_URI = "/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit";
+    private static final String LLM_EVALUATION_URI = "/v1/namespaces/nvcf/evaluations/apikey.llm_allow";
+    private static final String ACCOUNT_RATE_LIMIT_EVALUATION_URI =
+            "/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit";
 
     private WireMockServer server;
-    private AccountRateLimitClient client;
+    private ApiKeysClient client;
 
     @BeforeEach
     void setUp() {
@@ -47,8 +50,10 @@ class AccountRateLimitClientTest {
         server.start();
         var staticProperties = new StaticClientApiKeysProperties();
         staticProperties.setToken("test-token");
-        client = new AccountRateLimitClient(
-                server.baseUrl(), EVALUATION_URI, "tiered_rate_key",
+        client = new ApiKeysClient(
+                server.baseUrl(), "/v1/namespaces/nvcf/evaluations/apikey.allow", "apiKey",
+                LLM_EVALUATION_URI, "llmKey",
+                ACCOUNT_RATE_LIMIT_EVALUATION_URI, "tiered_rate_key",
                 "unused", "unused", "unused", "unused",
                 Optional.of(staticProperties), WebClient.builder(), new JsonMapper());
     }
@@ -58,17 +63,36 @@ class AccountRateLimitClientTest {
         server.stop();
     }
 
-    private void stubResponse(String body) {
-        server.stubFor(post(urlPathEqualTo(EVALUATION_URI))
+    private void stubResponse(String uri, String requestBody, String responseBody) {
+        server.stubFor(post(urlPathEqualTo(uri))
+                               .withRequestBody(equalToJson(requestBody))
                                .willReturn(aResponse().withStatus(200)
                                                    .withHeader(HttpHeaders.CONTENT_TYPE,
                                                                MediaType.APPLICATION_JSON_VALUE)
-                                                   .withBody(body)));
+                                                   .withBody(responseBody)));
+    }
+
+    @Test
+    void fetchLlmApiKeyValidationResult_usesLlmEvaluation() {
+        stubResponse(LLM_EVALUATION_URI, """
+                {"input":{"llmKey":"key-1"}}
+                """, """
+                {"namespace":"nvcf","rule_name":"apikey.llm_allow",
+                 "result":{"allowed":true,"ncaId":"nca-1","ownerId":"owner-1","policy":{},
+                           "accountTokenRateLimit":{"inputTokenRateLimit":"1000-M","outputTokenRateLimit":"500-M"}}}
+                """);
+
+        var result = client.fetchLlmApiKeyValidationResult("key-1");
+
+        assertThat(result.ncaId()).isEqualTo("nca-1");
+        assertThat(result.accountTokenRateLimit()).isEqualTo(new RateLimitAttributes("1000-M", "500-M"));
     }
 
     @Test
     void fetchTieredRateLimit_returnsRates() {
-        stubResponse("""
+        stubResponse(ACCOUNT_RATE_LIMIT_EVALUATION_URI, """
+                {"input":{"tiered_rate_key":"nca-1"}}
+                """, """
                 {"namespace":"nvcf","rule_name":"apikey.account_rate_limit",
                  "result":{"inputTokenRateLimit":"1000-M","outputTokenRateLimit":"500-M"}}
                 """);
@@ -79,7 +103,9 @@ class AccountRateLimitClientTest {
 
     @Test
     void fetchTieredRateLimit_returnsNoLimitWhenResultAbsent() {
-        stubResponse("""
+        stubResponse(ACCOUNT_RATE_LIMIT_EVALUATION_URI, """
+                {"input":{"tiered_rate_key":"nca-1"}}
+                """, """
                 {"namespace":"nvcf","rule_name":"apikey.account_rate_limit"}
                 """);
 
