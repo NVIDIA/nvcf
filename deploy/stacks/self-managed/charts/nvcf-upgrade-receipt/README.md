@@ -34,9 +34,11 @@ upgradeReceipt:
     tag: "1.36.6"
 ```
 
-This tag-only override retains the upstream registry and repository. It does
-not select or upgrade the Kubernetes server. Qualify the receipt install and
-upgrade hooks on the target cluster when changing its helper image.
+This tag-only override keeps the configured registry and repository. Without
+a mirror, these are `docker.io` and `alpine/k8s`. If you configured a mirror,
+make the compatible tag available there too. The override does not select or
+upgrade the Kubernetes server. Qualify the receipt install and upgrade hooks
+on the target cluster when changing its helper image.
 
 ## Release inventory
 
