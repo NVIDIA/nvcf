@@ -394,6 +394,7 @@ func TestFailRestored_GPUFault(t *testing.T) {
 	for _, verdict := range []string{"init CUDA_ERROR_UNKNOWN", "ok"} {
 		c, _ := lifecycleAgent(t, "GB300")
 		pod := onGPUs(c, enginePod(0), "ctr1", "GPU-a")
+		pod.OwnerReferences = []metav1.OwnerReference{ownedBy("ReplicaSet", true)}
 		pod.Annotations[webhook.CRIURestoreAnnotation] = "c0"
 		pod.Annotations[webhook.CRIURestoreContainerAnnotation] = "engine"
 		if _, err := c.a.kubeClient.CoreV1().Pods("fn").Create(ctx, pod, metav1.CreateOptions{}); err != nil {
@@ -419,6 +420,7 @@ func TestConsiderGPUShareFailure_FaultyGPU(t *testing.T) {
 		a, cs := fallbackAgent(t)
 		c := &criuAutoRestorer{a: a}
 		pod := onGPUs(c, withLibrary(crashing(enginePod(0), 2, 1)), "ctr9", "GPU-a")
+		pod.OwnerReferences = []metav1.OwnerReference{ownedBy("ReplicaSet", true)}
 		if _, err := cs.CoreV1().Pods("fn").Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
 		}

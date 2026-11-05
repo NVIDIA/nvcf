@@ -286,8 +286,15 @@ func (c *criuAutoRestorer) considerGPUShareFailure(ctx context.Context, pod *cor
 	if !marked {
 		return
 	}
-	log.Warn("gpushare: the pod never started under the library; its configuration falls back to the cachedir without it, and the pod is replaced")
 	c.observeGPUShareFailed(ctx, pod, log)
+	if !podRecreatedOnDelete(pod) {
+		// Deleted, it would just be gone. Left as it is, it goes on as it
+		// would without nvsnap; its configuration's next pods start
+		// without the library.
+		log.Warn("gpushare: the pod never started under the library; its configuration falls back to the cachedir without it. Nothing would recreate the pod, so it is left as it is")
+		return
+	}
+	log.Warn("gpushare: the pod never started under the library; its configuration falls back to the cachedir without it, and the pod is replaced")
 	if err := c.a.deletePodRetrying(ctx, pod.Namespace, pod.Name, pod.UID); err != nil {
 		log.WithError(err).Warn("gpushare: cannot delete the pod; its replacement will be admitted without the library")
 	}

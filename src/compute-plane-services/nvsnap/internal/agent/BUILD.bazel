@@ -20,6 +20,7 @@ go_library(
         "checkpoint_reaper.go",
         "checkpoint_spread.go",
         "checkpoint_v2.go",
+        "cold_start.go",
         "confined_fs.go",
         "criu_auto_restore.go",
         "criu_companion.go",
@@ -165,6 +166,7 @@ go_test(
         "checkpoint_reaper_test.go",
         "checkpoint_spread_test.go",
         "client_limits_test.go",
+        "cold_start_test.go",
         "confined_fs_test.go",
         "criu_auto_restore_test.go",
         "criu_companion_slots_test.go",
@@ -246,7 +248,7 @@ go_test(
         "tar_extract_test.go",
         "tar_pipe_test.go",
     ],
-    data = glob(["testdata/**"]),
+    data = glob(["testdata/**"]) + ["//src/compute-plane-services/nvsnap/cmd/nvsnap-idle:c/nvsnap-idle.c"],  # keep
     embed = [":agent"],
     deps = [
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",

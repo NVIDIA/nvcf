@@ -13,6 +13,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -56,7 +57,7 @@ func criuRestoreTarget(pod *corev1.Pod) (checkpointID, container string, ready b
 	checkpointID = pod.Annotations[webhook.CRIURestoreAnnotation]
 	container = pod.Annotations[webhook.CRIURestoreContainerAnnotation]
 	if checkpointID == "" || container == "" || pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning ||
-		pod.Annotations[webhook.CRIURestoredAnnotation] != "" {
+		pod.Annotations[webhook.CRIURestoredAnnotation] != "" || coldStarted(pod) {
 		return checkpointID, container, false
 	}
 	for _, cs := range pod.Status.ContainerStatuses {
@@ -183,7 +184,7 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 // not deleted, which a controller recreating it with the same annotations
 // would only repeat.
 func (c *criuAutoRestorer) admitted(ctx context.Context, pod *corev1.Pod) bool {
-	if pod.DeletionTimestamp != nil || pod.Annotations[webhook.CRIURestoredAnnotation] != "" {
+	if pod.DeletionTimestamp != nil || pod.Annotations[webhook.CRIURestoredAnnotation] != "" || coldStarted(pod) {
 		return true // nothing to fetch or restore; considerRestored has its own check
 	}
 	why, err := c.restoreRefusal(ctx, pod)
@@ -211,7 +212,7 @@ var errCheckpointUnavailable = errors.New("the checkpoint could not be brought t
 // this node, while its containers start: the restore finds it local.
 func (c *criuAutoRestorer) prefetch(ctx context.Context, pod *corev1.Pod) {
 	id := pod.Annotations[webhook.CRIURestoreAnnotation]
-	if id == "" || pod.Annotations[webhook.CRIURestoredAnnotation] != "" || pod.DeletionTimestamp != nil || pod.Spec.NodeName == "" {
+	if id == "" || pod.Annotations[webhook.CRIURestoredAnnotation] != "" || coldStarted(pod) || pod.DeletionTimestamp != nil || pod.Spec.NodeName == "" {
 		return
 	}
 	if localCheckpointComplete(c.a.config.CheckpointDir, id) {
@@ -304,8 +305,24 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod string, uid type
 	default:
 		log.WithError(err).Error("CRIU auto-restore failed; its capture was verified, so it is kept and the replacement restores from it again")
 	}
-	if derr := a.deletePodRetrying(context.WithoutCancel(ctx), ns, pod, ""); derr != nil {
-		log.WithError(derr).Error("CRIU auto-restore: could not delete the failed pod")
+	a.disposeFailedPlaceholder(context.WithoutCancel(ctx), ns, pod, container, log)
+}
+
+// disposeFailedPlaceholder gets placeholder ns/pod, whose restore failed,
+// going again. Deleting it leaves its replacement to its controller; a pod
+// nothing recreates would just be gone, so it starts its workload cold in
+// place instead, and is deleted only when it cannot.
+func (a *Agent) disposeFailedPlaceholder(ctx context.Context, ns, pod, container string, log *logrus.Entry) {
+	if _, keep := a.keepPodNothingRecreates(ctx, ns, pod, nil); keep {
+		err := a.coldStartInPlace(ctx, ns, pod, container, log)
+		if err == nil {
+			log.Warn("CRIU auto-restore failed in a pod nothing would recreate; its workload started cold in place")
+			return
+		}
+		log.WithError(err).Error("CRIU auto-restore failed in a pod nothing would recreate, and it cannot start cold in place; deleting it")
+	}
+	if err := a.deletePodRetrying(ctx, ns, pod, ""); err != nil {
+		log.WithError(err).Error("CRIU auto-restore: could not delete the failed pod")
 	}
 }
 
@@ -420,6 +437,13 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 	if id := a.podBundle(ctx, req.Namespace, req.PodName); id != "" {
 		// ... the library of the bundle version the pod ran with.
 		m.SourcePodMeta[webhook.BundleMeta] = id
+	}
+	if argv := a.containerColdArgv(ctx, req.Namespace, req.PodName, req.ContainerName); len(argv) > 0 {
+		// A placeholder whose restore fails, in a pod nothing would
+		// recreate, starts the workload in place with it.
+		if b, err := json.Marshal(argv); err == nil {
+			m.SourcePodMeta[webhook.ColdArgvMeta] = string(b)
+		}
 	}
 	if req.CaptureID != "" {
 		m.SourcePodMeta[checkpointstore.InstanceCaptureMetaKey] = "true"

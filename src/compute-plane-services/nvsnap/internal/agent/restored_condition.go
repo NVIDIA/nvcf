@@ -28,11 +28,17 @@ import (
 
 // setRestoredCondition sets pod's webhook.CRIURestoredCondition True.
 func (a *Agent) setRestoredCondition(ctx context.Context, ns, pod string) error {
+	return a.setRestoredConditionReason(ctx, ns, pod, "Restored", "the agent restored the checkpoint into the pod")
+}
+
+// setRestoredConditionReason sets pod's webhook.CRIURestoredCondition True
+// with reason and message.
+func (a *Agent) setRestoredConditionReason(ctx context.Context, ns, pod, reason, message string) error {
 	patch, err := json.Marshal(map[string]any{"status": map[string]any{"conditions": []corev1.PodCondition{{
 		Type:               webhook.CRIURestoredCondition,
 		Status:             corev1.ConditionTrue,
-		Reason:             "Restored",
-		Message:            "the agent restored the checkpoint into the pod",
+		Reason:             reason,
+		Message:            message,
 		LastTransitionTime: metav1.NewTime(time.Now()),
 	}}}})
 	if err != nil {
@@ -61,7 +67,7 @@ func restoredConditionTrue(pod *corev1.Pod) bool {
 // tries again after a failure.
 func (c *criuAutoRestorer) considerRestoredCondition(ctx context.Context, pod *corev1.Pod) {
 	if !webhook.HasRestoredGate(pod) || restoredConditionTrue(pod) || pod.DeletionTimestamp != nil ||
-		pod.Annotations[webhook.CRIURestoredAnnotation] == "" {
+		(pod.Annotations[webhook.CRIURestoredAnnotation] == "" && !coldStarted(pod)) {
 		return
 	}
 	if _, busy := c.attempted.LoadOrStore("condition/"+string(pod.UID), struct{}{}); busy {
@@ -70,6 +76,15 @@ func (c *criuAutoRestorer) considerRestoredCondition(ctx context.Context, pod *c
 	go func() {
 		defer c.attempted.Delete("condition/" + string(pod.UID))
 		log := c.a.log.WithField("pod", pod.Namespace+"/"+pod.Name)
+		if coldStarted(pod) {
+			// Started cold in place after a failed restore: the workload's
+			// own readiness probe decides.
+			if err := c.a.setRestoredConditionReason(ctx, pod.Namespace, pod.Name, "ColdStarted",
+				"the restore failed; the workload started cold in place and its own readiness probe decides"); err != nil {
+				log.WithError(err).Warn("cold start: cannot set the pod's restored condition; its readiness waits for its next event")
+			}
+			return
+		}
 		_, ok, err := c.restoredBy(ctx, pod)
 		if err != nil {
 			log.WithError(err).Warn("CRIU restore: cannot read the restore record; the pod's readiness waits for its next event")

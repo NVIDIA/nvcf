@@ -421,6 +421,8 @@ func (c *criuAutoRestorer) observePodReady(ctx context.Context, pod *corev1.Pod)
 // from a cachedir capture, or cold.
 func podStartMethod(pod *corev1.Pod) string {
 	switch {
+	case coldStarted(pod):
+		return metrics.MethodCold // its restore failed; the workload started cold in place
 	case pod.Annotations[webhook.CRIURestoredAnnotation] != "":
 		return metrics.MethodCRIU
 	case pod.Annotations[webhook.FallbackCaptureAnnotation] != "":

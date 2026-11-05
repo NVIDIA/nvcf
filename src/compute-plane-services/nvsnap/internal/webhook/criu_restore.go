@@ -13,6 +13,7 @@ package webhook
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -48,6 +49,20 @@ const (
 	// restore's session. The checkpoint itself is mounted read-only: later
 	// restores on the node use the same images.
 	RestoreWorkMountPath = "/nvsnap-restore-work"
+
+	// ColdArgvMeta is the capture record key holding, as a JSON list, the
+	// argv the source container's runtime started it with (its OCI spec's
+	// process.args: the image entrypoint and command with the pod's
+	// overrides applied). A placeholder in a pod nothing would recreate
+	// starts it in place when its restore fails.
+	ColdArgvMeta = "cold_argv"
+	// ColdStartMarker is where the placeholder's idle program records a
+	// cold start, on the work volume, which outlives the container: a
+	// restarted container starts the workload at once.
+	ColdStartMarker = RestoreWorkMountPath + "/cold-start"
+	// ColdStartedAnnotation marks a placeholder whose restore failed and
+	// that the agent started cold in place, with the time it did.
+	ColdStartedAnnotation = "nvsnap.io/criu-cold-started"
 )
 
 // criuCheckpointID returns the CRIU checkpoint a capture record points to,
@@ -179,11 +194,16 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 	// The container idles until the restored process takes over: the
 	// helper (helper.go) runs a short child every two seconds, so once the
 	// agent raises the namespace's next pid the reserved range shows, and
-	// it reaps what the restore reparents to it.
+	// it reaps what the restore reparents to it. Given the workload's argv
+	// it can also start that in place, when the restore fails in a pod
+	// nothing would recreate (cmd/nvsnap-idle).
 	patches := []PatchOp{
 		{Op: setOp(c.Command != nil), Path: base + "/command", Value: []string{IdleBin}},
 	}
-	if c.Args != nil {
+	if argv := ColdArgv(c, man); len(argv) > 0 {
+		patches = append(patches, PatchOp{Op: setOp(c.Args != nil), Path: base + "/args",
+			Value: append([]string{"--cold-start", ColdStartMarker, "--"}, argv...)})
+	} else if c.Args != nil {
 		patches = append(patches, PatchOp{Op: "remove", Path: base + "/args"})
 	}
 	patches = append(patches, placeholderInitPatches(pod, c)...)
@@ -262,6 +282,24 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 	patches = append(patches, criuNodePreference(pod, man.CapturedOnNodes)...)
 	patches = append(patches, restoredGatePatches(pod)...)
 	return patches, nil
+}
+
+// ColdArgv returns the argv container c starts its workload with, as the
+// pod would without nvsnap: its own command and args when it names a
+// command, else what the capture record man saw the runtime start (the
+// image entrypoint lives in the image, not the pod). Nil when neither is
+// known; the placeholder then cannot start cold in place.
+func ColdArgv(c *corev1.Container, man checkpointstore.Manifest) []string {
+	if len(c.Command) > 0 && c.Command[0] != IdleBin {
+		return append(append([]string{}, c.Command...), c.Args...)
+	}
+	var argv []string
+	if raw := man.SourcePodMeta[ColdArgvMeta]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &argv); err != nil || len(argv) == 0 || argv[0] == "" || argv[0] == IdleBin {
+			return nil
+		}
+	}
+	return argv
 }
 
 // restoredGatePatches adds the CRIURestoredCondition readiness gate.

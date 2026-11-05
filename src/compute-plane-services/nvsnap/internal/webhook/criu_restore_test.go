@@ -67,9 +67,12 @@ func TestCRIURestore_PodBecomesThePlaceholder(t *testing.T) {
 	}
 	got := applyPatches(t, pod, patches)
 	c := got.Spec.Containers[1]
-	// Idled by nvsnap-idle, which needs nothing from the engine's image.
-	if !reflect.DeepEqual(c.Command, []string{IdleBin}) || len(c.Args) != 0 {
-		t.Errorf("engine container not idled: %v %v", c.Command, c.Args)
+	// Idled by nvsnap-idle, which needs nothing from the engine's image,
+	// and given the engine's own argv to start cold in place if the
+	// restore fails.
+	if !reflect.DeepEqual(c.Command, []string{IdleBin}) ||
+		!reflect.DeepEqual(c.Args, []string{"--cold-start", ColdStartMarker, "--", "vllm", "serve", "m"}) {
+		t.Errorf("engine container not idled with its cold start: %v %v", c.Command, c.Args)
 	}
 	helperMounted, helperVolume := false, false
 	for _, vm := range c.VolumeMounts {
@@ -539,5 +542,68 @@ func TestCRIURestore_StoreReadOnlyAndWorkVolumeReserved(t *testing.T) {
 		if _, err := m.criuRestorePatches(p, "abc123__20261008-101010", man); err == nil {
 			t.Errorf("%s: admitted as a placeholder", what)
 		}
+	}
+}
+
+// The placeholder's idle program is given the argv the pod would start its
+// engine with: the pod's own command and args, else the argv the capture
+// saw the runtime start (an entrypoint-only image), else nothing, and then
+// it cannot start cold in place.
+func TestCRIURestore_PlaceholderKnowsItsColdStart(t *testing.T) {
+	recorded := criuCaptureRecord()
+	recorded.SourcePodMeta[ColdArgvMeta] = `["/opt/nim/start.sh","--port","8000"]`
+	for _, tc := range []struct {
+		name    string
+		command []string
+		args    []string
+		man     checkpointstore.Manifest
+		want    []string
+	}{
+		{"pod command and args", []string{"vllm"}, []string{"serve", "m"}, criuCaptureRecord(), []string{"vllm", "serve", "m"}},
+		{"pod command wins over the record", []string{"vllm"}, nil, recorded, []string{"vllm"}},
+		{"entrypoint image: the recorded argv", nil, []string{"--port", "8000"}, recorded, []string{"/opt/nim/start.sh", "--port", "8000"}},
+		{"entrypoint image, nothing recorded", nil, []string{"--port", "8000"}, criuCaptureRecord(), nil},
+		{"entrypoint image, no args, nothing recorded", nil, nil, criuCaptureRecord(), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := podWithAnnotation("abc123")
+			pod.Spec = criuFunctionPod().Spec
+			pod.Spec.Containers[1].Command, pod.Spec.Containers[1].Args = tc.command, tc.args
+			m := criuMutator(t, tc.man)
+			patches, err := m.Mutate(context.Background(), pod)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := applyPatches(t, pod, patches).Spec.Containers[1]
+			if !reflect.DeepEqual(c.Command, []string{IdleBin}) {
+				t.Fatalf("command = %v, want the idle program", c.Command)
+			}
+			if tc.want == nil {
+				if len(c.Args) != 0 {
+					t.Errorf("args = %v, want none: nothing to start cold", c.Args)
+				}
+				return
+			}
+			if want := append([]string{"--cold-start", ColdStartMarker, "--"}, tc.want...); !reflect.DeepEqual(c.Args, want) {
+				t.Errorf("args = %v, want %v", c.Args, want)
+			}
+		})
+	}
+}
+
+// A record whose argv is unusable gives no cold start, rather than a wrong one.
+func TestColdArgv_RejectsBadRecords(t *testing.T) {
+	c := &corev1.Container{Name: "inference"}
+	for _, raw := range []string{`not json`, `[]`, `[""]`, `["` + IdleBin + `"]`} {
+		man := criuCaptureRecord()
+		man.SourcePodMeta[ColdArgvMeta] = raw
+		if got := ColdArgv(c, man); got != nil {
+			t.Errorf("%s: got %v, want nil", raw, got)
+		}
+	}
+	// A pod whose command is already the idle program is a placeholder.
+	c.Command = []string{IdleBin}
+	if got := ColdArgv(c, criuCaptureRecord()); got != nil {
+		t.Errorf("placeholder command: got %v", got)
 	}
 }
