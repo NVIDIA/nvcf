@@ -25,7 +25,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv"
 )
 
 // Attribute keys follow https://opentelemetry.io/docs/specs/semconv/http/http-metrics/

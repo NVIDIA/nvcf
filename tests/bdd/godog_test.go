@@ -495,6 +495,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("SAMPLE_HELM_TASK_CHART", "https://charts.example.test/task-helmchart-test.tgz")
 	t.Setenv("SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES", "https://charts.example.test/task-helmchart-test-missing-resources.tgz")
 	t.Setenv("SAMPLE_LLM_ECHO_IMAGE", "nvcr.io/test-org/test-team/openai-compatible-echo:test")
+	t.Setenv("SAMPLE_LLM_DECISIONS_IMAGE", "nvcr.io/test-org/test-team/openai-compatible-decisions:test")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	runner := newFakeRunner(map[string]harness.Result{
@@ -571,8 +572,10 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 	seedFunctionAPIKey(t, home)
 
-	vanityShadow := newVanityShadowFake("", &llmRoutingHTTPFake{seen: map[string]bool{}})
+	decisionRoutes := newDecisionRoutesFake("", &llmRoutingHTTPFake{seen: map[string]bool{}})
+	vanityShadow := newVanityShadowFake("", decisionRoutes)
 	vanityShadow.attach(runner)
+	decisionRoutes.attach(runner, suite.Config.RepoRoot)
 	suite.HTTP = vanityShadow
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile.feature")
@@ -689,10 +692,16 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"--function-type LLM") {
 		t.Fatal("LLM field-fidelity function was not created from SAMPLE_LLM_ECHO_IMAGE")
 	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-llm-decision-routes",
+		"--image nvcr.io/test-org/test-team/openai-compatible-decisions:test",
+		"--function-type LLM") {
+		t.Fatal("decision route function was not created from SAMPLE_LLM_DECISIONS_IMAGE")
+	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function delete --deployment-only") {
 		t.Fatal("function deployment cleanup was never invoked")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 8)
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 11)
 	for _, key := range []string{"shadow-warmup", "promptCacheKey", "firstMessageHash", "continuation", "failing-shadow"} {
 		if !vanityShadow.seen[key] {
 			t.Errorf("vanity shadow scenario never exercised %s", key)
@@ -1739,6 +1748,7 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 		key  string
 		want string
 	}{
+		{key: "llmRequestRouter.kubernetes.advertisedHostnameTemplate", want: strconv.Quote("{pod_name}.llm-request-router-region-b-headless.nvcf.svc.cluster.local")},
 		{key: "llmRequestRouter.backendRouter.enabled", want: "true"},
 		{key: "llmRequestRouter.serviceAccount.create", want: "false"},
 		{key: "llmRequestRouter.pki.enabled", want: "false"},
@@ -1804,11 +1814,14 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 	if err != nil {
 		t.Fatalf("resolve multi-region environment: %v", err)
 	}
+	if err := dsl.MatchYAMLSubtree(environmentPath, "addons.llm.requestRouter.grpcTls.dnsNames",
+		"- region-b-watch.nvcf.svc.cluster.local", dsl.MatchExact); err != nil {
+		t.Fatalf("additional Gateway TLS DNS names must form a dense list: %v", err)
+	}
 	for _, expectation := range []struct {
 		key  string
 		want string
 	}{
-		{key: "addons.llm.requestRouter.grpcTls.dnsNames[1]", want: "region-b-watch.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.dnsNames[2]", want: "region-b-watch.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.dnsNames[3]", want: "*.llm-request-router-region-b-headless.nvcf.svc.cluster.local"},
 	} {
@@ -2358,7 +2371,15 @@ func seedUpstreamImageRenderOutput(t *testing.T, repoRoot string) {
 	t.Helper()
 	manifests := map[string]string{
 		"01-nats/templates/nats.yaml": `# Source: helm-nvcf-nats/templates/nkey-secret.yaml
+image: docker.io/synadia/nats-server:fixture-tag
 image: docker.io/natsio/nats-server-config-reloader:fixture-tag
+image: docker.io/natsio/nats-box:fixture-tag
+`,
+		"01-cert-manager/templates/cert-manager.yaml": `image: nvcr.io/nvidia/nvcf/cert-manager-controller:fixture-tag
+image: nvcr.io/nvidia/nvcf/cert-manager-webhook:fixture-tag
+image: nvcr.io/nvidia/nvcf/cert-manager-cainjector:fixture-tag
+image: nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:fixture-tag
+--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:fixture-tag
 `,
 		"02-cassandra/templates/cassandra.yaml": "image: nvcf-cassandra-migrations:latest\n",
 		"03-api/templates/api.yaml":             "image: docker.io/alpine/k8s:fixture-tag\n",
@@ -2386,12 +2407,21 @@ spec:
   dnsNames:
     - llm-request-router.nvcf.svc.cluster.local
 worker-address: llm-request-router-backend-router.nvcf.svc.cluster.local:50071
-env:
-  - name: ADDONS_LLM_ENABLED
-    value: "true"
-  - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
-    value: "nvcf.svc.cluster.local"
 image: nvcr.io/test-org/test-team/nvcf-openbao-migrations:fixture-tag
+---
+kind: Job
+metadata:
+  name: openbao-server-migrations
+spec:
+  template:
+    spec:
+      containers:
+        - name: bao-migrations
+          env:
+            - name: ADDONS_LLM_ENABLED
+              value: "true"
+            - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
+              value: nvcf.svc.cluster.local
 `
 	filePath := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "out", "01-pki", "templates", "pki.yaml")
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
@@ -3078,7 +3108,26 @@ func TestSingleClusterHelmfile(t *testing.T) {
 	if os.Getenv(sampleLLMEchoImageEnv) == "" {
 		t.Setenv(sampleLLMEchoImageEnv, "nvcr.io/"+os.Getenv("SAMPLE_NGC_ORG")+"/"+os.Getenv("SAMPLE_NGC_TEAM")+"/"+sampleLLMEchoDefaultImage)
 	}
-	runLiveFeature(t, "single-cluster-helmfile.feature")
+	tags := singleClusterHelmfileTags()
+	if tags != "" {
+		t.Logf("%s is not set, so the @llm-decision-routes scenarios are skipped", sampleLLMDecisionsImageEnv)
+	}
+	runLiveFeatureTags(t, "single-cluster-helmfile.feature", tags)
+}
+
+// sampleLLMDecisionsImageEnv selects the OpenAI-compatible sample the decision
+// route scenarios deploy. The scenarios are opt-in: they also need gateway,
+// Stargate, Pylon and Vanity Gateway builds that serve the routes, so they run
+// only when an operator sets this variable.
+const sampleLLMDecisionsImageEnv = "SAMPLE_LLM_DECISIONS_IMAGE"
+
+// singleClusterHelmfileTags excludes the decision route scenarios unless
+// SAMPLE_LLM_DECISIONS_IMAGE is set.
+func singleClusterHelmfileTags() string {
+	if os.Getenv(sampleLLMDecisionsImageEnv) == "" {
+		return "~@llm-decision-routes"
+	}
+	return ""
 }
 
 // sampleLLMEchoImageEnv selects the OpenAI-compatible sample the LLM
@@ -4159,6 +4208,8 @@ func TestLLMRoutingFeaturesRejectIncompleteAndMisroutedResponses(t *testing.T) {
 		if !found {
 			t.Fatal("missing LLM scenario")
 		}
+		// The decision route scenarios have their own wiring test.
+		scenario, _, _ = strings.Cut(scenario, "\n    # Beta decision routes")
 		brokenModes := []string{"", "chat-stream", "responses", "classic", "pexec", "unlisted", "long-nonstream", "long-stream", "long-nonstream-too-fast", "long-stream-too-fast"}
 		exercised := []string{"chat-stream", "responses", "classic", "pexec", "unlisted", "long-nonstream", "long-stream"}
 		// Field fidelity runs only in the single-cluster feature.
@@ -4249,6 +4300,9 @@ func (f *vanityShadowFake) Do(ctx context.Context, method, rawURL string, header
 		return harness.HTTPResponse{}, err
 	}
 	if u.Host != "vanity-openai.localhost:8080" {
+		return f.inner.Do(ctx, method, rawURL, headers, body)
+	}
+	if isDecisionRoutePath(u.Path) {
 		return f.inner.Do(ctx, method, rawURL, headers, body)
 	}
 	if method != "POST" || headers["Authorization"] != "Bearer wiring-function-api-key" || headers["Content-Type"] != "application/json" {

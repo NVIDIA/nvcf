@@ -29,6 +29,8 @@ test:
 		--set functionautoscaler.image.registry=nvcr.io \
 		--set functionautoscaler.image.repository=test/nvcf-function-autoscaler
 	@tests/profile-defaults.sh
+	@tests/chart-versions-selftest.sh
+	@tests/chart-versions.sh
 	@../self-managed/tests/observability-autoscaler.sh
 	@../nvcf-compute-plane/tests/observability-profile.sh
 

@@ -26,6 +26,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The encoded values are the exact output of IcmsClient.encodeEnvironmentValue in nvcf-core.
+func TestEnvDecoderText_QuotedValue_StaysOneEntry(t *testing.T) {
+	cases := []struct {
+		name    string
+		encoded string
+		want    string
+	}{
+		{"line feed", `"svc\u000aEXTRA=1"`, "svc\nEXTRA=1"},
+		{"carriage return and tab", `"a\u000db\u0009c"`, "a\rb\tc"},
+		{"backslash and quote", `"a\\b\"c\u000a"`, "a\\b\"c\n"},
+		{"C1 control character", `"a\u0085b"`, "a\u0085b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := "FIRST=1\nKEY=" + tc.encoded + "\nLAST=2"
+			got, err := DecodeEnvironmentB64(base64.StdEncoding.EncodeToString([]byte(env)), EnvDecoderText)
+			require.NoError(t, err)
+			assert.Equal(t, map[string]string{"FIRST": "1", "KEY": tc.want, "LAST": "2"}, got)
+		})
+	}
+}
+
 func TestExtractHelmConfiguration(t *testing.T) {
 	type spec struct {
 		name         string

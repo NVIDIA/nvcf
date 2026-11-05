@@ -121,6 +121,9 @@ done
 render_chart_values openbao-server "$work_dir/openbao-off.yaml" "$deps" || fail "render openbao (ha none)"
 grep -A3 "disruptionBudget:" "$work_dir/openbao-off.yaml" | grep -q "enabled: false" ||
   fail "openbao: server.ha.disruptionBudget must stay disabled when highAvailability.mode=none"
+if grep -q "publishNotReadyAddresses:" "$work_dir/openbao-off.yaml"; then
+  fail "openbao: service readiness override leaked while highAvailability.mode=none"
+fi
 
 echo "== highAvailability preferred: stateless / quorum sizing =="
 write_env <<'EOF'
@@ -183,6 +186,8 @@ grep -q "podAntiAffinity:" "$work_dir/openbao-on.yaml" ||
   fail "openbao: expected Tier-2 anti-affinity when highAvailability.mode=preferred"
 grep -A3 "disruptionBudget:" "$work_dir/openbao-on.yaml" | grep -q "maxUnavailable: 1" ||
   fail "openbao: expected server.ha.disruptionBudget maxUnavailable=1 when highAvailability.mode=preferred"
+grep -q "publishNotReadyAddresses: false" "$work_dir/openbao-on.yaml" ||
+  fail "openbao: client Services must exclude not-ready members under preferred HA"
 # base.yaml disables the budget for single-node installs; HA must turn it on,
 # or the chart renders no PDB for the Raft peers.
 grep -A3 "disruptionBudget:" "$work_dir/openbao-on.yaml" | grep -q "enabled: true" ||
@@ -632,6 +637,8 @@ grep -q "whenUnsatisfiable: DoNotSchedule" <<<"$openbao_enforced" ||
   fail "openbao: expected hard zone spread when highAvailability.mode=enforced"
 grep -Eq '^ *component: "?server"?$' <<<"$openbao_enforced" ||
   fail "openbao: hard zone spread must select the server Pods only"
+grep -q "publishNotReadyAddresses: false" <<<"$openbao_enforced" ||
+  fail "openbao: client Services must exclude not-ready members under enforced HA"
 
 echo "== highAvailability sizing is a floor, not a replacement =="
 write_env <<'EOF'

@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "types",
     srcs = ["types.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common/core/types",
     visibility = ["//visibility:public"],
     deps = [
         "//src/control-plane-services/event-ledger/common/core/utils",

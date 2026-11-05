@@ -23,7 +23,7 @@ go_library(
         "unionFile.go",
         "util.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/afero",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/afero",
     importpath = "github.com/spf13/afero",
     visibility = ["//visibility:public"],
     deps = [

@@ -29,12 +29,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
 	"go.uber.org/zap"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvct"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvct"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/test/testutils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/types"
 
 	"golang.org/x/oauth2"
 )

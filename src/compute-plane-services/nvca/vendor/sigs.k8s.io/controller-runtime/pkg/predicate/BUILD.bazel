@@ -6,7 +6,7 @@ go_library(
         "doc.go",
         "predicate.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/predicate",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/predicate",
     importpath = "sigs.k8s.io/controller-runtime/pkg/predicate",
     visibility = ["//visibility:public"],
     deps = [

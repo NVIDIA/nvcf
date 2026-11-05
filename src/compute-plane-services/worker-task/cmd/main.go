@@ -17,7 +17,7 @@ limitations under the License.
 
 package main
 
-import "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/service"
+import "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/service"
 
 func main() {
 	service.Run()

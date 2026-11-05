@@ -88,6 +88,7 @@ pub mod registration {
     pub use crate::control_plane::{
         DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT, DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
     };
+    pub use crate::routing_state::DEFAULT_DEREGISTERED_MODEL_GRACE;
 }
 
 pub mod routing {

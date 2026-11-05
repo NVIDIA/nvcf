@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/httpapi"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/httpapi"
 )
 
 func decodeAPIError(t *testing.T, body string) httpapi.ApiError {

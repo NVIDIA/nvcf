@@ -15,7 +15,7 @@
 
 load("@gazelle//:def.bzl", "gazelle_test")
 
-# gazelle:prefix github.com/NVIDIA/nvcf/src/libraries/go/lib
+# gazelle:prefix github.com/dsx-ai-factory/nvcf/src/libraries/go/lib
 # gazelle:exclude vendor
 # gazelle:exclude testdata
 # Phase 1 keeps protobuf out of the toolchain; pre-generated .pb.go files are
@@ -25,7 +25,7 @@ load("@gazelle//:def.bzl", "gazelle_test")
 # Disambiguate consumers of the errors API that gazelle would otherwise leave
 # with an empty deps list because the proto package historically defined two
 # rules with the same importpath (nverrors_go_proto and errors).
-# gazelle:resolve go github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1 //src/libraries/go/lib/pkg/nvkit/api/errors/v1:errors
+# gazelle:resolve go github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1 //src/libraries/go/lib/pkg/nvkit/api/errors/v1:errors
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 

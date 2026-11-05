@@ -4,7 +4,7 @@ NvSnap is a GPU checkpoint/restore system for Kubernetes.
 
 ## Project location
 
-The canonical repo is `github.com/NVIDIA/nvcf`, under
+The canonical repo is `github.com/dsx-ai-factory/nvcf`, under
 `src/compute-plane-services/nvsnap`. The CRIU fork NvSnap builds from is public
 at `github.com/balajinvda/criu` (branch `criu-dev`; the build pins a commit,
 `NVSNAP_CRIU_REF` in `scripts/versions.sh`).

@@ -30,11 +30,11 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/otelcollector"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/otelconfig"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/secrets"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/internal/otelcollector"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/internal/otelconfig"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/internal/secrets"
 )
 
 const (

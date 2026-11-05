@@ -23,7 +23,7 @@ go_library(
         "text_formatter.go",
         "writer.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
     importpath = "github.com/sirupsen/logrus",
     visibility = ["//visibility:public"],
     deps = select({

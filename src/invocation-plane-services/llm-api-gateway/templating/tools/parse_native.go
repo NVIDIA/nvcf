@@ -24,11 +24,11 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/encoding/json"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/pool"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/templating/output"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/encoding/json"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/pool"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/templating/output"
 )
 
 var (

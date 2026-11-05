@@ -109,6 +109,6 @@ func TestModelCacheBindingOpenAPIDefinitions(t *testing.T) {
 		"ModelCacheBindingStatus",
 	} {
 		assert.Contains(t, definitions,
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1."+typeName)
+			"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1."+typeName)
 	}
 }

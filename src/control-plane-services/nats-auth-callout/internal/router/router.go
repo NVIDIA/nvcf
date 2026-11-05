@@ -22,9 +22,9 @@ import (
 	"strconv"
 	"time"
 
-	_ "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/api"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/models"
-	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	_ "github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/api"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/models"
+	golibversion "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 
 	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"

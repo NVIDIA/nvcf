@@ -17,9 +17,9 @@ apiVersion: v2
 name: helm-nvcf-cert-manager
 description: Thin Helm wrapper for cert-manager in self-hosted NVCF
 type: application
-version: 0.1.0
-appVersion: "1.20.2"
+version: 0.1.1
+appVersion: "1.20.5"
 dependencies:
   - name: cert-manager
     repository: "file://charts/cert-manager"
-    version: "v1.20.2"
+    version: "v1.20.5"

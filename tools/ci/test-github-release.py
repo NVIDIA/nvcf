@@ -600,7 +600,7 @@ class GithubReleaseTest(unittest.TestCase):
     def write_go_sdk(self, root, toolchain):
         sdk = root / "tools/go-toolchain/go.mod"
         sdk.parent.mkdir(parents=True, exist_ok=True)
-        sdk.write_text(f"module github.com/NVIDIA/nvcf/tools/go-toolchain\n\ngo 1.26.5\n\ntoolchain {toolchain}\n")
+        sdk.write_text(f"module github.com/dsx-ai-factory/nvcf/tools/go-toolchain\n\ngo 1.26.5\n\ntoolchain {toolchain}\n")
 
     def write_module_bazel(self, root, digests):
         """MODULE.bazel in the shape of the real one: one digest-pinned oci.pull per base."""

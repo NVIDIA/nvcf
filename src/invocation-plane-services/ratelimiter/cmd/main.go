@@ -38,10 +38,10 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/config"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
-	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/config"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	golibversion "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 
 	"ratelimiter"
 )
@@ -71,7 +71,7 @@ func stopGrpcServer(server *grpc.Server, drainTimeout time.Duration) {
 
 func main() {
 	setupLogger()
-	setupMetrics()
+	setupMetrics(metricsAddr)
 	setupPprof()
 	rootCmd := NewRootCommand()
 	err := rootCmd.Execute()
@@ -87,13 +87,15 @@ func setupLogger() *logs.ZapLogger {
 	return zapLogger
 }
 
-func setupMetrics() {
+const metricsAddr = "0.0.0.0:7776"
+
+func setupMetrics(addr string) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	go func() {
-		err := http.ListenAndServe("0.0.0.0:7776", mux)
+		err := http.ListenAndServe(addr, mux)
 		if err != nil {
-
+			zap.L().Error("metrics server failed", zap.Error(err))
 		}
 	}()
 }

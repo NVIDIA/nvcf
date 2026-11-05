@@ -28,6 +28,9 @@ otelExporterOtlpLogsProtocol: ""
 otelExporterOtlpMetricsProtocol: ""
 otelExporterOtlpTracesProtocol: ""
 
+# Replace with an image you build from examples/task-samples/task-byoo-sample.
+# Builds that predate http/protobuf support exit at startup because NVCF sets
+# OTEL_EXPORTER_OTLP_<SIGNAL>_PROTOCOL=http/protobuf.
 image:
   repository: "nvcr.io/guineapig-1/task_byoo_sample" # replace with your own container
   tag: "latest"

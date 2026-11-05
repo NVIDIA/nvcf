@@ -4,6 +4,66 @@ This tool keeps top-of-tree documentation aligned with three released stack
 inventories. It renders the cross-stack compatibility matrix and prepares
 branch-based SemVer docs editions for qualified three-stack combinations.
 
+## Chart image settings
+
+NATS, cert-manager, OpenBao and Cassandra expose their image settings in each
+wrapper's `values.yaml`. Helm consumes the existing image keys directly. No
+inventory command, mapping file or mirror generator is required to install.
+NVCF rebuilds retain their own release provenance and versions.
+
+The `thirdPartyImages` and `ownedImages` maps are a CI index of those existing
+keys. They do not duplicate image versions and are not runtime overrides.
+Change the referenced image settings with an ordinary Helm values file.
+
+For example, NATS accepts renamed repositories at the existing paths:
+
+```yaml
+nats:
+  container:
+    image:
+      registry: registry.example.com
+      repository: platform/nats
+  reloader:
+    image:
+      registry: registry.example.com
+      repository: platform/nats-reloader
+  natsBox:
+    container:
+      image:
+        registry: registry.example.com
+        repository: platform/nats-box
+```
+
+From the repository root, register the NATS chart repository and download the
+chart dependency. Then apply the image values after other deployment profiles:
+
+```sh
+helm repo add nats https://nats-io.github.io/k8s/helm/charts/
+helm dependency build deploy/helm/nats
+helm upgrade --install nats deploy/helm/nats -f /path/images.yaml
+```
+
+Use repositories containing the selected versions. Image copying and artifact
+identity verification belong to release preparation. Values overrides do not
+publish or verify images. A single global registry setting does not retarget
+every chart. cert-manager supports full `repository`, `tag` and `digest`
+overrides for all five images; empty tags inherit the vendored appVersion.
+OpenBao and Cassandra accept separate `registry`, `repository` and `tag` fields.
+Their tag fields also accept `tag@sha256:digest` references.
+
+CI renders defaults and ordinary overrides for all four charts, including
+hooks, init containers, injected agents and the ACME solver argument:
+
+```sh
+NVCF_IMAGE_CATALOG_E2E=1 go test -C tools/docs-version-sync -run '^TestImageCatalogCharts$' -count=1
+```
+
+The release inventory scanner also reads indirect image settings such as the
+cert-manager solver argument and `AGENT_INJECT_VAULT_IMAGE`. This includes
+images created later by a controller or injector. The chart checks reuse this
+scanner and its image-reference parser, keeping CI and released inventories
+consistent. Helm render/probe helpers are test-only.
+
 ## Release and documentation flow
 
 ```text

@@ -6,7 +6,7 @@ go_library(
         "workload.pb.go",
         "workload_grpc.pb.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/proto/spiffe/workload",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/proto/spiffe/workload",
     importpath = "github.com/spiffe/go-spiffe/v2/proto/spiffe/workload",
     visibility = ["//visibility:public"],
     deps = [

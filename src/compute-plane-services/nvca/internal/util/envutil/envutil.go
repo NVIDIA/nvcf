@@ -22,7 +22,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
 
 // ApplyEnvOverrides decodes a base64-encoded environment string,

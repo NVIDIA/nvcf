@@ -41,7 +41,9 @@ Pylon gates startup on an upstream health probe. It tries `/health` and then
 OpenAI-style ready endpoint work without extra configuration. The repeatable
 `--upstream-health-path` puts your own paths ahead of those defaults, which stay
 in place as a fallback, and `--upstream-health-wait-ms` bounds how long startup
-retries the probe (default 60000; `0` probes once and exits).
+retries the probe (`0` probes once and exits). Without the flag, Pylon uses the
+Go duration in `INFERENCE_READY_TIMEOUT` (for example `2h0m0s`) when it is set
+to a positive Go duration, and 60000 otherwise.
 
 For engines without a stats endpoint, set `pylon --max-engine-concurrency N`
 to provide a positive concurrency fallback for routing and local queue

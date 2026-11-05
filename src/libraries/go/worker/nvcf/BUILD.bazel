@@ -23,7 +23,7 @@ go_library(
         "ess.go",
         "metadata.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/nvcf",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/nvcf",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/lib/pkg/nvkit/auth",

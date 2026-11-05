@@ -26,13 +26,13 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/goccy/go-json"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 )
 
 type NgcClient struct {

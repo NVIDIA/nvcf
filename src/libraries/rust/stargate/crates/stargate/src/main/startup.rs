@@ -194,6 +194,7 @@ pub(super) fn runtime_config_from_args(
         registration_update_max_idle_timeout: millis(args.registration_update_max_idle_timeout_ms),
         routing_reservation_ttl_min: millis(args.routing_reservation_ttl_min_ms),
         routing_reservation_ttl_max: millis(args.routing_reservation_ttl_max_ms),
+        deregistered_model_grace: millis(args.deregistered_model_grace_ms),
         proxy_transport,
         lb_config_path: args.lb_config_path.clone(),
         metrics_prefix: args.metrics_prefix.clone(),

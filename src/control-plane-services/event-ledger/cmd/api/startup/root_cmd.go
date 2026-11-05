@@ -25,9 +25,9 @@ import (
 	"github.com/spf13/viper"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/toolbox"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/constants"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/cmd/toolbox"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/pkg/constants"
 )
 
 const configEnvPrefix = "EVENT_LEDGER"

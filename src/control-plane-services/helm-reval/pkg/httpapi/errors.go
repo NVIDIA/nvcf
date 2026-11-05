@@ -21,10 +21,10 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/zapotelspan"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/zapotelspan"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/tracing"
 )
 
 type ApiError struct {

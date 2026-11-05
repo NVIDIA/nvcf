@@ -74,6 +74,9 @@ llmApiGateway:
     # /v1/systemone. The image payload is never counted by size. Must be 0 or
     # more; 0 counts images as free.
     decisionImageTokens: 1024
+    # Request bodies larger than this get 413 and are never forwarded. Must be
+    # a whole number of bytes, 0 or more; 0 disables the limit.
+    maxRequestBodyBytes: 52428800
     nvcfGrpcAddr: "api.nvcf.svc.cluster.local:9090"
     nvcfGrpcInsecure: false
     nvcfGrpcTimeout: 2s

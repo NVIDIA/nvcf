@@ -18,7 +18,7 @@ go_library(
         "storage_profile.go",
         "store.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
         "//src/compute-plane-services/nvsnap/internal/tracing",

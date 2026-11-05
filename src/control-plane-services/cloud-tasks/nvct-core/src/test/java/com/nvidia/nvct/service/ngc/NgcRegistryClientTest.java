@@ -30,6 +30,7 @@ import tools.jackson.databind.node.StringNode;
 import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.NotFoundException;
 import com.nvidia.boot.exceptions.UnauthorizedException;
+import com.nvidia.boot.exceptions.UpstreamException;
 import com.nvidia.boot.mock.ngc.MockCasServer;
 import com.nvidia.nvct.IntegrationTestConfiguration;
 import com.nvidia.nvct.NvctTestApp;
@@ -132,8 +133,9 @@ class NgcRegistryClientTest {
     void testNonExistentOrg(JsonNode jsonNode) {
         var resultsLocation = TEST_UNKNOWN_ORG_NAME + "/test-model-2";
 
-        assertThatExceptionOfType(NotFoundException.class)
-                .isThrownBy(() -> ngcRegistryClient.validate(jsonNode, resultsLocation));
+        assertThatExceptionOfType(UpstreamException.class)
+                .isThrownBy(() -> ngcRegistryClient.validate(jsonNode, resultsLocation))
+                .withCauseInstanceOf(NotFoundException.class);
     }
 
     @ParameterizedTest
@@ -141,8 +143,9 @@ class NgcRegistryClientTest {
     void testNonExistentTeam(JsonNode jsonNode) {
         var resultsLocation = TEST_VALID_ORG_NAME + "/" + TEST_UNKNOWN_TEAM_NAME + "/test-model-2";
 
-        assertThatExceptionOfType(NotFoundException.class)
-                .isThrownBy(() -> ngcRegistryClient.validate(jsonNode, resultsLocation));
+        assertThatExceptionOfType(UpstreamException.class)
+                .isThrownBy(() -> ngcRegistryClient.validate(jsonNode, resultsLocation))
+                .withCauseInstanceOf(NotFoundException.class);
     }
 
     @ParameterizedTest
@@ -150,8 +153,9 @@ class NgcRegistryClientTest {
     void testInvalidApiKey(JsonNode jsonNode) {
         var resultsLocation = TEST_VALID_ORG_NAME_INVALID_KEY +  "/test-model-2";
 
-        assertThatExceptionOfType(UnauthorizedException.class)
-                .isThrownBy(() -> ngcRegistryClient.validate(jsonNode, resultsLocation));
+        assertThatExceptionOfType(UpstreamException.class)
+                .isThrownBy(() -> ngcRegistryClient.validate(jsonNode, resultsLocation))
+                .withCauseInstanceOf(UnauthorizedException.class);
     }
 
     @ParameterizedTest

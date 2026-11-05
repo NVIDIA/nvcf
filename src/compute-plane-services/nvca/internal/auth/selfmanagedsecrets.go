@@ -22,9 +22,9 @@ import (
 	"encoding/json"
 	"time"
 
-	cmnsecret "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret"
+	cmnsecret "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/secret"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
 )
 
 const (

@@ -8,7 +8,7 @@ go_library(
         "v2.go",
         "v3_account_reads.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/db_client/cassandra",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/db_client/cassandra",
     visibility = ["//:__subpackages__"],
     deps = [
         "//src/control-plane-services/event-ledger/common/core/types",

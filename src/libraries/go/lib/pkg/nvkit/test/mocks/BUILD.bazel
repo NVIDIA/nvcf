@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "mocks",
     srcs = ["jose_enrypter.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/test/mocks",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/test/mocks",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_go_jose_go_jose_v4//:go-jose",

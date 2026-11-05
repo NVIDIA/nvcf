@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "toolbox",
     srcs = ["generate-config.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/toolbox",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/cmd/toolbox",
     visibility = ["//visibility:public"],
     deps = [
         "//src/control-plane-services/event-ledger/internal/config",

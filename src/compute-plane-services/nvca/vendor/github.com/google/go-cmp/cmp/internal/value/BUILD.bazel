@@ -7,7 +7,7 @@ go_library(
         "pointer.go",
         "sort.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-cmp/cmp/internal/value",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-cmp/cmp/internal/value",
     importpath = "github.com/google/go-cmp/cmp/internal/value",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/google/go-cmp/cmp:__subpackages__"],
 )

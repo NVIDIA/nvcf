@@ -9,7 +9,7 @@ go_library(
         "enqueue_owner.go",
         "eventhandler.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/handler",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/handler",
     importpath = "sigs.k8s.io/controller-runtime/pkg/handler",
     visibility = ["//visibility:public"],
     deps = [

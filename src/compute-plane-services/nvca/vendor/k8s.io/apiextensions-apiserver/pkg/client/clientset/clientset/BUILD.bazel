@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "clientset",
     srcs = ["clientset.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset",
     importpath = "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset",
     visibility = ["//visibility:public"],
     deps = [

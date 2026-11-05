@@ -511,9 +511,31 @@ public class IcmsClient {
         }
 
         var env = envStream
-                .map(pair -> pair.getFirst() + "=" + pair.getSecond())
+                .map(pair -> pair.getFirst() + "=" + encodeEnvironmentValue(pair.getSecond()))
                 .collect(Collectors.joining("\n"));
         return Base64.getEncoder().encodeToString(env.getBytes(StandardCharsets.UTF_8));
+    }
+
+    // The worker reads one KEY=value entry per line and unquotes Go double-quoted values, so a
+    // value with a control character is quoted to stay one entry. Other values are not quoted, so
+    // workers see the same bytes as before.
+    // Example: "a\nb" becomes "a\\u000ab", which the worker unquotes back to "a\nb".
+    static String encodeEnvironmentValue(Object value) {
+        var text = String.valueOf(value);
+        if (text.chars().noneMatch(Character::isISOControl)) {
+            return text;
+        }
+        var quoted = new StringBuilder("\"");
+        text.chars().forEach(c -> {
+            if (c == '"' || c == '\\') {
+                quoted.append('\\').append((char) c);
+            } else if (Character.isISOControl(c)) {
+                quoted.append("\\u%04x".formatted(c));
+            } else {
+                quoted.append((char) c);
+            }
+        });
+        return quoted.append('"').toString();
     }
 
     private String getFunctionModels(FunctionEntity function) {
@@ -724,7 +746,10 @@ public class IcmsClient {
         try {
             return service.getInstancesByDeploymentId(
                     ncaId, deploymentId, includeTerminated, true, includeExpiredAckedInstances);
-        } catch (NotFoundException ex) {
+        } catch (UpstreamException ex) {
+            if (!(ex.getCause() instanceof NotFoundException)) {
+                throw ex;
+            }
             log.info(MSG_NO_INSTANCES_FOUND, ncaId, deploymentId);
             return IcmsStubService.Instances.builder().Instances(List.of()).build();
         }

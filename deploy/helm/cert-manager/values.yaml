@@ -13,7 +13,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# CI indexes the prefilled image settings below. Helm consumes those settings
+# directly; override them with ordinary values files. Empty tags inherit the
+# vendored chart's appVersion, keeping the shared version in one place.
+thirdPartyImages:
+  certManagerController: cert-manager.image
+  certManagerWebhook: cert-manager.webhook.image
+  certManagerCAInjector: cert-manager.cainjector.image
+  certManagerStartupAPICheck: cert-manager.startupapicheck.image
+  certManagerACMESolver: cert-manager.acmesolver.image
+
 cert-manager:
+  imageRegistry: quay.io
+  imageNamespace: jetstack
+
+  image:
+    name: cert-manager-controller
+    repository: ""
+    tag: ""
+    digest: ""
+
   crds:
     enabled: true
 
@@ -21,9 +40,33 @@ cert-manager:
 
   webhook:
     replicaCount: 1
+    image:
+      name: cert-manager-webhook
+      repository: ""
+      tag: ""
+      digest: ""
 
   cainjector:
     replicaCount: 1
+    image:
+      name: cert-manager-cainjector
+      repository: ""
+      tag: ""
+      digest: ""
+
+  startupapicheck:
+    image:
+      name: cert-manager-startupapicheck
+      repository: ""
+      tag: ""
+      digest: ""
+
+  acmesolver:
+    image:
+      name: cert-manager-acmesolver
+      repository: ""
+      tag: ""
+      digest: ""
 
   prometheus:
     enabled: false

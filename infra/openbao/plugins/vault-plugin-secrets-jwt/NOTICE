@@ -39,9 +39,10 @@ changes were made to the original work:
    the removed dependency.
 
 6. go.mod, go.sum: the module path was changed to
-   github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt so the
+   github.com/dsx-ai-factory/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt so the
    module resolves inside this repository. The friendlyid-go requirement was
    removed. Go, Vault, and security-sensitive dependency versions were updated.
+   The Go requirement is 1.27.3 to include the crypto/x509 intermediate CA fix.
    plugincontainer was updated to v0.5.0 so the plugin uses the split Moby API
    and client modules instead of the legacy github.com/docker/docker module.
 

@@ -9,7 +9,7 @@ go_library(
         "types.go",
         "zz_generated.deepcopy.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/clientcmd/api",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/clientcmd/api",
     importpath = "k8s.io/client-go/tools/clientcmd/api",
     visibility = ["//visibility:public"],
     deps = [

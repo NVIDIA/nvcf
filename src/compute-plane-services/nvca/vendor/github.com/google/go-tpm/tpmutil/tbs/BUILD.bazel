@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "tbs",
     srcs = ["tbs_windows.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-tpm/tpmutil/tbs",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-tpm/tpmutil/tbs",
     importpath = "github.com/google/go-tpm/tpmutil/tbs",
     visibility = ["//visibility:public"],
 )

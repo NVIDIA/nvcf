@@ -23,10 +23,10 @@ import static com.nvidia.nvcf.service.function.FunctionPredicateUtils.authorized
 import static com.nvidia.nvcf.service.function.FunctionPredicateUtils.privateFunctionMatch;
 import static com.nvidia.nvcf.util.NvcfUtils.functionNotFoundMessage;
 
-import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.boot.exceptions.NotFoundException;
 import com.nvidia.boot.exceptions.PaymentRequiredException;
+import com.nvidia.nvcf.configuration.exceptions.FunctionDegradedException;
 import com.nvidia.nvcf.persistence.function.entity.FunctionEntity;
 import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.service.azp.AuthorizedPartiesService;
@@ -128,8 +128,8 @@ public class FunctionInvocationValidationService {
         if (CollectionUtils.isEmpty(contexts)) {
             if (hasDegraded.get()) {
                 var mesg = MESG_DEGRADED_NOT_ALLOWED.formatted(functionId);
-                log.error(mesg);
-                throw new BadRequestException(mesg);
+                log.warn(mesg);
+                throw new FunctionDegradedException(mesg);
             }
             var mesg = MESG_FUNCTION_NOT_FOUND.formatted(functionId, versionId, ncaId);
             log.error(mesg);

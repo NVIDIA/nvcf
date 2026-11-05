@@ -19,8 +19,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/backend"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/config"
 )
 
 // maxObjectBytes is the S3 single-PutObject limit. A segment past this size

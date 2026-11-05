@@ -37,12 +37,12 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/lastcluster"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/lastcluster"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const (
@@ -1012,6 +1012,22 @@ func (a *chatCompletionChoiceAccumulator) buildToolCalls() []models.ChatCompleti
 	return toolCalls
 }
 
+// upstreamStreamError returns the error event that engines such as vLLM send in
+// place of a chunk when they fail after the 200, or nil for any other payload.
+// The message follows the rules and size cap for upstream error bodies.
+func upstreamStreamError(payload string) *UpstreamStreamError {
+	var event struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal([]byte(payload), &event) != nil {
+		return nil
+	}
+	if len(event.Error) == 0 || bytes.Equal(event.Error, []byte("null")) {
+		return nil
+	}
+	return &UpstreamStreamError{Message: UpstreamErrorMessage([]byte(payload))}
+}
+
 func (p *StargateProvider) readStream(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -1024,6 +1040,21 @@ func (p *StargateProvider) readStream(
 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), sseMaxToken)
+
+	// A canceled context means the client went away and may not read again. A
+	// missed request deadline must reach the reader, or the stream ends like a
+	// finished one; the API layer drains the stream if it stops reading early.
+	sendContextErr := func() {
+		ctxErr := ctx.Err()
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			events <- StreamEvent{Err: fmt.Errorf("%w: %w", ErrStreamIncomplete, ctxErr)}
+			return
+		}
+		select {
+		case events <- StreamEvent{Err: ctxErr}:
+		default:
+		}
+	}
 
 	var dataLines []string
 	emit := func() bool {
@@ -1038,20 +1069,26 @@ func (p *StargateProvider) readStream(
 			return false
 		}
 
+		// An error member can come with choices (OpenRouter sends finish_reason
+		// "error"). Only payloads that contain the key are parsed for it.
+		if strings.Contains(payload, `"error"`) {
+			if upstreamErr := upstreamStreamError(payload); upstreamErr != nil {
+				events <- StreamEvent{Err: upstreamErr}
+				return false
+			}
+		}
+
 		var chunk models.ChatCompletionChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			events <- StreamEvent{
-				Err: fmt.Errorf("decode stargate stream chunk: %w", err),
+				Err: fmt.Errorf("%w: decode stargate stream chunk: %w", ErrStreamIncomplete, err),
 			}
 			return false
 		}
 
 		select {
 		case <-ctx.Done():
-			select {
-			case events <- StreamEvent{Err: ctx.Err()}:
-			default:
-			}
+			sendContextErr()
 			return false
 		case events <- StreamEvent{Chunk: &chunk, Raw: json.RawMessage(payload)}:
 			return true
@@ -1074,23 +1111,25 @@ func (p *StargateProvider) readStream(
 		}
 	}
 
-	if len(dataLines) > 0 {
-		_ = emit()
+	// Check the context first: an event cut off because the client went away
+	// would otherwise fail to decode and look like an upstream failure.
+	if ctx.Err() != nil {
+		sendContextErr()
+		return
 	}
-
+	if len(dataLines) > 0 && !emit() {
+		return
+	}
 	if err := scanner.Err(); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			select {
-			case events <- StreamEvent{Err: ctxErr}:
-			default:
-			}
-			return
-		}
 		if errors.Is(err, context.Canceled) {
 			return
 		}
 		events <- StreamEvent{
-			Err: fmt.Errorf("read stargate stream: %w", err),
+			Err: fmt.Errorf("%w: read stargate stream: %w", ErrStreamIncomplete, err),
 		}
+		return
 	}
+	// A stream cut short upstream (Pylon output timeout, worker hang) can still
+	// end in a clean EOF, so only [DONE] marks a finished response.
+	events <- StreamEvent{Err: fmt.Errorf("%w: stargate stream ended before [DONE]", ErrStreamIncomplete)}
 }

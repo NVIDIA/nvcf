@@ -11,8 +11,8 @@
 # the image. Nothing is vendored and nothing is injected, so `docker build .`
 # here produces the same image as the release pipeline.
 ARG BAO_VERSION=2.6.3
-ARG GO_VERSION=1.27.0
-ARG GO_IMAGE=golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc
+ARG GO_VERSION=1.27.3
+ARG GO_IMAGE=golang:1.27.3-alpine3.23@sha256:8a5046497cda39860b832ffdbe8dd66018a0f05bb01352f533a36e7e2ced66a0
 ARG BAO_SOURCE_COMMIT=63a65e6b907589dbb952c371a70260a065bf8bd7
 ARG BAO_SOURCE_SHA256=471a2c2e3a156a833704f43335ed5e66476a90719ce692b80c3f541e346cda69
 ARG BAO_RUNTIME_IMAGE=openbao/openbao:2.6.3@sha256:a60afafda36337abe833c4a63894bf1095098f29abea4091e7e555a33dd52889
@@ -23,7 +23,7 @@ ARG JWT_INCLUDE_LEGACY=true
 
 FROM ${JWT_LEGACY_IMAGE} AS legacy-plugin
 
-FROM ${GO_IMAGE} AS bao-build
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS bao-build
 ARG BAO_VERSION
 ARG BAO_SOURCE_COMMIT
 ARG BAO_SOURCE_SHA256
@@ -39,17 +39,17 @@ RUN BAO_VERSION="${BAO_VERSION}" \
     OUTPUT_DIR=/out \
     /usr/local/bin/build-openbao.sh
 
-FROM ${GO_IMAGE} AS plugin-build
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS plugin-build
 ARG TARGETARCH
 WORKDIR /src
 # Module files first so dependency download caches independently of source edits.
 COPY plugins/vault-plugin-secrets-jwt/go.mod plugins/vault-plugin-secrets-jwt/go.sum ./
-RUN go mod download
+RUN GOTOOLCHAIN=local go mod download
 COPY plugins/vault-plugin-secrets-jwt/ ./
 # CGO_ENABLED=0 for a static binary: the plugin is exec'd by the OpenBao server
 # inside a distro image it was not linked against, so it must not need a
 # dynamic loader. -trimpath keeps build paths out of the binary.
-RUN GOOS=linux GOARCH="${TARGETARCH}" CGO_ENABLED=0 \
+RUN GOOS=linux GOARCH="${TARGETARCH}" CGO_ENABLED=0 GOTOOLCHAIN=local \
     go build -trimpath -o /out/vault-plugin-secrets-jwt ./cmd/vault-plugin-secrets-jwt
 
 FROM ${BAO_RUNTIME_IMAGE} AS plugin-package-base
@@ -79,7 +79,8 @@ USER root
 # applied even when the upstream image predates them.
 # hadolint ignore=DL3018
 RUN apk upgrade --no-cache && \
-    apk add --no-cache 'brotli-libs>=1.2.1-r0' curl jq bash && \
+    apk add --no-cache 'brotli-libs>=1.2.1-r0' 'ca-certificates>=20261020-r0' \
+      'ca-certificates-bundle>=20261020-r0' curl jq bash && \
     mkdir -p /openbao/plugins
 
 COPY --from=bao-build --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao

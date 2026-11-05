@@ -23,8 +23,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
-	otelconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/config"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
+	otelconfig "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otelconfig/config"
 )
 
 // spdxHeader is prepended to every generated config. The committed examples are

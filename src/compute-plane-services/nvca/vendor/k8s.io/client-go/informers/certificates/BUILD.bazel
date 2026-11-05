@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "certificates",
     srcs = ["interface.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/certificates",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/certificates",
     importpath = "k8s.io/client-go/informers/certificates",
     visibility = ["//visibility:public"],
     deps = [

@@ -34,6 +34,10 @@ const ERROR_OVERLOADED: &str = "overloaded_error";
 const ERROR_NO_ELIGIBLE_CANDIDATES: &str = "no_eligible_candidates";
 const ERROR_NO_ELIGIBLE_CANDIDATES_BODY: &str =
     r#"{"error":"no eligible candidates","code":"no_eligible_candidates"}"#;
+const ERROR_NO_READY_BACKENDS: &str = "no_ready_backends";
+const ERROR_NO_READY_BACKENDS_BODY: &str =
+    r#"{"error":"no ready backends","code":"no_ready_backends"}"#;
+const NO_READY_BACKENDS_RETRY_AFTER_SECS: &str = "5";
 const ADMISSION_REASON_INPUT_WORK_LIMIT_EXCEEDED: &str = "input_work_limit_exceeded";
 const ADMISSION_REASON_INPUT_WORK_CAPACITY_UNAVAILABLE: &str = "input_work_capacity_unavailable";
 const ADMISSION_REASON_ROUTING_CAPACITY_UNAVAILABLE: &str = "routing_capacity_unavailable";
@@ -123,17 +127,21 @@ pub(super) enum NoRoutingChoiceAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum NoRoutingFinalization {
     NoCandidatesNotFound,
+    NoReadyBackends,
     ServiceUnavailable,
 }
 
 pub(super) fn classify_no_routing_choice(inputs: NoRoutingChoiceInputs) -> NoRoutingChoiceAction {
     if inputs.num_candidates > 0 && inputs.eligible_candidate_count > 0 && inputs.retry_allowed {
         NoRoutingChoiceAction::RetryRouting
-    } else if inputs.num_candidates == 0
-        && !inputs.target_registered
-        && inputs.failed_backend_count == 0
-        && inputs.failed_cluster_count == 0
+    } else if inputs.eligible_candidate_count == 0
+        && (inputs.num_candidates > 0
+            || inputs.target_registered
+            || inputs.failed_backend_count > 0
+            || inputs.failed_cluster_count > 0)
     {
+        NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoReadyBackends)
+    } else if inputs.num_candidates == 0 {
         NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoCandidatesNotFound)
     } else {
         NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
@@ -184,7 +192,7 @@ pub(super) fn finalize_no_routing_choice(
                 .inc();
             Ok(no_eligible_candidates_response())
         }
-        NoRoutingFinalization::ServiceUnavailable => {
+        NoRoutingFinalization::NoReadyBackends | NoRoutingFinalization::ServiceUnavailable => {
             context
                 .metrics
                 .requests_total(rk_ref, model_id, "", "503")
@@ -199,6 +207,8 @@ pub(super) fn finalize_no_routing_choice(
             }
             if context.capacity_rejected || context.routing_capacity_rejected {
                 Ok(overloaded_response())
+            } else if context.finalization == NoRoutingFinalization::NoReadyBackends {
+                Ok(no_ready_backends_response())
             } else {
                 Err(StatusCode::SERVICE_UNAVAILABLE)
             }
@@ -263,6 +273,19 @@ fn no_eligible_candidates_response() -> Response<Body> {
         ERROR_NO_ELIGIBLE_CANDIDATES,
         ERROR_NO_ELIGIBLE_CANDIDATES_BODY,
     )
+}
+
+fn no_ready_backends_response() -> Response<Body> {
+    let mut response = json_error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        ERROR_NO_READY_BACKENDS,
+        ERROR_NO_READY_BACKENDS_BODY,
+    );
+    response.headers_mut().insert(
+        header::RETRY_AFTER,
+        HeaderValue::from_static(NO_READY_BACKENDS_RETRY_AFTER_SECS),
+    );
+    response
 }
 
 pub(super) fn json_error_response(
@@ -449,7 +472,7 @@ mod tests {
                 failed_cluster_count: 1,
                 ..no_routing_inputs(2, 0)
             }),
-            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
+            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoReadyBackends)
         );
         assert_eq!(
             classify_no_routing_choice(NoRoutingChoiceInputs {
@@ -469,24 +492,91 @@ mod tests {
     }
 
     #[test]
-    fn no_routing_choice_finalizes_registered_empty_route_as_unavailable() {
+    fn no_routing_choice_finalizes_registered_empty_route_as_no_ready_backends() {
         assert_eq!(
             classify_no_routing_choice(NoRoutingChoiceInputs {
                 target_registered: true,
                 ..no_routing_inputs(0, 0)
             }),
-            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
+            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoReadyBackends)
+        );
+        assert_eq!(
+            classify_no_routing_choice(NoRoutingChoiceInputs {
+                target_registered: true,
+                failed_backend_count: 1,
+                failed_cluster_count: 1,
+                ..no_routing_inputs(0, 0)
+            }),
+            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoReadyBackends)
         );
     }
 
+    fn finalize_for_test(
+        metrics: &StargateMetrics,
+        finalization: NoRoutingFinalization,
+        capacity_rejected: bool,
+    ) -> Result<Response<Body>, StatusCode> {
+        finalize_no_routing_choice(NoRoutingFinalizationContext {
+            metrics,
+            target: &routing_target(),
+            finalization,
+            failed_backend_count: 1,
+            failed_cluster_count: 0,
+            routing_retry_attempts: 0,
+            capacity_rejected,
+            routing_capacity_rejected: false,
+        })
+    }
+
+    #[tokio::test]
+    async fn no_ready_backends_returns_retryable_json_503() {
+        let metrics = StargateMetrics::new().unwrap();
+        let response =
+            finalize_for_test(&metrics, NoRoutingFinalization::NoReadyBackends, false).unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "5");
+        assert_eq!(
+            response.headers()[HEADER_STARGATE_ERROR_CODE],
+            ERROR_NO_READY_BACKENDS
+        );
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"error": "no ready backends", "code": "no_ready_backends"})
+        );
+
+        let overloaded =
+            finalize_for_test(&metrics, NoRoutingFinalization::NoReadyBackends, true).unwrap();
+        assert_eq!(
+            overloaded.headers()[HEADER_STARGATE_ERROR_CODE],
+            ERROR_OVERLOADED
+        );
+        assert_eq!(
+            finalize_for_test(&metrics, NoRoutingFinalization::ServiceUnavailable, false)
+                .unwrap_err(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let retry_exhausted = metrics
+            .registry()
+            .gather()
+            .into_iter()
+            .find(|family| family.name() == "stargate_proxy_retry_exhausted_total")
+            .unwrap();
+        assert_eq!(retry_exhausted.get_metric()[0].get_counter().value(), 3.0);
+    }
+
     #[test]
-    fn no_routing_choice_finalizes_failed_empty_route_as_unavailable() {
+    fn no_routing_choice_finalizes_failed_empty_route_as_no_ready_backends() {
         assert_eq!(
             classify_no_routing_choice(NoRoutingChoiceInputs {
                 failed_backend_count: 1,
                 ..no_routing_inputs(0, 0)
             }),
-            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::ServiceUnavailable)
+            NoRoutingChoiceAction::Finalize(NoRoutingFinalization::NoReadyBackends)
         );
     }
 

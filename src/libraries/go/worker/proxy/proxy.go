@@ -50,16 +50,16 @@ import (
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/ca"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/buffconn"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/handlerisolationconn"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/quicconn"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/rp"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils/middleware"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils/pool"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/ca"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proto/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/buffconn"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/handlerisolationconn"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/quicconn"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/proxy/rp"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils/middleware"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils/pool"
 )
 
 const (

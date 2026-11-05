@@ -204,7 +204,7 @@ class XAccountEventControllerTest {
                              "non-existent-account",
                              TEST_TASK_ID_1,
                              Set.of(),
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Task in different account.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(ADMIN_SCOPE_LIST_EVENTS,

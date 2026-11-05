@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS event_ledger.events_v3 (
     timestamp TIMESTAMP,
     created_at TIMESTAMP,
     updated_at TIMESTAMP,
-    nca_id TEXT,           -- Owning/calling account; NULL on rows written before account scoping
+    nca_id TEXT,           -- Owning/calling account. NULL on rows written before account scoping
     function_id TEXT,
     PRIMARY KEY ((namespace, context), event_name)
 );

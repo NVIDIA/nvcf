@@ -32,6 +32,8 @@ x_text_version=${X_TEXT_VERSION:-v0.41.0}
 grpc_version=${GRPC_VERSION:-v1.83.2}
 go_jose_version=${GO_JOSE_VERSION:-v4.1.4}
 output_dir=${OUTPUT_DIR:-"$repo_root/files/plugins"}
+GOTOOLCHAIN=${GO_TOOLCHAIN:-go1.27.3}
+export GOTOOLCHAIN
 
 # Only a work dir this script created is ours to remove. Deleting a
 # caller-supplied WORK_DIR would destroy a directory the caller still owns.

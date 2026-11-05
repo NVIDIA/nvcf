@@ -51,7 +51,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: 1.27.0
+          go-version: 1.27.3
 
       - name: Build and verify both server architectures
         working-directory: infra/openbao

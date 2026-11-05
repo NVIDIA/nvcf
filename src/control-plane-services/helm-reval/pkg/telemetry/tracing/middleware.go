@@ -22,7 +22,7 @@ import (
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/telemetry"
 )
 
 func NewOtelTraceMiddleware() func(next http.Handler) http.Handler {

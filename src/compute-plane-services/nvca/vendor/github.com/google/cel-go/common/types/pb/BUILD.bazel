@@ -10,7 +10,7 @@ go_library(
         "pb.go",
         "type.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/pb",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/pb",
     importpath = "github.com/google/cel-go/common/types/pb",
     visibility = ["//visibility:public"],
     deps = [

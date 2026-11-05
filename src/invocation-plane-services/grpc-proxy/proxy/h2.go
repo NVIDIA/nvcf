@@ -18,7 +18,7 @@ package proxy
 
 import (
 	"context"
-	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	golibversion "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/hellofresh/health-go/v5"
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"

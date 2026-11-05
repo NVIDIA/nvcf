@@ -124,7 +124,7 @@ LABEL org.opencontainers.image.title="nvstor-peer" \
       org.opencontainers.image.revision="${SOURCE_COMMIT}" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.base.name="${UBUNTU}" \
-      org.opencontainers.image.source="https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/nvstor"
+      org.opencontainers.image.source="https://github.com/dsx-ai-factory/nvcf/tree/main/src/compute-plane-services/nvstor"
 COPY --from=packages /overlay/ /
 COPY nvstor-peer /usr/local/bin/nvstor-peer
 # `fetch --gpu` / `bench --gpu` load the CUDA driver (libcuda.so.1) at run

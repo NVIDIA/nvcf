@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/agent"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/agent"
 )
 
 func TestBindUnixListenersRejectsBadSpec(t *testing.T) {
