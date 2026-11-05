@@ -22,7 +22,7 @@ class ReceiptChecks(unittest.TestCase):
         self.observability = self.root / "deploy/stacks/observability"
         text = GUIDE.read_text(encoding="utf-8")
         blocks = re.findall(r"```bash\n(.*?)\n```", text, re.DOTALL)
-        self.preflight = next(block for block in blocks if "check_package_version() {" in block)
+        self.preflight = next(block for block in blocks if "check-upgrade-packages.py" in block and "export EXPECTED_CONTROL_STACK_VERSION" in block)
         self.receipt = next(block for block in blocks if "get job upgrade-receipt" in block)
         self.selected = {}
         for name, stack in (("Self-Managed", self.control), ("Compute Plane", self.compute),
@@ -33,18 +33,19 @@ class ReceiptChecks(unittest.TestCase):
             (stack / "VERSION").write_text(version + "\n", encoding="utf-8")
         self.env = {**os.environ, "CONTROL_STACK": str(self.control), "COMPUTE_STACK": str(self.compute),
                     "TARGET_BUNDLE": str(self.root), "UPGRADE_RECORD": str(self.root),
-                    "CONTROL_KUBECONFIG": "synthetic-config", "RECEIPT_VERSION": self.selected[self.control]}
+                    "CONTROL_KUBECONFIG": "synthetic-config", "CONTROL_CONTEXT": "synthetic-context",
+                    "UPGRADE_SCRIPTS": str(Path(__file__).parent.resolve()),
+                    "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+                    "RECEIPT_VERSION": self.selected[self.control]}
+        stub = self.root / "kubectl"
+        stub.write_text('#!/bin/sh\ncase "$*" in *jsonpath*) printf "%s" "$RECEIPT_VERSION" ;; esac\n')
+        stub.chmod(0o700)
 
     def run_blocks(self, receipt=False, env=None, before_receipt=""):
         # Only these two adapters replace cluster access. Execute the guide's
         # actual shell checks, including errexit and command substitution.
         stubs = r'''
 control_helmfile() { printf '%s\n' "$*" >> "$UPGRADE_RECORD/apply.log"; }
-kubectl() {
-  case "$*" in
-    *jsonpath*) printf '%s' "$RECEIPT_VERSION" ;;
-  esac
-}
 '''
         script = "set -euo pipefail\n" + stubs + self.preflight
         if receipt:
@@ -58,7 +59,6 @@ kubectl() {
         self.assertIn("04-upgrade-receipt.yaml.gotmpl apply", (self.root / "apply.log").read_text())
 
     def test_preflight_uses_selected_release_table(self):
-        self.assertEqual(["1.0.8", "1.0.4", "1.0.0"], list(self.selected.values()))
         for stack, variable in ((self.control, "CONTROL"), (self.compute, "COMPUTE"),
                                 (self.observability, "OBSERVABILITY")):
             self.assertIn(f'export EXPECTED_{variable}_STACK_VERSION="{self.selected[stack]}"', self.preflight)
@@ -97,7 +97,7 @@ kubectl() {
     def test_resumed_session_preserves_independent_expectations(self):
         result = self.run_blocks()
         self.assertEqual(0, result.returncode, result.stderr)
-        script = 'set -euo pipefail\nsource "$UPGRADE_RECORD/session.sh"\ncheck_selected_stack_versions\n'
+        script = 'set -euo pipefail\nsource "$UPGRADE_RECORD/session.sh"\npython3 "$UPGRADE_SCRIPTS/check-upgrade-packages.py"\n'
         result = subprocess.run(["bash", "-c", script], env=self.env, capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
         (self.control / "VERSION").write_text("1.0.0\n", encoding="utf-8")

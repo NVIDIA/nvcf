@@ -39,6 +39,23 @@ AGENTS.md   Rules for working in this directory.
 
 ## Running
 
+`TestUpgradeReadOnlyChecks` exercises the downloadable upgrade scripts against
+an existing installation. Export the package paths, independently selected
+versions, and dedicated kubeconfig/context variables from the
+[upgrade guide](../../docs/overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
+Set `UPGRADE_RECORD` to a new private directory; the test creates `before` and
+`after` captures and checks that an existing baseline cannot be overwritten.
+
+```sh
+unset BDD_CLEANUP_MODE
+cd tests/bdd
+go test -count=1 -run '^TestUpgradeReadOnlyChecks$' -timeout 40m -v
+```
+
+It checks package stamps, rolling workloads, cluster/registration identity and
+the receipt. It does not apply an upgrade, replace OnDelete pods, or qualify
+data preservation across an upgrade. Run it alongside the live upgrade rehearsal.
+
 `TestUpgradeProfileExistingInstall` checks profile export against an existing
 single-cluster installation with `addons.llm.enabled: false` in its selected
 environment. Initialize a dedicated CLI config first. Use an isolated copy of
