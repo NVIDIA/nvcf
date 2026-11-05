@@ -241,7 +241,7 @@ help:
 	@echo "  test-observability-profile  Verify NVCA observability profile defaults"
 	@echo "  test-register-cluster       Verify generated profile registration handoff"
 	@echo "  test-kube-context           Verify lifecycle and cleanup context propagation"
-	@echo "  test-nats-reloader-alignment Verify compute-plane and chart-default NATS reloader pins match"
+	@echo "  test-nats-reloader-alignment Verify the compute-plane NATS reloader pin matches its render"
 	@echo "  test-nats-server-source     Verify Dynamo NATS defaults and mirror override wiring"
 	@echo "  test-nvca-entrypoints       Verify rendered NVCA images use available entrypoints"
 	@echo "  test-local         Render the local env and diff against golden testdata"
