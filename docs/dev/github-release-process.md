@@ -281,6 +281,36 @@ corresponding image or chart release pipeline. The pipeline uses the mirrored so
 metadata to build, promote, and publish artifacts. The mirror tag
 pipeline does not publish artifacts.
 
+## CLI binary assets
+
+`CLI release assets` builds the five CLI platform binaries from the exact
+published `src/clis/nvcf-cli/vX.Y.Z` tag. It attaches versioned archives and
+`SHA256SUMS` to that existing GitHub Release. Each archive includes `LICENSE`,
+`NOTICE`, and `SOURCE.txt` with the tag, commit, and platform.
+
+The release automation uses `NV_GITHUB_TOKEN`; GitHub's default `GITHUB_TOKEN`
+does not trigger a follow-on `release.published` workflow. Releases created
+with that default token require the manual backfill path.
+
+For an existing release without binaries, run from `main` with publication
+disabled first:
+
+```bash
+gh workflow run cli-release-assets.yml --ref main \
+  -f release_tag=src/clis/nvcf-cli/vX.Y.Z -F publish=false
+```
+
+Inspect the run's `cli-release-assets` artifact and native version check.
+After release approval, repeat with `-F publish=true`. The workflow rejects
+an unpublished tag, a moved tag, dirty source, and existing asset names. An
+interrupted upload requires maintainer recovery before retrying; it does not
+overwrite previously uploaded files.
+
+Download binaries only when all five archives and `SHA256SUMS` are present.
+The checksum file is attached last, after downloaded archives match the build.
+Verify the downloaded archive against that file before extracting it. Source
+releases without these assets do not provide an installable CLI.
+
 ## Package metadata
 
 Package metadata uses SemVer without the leading `v`:

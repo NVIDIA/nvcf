@@ -1,0 +1,135 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: CLI release assets
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing CLI release tag (src/clis/nvcf-cli/vX.Y.Z)
+        required: true
+        type: string
+      publish:
+        description: Attach verified binaries to the existing release
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-release-assets-${{ inputs.release_tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  resolve:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'src/clis/nvcf-cli/v')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - name: Resolve the existing release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^src/clis/nvcf-cli/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]]; then
+            echo "Expected a stable or RC CLI release tag" >&2
+            exit 1
+          fi
+          gh release view "$RELEASE_TAG" --json tagName,isDraft |
+            jq -e --arg tag "$RELEASE_TAG" '.tagName == $tag and .isDraft == false'
+          commit=$(gh api "repos/$GH_REPO/commits/${RELEASE_TAG//\//%2F}" --jq .sha)
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    runs-on: linux-amd64-cpu16
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/dsx-ai-factory/nvcf/bazel-ci:0.14.0' }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    steps:
+      # Keep the reviewed helper separate from the immutable source checkout.
+      # This also permits backfilling tags which predate the helper.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: tooling
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          fetch-depth: 0
+          path: source
+          persist-credentials: false
+
+      - name: Build and package every supported platform
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: tooling/tools/ci/build-cli-release "$GITHUB_WORKSPACE/source" "$RELEASE_TAG" "$RUNNER_TEMP/cli-assets"
+
+      - name: Check the Linux binary version and source commit
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version=${RELEASE_TAG#src/clis/nvcf-cli/v}
+          mkdir "$RUNNER_TEMP/cli-smoke"
+          tar -xzf "$RUNNER_TEMP/cli-assets/nvcf-cli-$version-linux-amd64.tar.gz" -C "$RUNNER_TEMP/cli-smoke"
+          "$RUNNER_TEMP/cli-smoke/nvcf-cli" version | tee "$RUNNER_TEMP/cli-version.txt"
+          awk -v expected="$version" '$1 == "Version:" && $2 == expected { found=1 } END { exit !found }' "$RUNNER_TEMP/cli-version.txt"
+          commit=$(git -C source rev-parse --short HEAD)
+          awk -v expected="$commit" '$1 == "Git" && $2 == "Commit:" && $3 == expected { found=1 } END { exit !found }' "$RUNNER_TEMP/cli-version.txt"
+          grep -Fx "commit=$(git -C source rev-parse HEAD)" "$RUNNER_TEMP/cli-smoke/SOURCE.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-release-assets
+          path: ${{ runner.temp }}/cli-assets/
+          if-no-files-found: error
+
+  publish:
+    needs: [resolve, build]
+    # Manual backfills default to build-only. Publication runs from main or a
+    # published release, never from an arbitrary workflow_dispatch branch.
+    if: github.event_name == 'release' || (inputs.publish && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cli-release-assets
+          path: ${{ runner.temp }}/cli-assets
+
+      - name: Attach verified archives and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.resolve.outputs.commit }}
+        run: tools/ci/upload-cli-release "$GH_REPO" "$RELEASE_TAG" "$SOURCE_COMMIT" "$RUNNER_TEMP/cli-assets"

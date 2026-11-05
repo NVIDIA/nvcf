@@ -327,6 +327,9 @@ jobs:
       - name: Run release helper tests
         run: python3 tools/ci/test-github-release.py
 
+      - name: Test CLI release packaging and publication guards
+        run: bash tools/ci/test-cli-release
+
       - name: Test stack pin branch refresh
         run: bash tools/ci/test-prepare-stack-pin-branch
 

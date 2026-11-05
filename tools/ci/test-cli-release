@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+mkdir "$work/source" "$work/bin" "$work/remote"
+export FIXTURE_SOURCE="$work/source" FIXTURE_REMOTE="$work/remote"
+export PATH="$work/bin:$PATH"
+tag=src/clis/nvcf-cli/v1.2.3
+cd "$work/source"
+git init -q
+git config user.email test@example.invalid
+git config user.name Test
+printf 'fixture license\n' > LICENSE
+printf 'fixture notice\n' > NOTICE
+printf 'out/\n' > .gitignore
+git add .
+git commit -qm fixture
+git tag "$tag"
+export FIXTURE_COMMIT
+FIXTURE_COMMIT=$(git rev-parse HEAD)
+export REAL_CHECKSUM_TOOL REAL_CHECKSUM_STYLE
+if command -v sha256sum >/dev/null 2>&1; then
+    REAL_CHECKSUM_TOOL=$(command -v sha256sum)
+    REAL_CHECKSUM_STYLE=sha256sum
+else
+    REAL_CHECKSUM_TOOL=$(command -v shasum)
+    REAL_CHECKSUM_STYLE=shasum
+fi
+cat > "$work/bin/sha256sum" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ ${FAIL_CHECKSUM:-} != true ]] || exit 1
+if [[ "$REAL_CHECKSUM_STYLE" == shasum ]]; then
+    exec "$REAL_CHECKSUM_TOOL" -a 256 "$@"
+fi
+exec "$REAL_CHECKSUM_TOOL" "$@"
+SH
+cat > "$work/bin/bazel" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+    build)
+        [[ "$*" == 'build --stamp //src/clis/nvcf-cli:dist' ]]
+        [[ "$NVCF_VERSION" == 1.2.3 ]]
+        mkdir -p out
+        [[ ${MUTATE_SOURCE:-} != true ]] || printf changed >> LICENSE
+        for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64; do
+            [[ "$platform" != "${MISSING_PLATFORM:-}" ]] || continue
+            printf 'binary for %s version %s\n' "$platform" "$NVCF_VERSION" > "out/$platform"
+        done
+        ;;
+    cquery) printf 'out/%s\n' "${3##*:nvcf-cli-}" ;;
+    *) exit 1 ;;
+esac
+SH
+cat > "$work/bin/gh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1 $2" in
+    'api '*) printf '%s\n' "${REMOTE_COMMIT:-$FIXTURE_COMMIT}" ;;
+    'release view')
+        if [[ ${EXISTING_ASSET:-} == true ]]; then
+            printf '{"tagName":"src/clis/nvcf-cli/v1.2.3","isDraft":false,"assets":[{"name":"SHA256SUMS"}]}\n'
+        else
+            printf '{"tagName":"src/clis/nvcf-cli/v1.2.3","isDraft":false,"assets":[]}\n'
+        fi
+        ;;
+    'release upload')
+        shift 5
+        for asset in "$@"; do
+            [[ "$asset" != --clobber ]]
+            cp "$asset" "$FIXTURE_REMOTE/"
+            [[ ${FAIL_UPLOAD:-} != true ]] || exit 1
+        done
+        ;;
+    'release download')
+        destination=${@: -1}
+        cp "$FIXTURE_REMOTE/"*.tar.gz "$destination/"
+        if [[ ${CORRUPT_DOWNLOAD:-} == true ]]; then
+            printf corrupt >> "$destination/nvcf-cli-1.2.3-linux-amd64.tar.gz"
+        fi
+        ;;
+    *) exit 1 ;;
+esac
+SH
+chmod +x "$work/bin/"*
+fail() {
+    if "$@" > "$work/failure.log" 2>&1; then
+        echo "expected failure: $*" >&2
+        exit 1
+    fi
+}
+fail "$script_dir/build-cli-release" "$work/source" src/clis/nvcf-cli/v1.2.3/other "$work/spoof"
+fail "$script_dir/build-cli-release" "$work/source" other/v1.2.3 "$work/other"
+printf dirty >> LICENSE
+fail "$script_dir/build-cli-release" "$work/source" "$tag" "$work/dirty"
+git restore LICENSE
+git commit -qm changed --allow-empty
+fail "$script_dir/build-cli-release" "$work/source" "$tag" "$work/head"
+git checkout -q "$tag"
+MUTATE_SOURCE=true fail "$script_dir/build-cli-release" "$work/source" "$tag" "$work/mutated"
+[[ ! -e "$work/mutated/SHA256SUMS" ]]
+git restore LICENSE
+rm -f out/windows-amd64
+MISSING_PLATFORM=windows-amd64 fail "$script_dir/build-cli-release" "$work/source" "$tag" "$work/incomplete"
+[[ ! -e "$work/incomplete/SHA256SUMS" ]]
+FAIL_CHECKSUM=true fail "$script_dir/build-cli-release" "$work/source" "$tag" "$work/bad-checksum"
+[[ ! -e "$work/bad-checksum/SHA256SUMS" ]]
+"$script_dir/build-cli-release" "$work/source" "$tag" "$work/assets"
+[[ $(wc -l < "$work/assets/SHA256SUMS") -eq 5 ]]
+mkdir "$work/unpack"
+tar -xzf "$work/assets/nvcf-cli-1.2.3-windows-amd64.tar.gz" -C "$work/unpack"
+[[ -x "$work/unpack/nvcf-cli.exe" ]]
+grep -Fx "commit=$FIXTURE_COMMIT" "$work/unpack/SOURCE.txt"
+cmp NOTICE "$work/unpack/NOTICE"
+fail "$script_dir/build-cli-release" "$work/source" "$tag" "$work/assets"
+upload=("$script_dir/upload-cli-release" example/repo "$tag" "$FIXTURE_COMMIT" "$work/assets")
+REMOTE_COMMIT=0000000000000000000000000000000000000000 fail "${upload[@]}"
+EXISTING_ASSET=true fail "${upload[@]}"
+[[ ! -e "$work/remote/SHA256SUMS" ]]
+cp "$work/assets/SHA256SUMS" "$work/checksums"
+printf 'invalid entry\n' >> "$work/assets/SHA256SUMS"
+fail "${upload[@]}"
+cp "$work/checksums" "$work/assets/SHA256SUMS"
+FAIL_UPLOAD=true fail "${upload[@]}"
+[[ ! -e "$work/remote/SHA256SUMS" ]]
+CORRUPT_DOWNLOAD=true fail "${upload[@]}"
+[[ ! -e "$work/remote/SHA256SUMS" ]]
+"${upload[@]}"
+cmp "$work/assets/SHA256SUMS" "$work/remote/SHA256SUMS"
+printf 'CLI release packaging and publication guards passed\n'

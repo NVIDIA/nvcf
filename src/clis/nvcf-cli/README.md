@@ -77,7 +77,10 @@ install -m 0755 \
 
 ### Option 2: Download Pre-built Binary
 
-Pre-built binaries for multiple platforms are available in the [releases section](https://github.com/NVIDIA/nvcf/releases).
+Use a CLI [GitHub Release](https://github.com/dsx-ai-factory/nvcf/releases)
+that includes platform archives and `SHA256SUMS`. A source tag alone does not
+provide a binary. Verify the archive checksum before extracting it, then run
+`nvcf-cli version` to confirm the selected version.
 
 ## Release Process
 

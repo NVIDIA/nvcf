@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+digest() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$@"
+    else
+        shasum -a 256 "$@"
+    fi
+}
+
+# Usage: upload-cli-release REPOSITORY RELEASE_TAG COMMIT ASSET_DIRECTORY
+# Called only by the separately permissioned publication job.
+if [[ $# != 4 ]]; then
+    echo "usage: upload-cli-release REPOSITORY RELEASE_TAG COMMIT ASSET_DIRECTORY" >&2
+    exit 1
+fi
+repo=$1
+tag=$2
+commit=$3
+cd "$4"
+if [[ ! "$tag" =~ ^src/clis/nvcf-cli/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]]; then
+    echo "expected a stable or RC CLI release tag" >&2
+    exit 1
+fi
+version=${tag#src/clis/nvcf-cli/v}
+if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "expected the full source commit" >&2
+    exit 1
+fi
+# Resolve again after the build so a moved tag cannot receive the old build.
+remote_commit=$(gh api "repos/$repo/commits/${tag//\//%2F}" --jq .sha)
+[[ "$remote_commit" == "$commit" ]] || { echo "release tag moved after build" >&2; exit 1; }
+release=$(gh release view "$tag" --repo "$repo" --json tagName,isDraft,assets)
+jq -e --arg tag "$tag" '.tagName == $tag and .isDraft == false' <<< "$release" >/dev/null
+archives=()
+for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64; do
+    archive="nvcf-cli-$version-$platform.tar.gz"
+    [[ -s "$archive" ]] || { echo "missing archive: $archive" >&2; exit 1; }
+    archives+=("$archive")
+done
+expected=$(mktemp)
+trap 'rm -f "$expected"' EXIT
+# Recompute the exact expected manifest; reject missing, extra or unsafe entries.
+digest ./nvcf-cli-"$version"-*.tar.gz > "$expected"
+cmp "$expected" SHA256SUMS
+[[ $(wc -l < SHA256SUMS) -eq 5 ]] || { echo "expected five platform checksums" >&2; exit 1; }
+for asset in "${archives[@]}" SHA256SUMS; do
+    if jq -e --arg name "$asset" '.assets[] | select(.name == $name)' <<< "$release" >/dev/null; then
+        echo "release already contains $asset; refusing to overwrite or mix builds" >&2
+        exit 1
+    fi
+done
+# No --clobber. A partial upload fails without publishing the completion marker.
+gh release upload "$tag" --repo "$repo" "${archives[@]}"
+verify_dir=$(mktemp -d)
+trap 'rm -f "$expected"; rm -rf "$verify_dir"' EXIT
+gh release download "$tag" --repo "$repo" --pattern "nvcf-cli-$version-*.tar.gz" --dir "$verify_dir"
+for archive in "${archives[@]}"; do
+    cmp "$archive" "$verify_dir/$archive"
+done
+gh release upload "$tag" --repo "$repo" SHA256SUMS
