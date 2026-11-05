@@ -19,14 +19,13 @@ package com.nvidia.nvcf.service.eventledger;
 import static io.cloudevents.jackson.JsonFormat.CONTENT_TYPE;
 
 import com.nvidia.nvcf.configuration.staticclientauth.FixedBearerExchangeFilterFunction;
+import com.nvidia.nvcf.configuration.staticclientauth.StaticClientAuthConfiguration.StaticClientEventLedgerProperties;
 import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.util.NvcfOAuth2ClientUtils;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PreDestroy;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -34,6 +33,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
@@ -43,11 +43,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.context.config.annotation.RefreshScope;
-import org.springframework.http.MediaType;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.support.WebClientAdapter;
+import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 import tools.jackson.databind.json.JsonMapper;
 
 @Slf4j
@@ -73,16 +73,12 @@ public class EventLedgerClient {
             FunctionStatus.DEGRADED, "Function.Degraded",
             FunctionStatus.ERROR, "Function.Error",
             FunctionStatus.INACTIVE, "Function.Inactive");
-    private final Duration timeout;
     private final boolean enabled;
-    private final WebClient webClient;
+    private final EventLedgerStubService service;
     private final JsonMapper jsonMapper;
     private final EventFormat eventFormat;
     private final ThreadPoolExecutor executor;
-    private final Counter rejectedCounter;
-    private final Counter publishFailureCounter;
-    private final Counter clientErrorCounter;
-    private final Counter serverErrorCounter;
+    private final EventLedgerMetricsService metrics;
 
     private record FunctionStatusTransition(
             UUID functionId,
@@ -105,15 +101,15 @@ public class EventLedgerClient {
                     String clientSecret,
             @Value("${spring.security.oauth2.client.registration.event-ledger.scope:}") String scope,
             @Value("${spring.security.oauth2.client.provider.event-ledger.token-uri:}") String tokenUri,
-            @Value("${NVCF_EVENT_LEDGER_STATIC_TOKEN:}") String staticToken,
+            Optional<StaticClientEventLedgerProperties> staticClientEventLedgerProperties,
             WebClient.Builder webClientBuilder,
             JsonMapper jsonMapper,
-            MeterRegistry meterRegistry) {
+            EventLedgerMetricsService metrics) {
         this(enabled, timeout, enabled
                       ? authenticatedWebClient(
                               baseUrl, clientId, clientSecret, scope, tokenUri,
-                              staticToken, webClientBuilder)
-                      : webClientBuilder.baseUrl(baseUrl).build(), jsonMapper, meterRegistry);
+                              staticClientEventLedgerProperties, webClientBuilder)
+                      : webClientBuilder.baseUrl(baseUrl).build(), jsonMapper, metrics);
     }
 
     EventLedgerClient(
@@ -121,20 +117,16 @@ public class EventLedgerClient {
             Duration timeout,
             WebClient webClient,
             JsonMapper jsonMapper,
-            MeterRegistry meterRegistry) {
+            EventLedgerMetricsService metrics) {
         this.enabled = enabled;
-        this.timeout = timeout;
-        this.webClient = webClient;
+        this.metrics = metrics;
+        var adapter = WebClientAdapter.create(webClient);
+        adapter.setBlockTimeout(timeout);
+        this.service = HttpServiceProxyFactory.builderFor(adapter)
+                .build()
+                .createClient(EventLedgerStubService.class);
         this.jsonMapper = jsonMapper;
         this.eventFormat = EventFormatProvider.getInstance().resolveFormat(CONTENT_TYPE);
-        this.rejectedCounter = meterRegistry.counter(
-                "nvcf_cloud_functions_event_ledger_rejected_total");
-        this.publishFailureCounter = meterRegistry.counter(
-                "nvcf_cloud_functions_event_ledger_publish_failures_total");
-        this.clientErrorCounter = meterRegistry.counter(
-                "nvcf_cloud_functions_event_ledger_client_errors_total");
-        this.serverErrorCounter = meterRegistry.counter(
-                "nvcf_cloud_functions_event_ledger_server_errors_total");
         this.executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(256), task -> {
                     var thread = new Thread(task, "event-ledger-publisher");
@@ -173,10 +165,10 @@ public class EventLedgerClient {
         try {
             executor.execute(() -> send(ncaId, transition, eventName));
         } catch (RejectedExecutionException ex) {
-            rejectedCounter.increment();
+            metrics.recordRejected();
             logPublishFailure(ncaId, transition, ex);
         } catch (RuntimeException ex) {
-            publishFailureCounter.increment();
+            metrics.recordEnqueueFailure();
             logPublishFailure(ncaId, transition, ex);
         }
     }
@@ -184,23 +176,9 @@ public class EventLedgerClient {
     private void send(
             String ncaId, FunctionStatusTransition transition, String eventName) {
         try {
-            webClient.post()
-                    .uri(CLOUD_EVENTS_PATH)
-                    .contentType(MediaType.parseMediaType(CLOUD_EVENTS_CONTENT_TYPE))
-                    .bodyValue(eventFormat.serialize(buildCloudEvent(ncaId, transition, eventName)))
-                    .retrieve()
-                    .onStatus(HttpStatusCode::is4xxClientError, response -> {
-                        clientErrorCounter.increment();
-                        return response.createException();
-                    })
-                    .onStatus(HttpStatusCode::is5xxServerError, response -> {
-                        serverErrorCounter.increment();
-                        return response.createException();
-                    })
-                    .toBodilessEntity()
-                    .block(timeout);
+            service.publish(eventFormat.serialize(buildCloudEvent(ncaId, transition, eventName)));
         } catch (Exception ex) {
-            publishFailureCounter.increment();
+            metrics.recordPublicationFailure(ex);
             logPublishFailure(ncaId, transition, ex);
         }
     }
@@ -250,14 +228,17 @@ public class EventLedgerClient {
             String clientSecret,
             String scope,
             String tokenUri,
-            String staticToken,
+            Optional<StaticClientEventLedgerProperties> staticClientEventLedgerProperties,
             WebClient.Builder builder) {
-        ExchangeFilterFunction authFilter = !staticToken.isBlank()
-                ? new FixedBearerExchangeFilterFunction(() -> staticToken)
-                : NvcfOAuth2ClientUtils.getOAuth2ExchangeFilter(
-                        builder, CLIENT_REGISTRATION_ID, tokenUri, clientId, clientSecret, scope);
+        ExchangeFilterFunction authFilter = staticClientEventLedgerProperties
+                .map(p -> (ExchangeFilterFunction)
+                        new FixedBearerExchangeFilterFunction(p::getToken))
+                .orElseGet(() -> NvcfOAuth2ClientUtils.getOAuth2ExchangeFilter(
+                        builder, CLIENT_REGISTRATION_ID, tokenUri, clientId, clientSecret, scope));
         return builder.baseUrl(baseUrl)
+                .filter(NvcfOAuth2ClientUtils.getRetryableFilter(CLIENT_REGISTRATION_ID))
                 .filter(authFilter)
+                .filter(NvcfOAuth2ClientUtils.getResponseFilterProcessor("Event Ledger"))
                 .build();
     }
 }

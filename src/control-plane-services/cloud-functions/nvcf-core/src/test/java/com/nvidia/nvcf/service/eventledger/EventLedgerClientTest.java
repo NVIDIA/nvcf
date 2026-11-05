@@ -29,7 +29,9 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.nvidia.nvcf.configuration.staticclientauth.StaticClientAuthConfiguration.StaticClientEventLedgerProperties;
 import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
+import com.nvidia.nvcf.util.NvcfOAuth2ClientUtils;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
@@ -131,7 +133,7 @@ class EventLedgerClientTest {
                 .withBean(WebClient.Builder.class, WebClient::builder)
                 .withBean(JsonMapper.class, JsonMapper::new)
                 .withBean(SimpleMeterRegistry.class, SimpleMeterRegistry::new)
-                .withUserConfiguration(EventLedgerClient.class)
+                .withUserConfiguration(EventLedgerMetricsService.class, EventLedgerClient.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean("scopedTarget.eventLedgerClient"))
@@ -173,7 +175,7 @@ class EventLedgerClientTest {
                 }))
                 .withBean(JsonMapper.class, JsonMapper::new)
                 .withBean(SimpleMeterRegistry.class, SimpleMeterRegistry::new)
-                .withUserConfiguration(EventLedgerClient.class)
+                .withUserConfiguration(EventLedgerMetricsService.class, EventLedgerClient.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     context.getBean(EventLedgerClient.class).publish(
@@ -203,11 +205,12 @@ class EventLedgerClientTest {
                         .setConversionService(ApplicationConversionService.getSharedInstance()))
                 .withPropertyValues("nvcf.event-ledger.enabled=true",
                                     "nvcf.event-ledger.base-url=" + server.baseUrl(),
-                                    "NVCF_EVENT_LEDGER_STATIC_TOKEN=test-token")
+                                    "nvcf.event-ledger.static.token=test-token")
                 .withBean(WebClient.Builder.class, WebClient::builder)
                 .withBean(JsonMapper.class, JsonMapper::new)
                 .withBean(SimpleMeterRegistry.class, SimpleMeterRegistry::new)
-                .withUserConfiguration(EventLedgerClient.class)
+                .withUserConfiguration(StaticClientEventLedgerProperties.class,
+                                       EventLedgerMetricsService.class, EventLedgerClient.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     var eventLedgerClient = context.getBean(EventLedgerClient.class);
@@ -230,7 +233,7 @@ class EventLedgerClientTest {
                 .withBean(WebClient.Builder.class, WebClient::builder)
                 .withBean(JsonMapper.class, JsonMapper::new)
                 .withBean(SimpleMeterRegistry.class, SimpleMeterRegistry::new)
-                .withUserConfiguration(EventLedgerClient.class)
+                .withUserConfiguration(EventLedgerMetricsService.class, EventLedgerClient.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean("scopedTarget.eventLedgerClient"))
@@ -316,8 +319,10 @@ class EventLedgerClientTest {
         return new EventLedgerClient(
                 enabled,
                 timeout,
-                WebClient.builder().baseUrl(server.baseUrl()).build(),
-                new JsonMapper(), meterRegistry);
+                WebClient.builder().baseUrl(server.baseUrl())
+                        .filter(NvcfOAuth2ClientUtils.getResponseFilterProcessor("Event Ledger"))
+                        .build(),
+                new JsonMapper(), new EventLedgerMetricsService(meterRegistry));
     }
 
     private void publish(
