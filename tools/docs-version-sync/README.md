@@ -55,6 +55,12 @@ hooks, init containers, injected agents and the ACME solver argument:
 NVCF_IMAGE_CATALOG_E2E=1 go test -C tools/docs-version-sync -run '^TestImageCatalogCharts$' -count=1
 ```
 
+The release inventory scanner also reads indirect image settings such as the
+cert-manager solver argument and `AGENT_INJECT_VAULT_IMAGE`. This includes
+images created later by a controller or injector. The chart checks reuse this
+scanner and its image-reference parser, keeping CI and released inventories
+consistent. Helm render/probe helpers are test-only.
+
 ## Release and documentation flow
 
 ```text

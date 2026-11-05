@@ -44,6 +44,8 @@ const imageCatalogProbe = "{{- $versions := dict \"\" .Chart.AppVersion -}}\n" +
 	"data:\n  values: {{ toJson .Values | quote }}\n" +
 	"  appVersions: {{ toJson $versions | quote }}\n"
 
+// renderImageChart probes computed values in a temporary chart copy, without
+// installing resources or changing the source chart.
 func renderImageChart(chart string, values []string) (imageChartSnapshot, error) {
 	directory, err := os.MkdirTemp("", "nvcf-image-catalog-")
 	if err != nil {
@@ -94,6 +96,7 @@ func renderImageChart(chart string, values []string) (imageChartSnapshot, error)
 	}
 }
 
+// imageCatalogCommand bounds external tool execution and attaches stderr to failures.
 func imageCatalogCommand(name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -107,6 +110,8 @@ func imageCatalogCommand(name string, args ...string) ([]byte, error) {
 	return output, nil
 }
 
+// resolveChartImageCatalog validates indexed value paths and returns stable,
+// sorted image identities using the same parser as release inventories.
 func resolveChartImageCatalog(snapshot imageChartSnapshot) ([]catalogImage, error) {
 	var images []catalogImage
 	identities := make(map[string]bool)
@@ -140,6 +145,7 @@ func resolveChartImageCatalog(snapshot imageChartSnapshot) ([]catalogImage, erro
 	return images, nil
 }
 
+// imageCatalogValue follows a dotted values path and requires an image object at its leaf.
 func imageCatalogValue(values map[string]any, path string) (map[string]any, error) {
 	var node any = values
 	for _, key := range strings.Split(path, ".") {
@@ -159,11 +165,14 @@ func imageCatalogValue(values map[string]any, path string) (map[string]any, erro
 	return object, nil
 }
 
+// imageCatalogString treats missing or non-string optional image fields as unset.
 func imageCatalogString(node map[string]any, key string) string {
 	value, _ := node[key].(string)
 	return value
 }
 
+// resolveCatalogImage accounts for split image fields and cert-manager's
+// repository, namespace and appVersion defaults.
 func resolveCatalogImage(snapshot imageChartSnapshot, path string, node map[string]any) (catalogImage, error) {
 	registry := imageCatalogString(node, "registry")
 	repository := imageCatalogString(node, "repository")
@@ -203,6 +212,8 @@ func resolveCatalogImage(snapshot imageChartSnapshot, path string, node map[stri
 	return catalogImage{Reference: reference, split: split && !fullRepository, digest: fullRepository}, nil
 }
 
+// checkChartImageCoverage uses the release scanner so indirect image settings
+// are subject to the same declaration check as Pod and hook images.
 func checkChartImageCoverage(catalog []catalogImage, manifest []byte) error {
 	declared := make(map[string]bool)
 	for _, image := range catalog {

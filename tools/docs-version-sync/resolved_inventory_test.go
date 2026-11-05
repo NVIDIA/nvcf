@@ -64,6 +64,63 @@ spec:
 	}
 }
 
+// TestResolvedInventoryIncludesInjectedAgentImages keeps controller-selected
+// agent images visible even when they differ from the injector container.
+func TestResolvedInventoryIncludesInjectedAgentImages(t *testing.T) {
+	inputs := resolvedInventoryTestInputs(t)
+	inputs[1].ManifestByRelease["resource-config"] = []byte(`
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: injector
+          image: registry.example.com/injector:fixture
+          env:
+            - name: AGENT_INJECT_VAULT_IMAGE
+              value: mirror.example.com/agent:fixture
+`)
+	inventory, err := generateResolvedStackInventory(resolvedInventoryTestSource(), inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findResolvedInventoryArtifact(t, inventory, "container-image", "registry.example.com/injector:fixture")
+	agent := findResolvedInventoryArtifact(t, inventory, "container-image", "mirror.example.com/agent:fixture")
+	if len(agent.Sources) != 1 || agent.Sources[0].Requirement != ManifestOptional {
+		t.Fatalf("injected-only image must retain its indirect requirement: %+v", agent)
+	}
+}
+
+// TestResolvedAgentEnvironmentPreservesDirectImageRequirement ensures an
+// injected reference cannot weaken an existing Pod image requirement.
+func TestResolvedAgentEnvironmentPreservesDirectImageRequirement(t *testing.T) {
+	reference := "registry.example.com/agent:fixture"
+	environment := "env: [{name: AGENT_INJECT_VAULT_IMAGE, value: " + reference + "}]\n"
+	direct := "image: " + reference + "\n"
+	for _, manifest := range []string{direct + environment, environment + direct} {
+		images, err := extractResolvedImages([]byte(manifest))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(images) != 1 || images[0].Indirect {
+			t.Fatalf("direct image requirement was lost: %+v", images)
+		}
+	}
+}
+
+// TestResolvedAgentEnvironmentRejectsIncompleteImages prevents unresolved agent
+// settings from entering a published inventory as usable image references.
+func TestResolvedAgentEnvironmentRejectsIncompleteImages(t *testing.T) {
+	for _, reference := range []string{"", "missing-tag", "${REGISTRY}/agent:fixture"} {
+		manifest := fmt.Sprintf("env: [{name: AGENT_INJECT_VAULT_IMAGE, value: %q}]\n", reference)
+		_, err := extractResolvedImages([]byte(manifest))
+		if err == nil || !strings.Contains(err.Error(), "AGENT_INJECT_VAULT_IMAGE") {
+			t.Fatalf("invalid agent image %q: %v", reference, err)
+		}
+	}
+}
+
 func TestResolvedCollectorEnvironmentPreservesDirectImageRequirement(t *testing.T) {
 	for _, manifest := range []string{
 		"image: registry.example.com/collector:fixture\n" + collectorEnvironmentFixture(),

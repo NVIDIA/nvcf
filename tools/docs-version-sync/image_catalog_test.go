@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// imageCatalogFixture supplies a synthetic dependency version for inheritance tests.
 func imageCatalogFixture(t *testing.T, values string) imageChartSnapshot {
 	t.Helper()
 	var tree map[string]any
@@ -22,6 +23,7 @@ func imageCatalogFixture(t *testing.T, values string) imageChartSnapshot {
 	return imageChartSnapshot{Values: tree, AppVersions: map[string]string{"dependency": "v8.2.1"}}
 }
 
+// TestImageCatalogResolveDefaultsAndOwnership checks inherited versions and fully qualified overrides.
 func TestImageCatalogResolveDefaultsAndOwnership(t *testing.T) {
 	snapshot := imageCatalogFixture(t, "thirdPartyImages:\n  dependency: dependency.image\nownedImages:\n  server: server.image\ndependency:\n  imageRegistry: quay.io\n  imageNamespace: example\n  image:\n    name: dependency\nserver:\n  image:\n    registry: registry.example:5000\n    repository: team/server\n    tag: v2\n")
 	images, err := resolveChartImageCatalog(snapshot)
@@ -43,6 +45,7 @@ func TestImageCatalogResolveDefaultsAndOwnership(t *testing.T) {
 	}
 }
 
+// TestImageCatalogRejectsInvalidDeclarations requires complete, uniquely indexed images.
 func TestImageCatalogRejectsInvalidDeclarations(t *testing.T) {
 	for _, input := range []string{
 		"{}",
@@ -58,6 +61,7 @@ func TestImageCatalogRejectsInvalidDeclarations(t *testing.T) {
 	}
 }
 
+// TestImageCatalogCoverageIncludesIndirectImages catches undeclared solver and injected-agent images.
 func TestImageCatalogCoverageIncludesIndirectImages(t *testing.T) {
 	catalog := []catalogImage{{Reference: "mirror.example/server:v1"}}
 	for _, manifest := range []string{
@@ -78,6 +82,8 @@ func TestImageCatalogCoverageIncludesIndirectImages(t *testing.T) {
 	}
 }
 
+// TestImageCatalogCharts exercises real Helm defaults and ordinary values overrides
+// from an isolated Helm configuration, including indirect workload settings.
 func TestImageCatalogCharts(t *testing.T) {
 	if os.Getenv("NVCF_IMAGE_CATALOG_E2E") != "1" {
 		t.Skip("set NVCF_IMAGE_CATALOG_E2E=1 to render the four real charts with Helm")
@@ -270,6 +276,8 @@ func TestImageCatalogCharts(t *testing.T) {
 	}
 }
 
+// registerImageCatalogRepositories registers HTTPS dependencies in the test's
+// isolated Helm configuration. OCI dependencies need no repository registration.
 func registerImageCatalogRepositories(t *testing.T, chart string) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(chart, "Chart.yaml"))
@@ -295,6 +303,8 @@ func registerImageCatalogRepositories(t *testing.T, chart string) {
 	}
 }
 
+// setTestImageValues replaces an image object in an override file; Helm performs
+// the merge with chart defaults when that file is rendered.
 func setTestImageValues(t *testing.T, values map[string]any, path string, fields map[string]any) {
 	t.Helper()
 	keys := strings.Split(path, ".")
