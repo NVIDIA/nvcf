@@ -34,9 +34,12 @@ nats:
         repository: platform/nats-box
 ```
 
-Apply the values after other deployment profiles:
+From the repository root, register the NATS chart repository and download the
+chart dependency. Then apply the image values after other deployment profiles:
 
 ```sh
+helm repo add nats https://nats-io.github.io/k8s/helm/charts/
+helm dependency build deploy/helm/nats
 helm upgrade --install nats deploy/helm/nats -f /path/images.yaml
 ```
 
