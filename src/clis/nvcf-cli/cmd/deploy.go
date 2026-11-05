@@ -570,7 +570,7 @@ func runDeployCreate(cmd *cobra.Command, args []string) error {
 
 	// Wait for deployment to complete
 	if err := nvcfClient.WaitForFunctionDeployment(ctx, config.FunctionID, config.VersionID, config.Timeout); err != nil {
-		return fmt.Errorf("deployment failed: %w", err)
+		return fmt.Errorf("waiting for deployment completion: %w", err)
 	}
 
 	fmt.Printf("Function %s deployed successfully!\n", config.FunctionID)

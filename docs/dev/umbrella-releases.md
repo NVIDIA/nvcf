@@ -169,7 +169,7 @@ the docs default or publish the site.
 
 This section currently supports schema 1 products only. Schema 2 maintained
 docs preparation and activation are deferred until selected inventories can
-seed the docs catalog; see [the docs follow-up](https://github.com/NVIDIA/nvcf/issues/2798).
+seed the docs catalog; see [the docs follow-up](https://github.com/dsx-ai-factory/nvcf/issues/2798).
 The commands reject schema 2 instead of copying unrelated Development pins.
 Keep the existing published docs edition while that support is pending.
 

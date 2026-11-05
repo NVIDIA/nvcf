@@ -14,9 +14,9 @@
 # limitations under the License.
 
 
-.PHONY: test test-render-routes test-vanity-gateway-route check-llm-worker-routes
+.PHONY: test test-api-connection-idle test-render-routes test-vanity-gateway-route check-llm-worker-routes
 
-test: test-render-routes test-vanity-gateway-route check-llm-worker-routes
+test: test-api-connection-idle test-render-routes test-vanity-gateway-route check-llm-worker-routes
 
 test-render-routes:
 	@sh ./scripts/test-render-routes.sh
@@ -26,3 +26,6 @@ test-vanity-gateway-route:
 
 check-llm-worker-routes:
 	@bash ./scripts/check-llm-worker-routes.sh
+
+test-api-connection-idle:
+	@sh ./scripts/test-api-connection-idle.sh

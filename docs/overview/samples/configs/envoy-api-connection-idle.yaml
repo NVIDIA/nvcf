@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Optional operator-managed configuration for Envoy Gateway only.
+# Set namespace and targetRefs.name to match the NVCF API HTTPRoute.
+# Keep connectionIdleTimeout below the API server's keep-alive timeout.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: nvcf-api-connection-idle
+  namespace: envoy-gateway-system
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: nvcf-api
+  timeout:
+    http:
+      connectionIdleTimeout: 30s

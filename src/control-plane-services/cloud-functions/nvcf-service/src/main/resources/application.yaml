@@ -196,6 +196,8 @@ management:
 
 server:
   port: 8080
+  tomcat:
+    keep-alive-timeout: 60s
   compression:
     enabled: true
   forward-headers-strategy: framework

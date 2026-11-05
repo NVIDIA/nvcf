@@ -35,7 +35,6 @@ import (
 	"nvcf-cli/internal/state"
 
 	"github.com/spf13/viper"
-	"golang.org/x/oauth2"
 )
 
 func ptrInt(v int) *int { return &v }
@@ -192,16 +191,19 @@ func TestNewClientOAuth2UsesConfiguredTLSConfig(t *testing.T) {
 	}
 	defer client.Close()
 
-	oauthTransport, ok := client.httpClient.Transport.(*oauth2.Transport)
+	oauthTransport, ok := client.httpClient.Transport.(*oauth2RequestTransport)
 	if !ok {
-		t.Fatalf("HTTP transport = %T, want *oauth2.Transport", client.httpClient.Transport)
+		t.Fatalf("HTTP transport = %T, want *oauth2RequestTransport", client.httpClient.Transport)
 	}
-	baseTransport, ok := oauthTransport.Base.(*http.Transport)
+	baseTransport, ok := oauthTransport.base.(*http.Transport)
 	if !ok {
-		t.Fatalf("OAuth2 base transport = %T, want *http.Transport", oauthTransport.Base)
+		t.Fatalf("OAuth2 base transport = %T, want *http.Transport", oauthTransport.base)
 	}
 	if baseTransport.TLSClientConfig != tlsConfig {
 		t.Fatalf("TLSClientConfig = %p, want configured TLS config %p", baseTransport.TLSClientConfig, tlsConfig)
+	}
+	if oauthTransport.tokenClient.Transport != baseTransport {
+		t.Fatal("token endpoint and API must use the same TLS transport")
 	}
 }
 

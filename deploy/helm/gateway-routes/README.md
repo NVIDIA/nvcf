@@ -162,3 +162,33 @@ Cross-namespace routing is supported via `ReferenceGrant` resources rendered int
   `grpcTls.allowInsecureHttp=true`; it renders the legacy `TCPRoute`.
   Keep the HTTPS and UDP Gateways separate when the infrastructure requires
   separate load balancers for each protocol.
+
+## API backend connection idle timeout
+
+Configure your Gateway controller to retire unused upstream HTTP connections
+before the API server closes them. Keep the connection idle timeout positive
+and below the API server's keep-alive timeout, with a margin for timer
+scheduling. The API default is `60s`, configured by
+`server.tomcat.keep-alive-timeout`; Spring Boot also accepts
+`SERVER_TOMCAT_KEEPALIVETIMEOUT`.
+
+The required relationship is:
+
+```text
+API keep-alive timeout > proxy upstream connection idle timeout
+Example: 60s > 30s
+```
+
+The operator owns this controller-specific configuration. The chart does not
+create an API connection idle policy or select a Gateway controller. For Envoy
+Gateway, the standalone
+[API connection idle policy example](../../../docs/overview/samples/configs/envoy-api-connection-idle.yaml)
+uses `30s`. Set its namespace and target route name for your installation.
+See [NVCF API connection idle timeout](../../../docs/self-managed/gateway-routing.md#nvcf-api-connection-idle-timeout)
+for application instructions.
+
+The example applies when a connection has no active requests. It does not limit
+request duration or add request retries. Deployment status polling in the
+CLI separately retries transient GET failures (502, 503, 504, and selected
+transport errors) up to three times with 1s, 2s, and 4s delays, within the original
+wait deadline. Authentication errors and terminal deployment states stop polling.

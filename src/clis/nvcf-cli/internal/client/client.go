@@ -38,7 +38,6 @@ import (
 	"nvcf-cli/internal/state"
 
 	"github.com/spf13/viper"
-	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -637,14 +636,19 @@ func NewClient(config *Config) (*Client, error) {
 			},
 		}
 
-		// Create HTTP client with OAuth2 transport. The context client is used
-		// by oauth2 for both token acquisition and the returned transport base.
-		ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{
+		// Token requests use the context of the API request that needs them.
+		tokenClient := &http.Client{
 			Transport: baseTransport,
 			Timeout:   config.DefaultTimeout,
-		})
-		httpClient = oauth2Config.Client(ctx)
-		httpClient.Timeout = config.DefaultTimeout
+		}
+		httpClient = &http.Client{
+			Transport: &oauth2RequestTransport{
+				config:      oauth2Config,
+				tokenClient: tokenClient,
+				base:        baseTransport,
+			},
+			Timeout: config.DefaultTimeout,
+		}
 
 		// Wrap with debug transport if debug is enabled
 		if config.Debug {
@@ -1065,7 +1069,7 @@ func (c *Client) GetFunction(ctx context.Context, functionID, versionID string) 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var result GetFunctionResponse
@@ -1368,51 +1372,6 @@ type DeploymentHealthDto struct {
 	Status  string `json:"status,omitempty"`
 	Message string `json:"message,omitempty"`
 	Reason  string `json:"reason,omitempty"`
-}
-
-// WaitForFunctionDeployment waits for a function to be deployed
-func (c *Client) WaitForFunctionDeployment(ctx context.Context, functionID, versionID string, timeoutSec int) error {
-	timeout := time.Duration(timeoutSec) * time.Second
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		resp, err := c.GetFunction(ctx, functionID, versionID)
-		if err != nil {
-			return err
-		}
-
-		if c.config.Debug {
-			log.Printf("DEBUG: Function status: %s", resp.Function.Status)
-		}
-
-		switch resp.Function.Status {
-		case "ACTIVE":
-			return nil
-		case "ERROR", "FAILED":
-			return fmt.Errorf("function deployment failed with status: %s", resp.Function.Status)
-		case "DEPLOYING", "INACTIVE", "BUILDING":
-			// Continue polling - these are intermediate states
-			if c.config.Debug {
-				log.Printf("DEBUG: Function still deploying, waiting...")
-			}
-		default:
-			// Unknown status - log it but continue polling
-			if c.config.Debug {
-				log.Printf("DEBUG: Unknown function status '%s', continuing to poll...", resp.Function.Status)
-			}
-		}
-
-		// Wait before polling again
-		time.Sleep(10 * time.Second)
-	}
-
-	return fmt.Errorf("function deployment timed out after %d seconds", timeoutSec)
 }
 
 // InvokeFunctionRequest represents a function invocation request

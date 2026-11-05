@@ -193,3 +193,21 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
         | clusterID                  |
         | clusterGroupID             |
         | selfManaged.identitySource |
+
+  Rule: Operators configure API connection idle retirement for their Gateway controller
+
+    @gateway-api-idle-contract
+    Scenario: Inspect the standalone API connection policy example for Envoy Gateway
+      Given environment variable "REPO_ROOT" is set
+      When I run command:
+        """
+        cat ${REPO_ROOT}/docs/overview/samples/configs/envoy-api-connection-idle.yaml
+        """
+      Then the command exit code should be 0
+      And the command output should contain "kind: BackendTrafficPolicy"
+      And the command output should contain "namespace: envoy-gateway-system"
+      And the command output should contain "kind: HTTPRoute"
+      And the command output should contain "name: nvcf-api"
+      And the command output should contain "connectionIdleTimeout:"
+      And the command output should not contain "retry:"
+      And the command output should not contain "requestTimeout:"
