@@ -8,7 +8,16 @@
 # bogus empty scope. Scope values must also be JSON-escaped.
 
 # The suite runs tests with `sh`, but functions.sh needs non-POSIX bash.
+# An exported POSIXLY_CORRECT starts every new bash in POSIX mode, so drop it
+# before re-executing and re-execute at most once to avoid an endless loop.
 if [ -z "${BASH_VERSION:-}" ] || shopt -oq posix; then
+  if [ -n "${JWT_SCOPES_TEST_REEXECED:-}" ]; then
+    echo "jwt-secret-role-scopes: requires bash outside POSIX mode" >&2
+    exit 1
+  fi
+  unset POSIXLY_CORRECT
+  JWT_SCOPES_TEST_REEXECED=1
+  export JWT_SCOPES_TEST_REEXECED
   exec bash "$0" "$@"
 fi
 
