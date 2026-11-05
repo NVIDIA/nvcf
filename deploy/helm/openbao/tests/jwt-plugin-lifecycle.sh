@@ -14,8 +14,24 @@ render() {
     helm template openbao "$test_root/helm" -f "$values" "$@"
 }
 
-# Published images retain their old hook and unversioned migration behavior.
-render | yq 'select(.kind == "Job")' > "$test_root/legacy.yaml"
+# The default must initialize fresh installs with versioned migration inputs.
+render > "$test_root/default.yaml"
+grep -q 'jwt-plugin-lifecycle image-check' "$test_root/default.yaml"
+grep -q 'BAO_JWT_PLUGIN_VERSIONS_FILE' "$test_root/default.yaml"
+if grep -q 'name: openbao-server-refresh-jwt-plugin-catalog$' "$test_root/default.yaml"; then
+    echo 'Versioned defaults must not rewrite the legacy plugin catalog' >&2
+    exit 1
+fi
+# The supplied upgrade overlay must stage a bridge before enabling migrations.
+render --is-upgrade -f "$repo_root/deploy/helm/openbao/upgrade/values-upgrades.yaml" > "$test_root/upgrade-default.yaml"
+grep -q 'jwt-plugin-lifecycle bridge-preflight' "$test_root/upgrade-default.yaml"
+if grep -q 'name: openbao-server-migrations$' "$test_root/upgrade-default.yaml"; then
+    echo 'The bridge overlay must defer migrations during rotation' >&2
+    exit 1
+fi
+
+# Explicit legacy mode retains pre-bridge hooks for compatible image overrides.
+render --set openbao.jwtPluginLifecycle.mode=legacy | yq 'select(.kind == "Job")' > "$test_root/legacy.yaml"
 grep -q 'bao plugin register' "$test_root/legacy.yaml"
 if grep -q 'jwt-plugin-lifecycle\|BAO_JWT_PLUGIN_VERSIONS_FILE' "$test_root/legacy.yaml"; then
     echo 'Legacy mode must not require versioned image tooling' >&2
@@ -34,7 +50,7 @@ if grep -q 'bao plugin reload' "$legacy_refresh"; then
 fi
 grep -q 'Versioned OpenBao images require bridge or versioned lifecycle mode' "$legacy_refresh"
 # Preserve custom resource settings on the maintenance line's legacy hook.
-render --set openbao.hooks.refreshJWTPluginCatalog.resources.requests.memory=96Mi > "$test_root/custom-legacy-hook.yaml"
+render --set openbao.jwtPluginLifecycle.mode=legacy --set openbao.hooks.refreshJWTPluginCatalog.resources.requests.memory=96Mi > "$test_root/custom-legacy-hook.yaml"
 test "$(yq -r 'select(.metadata.name == "openbao-server-refresh-jwt-plugin-catalog") | .spec.template.spec.containers[0].resources.requests.memory' "$test_root/custom-legacy-hook.yaml")" = 96Mi
 legacy_migrations="$test_root/legacy-migrations.yaml"
 yq 'select(.metadata.name == "openbao-server-migrations")' "$test_root/legacy.yaml" > "$legacy_migrations"

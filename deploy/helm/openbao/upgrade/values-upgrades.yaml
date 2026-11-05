@@ -2,9 +2,12 @@
 # Usage: make install additional_values=values.local.yaml,upgrade/values-upgrades.yaml
 
 openbao:
+  # Stage one only: preserve existing mount versions during member rotation.
+  jwtPluginLifecycle:
+    mode: bridge
   server:
     image:
-      tag: 2.6.3-nv-1.3.7
+      tag: 2.6.3-nv-1.3.9
 
     # Update auto-unseal sidecar to match server version
     extraContainers:
@@ -52,4 +55,4 @@ openbao:
 
   injector:
     agentImage:
-      tag: 2.6.3-nv-1.3.7
+      tag: 2.6.3-nv-1.3.9

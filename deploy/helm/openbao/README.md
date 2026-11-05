@@ -19,12 +19,12 @@ The bridge server image supplies declarative plugin registration at
 `/openbao/plugin-config`; its entrypoint loads that directory on server startup.
 Set `openbao.jwtPluginLifecycle.mode` for the deployment stage:
 
-- `legacy` (default): retains the refresh hook for published pre-bridge images.
+- `legacy`: retains the refresh hook for published pre-bridge images.
   Preflight rejects versioned images before changing the release.
 - `bridge`: checks existing mount compatibility without rewriting the catalog.
   Defers migrations. Keep hooks enabled and rotate every member before enabling
   versioned mount creation. Upgrades only.
-- `versioned`: checks image compatibility and pins new signing mounts to the
+- `versioned` (default): checks image compatibility and pins new signing mounts to the
   target version from the server image. Use for fresh bridge installations
   and after an existing deployment completes its bridge migration.
 
@@ -33,8 +33,11 @@ The migration Job rechecks catalog readiness after rollout because the active
 member can change after preflight. Its init container also supplies the server
 image's version manifest to migrations.
 
-Publish and qualify the matching bridge server and migrations images before
-advancing chart or stack image pins. Existing deployments need the staged
+The default pins select a bridge-capable server and versioned migrations.
+Fresh installations use `versioned` mode. Existing deployments must first apply
+`upgrade/values-upgrades.yaml`, which selects `bridge` mode and defers migrations
+during member rotation. Do not apply the default versioned mode to an existing
+legacy deployment before completing the staged
 [JWT plugin upgrade procedure](https://github.com/dsx-ai-factory/nvcf/blob/4de46cb8d26d5b65a2a0e1c1ae76fbde00565085/docs/self-managed/runbooks/openbao-jwt-plugin-upgrade.md),
 including the explicit old version and a later cleanup release.
 
@@ -52,10 +55,9 @@ This repository is published as chart source only.
 This chart depends on NVIDIA-managed container images for the OpenBao server
 extensions, migration jobs, and related operational tooling.
 
-The default chart values do not set the required image registries and
-repositories for those components. They must be supplied through an additional
-values file at install time, and access to those images must be arranged
-separately.
+The chart prefills image registries, repositories and tags. Use an additional
+values file to select another registry or repository. Arrange image access
+before installing.
 
 Example:
 
@@ -133,7 +135,7 @@ required fields from the base values file.
 
 `openbao.migrations.kubectlMinor` controls both the initialization and migration
 Jobs. Leave it empty to use the image default, or set `"1.36"` for Kubernetes
-1.35 servers. The migrations 0.19.10 image provides kubectl 1.37.2 by default
+1.35 servers. The migrations 0.19.11 image provides kubectl 1.37.2 by default
 and the patched 1.36.6 client through `NVCF_KUBECTL_MINOR="1.36"`. An explicit
 `"1.37"` is also supported; other selections fail rendering.
 
