@@ -563,14 +563,12 @@ async fn input_work_admission_rejects_overloaded_pool_and_registered_unavailable
             .await
             .expect("registered unavailable request failed");
 
-        if registered_but_unavailable.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            assert_ne!(
-                registered_but_unavailable
-                    .headers()
-                    .get("x-stargate-error-code")
-                    .and_then(|value| value.to_str().ok()),
-                Some("no_eligible_candidates")
-            );
+        if registered_but_unavailable.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
+            && registered_but_unavailable
+                .headers()
+                .get("x-stargate-error-code")
+                .is_some_and(|value| value == "no_ready_backends")
+        {
             break;
         }
 
@@ -585,26 +583,31 @@ async fn input_work_admission_rejects_overloaded_pool_and_registered_unavailable
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let unregistered_after_stop = chat
-            .with_input_tokens("req-input-work-unregistered-after-stop", 50)
+        let deregistered_after_stop = chat
+            .with_input_tokens("req-input-work-deregistered-after-stop", 50)
             .send()
             .await
-            .expect("unregistered missing-model request failed");
+            .expect("deregistered model request failed");
 
-        if unregistered_after_stop.status() == reqwest::StatusCode::NOT_FOUND {
+        if deregistered_after_stop.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
             assert_eq!(
-                unregistered_after_stop
+                deregistered_after_stop
                     .headers()
                     .get("x-stargate-error-code")
                     .and_then(|value| value.to_str().ok()),
-                Some("no_eligible_candidates")
+                Some("no_ready_backends")
+            );
+            assert!(
+                deregistered_after_stop
+                    .headers()
+                    .contains_key(reqwest::header::RETRY_AFTER)
             );
             break;
         }
 
         assert!(
             tokio::time::Instant::now() < deadline,
-            "stopped registration did not return to 404 no_eligible_candidates"
+            "stopped registration did not return 503 no_ready_backends within the grace period"
         );
         tokio::task::yield_now().await;
     }

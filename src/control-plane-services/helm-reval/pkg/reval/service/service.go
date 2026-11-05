@@ -31,8 +31,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/httpapi"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/reval"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/pkg/httpapi"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/reval"
 )
 
 const timeout = 2 * time.Minute

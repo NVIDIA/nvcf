@@ -11,7 +11,7 @@ go_library(
         "nvca_client.go",
         "storagerequest.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/typed/nvca/v1",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/typed/nvca/v1",
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/nvca/pkg/apis/nvca/v1:nvca",

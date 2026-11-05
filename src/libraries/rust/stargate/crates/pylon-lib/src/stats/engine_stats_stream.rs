@@ -384,6 +384,7 @@ async fn run_engine_stats_stream(
     let client = reqwest::Client::new();
     let mut backoff = config.initial_reconnect_backoff;
     let mut valid_event_seen = false;
+    let mut connect_failure_reported = false;
     loop {
         if stop.is_cancelled() {
             return;
@@ -394,6 +395,7 @@ async fn run_engine_stats_stream(
             &stats_update_tx,
             &stop,
             &mut valid_event_seen,
+            &mut connect_failure_reported,
         )
         .await
         {
@@ -444,11 +446,13 @@ async fn read_stream_once(
     stats_update_tx: &flume::Sender<StatsAggregatorUpdate>,
     stop: &CancellationToken,
     valid_event_seen: &mut bool,
+    connect_failure_reported: &mut bool,
 ) -> StreamReadOutcome {
-    let response = match open_engine_stats_response(config, client, stop).await {
-        Ok(response) => response,
-        Err(outcome) => return outcome,
-    };
+    let response =
+        match open_engine_stats_response(config, client, stop, connect_failure_reported).await {
+            Ok(response) => response,
+            Err(outcome) => return outcome,
+        };
     observe_connected(config, true);
     let outcome =
         drain_engine_stats_response(config, response, stats_update_tx, stop, valid_event_seen)
@@ -490,6 +494,7 @@ async fn open_engine_stats_response(
     config: &EngineStatsStreamConfig,
     client: &reqwest::Client,
     stop: &CancellationToken,
+    connect_failure_reported: &mut bool,
 ) -> Result<reqwest::Response, StreamReadOutcome> {
     let response = tokio::select! {
         _ = stop.cancelled() => return Err(StreamReadOutcome::Stopped),
@@ -501,7 +506,12 @@ async fn open_engine_stats_response(
     let response = match response {
         Ok(response) => response,
         Err(error) => {
-            tracing::warn!(url = config.url, error = %error, "engine stats stream connect failed");
+            if *connect_failure_reported {
+                tracing::debug!(url = config.url, error = %error, "engine stats stream connect failed");
+            } else {
+                *connect_failure_reported = true;
+                tracing::warn!(url = config.url, error = %error, "engine stats stream connect failed");
+            }
             return Err(StreamReadOutcome::Retry("connect_error"));
         }
     };
@@ -524,6 +534,7 @@ async fn open_engine_stats_response(
         );
         return Err(StreamReadOutcome::Retry("http_status"));
     }
+    *connect_failure_reported = false;
     Ok(response)
 }
 
@@ -715,9 +726,12 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tracing::instrument::WithSubscriber;
 
     use crate::generated_request_id::{GeneratedRequestKind, next_generated_request_id};
+    use crate::test_support::RecordingTracingSubscriber;
 
     fn parse(line: &[u8]) -> Result<ParsedEngineStatsEvent, EngineStatsParseError> {
         parse_engine_stats_line(line, TokioInstant::now())
@@ -1342,5 +1356,127 @@ mod tests {
             );
         }
         assert!(body.contains(r#"pylon_engine_stats_stream_events_total{type="stats"} 1"#));
+    }
+
+    fn connect_failure_levels(subscriber: &RecordingTracingSubscriber) -> Vec<tracing::Level> {
+        subscriber
+            .events()
+            .into_iter()
+            .filter(|event| {
+                event.fields.get("message").map(String::as_str)
+                    == Some("engine stats stream connect failed")
+            })
+            .map(|event| event.level)
+            .collect()
+    }
+
+    async fn run_until_connect_failures(base_url: &str, failures: usize) -> Vec<tracing::Level> {
+        let subscriber = RecordingTracingSubscriber::default();
+        let (stats_tx, _stats_rx) = flume::unbounded();
+        let stop = CancellationToken::new();
+        let task = tokio::spawn(
+            run_engine_stats_stream(
+                reconnecting_config(base_url, EngineStatsStreamMode::Required),
+                stats_tx,
+                stop.clone(),
+            )
+            .with_subscriber(tracing::Dispatch::new(subscriber.clone())),
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while connect_failure_levels(&subscriber).len() < failures {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("stats stream should keep reconnecting");
+        stop.cancel();
+        task.await.expect("stats stream task should finish");
+        connect_failure_levels(&subscriber)
+    }
+
+    #[tokio::test]
+    async fn repeated_connect_failures_warn_once() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let base_url = format!(
+            "http://{}",
+            listener.local_addr().expect("listener should have addr")
+        );
+        drop(listener);
+
+        let levels = run_until_connect_failures(&base_url, 4).await;
+        assert_eq!(levels[0], tracing::Level::WARN);
+        assert!(
+            levels[1..]
+                .iter()
+                .all(|level| *level == tracing::Level::DEBUG),
+            "{levels:?}"
+        );
+    }
+
+    async fn connect_failure_levels_around_one_response(
+        response: &'static [u8],
+    ) -> Vec<tracing::Level> {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let base_url = format!(
+            "http://{}",
+            listener.local_addr().expect("listener should have addr")
+        );
+        let server = tokio::spawn(async move {
+            let (dropped, _) = listener
+                .accept()
+                .await
+                .expect("stats client should connect");
+            drop(dropped);
+            let (mut socket, _) = listener
+                .accept()
+                .await
+                .expect("stats client should reconnect");
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await;
+            socket
+                .write_all(response)
+                .await
+                .expect("response should be written");
+        });
+
+        let levels = run_until_connect_failures(&base_url, 4).await;
+        server.await.expect("server task should finish");
+        levels
+    }
+
+    #[tokio::test]
+    async fn connect_failure_warns_again_after_a_successful_connection() {
+        let levels = connect_failure_levels_around_one_response(
+            b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+        )
+        .await;
+        assert_eq!(
+            levels[..3],
+            [
+                tracing::Level::WARN,
+                tracing::Level::WARN,
+                tracing::Level::DEBUG
+            ],
+            "{levels:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_status_does_not_reset_connect_failure_warning() {
+        let levels = connect_failure_levels_around_one_response(
+            b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+        )
+        .await;
+        assert_eq!(levels[0], tracing::Level::WARN);
+        assert!(
+            levels[1..]
+                .iter()
+                .all(|level| *level == tracing::Level::DEBUG),
+            "{levels:?}"
+        );
     }
 }

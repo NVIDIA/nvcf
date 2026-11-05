@@ -21,7 +21,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/testutils"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/pkg/testutils"
 )
 
 func TestWrap(t *testing.T) {

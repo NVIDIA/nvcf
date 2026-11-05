@@ -20,7 +20,7 @@ package v1
 import (
 	"encoding/json"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/internal/compat"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/internal/compat"
 )
 
 type storageRequestSpecJSON struct {

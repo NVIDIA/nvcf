@@ -25,10 +25,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const messagesTestBody = `{"model":"fn-alpha/company-name/model-name","max_tokens":64,"system":[{"type":"text","text":"Be concise","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"Hello"}]}],"tools":[{"name":"get_weather","input_schema":{"type":"object"}}],"thinking":{"type":"enabled","budget_tokens":32},"extra-headers":{"private":"remove"},"backend_extension":{"keep":true}}`
@@ -42,7 +42,7 @@ type messagesCapturedRequest struct {
 
 func messagesTestAPI(t *testing.T, upstream string, cfg *config.Config, limiter *recordingRateLimiter, uris []string) (*echo.Echo, *stubInvocationAuthClient) {
 	t.Helper()
-	p, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream})
+	p, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream, RequestTimeout: cfg.Stargate.RequestTimeout})
 	require.NoError(t, err)
 	auth := &stubInvocationAuthClient{authResponse: &nvcf.InvocationAuthResponse{
 		RoutingKey: "fn-alpha", RateLimitKey: "org-test", AuthContext: map[string]string{"ncaId": "org-test"},

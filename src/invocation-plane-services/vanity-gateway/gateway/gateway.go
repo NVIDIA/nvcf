@@ -68,9 +68,11 @@ func swapRouterWhenNotified(ctx context.Context, mappings reloadableconfig.Reloa
 			newMux, err := buildChiMux(mappings.Get(), config)
 			if err != nil {
 				zap.L().Error("Failed to build ChiMux, skipping router swap", zap.Error(err))
+				recordConfigReloadFailure(ctx, reloadStageRouterBuild)
 				continue
 			}
 			router.SetNewMux(newMux)
+			recordConfigReloadSuccess(ctx)
 			zap.L().Info("Finished swapping the new ChiMux")
 		}
 	}()
@@ -114,7 +116,12 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 		return nil, fmt.Errorf("failed to setup shadow metrics: %w", err)
 	}
 
-	mappings, err := gatewayConfig.SetupConfigWithConfigPathAndTimeout(config.MappingPath, config.MappingLoadTimeout)
+	if err := setupReloadMetrics(); err != nil {
+		return nil, fmt.Errorf("failed to setup config reload metrics: %w", err)
+	}
+
+	mappings, err := gatewayConfig.SetupConfigWithConfigPathAndTimeout(config.MappingPath, config.MappingLoadTimeout,
+		reloadableconfig.WithReloadErrorFunc[gatewayConfig.GatewayConfig](recordConfigLoadFailure))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load mapping configuration: %w", err)
 	}
@@ -125,6 +132,7 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 		cancel()
 		return nil, err
 	}
+	recordConfigReloadSuccess(ctx)
 	http2Server := createHttp2Server("0.0.0.0:10081", router)
 	http2ServerPair := servers.ServerFuncPair{
 		Execute: func() error {

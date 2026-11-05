@@ -454,7 +454,7 @@ metric names, labels, and scrape configuration.
 | Pod does not start after a configuration change | Inspect request-router logs for file read, JSON parse, unknown field, or algorithm factory errors. |
 | HTTP `400` before backend selection | Read `error.message` in the response body; see [Rejections](#rejections). Request-router logs record the code as `rejection_reason`, and the gateway returns it in `error.code` when `exposeRouterErrorCodes` is enabled. Compare the function `routingMethod` with the configured algorithm and `request_algorithms`. Check required and numeric gateway headers. |
 | HTTP `400` for affinity-aware routing | Confirm the gateway generated a nonblank affinity key when `require_cache_affinity_key` is enabled. |
-| HTTP `503` with no eligible candidates | Confirm pylons are registered and publish the capacity, queue, and optional KV-cache statistics required by the algorithm. |
+| HTTP `503` with no ready backends | Confirm pylons are registered, report the model as active, and publish the capacity, queue, and optional KV-cache statistics required by the algorithm. The request router also returns this after a model's last pylon leaves, for example during an instance replacement, for 15 minutes by default (`--deregistered-model-grace-ms`, `0` disables). |
 | New ConfigMap value has no effect | Confirm the pod creation time. Restart the selected Deployment or StatefulSet because Stargate does not reload the file. |
 | Unexpected fallback or retries | Compare routing selection, proxy attempt, retry, and retry-exhaustion metrics. Check pylon retry reasons. |
 | Affinity differs between replicas | Compare the ConfigMap, pod creation times, startup summaries, seed values, and registered candidate set. |

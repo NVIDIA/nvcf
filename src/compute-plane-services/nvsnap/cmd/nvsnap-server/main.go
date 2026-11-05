@@ -36,10 +36,10 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/server"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
-	nvsnapui "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/ui"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/db"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/server"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
+	nvsnapui "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/ui"
 )
 
 var version = "0.4.0"

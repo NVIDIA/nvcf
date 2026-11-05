@@ -6,7 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "trustbundle",
     srcs = ["trust_bundle.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/trustbundle",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/trustbundle",
     visibility = ["//visibility:public"],
 )
 

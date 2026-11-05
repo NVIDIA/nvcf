@@ -22,12 +22,12 @@ import (
 	"crypto/rsa"
 	"time"
 
-	cmnoauth "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth"
+	cmnoauth "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/oauth"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/utils"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/mock/utils"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
 )
 
 func New(issuer, oauthClientID, keyFile string) (*cmnoauth.JWTCache, *health.TokenFetcherHealthCheck, error) {

@@ -6,7 +6,7 @@ go_library(
         "syscall_linux.go",
         "syscall_nonlinux.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/syscall",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/syscall",
     importpath = "google.golang.org/grpc/internal/syscall",
     visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
     deps = select({

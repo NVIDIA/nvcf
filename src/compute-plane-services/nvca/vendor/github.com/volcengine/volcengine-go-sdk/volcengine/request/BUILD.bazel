@@ -15,7 +15,7 @@ go_library(
         "validation.go",
         "waiter.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/request",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/request",
     importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/request",
     visibility = ["//visibility:public"],
     deps = [

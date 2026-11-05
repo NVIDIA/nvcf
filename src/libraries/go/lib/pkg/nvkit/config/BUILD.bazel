@@ -21,7 +21,7 @@ go_library(
         "config.go",
         "example.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/config",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/config",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_mitchellh_go_homedir//:go-homedir",

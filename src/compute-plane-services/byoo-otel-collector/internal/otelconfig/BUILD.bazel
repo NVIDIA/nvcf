@@ -16,7 +16,7 @@ go_library(
         "templates/config-vm-container.yaml.tmpl",
         "templates/config-vm-helm.yaml.tmpl",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/otelconfig",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/byoo-otel-collector/internal/otelconfig",
     visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
     deps = [
         "//src/compute-plane-services/byoo-otel-collector/internal/logger",

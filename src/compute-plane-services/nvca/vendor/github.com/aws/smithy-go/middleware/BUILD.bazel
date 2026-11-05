@@ -18,7 +18,7 @@ go_library(
         "step_initialize.go",
         "step_serialize.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/middleware",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/middleware",
     importpath = "github.com/aws/smithy-go/middleware",
     visibility = ["//visibility:public"],
     deps = ["//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/logging"],

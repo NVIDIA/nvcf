@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "configutil",
     srcs = ["utils.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/configutil",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/configutil",
     visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
 )
 

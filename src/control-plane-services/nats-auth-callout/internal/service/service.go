@@ -25,8 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins"
 
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"

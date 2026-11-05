@@ -408,6 +408,8 @@ func TestNVCFCLIModelInvocationRetriesNoEligibleCandidates(t *testing.T) {
 		"router code":               `API error 404: {"code":"no_eligible_candidates"}`,
 		"router message":            `API error 404: {"message":"no eligible candidates"}`,
 		"backend still calibrating": `API error 503: {"message":"Service Unavailable"}`,
+		"no ready backends message": `API error 503: {"message":"no ready backends"}`,
+		"no ready backends code":    `API error 503: {"code":"no_ready_backends"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			sc, fake := newScenarioContext(t)

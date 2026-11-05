@@ -8,7 +8,7 @@ go_library(
         "server.go",
         "util.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp/internal/semconv",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp/internal/semconv",
     importpath = "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp/internal/semconv",
     visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp:__subpackages__"],
     deps = [

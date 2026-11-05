@@ -91,6 +91,16 @@ done
 
 reloader_image="$(yq -r '.nats.reloader.image.registry + "/" + .nats.reloader.image.repository + ":" + .nats.reloader.image.tag' "$chart_dir/values.yaml")"
 assert_contains "$default_render" "image: $reloader_image"
+for pair in nats:container nats-box:natsBox.container; do
+  container=${pair%%:*}
+  path=${pair#*:}
+  expected=$(yq -r ".nats.$path.image | .registry + \"/\" + .repository + \":\" + .tag" "$chart_dir/values.yaml")
+  actual=$(yq -r "select(.kind == \"StatefulSet\" or .kind == \"Deployment\") | .spec.template.spec.containers[] | select(.name == \"$container\") | .image" "$default_render")
+  test "$actual" = "$expected" || {
+    echo "expected $container image $expected, got $actual" >&2
+    exit 1
+  }
+done
 assert_contains "$default_render" "# Source: helm-nvcf-nats/templates/nats-auth-callout-nkeys-secret.yaml"
 assert_contains "$default_render" "name: nats-auth-callout-nkeys"
 assert_contains "$default_render" "nkey_signature:"

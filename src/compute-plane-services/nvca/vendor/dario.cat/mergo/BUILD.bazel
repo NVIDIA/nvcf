@@ -8,7 +8,7 @@ go_library(
         "merge.go",
         "mergo.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/dario.cat/mergo",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/dario.cat/mergo",
     importpath = "dario.cat/mergo",
     visibility = ["//visibility:public"],
 )

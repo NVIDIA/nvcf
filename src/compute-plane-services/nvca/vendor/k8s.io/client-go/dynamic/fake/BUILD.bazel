@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "fake",
     srcs = ["simple.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic/fake",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic/fake",
     importpath = "k8s.io/client-go/dynamic/fake",
     visibility = ["//visibility:public"],
     deps = [

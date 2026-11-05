@@ -32,9 +32,9 @@ import (
 	echo "github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
 // These tests run requests through the registered routes and a real
@@ -367,6 +367,10 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 	createdNoSequence := "event: response.created\n" +
 		`data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":1,"model":"company-name/model-name","status":"in_progress","output":[]}}` + "\n\n"
 	unfinished := "event: response.in_progress\ndata: {\"type\":\"resp"
+	// The upstream error event is not relayed; its message moves into the gateway's response.failed.
+	upstreamError := "event: error\n" +
+		`data: {"type":"error","code":"server_error","message":"engine failed","param":null,"sequence_number":5}` + "\n\n"
+	upstreamErrorNoMessage := "event: error\n" + `data: {"type":"error","code":"server_error","sequence_number":5}` + "\n\n"
 
 	tests := []struct {
 		name         string
@@ -377,6 +381,8 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 		// gateway sends its own before response.failed.
 		wantResponseID string
 		wantSequence   int
+		// wantMessage is the response.failed error message; empty means msgNativeResponsesNoTerminal.
+		wantMessage string
 	}{
 		{name: "empty stream", wantSequence: 1},
 		{name: "ends after non terminal event", upstreamBody: created, wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5},
@@ -384,6 +390,22 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 		{name: "no sequence numbers", upstreamBody: createdNoSequence, wantRelayed: createdNoSequence, wantResponseID: "resp_1", wantSequence: 0},
 		{name: "connection drops mid event", upstreamBody: created + unfinished, dropMidway: true, wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5},
 		{name: "stream ends mid event", upstreamBody: created + unfinished, wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5},
+		{
+			name: "upstream error event", upstreamBody: created + upstreamError, wantRelayed: created,
+			wantResponseID: "resp_1", wantSequence: 5, wantMessage: "engine failed",
+		},
+		{
+			name: "upstream error event cut off at EOF", upstreamBody: created + strings.TrimSuffix(upstreamError, "\n\n"),
+			wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5, wantMessage: "engine failed",
+		},
+		{
+			name: "upstream error event without message", upstreamBody: created + upstreamErrorNoMessage,
+			wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5,
+		},
+		{
+			name: "upstream error event with plain text data", upstreamBody: created + "event: error\ndata: engine failed\n\n",
+			wantRelayed: created, wantResponseID: "resp_1", wantSequence: 5,
+		},
 	}
 
 	for _, tt := range tests {
@@ -451,7 +473,11 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 			require.Equal(t, tt.wantSequence, event.SequenceNumber)
 			require.Equal(t, "failed", event.Response.Status)
 			require.Equal(t, "server_error", event.Response.Error.Code)
-			require.Equal(t, "responses proxy stream ended without a terminal response event", event.Response.Error.Message)
+			wantMessage := tt.wantMessage
+			if wantMessage == "" {
+				wantMessage = msgNativeResponsesNoTerminal
+			}
+			require.Equal(t, wantMessage, event.Response.Error.Message)
 			if tt.wantResponseID != "" {
 				require.Equal(t, tt.wantResponseID, event.Response.ID)
 			} else {
@@ -460,6 +486,60 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 				require.Equal(t, tt.wantSequence-1, events[0].SequenceNumber)
 				require.Equal(t, "in_progress", events[0].Response.Status)
 			}
+		})
+	}
+}
+
+func TestResponsesUnaryReturns502WhenUpstreamStreamFails(t *testing.T) {
+	t.Parallel()
+
+	created := "event: response.created\n" +
+		`data: {"type":"response.created","sequence_number":4,"response":{"id":"resp_1","object":"response","created_at":1,"model":"company-name/model-name","status":"in_progress","output":[]}}` + "\n\n"
+
+	tests := []struct {
+		name         string
+		upstreamBody string
+		dropMidway   bool
+	}{
+		{name: "ends after non terminal event", upstreamBody: created},
+		{name: "connection drops mid stream", upstreamBody: created, dropMidway: true},
+		{
+			name: "upstream error event",
+			upstreamBody: created + "event: error\n" +
+				`data: {"type":"error","code":"server_error","message":"engine failed","param":null,"sequence_number":5}` + "\n\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.Header().Set(echo.HeaderContentType, "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, tt.upstreamBody)
+				w.(http.Flusher).Flush()
+				if tt.dropMidway {
+					panic(http.ErrAbortHandler)
+				}
+			}))
+			t.Cleanup(upstream.Close)
+			e := newPassthroughAPI(t, upstream.URL)
+			handlerErr := captureHandlerError(e)
+
+			clientBody := `{"model":"fn-alpha/company-name/model-name","input":"hi","stream":false}`
+			rec := servePassthroughRequest(t, e, "/v1/responses", clientBody)
+			body := rec.Body.String()
+
+			require.Equal(t, http.StatusBadGateway, rec.Code, body)
+			var httpErr *echo.HTTPError
+			require.ErrorAs(t, *handlerErr, &httpErr, "logs and metrics must record the 502")
+			require.Equal(t, http.StatusBadGateway, httpErr.Code)
+			var errBody openAIErrorResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &errBody), body)
+			require.Equal(t, "server_error", errBody.Error.Type)
+			require.Equal(t, msgNativeResponsesNoTerminal, errBody.Error.Message)
 		})
 	}
 }
@@ -484,6 +564,29 @@ func TestResponsesStreamKeepsTerminalStreamWhenConnectionDropsAfterIt(t *testing
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, completed, rec.Body.String())
+}
+
+func TestResponsesUnaryKeepsTerminalResponseWhenConnectionDropsAfterIt(t *testing.T) {
+	t.Parallel()
+
+	const response = `{"id":"resp_1","object":"response","status":"completed","output":[]}`
+	completed := "event: response.completed\n" +
+		`data: {"type":"response.completed","sequence_number":0,"response":` + response + `}` + "\n\n"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set(echo.HeaderContentType, "text/event-stream")
+		_, _ = io.WriteString(w, completed)
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(upstream.Close)
+	e := newPassthroughAPI(t, upstream.URL)
+
+	clientBody := `{"model":"fn-alpha/company-name/model-name","input":"hi","stream":false}`
+	rec := servePassthroughRequest(t, e, "/v1/responses", clientBody)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.JSONEq(t, response, rec.Body.String())
 }
 
 func TestResponsesStreamReadsUncompressedStreamWhenClientAcceptsGzip(t *testing.T) {

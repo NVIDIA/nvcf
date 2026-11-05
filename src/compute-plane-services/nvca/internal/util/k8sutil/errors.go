@@ -17,7 +17,7 @@ limitations under the License.
 
 package k8sutil
 
-import "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8serr"
+import "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8serr"
 
 // IsTransientK8sError returns true for Kubernetes API errors that are expected
 // to resolve on retry without human intervention: k8serr.IsTransient, which

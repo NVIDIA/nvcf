@@ -8,7 +8,7 @@ go_library(
         "propagation.go",
         "trace_context.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/propagation",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/propagation",
     importpath = "go.opentelemetry.io/otel/propagation",
     visibility = ["//visibility:public"],
     deps = [

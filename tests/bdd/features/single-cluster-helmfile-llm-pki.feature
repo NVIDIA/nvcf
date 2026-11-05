@@ -68,13 +68,11 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
       And the rendered manifests in "deploy/stacks/self-managed/out" should contain Kubernetes resource "ClusterIssuer/nvcf-openbao-pki"
       And the rendered manifests in "deploy/stacks/self-managed/out" should contain:
         | text                                               |
-        | name: ADDONS_LLM_ENABLED                           |
-        | value: "true"                                     |
         | llm-request-router.nvcf.svc.cluster.local          |
         | worker-address: llm-request-router-backend-router.nvcf.svc.cluster.local:50071 |
-        | name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS              |
-        | value: "nvcf.svc.cluster.local"                   |
         | nvcf-openbao-migrations:                            |
+      And rendered workload "Job/openbao-server-migrations" in "deploy/stacks/self-managed/out" container "bao-migrations" environment variable "ADDONS_LLM_ENABLED" should equal "true"
+      And rendered workload "Job/openbao-server-migrations" in "deploy/stacks/self-managed/out" container "bao-migrations" environment variable "NVCF_SERVICE_PKI_ALLOWED_DOMAINS" should equal "nvcf.svc.cluster.local"
       # A colocated worker uses the in-cluster backend-router Service directly. The
       # dedicated HTTPS identity and route belong only to an explicitly
       # enabled remote-worker ingress.

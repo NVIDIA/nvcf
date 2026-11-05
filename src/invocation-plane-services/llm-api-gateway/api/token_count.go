@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
 
 const (

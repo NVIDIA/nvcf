@@ -27,7 +27,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics/nvcf"
 )
 
 // The counters are process-global, so every assertion is a delta.

@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "info",
     srcs = ["version.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/internal/info",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/internal/info",
     importpath = "github.com/NVIDIA/k8s-dra-driver-gpu/internal/info",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu:__subpackages__"],
     # The dra-driver's featuregates init() panics unless a real version is

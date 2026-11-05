@@ -49,7 +49,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
 
 // Copier copies a directory tree with the file-type discipline a

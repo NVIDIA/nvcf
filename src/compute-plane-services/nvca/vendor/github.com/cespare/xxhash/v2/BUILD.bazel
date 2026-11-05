@@ -10,7 +10,7 @@ go_library(
         "xxhash_other.go",
         "xxhash_unsafe.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/cespare/xxhash/v2",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/cespare/xxhash/v2",
     importpath = "github.com/cespare/xxhash/v2",
     visibility = ["//visibility:public"],
 )

@@ -33,7 +33,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/models"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/models"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

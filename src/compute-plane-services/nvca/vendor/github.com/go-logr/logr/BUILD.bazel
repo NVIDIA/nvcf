@@ -12,7 +12,7 @@ go_library(
         "slogr.go",
         "slogsink.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
     importpath = "github.com/go-logr/logr",
     visibility = ["//visibility:public"],
 )

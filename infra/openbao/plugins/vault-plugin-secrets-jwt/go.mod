@@ -1,6 +1,6 @@
-module github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt
+module github.com/dsx-ai-factory/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt
 
-go 1.27.0
+go 1.27.3
 
 require (
 	github.com/go-jose/go-jose/v4 v4.1.4

@@ -1,4 +1,4 @@
-module github.com/NVIDIA/nvcf/tools/ncp-local-cluster/credential-provider-go
+module github.com/dsx-ai-factory/nvcf/tools/ncp-local-cluster/credential-provider-go
 
 go 1.24.3
 

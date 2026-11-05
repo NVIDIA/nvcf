@@ -13,6 +13,7 @@
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$stack_dir/../../.." && pwd)"
 expected_version="$(tr -d '[:space:]' < "$stack_dir/VERSION")"
 
 rendered="$(cd "$stack_dir" && HELMFILE_ENV=base helmfile \
@@ -59,6 +60,10 @@ image() { yq -r 'select(.kind == "Job") | .spec.template.spec.containers[0].imag
 test "$(image <<<"$rendered")" = "$expected_image" || fail "receipt must use its chart image default"
 test "$(yq -r '.image.registry + "/" + .image.repository' "$chart_values")" = docker.io/alpine/k8s \
   || fail "receipt default must use the public upstream repository"
+api_values="$repo_root/deploy/helm/cloud-functions/nvcf-api/values.yaml"
+bootstrap_image="$(yq -r '.api.accountBootstrap.image | .registry + "/" + .repository + ":" + .tag' "$api_values")"
+test "$expected_image" = "$bootstrap_image" \
+  || fail "receipt and account-bootstrap toolbox defaults must stay aligned"
 
 public="$(cd "$stack_dir" && HELMFILE_ENV=base helmfile \
   --file helmfile.d/04-upgrade-receipt.yaml.gotmpl \
@@ -73,6 +78,16 @@ custom="$(cd "$stack_dir" && HELMFILE_ENV=base helmfile \
   --state-values-set upgradeReceipt.image.tag=9.8.7-sm.1 template)"
 test "$(image <<<"$custom")" = mirror.example.com/maintenance/helper:9.8.7-sm.1 \
   || fail "receipt image overrides did not reach the Job"
+
+compat_values="$(awk '/^## Kubernetes client compatibility/{section=1; next} section && /^```yaml$/{block=1; next} block && /^```$/{exit} block' \
+  "$stack_dir/charts/nvcf-upgrade-receipt/README.md")"
+compat_tag="$(yq -r '.upgradeReceipt.image.tag // ""' <<<"$compat_values")"
+test -n "$compat_tag" || fail "missing documented compatible-client override"
+compat="$(cd "$stack_dir" && HELMFILE_ENV=base helmfile \
+  --file helmfile.d/04-upgrade-receipt.yaml.gotmpl \
+  --state-values-set "upgradeReceipt.image.tag=$compat_tag" template)"
+test "$(image <<<"$compat")" = "${expected_image%:*}:$compat_tag" \
+  || fail "tag-only compatibility override must preserve the upstream repository"
 
 empty="$(cd "$stack_dir" && HELMFILE_ENV=base helmfile \
   --file helmfile.d/04-upgrade-receipt.yaml.gotmpl \

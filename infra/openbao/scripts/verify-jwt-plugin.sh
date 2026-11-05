@@ -23,7 +23,8 @@ repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 
 go_bin=${GO:-go}
 plugin_dir=${PLUGIN_DIR:-"$repo_root/files/plugins"}
-required_go_version=${REQUIRED_GO_VERSION:-v1.27.0}
+arches=${ARCHES:-"amd64 arm64"}
+required_go_version=${REQUIRED_GO_VERSION:-v1.27.3}
 required_x_crypto_version=${REQUIRED_X_CRYPTO_VERSION:-v0.56.0}
 required_x_net_version=${REQUIRED_X_NET_VERSION:-v0.58.0}
 required_x_text_version=${REQUIRED_X_TEXT_VERSION:-v0.41.0}
@@ -88,7 +89,7 @@ verify_binary() {
   fi
 
   path=$(awk '$1 == "path" { print $2 }' "$metadata")
-  if [ "$path" != "github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt/cmd/vault-plugin-secrets-jwt" ]; then
+  if [ "$path" != "github.com/dsx-ai-factory/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt/cmd/vault-plugin-secrets-jwt" ]; then
     echo "$binary has unexpected module path: $path" >&2
     exit 1
   fi
@@ -181,5 +182,6 @@ verify_binary() {
   rm -f "$metadata"
 }
 
-verify_binary amd64
-verify_binary arm64
+for arch in $arches; do
+  verify_binary "$arch"
+done

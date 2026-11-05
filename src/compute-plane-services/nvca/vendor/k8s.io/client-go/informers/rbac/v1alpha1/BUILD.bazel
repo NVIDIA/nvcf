@@ -9,7 +9,7 @@ go_library(
         "role.go",
         "rolebinding.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/rbac/v1alpha1",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/rbac/v1alpha1",
     importpath = "k8s.io/client-go/informers/rbac/v1alpha1",
     visibility = ["//visibility:public"],
     deps = [

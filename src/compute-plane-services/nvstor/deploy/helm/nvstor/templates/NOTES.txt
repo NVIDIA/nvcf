@@ -43,4 +43,4 @@ Replicas:  {{ .Values.replicaCount }}
 
 4. Storage location: {{ .Values.storage.hostPath }}
 
-For more information: https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/nvstor
+For more information: https://github.com/dsx-ai-factory/nvcf/tree/main/src/compute-plane-services/nvstor

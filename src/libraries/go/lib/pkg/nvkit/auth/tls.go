@@ -22,7 +22,7 @@ import (
 	"crypto/x509"
 	"os"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 )
 
 type TLSConfigOptions struct {

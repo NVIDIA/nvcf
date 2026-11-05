@@ -53,6 +53,24 @@ if grep -R -n -F 'envOrDefault "REPLICA_COUNT"' "${keyspaces}"; then
   fail "keyspace migrations contain templates unsupported by stock golang-migrate"
 fi
 
+if ! python3 - "${keyspaces}" <<'PY'
+from pathlib import Path
+import sys
+
+keyspaces = Path(sys.argv[1])
+invalid = False
+for pattern in ("*.sql", "*.cql"):
+    for path in sorted(keyspaces.glob(f"*/{pattern}")):
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if "--" in line and ";" in line.split("--", 1)[1]:
+                print(f"{path}:{number}: semicolon in CQL line comment", file=sys.stderr)
+                invalid = True
+sys.exit(1 if invalid else 0)
+PY
+then
+  fail "keyspace migrations contain comment semicolons that golang-migrate splits"
+fi
+
 envsubst_vars=$(sed -n "s/^ENVSUBST_VARS='\\(.*\\)'$/\\1/p" "${script}")
 # shellcheck disable=SC2016
 if [ "${envsubst_vars}" != '$SERVICE_ROLE_PASSWORD $REPLICA_COUNT' ]; then

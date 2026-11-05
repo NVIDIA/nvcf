@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "durationpb",
     srcs = ["duration.pb.go"],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/durationpb",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/durationpb",
     importpath = "google.golang.org/protobuf/types/known/durationpb",
     visibility = ["//visibility:public"],
     deps = [

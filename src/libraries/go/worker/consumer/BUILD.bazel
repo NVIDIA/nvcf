@@ -21,7 +21,7 @@ go_library(
         "nats_consumer.go",
         "work_request.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/consumer",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/consumer",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/worker/proto/nvcf:pb",

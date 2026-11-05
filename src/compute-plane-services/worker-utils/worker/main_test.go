@@ -23,8 +23,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/nvcf"
 )
 
 // TestMain pre-registers the shared worker metrics once, before any test spawns

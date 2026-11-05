@@ -94,6 +94,8 @@ type UpstreamError struct {
 	// RouterCode is the X-Stargate-Error-Code value. It is set only when the
 	// request router rejected the request itself.
 	RouterCode string
+	// RetryAfter is the upstream Retry-After header value, if any.
+	RetryAfter string
 	Body       []byte
 }
 
@@ -104,6 +106,7 @@ func NewUpstreamHTTPError(status int, header http.Header, body []byte) *echo.HTT
 	upstream := &UpstreamError{
 		Status:     status,
 		RouterCode: strings.Join(header.Values(headerStargateErrorCode), ","),
+		RetryAfter: header.Get("Retry-After"),
 		Body:       body,
 	}
 	return echo.NewHTTPError(status, upstream.Message()).SetInternal(upstream)
@@ -134,6 +137,12 @@ func (e *UpstreamError) Message() string {
 		return "Overloaded"
 	}
 	return "upstream request failed"
+}
+
+// UpstreamErrorMessage returns the message of an upstream error event sent
+// after the 200, read and capped like an error body, or "" when it has none.
+func UpstreamErrorMessage(event []byte) string {
+	return truncateMessage(strings.TrimSpace(upstreamErrorMessage(event)))
 }
 
 // upstreamErrorMessage returns the message from the error body shapes the

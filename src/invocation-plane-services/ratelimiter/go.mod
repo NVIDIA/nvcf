@@ -3,9 +3,9 @@ module ratelimiter
 go 1.26.10
 
 require (
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
 	github.com/auth0/go-jwt-middleware/v2 v2.3.0
 	github.com/carlmjohnson/versioninfo v0.22.5
+	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/google/uuid v1.6.0
@@ -162,3 +162,5 @@ replace k8s.io/client-go v11.0.0+incompatible => k8s.io/client-go v0.34.2
 // stay identical to the replace in llm-api-gateway/go.mod; the Bazel build
 // resolves one olric for the whole workspace.
 replace github.com/olric-data/olric => github.com/max007-008/olric v0.0.0-20260904024039-0e35b781a2f3
+
+replace github.com/dsx-ai-factory/nvcf/src/libraries/go/lib => ../../libraries/go/lib

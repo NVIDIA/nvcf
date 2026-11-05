@@ -32,9 +32,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/secrets"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/pkg/ngc"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/internal/secrets"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-task/pkg/ngc"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils"
 )
 
 // newTestSecrets writes a minimal secrets file and constructs a *secrets.Secrets

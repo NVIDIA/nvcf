@@ -13,7 +13,7 @@ go_library(
         "serialize-pe.go",
         "set.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/fieldpath",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/fieldpath",
     importpath = "sigs.k8s.io/structured-merge-diff/v6/fieldpath",
     visibility = ["//visibility:public"],
     deps = [

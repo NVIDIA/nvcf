@@ -30,11 +30,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
-	translateutil "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	translateutil "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -53,25 +53,25 @@ import (
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
-	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/workloadtypes"
-	helmutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/helm"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
-	nvcak8sutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
-	nvcainternaltranslate "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/translate"
-	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
-	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap"
-	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
-	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	nvcametrics "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/metrics/workloadtypes"
+	helmutil "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/helm"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	nvcak8sutil "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	nvcainternaltranslate "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/translate"
+	nvcav1new "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
+	nvcaerrors "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap"
+	nvcastorage "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcatypes "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 const (
@@ -473,6 +473,9 @@ func (c K8sComputeBackend) applyFunctionCreationMessage(ctx context.Context, req
 
 	// if requested instances are already created, return
 	if int(instCount) == len(activeInstances) {
+		if err := c.retryFunctionModelCacheCleanup(ctx, req, bdCreate, initCacheJob); err != nil {
+			log.WithError(err).Warn("failed to retry model cache cleanup")
+		}
 		return c.bk8s.ApplyICMSRequestStatusChange(ctx, req)
 	}
 
@@ -672,6 +675,18 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 ) (mf func(*corev1.Pod), roPVCName string, err error) {
 	log := core.GetLogger(ctx)
 	var mc ModelCachingState
+	// A request whose caching already failed stays on non-cached workers. Without this,
+	// a later pass finds no Job and no volume and starts the cache writer again. The check also
+	// covers a pass that starts from an informer copy that does not show the annotation yet.
+	if c.bk8s.modelCachingFailed(req) {
+		log.Infof("model caching already failed for request %v/%v, creating non-cached workers",
+			req.Namespace, req.Name)
+		if err := c.retryFailedModelCacheCleanup(ctx, req, rwPVC, initJob); err != nil {
+			log.WithError(err).Warn("failed to retry model cache cleanup")
+		}
+		c.clearCacheReference(ctx, req)
+		return func(*corev1.Pod) {}, "", nil
+	}
 	// The selection persisted at request creation decides the flow, mirroring
 	// HelmCacheBackendFromSelection. A request without one predates selections
 	// and takes the legacy path unchanged.
@@ -731,6 +746,10 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 		}
 		return nil, "", fmt.Errorf("model caching is still in progress")
 	case ModelCachingFailed:
+		if err := c.bk8s.markModelCachingFailed(ctx, req); err != nil {
+			return nil, "", fmt.Errorf("record model caching failure on request %v/%v: %w", req.Namespace, req.Name, err)
+		}
+		c.clearLiveCacheReference(ctx, req)
 		c.bk8s.EmitICMSEvent(req, corev1.EventTypeWarning,
 			string(types.EventCategoryModelCaching), "Caching setup failed, resort to non-cached workers", nil)
 		log.Warnf("model caching failed, NVCA will create non-cached workers")

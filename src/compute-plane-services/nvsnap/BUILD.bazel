@@ -5,7 +5,7 @@ load("@gazelle//:def.bzl", "gazelle")
 load("//rules/oci:defs.bzl", "go_oci_image")
 
 # Gazelle directives -- Go import prefix matches go.mod.
-# gazelle:prefix github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap
+# gazelle:prefix github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap
 # Skip non-Go subtrees so Gazelle does not try to generate BUILD files
 # in vendored or unrelated directories.
 # gazelle:exclude .bazel-cache
@@ -29,7 +29,7 @@ load("//rules/oci:defs.bzl", "go_oci_image")
 # gazelle:exclude lib/nvsnap_restore_helper
 # Make Gazelle resolve external Go module deps via the go_deps extension
 # in MODULE.bazel rather than http_archive workspace rules.
-# gazelle:resolve go github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap //:go_default_library
+# gazelle:resolve go github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap //:go_default_library
 
 gazelle(
     name = "gazelle",

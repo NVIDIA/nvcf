@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "middleware",
     srcs = ["middleware.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/utils/middleware",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/utils/middleware",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_madappgang_httplog//:httplog",

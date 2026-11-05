@@ -24,7 +24,7 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	nvcav2beta1 "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 
 	"github.com/stretchr/testify/assert"
 )

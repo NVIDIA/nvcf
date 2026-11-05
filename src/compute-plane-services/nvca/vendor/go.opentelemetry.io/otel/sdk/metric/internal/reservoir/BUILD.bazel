@@ -6,7 +6,7 @@ go_library(
         "concurrent_safe.go",
         "doc.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/internal/reservoir",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/internal/reservoir",
     importpath = "go.opentelemetry.io/otel/sdk/metric/internal/reservoir",
     visibility = ["//visibility:public"],
 )

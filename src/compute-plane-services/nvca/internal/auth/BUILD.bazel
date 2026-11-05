@@ -10,14 +10,14 @@ go_library(
         "selfmanagedsecrets.go",
         "tokenfetcher.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/auth",
     visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
     deps = [
         "//src/compute-plane-services/nvca/pkg/nvca/health",
-        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth",
-        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth",
-        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret",
+        "//src/compute-plane-services/nvca/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/auth",
+        "//src/compute-plane-services/nvca/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/oauth",
+        "//src/compute-plane-services/nvca/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/secret",
     ],
 )
 
@@ -38,7 +38,7 @@ go_test(
     embed = [":auth"],
     deps = [
         "//src/compute-plane-services/nvca/internal/metrics/clientmetrics",
-        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth",
+        "//src/compute-plane-services/nvca/vendor/github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/auth",
         "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
         "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promhttp",
         "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",

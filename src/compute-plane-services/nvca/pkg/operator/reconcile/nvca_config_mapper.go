@@ -27,8 +27,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
-	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/transporttls"
+	nvcaconfig "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	yamlv3 "gopkg.in/yaml.v3"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

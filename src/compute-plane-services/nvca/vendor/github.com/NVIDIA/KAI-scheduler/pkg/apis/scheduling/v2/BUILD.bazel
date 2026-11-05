@@ -11,7 +11,7 @@ go_library(
         "status.go",
         "zz_generated.deepcopy.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2",
     importpath = "github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2",
     visibility = ["//visibility:public"],
     deps = [

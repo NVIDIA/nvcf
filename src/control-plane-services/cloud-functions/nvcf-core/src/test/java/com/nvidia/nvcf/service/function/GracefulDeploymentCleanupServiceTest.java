@@ -16,6 +16,9 @@
  */
 package com.nvidia.nvcf.service.function;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.delete;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.nvidia.nvcf.util.TestConstants.TEST_DEPLOYMENT_ID;
 import static com.nvidia.nvcf.util.TestConstants.TEST_FUNCTION_ID;
 import static com.nvidia.nvcf.util.TestConstants.TEST_FUNCTION_ID_2;
@@ -25,7 +28,11 @@ import static com.nvidia.nvcf.util.TestConstants.TEST_NCA_ID;
 import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_1;
 import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_2;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.http.HttpStatus.BAD_REQUEST;
+import static org.springframework.http.HttpStatus.NOT_FOUND;
 
+import com.nvidia.boot.exceptions.UpstreamException;
 import com.nvidia.boot.mock.ngc.MockCasServer;
 import com.nvidia.boot.mock.ngc.MockNgcContainerRegistryServer;
 import com.nvidia.nvcf.IntegrationTestConfiguration;
@@ -164,5 +171,58 @@ class GracefulDeploymentCleanupServiceTest {
         // Verify active deployment still exists
         deploymentEntity2 = deploymentRepository.getByKeyFunctionVersionId(TEST_VERSION_ID_2);
         assertThat(deploymentEntity2).isPresent();
+    }
+
+    @Test
+    void shouldCleanupInactiveDeploymentWhenIcmsDeploymentIsMissing() {
+        var function = testService.createTestFunctionEntity(TEST_FUNCTION_ID, TEST_VERSION_ID_1,
+                                                            TEST_NCA_ID, TEST_FUNCTION_NAME,
+                                                            FunctionStatus.INACTIVE);
+        testService.createDeploymentEntity(TEST_FUNCTION_ID, TEST_VERSION_ID_1,
+                                           TEST_DEPLOYMENT_ID, TEST_NCA_ID);
+        var deployment = deploymentRepository.getByKeyFunctionVersionId(TEST_VERSION_ID_1)
+                .orElseThrow();
+        var icmsServer = MockIcmsServer.getMockIcmsServer();
+        var missingDeploymentStub = icmsServer.stubFor(
+                delete(urlPathEqualTo("/v1/si/accounts/" + TEST_NCA_ID +
+                                      "/workloads/" + TEST_DEPLOYMENT_ID))
+                        .atPriority(1)
+                        .willReturn(aResponse().withStatus(NOT_FOUND.value())));
+
+        try {
+            gracefulDeploymentCleanupService.cleanup(
+                    function, new FunctionDeploymentContext(deployment, List.of()));
+        } finally {
+            icmsServer.removeStub(missingDeploymentStub);
+        }
+
+        assertThat(deploymentRepository.getByKeyFunctionVersionId(TEST_VERSION_ID_1)).isEmpty();
+    }
+
+    @Test
+    void shouldRetainInactiveDeploymentWhenIcmsDeletionFails() {
+        var function = testService.createTestFunctionEntity(TEST_FUNCTION_ID, TEST_VERSION_ID_1,
+                                                            TEST_NCA_ID, TEST_FUNCTION_NAME,
+                                                            FunctionStatus.INACTIVE);
+        testService.createDeploymentEntity(TEST_FUNCTION_ID, TEST_VERSION_ID_1,
+                                           TEST_DEPLOYMENT_ID, TEST_NCA_ID);
+        var deployment = deploymentRepository.getByKeyFunctionVersionId(TEST_VERSION_ID_1)
+                .orElseThrow();
+        var icmsServer = MockIcmsServer.getMockIcmsServer();
+        var deletionFailureStub = icmsServer.stubFor(
+                delete(urlPathEqualTo("/v1/si/accounts/" + TEST_NCA_ID +
+                                      "/workloads/" + TEST_DEPLOYMENT_ID))
+                        .atPriority(1)
+                        .willReturn(aResponse().withStatus(BAD_REQUEST.value())));
+
+        try {
+            assertThatThrownBy(() -> gracefulDeploymentCleanupService.cleanup(
+                    function, new FunctionDeploymentContext(deployment, List.of())))
+                    .isInstanceOf(UpstreamException.class);
+        } finally {
+            icmsServer.removeStub(deletionFailureStub);
+        }
+
+        assertThat(deploymentRepository.getByKeyFunctionVersionId(TEST_VERSION_ID_1)).isPresent();
     }
 }

@@ -9,7 +9,7 @@ go_library(
         "kebab.go",
         "snake.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/stoewer/go-strcase",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/stoewer/go-strcase",
     importpath = "github.com/stoewer/go-strcase",
     visibility = ["//visibility:public"],
 )

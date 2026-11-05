@@ -47,6 +47,10 @@ for bridge rollout, version pinning, rollback, and later cleanup. The bridge
 keeps old binaries by default. A later qualified release can build with
 `--build-arg JWT_INCLUDE_LEGACY=false` after the metadata gate passes. Keep
 the target source and build inputs unchanged so its digest remains identical.
+The bridge still includes the old Go 1.27.0 plugin for existing catalogs.
+Do not treat that bridge image as complete removal of vulnerable binaries.
+After all mounts use the target version, verify a target-only image with
+`EXPECT_TARGET_ONLY=true RUNTIME_IMAGE=<image> sh scripts/test-runtime-packages.sh`.
 
 The image build compiles it in a Dockerfile build stage, so `docker build .`
 here produces the same image as the release pipeline:
@@ -102,7 +106,7 @@ archive does not contain those assets.
 ## Prerequisites
 
 - Docker or another OCI-compatible builder (with `buildx` for multi-arch)
-- Go 1.27.0 or newer when building the server or plugin outside the container
+- Go 1.27.3 or newer when building the server or plugin outside the container
 - `curl`, `tar` with xz support, and `sha256sum` or `shasum` for a local server build
 
 ## Building the container
@@ -131,16 +135,18 @@ docker buildx build \
 
 ## Runtime package verification
 
-The final Alpine stage requires `brotli-libs>=1.2.1-r0`. This package
-requirement also invalidates the earlier Docker package layer. The engine
-and plugin source pins are unchanged; a source rebuild can still change
-embedded metadata and the plugin hash stored in an existing catalog.
+The final Alpine stage requires `brotli-libs>=1.2.1-r0`,
+`ca-certificates>=20261020-r0`, and
+`ca-certificates-bundle>=20261020-r0`. These package requirements also
+invalidate the earlier Docker package layer. The engine and plugin source pins
+are unchanged; a source rebuild can still change embedded metadata and the
+plugin hash stored in an existing catalog.
 
 Run `sh scripts/test-runtime-packages.sh` for the source check. Set
 `RUNTIME_IMAGE` to test a built image, and optionally `BASELINE_IMAGE` to
-require identical server and plugin executable bytes. Repeat for both
-architectures. Persistent-state rollout and rollback qualification remain
-required before consuming a published image.
+require identical legacy JWT plugin bytes. The rebuilt server has a different
+hash. Repeat for both architectures. Persistent-state rollout and rollback
+qualification remain required before consuming a published image.
 
 ## Image contents
 

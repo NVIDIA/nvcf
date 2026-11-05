@@ -6,7 +6,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 go_library(
     name = "registry_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/test/registry",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/test/registry",
     visibility = ["//visibility:private"],
     deps = ["//src/control-plane-services/helm-reval/test/registry/registry"],
 )

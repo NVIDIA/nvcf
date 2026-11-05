@@ -21,7 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/version"
 	"github.com/spf13/cobra"
 )
 

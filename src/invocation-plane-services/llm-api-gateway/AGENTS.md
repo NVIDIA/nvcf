@@ -5,7 +5,7 @@ worker.
 
 ## Layout
 
-- Go module: `github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway`
+- Go module: `github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway`
 - Main gateway: `cmd/llm-api-gateway/main.go`
 - Rate-limit sync worker: `cmd/llm-api-gateway-rate-limit-sync-worker/main.go`
 - Runtime config and handlers live under `internal/`

@@ -29,7 +29,7 @@ go_library(
         "types_legacy.go",
         "zz_generated.deepcopy.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function",
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/lib/pkg/icms-translate/translate/cache",
