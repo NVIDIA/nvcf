@@ -23,7 +23,7 @@ require (
 	github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/common v0.0.0-00010101000000-000000000000
 	github.com/felixge/httpsnoop v1.0.4
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/gocql/gocql v1.7.0
+	github.com/gocql/gocql/v2 v2.1.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/handlers v1.5.2
