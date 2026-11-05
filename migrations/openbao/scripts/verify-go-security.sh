@@ -10,8 +10,9 @@ metadata=$(mktemp)
 trap 'rm -f "$metadata"' EXIT INT TERM
 "$go_bin" version -m "$binary" > "$metadata"
 
-# GO-2026-6611 has independent standard-library and x/net fixes. Check actual
-# binary metadata, since a builder pin alone does not identify embedded code.
+# GO-2026-6611 has independent standard-library and x/net fixes.
+# GO-2026-6809 also requires Go 1.26.10 or 1.27.3 for crypto/x509.
+# Check binary metadata since a builder pin does not identify embedded code.
 awk '
   NR == 1 {
     version = $2
@@ -19,8 +20,8 @@ awk '
     sub(/^go/, "", version)
     split(version, go, ".")
     if (go[1] < 1 || (go[1] == 1 && go[2] < 26)) exit 1
-    if (go[1] == 1 && go[2] == 26 && go[3] < 9) exit 1
-    if (go[1] == 1 && go[2] == 27 && go[3] < 2) exit 1
+    if (go[1] == 1 && go[2] == 26 && go[3] < 10) exit 1
+    if (go[1] == 1 && go[2] == 27 && go[3] < 3) exit 1
     toolchain_ok = 1
   }
   $1 == "dep" && $2 == "golang.org/x/net" {
@@ -36,7 +37,7 @@ awk '
   { xnet = 0 }
   END { if (!toolchain_ok) exit 1 }
 ' "$metadata" || {
-  echo "$binary does not meet the Go HTTP/2 security baseline" >&2
+  echo "$binary does not meet the Go HTTP/2 and x509 security baseline" >&2
   exit 1
 }
-echo "verified Go security metadata: $binary"
+echo "verified Go security metadata: $binary ($(awk 'NR == 1 { print $2 }' "$metadata"))"
