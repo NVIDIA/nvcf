@@ -26,12 +26,13 @@ idle_container="worker-callback-proxy-idle-${suffix}"
 upstream="worker-callback-proxy-upstream-${suffix}"
 tls_container="worker-callback-proxy-tls-${suffix}"
 plain_container="worker-callback-proxy-plain-${suffix}"
+wrong_ca_container="worker-callback-proxy-wrongca-${suffix}"
 tls_upstream="worker-callback-proxy-tls-upstream-${suffix}"
 network="worker-callback-proxy-${suffix}"
 ca_volume="worker-callback-proxy-ca-${suffix}"
 
 cleanup() {
-  docker rm -f "${container}" "${idle_container}" "${upstream}" "${tls_container}" "${tls_upstream}" "${plain_container}" >/dev/null 2>&1 || true
+  docker rm -f "${container}" "${idle_container}" "${upstream}" "${tls_container}" "${tls_upstream}" "${plain_container}" "${wrong_ca_container}" >/dev/null 2>&1 || true
   docker network rm "${network}" >/dev/null 2>&1 || true
   docker volume rm -f "${ca_volume}" >/dev/null 2>&1 || true
   rm -rf "${work_dir}"
@@ -71,7 +72,12 @@ yq -r .data.tls_crt "${work_dir}/certs.yaml" >"${work_dir}/frontend/tls.crt"
 yq -r .data.tls_key "${work_dir}/certs.yaml" >"${work_dir}/frontend/tls.key"
 yq -r .data.invocation_crt "${work_dir}/certs.yaml" >"${work_dir}/invocation/tls.crt"
 yq -r .data.invocation_key "${work_dir}/certs.yaml" >"${work_dir}/invocation/tls.key"
-chmod -R a+rX "${work_dir}/frontend" "${work_dir}/ca" "${work_dir}/invocation"
+# The CA bundles Envoy trusts for the invocation-service pod: the CA that signed
+# the pod certificate, and a different CA for the rejection check.
+mkdir -p "${work_dir}/invocation-ca" "${work_dir}/invocation-ca-wrong"
+cp "${work_dir}/ca/ca_one.crt" "${work_dir}/invocation-ca/ca.crt"
+cp "${work_dir}/ca/ca_two.crt" "${work_dir}/invocation-ca-wrong/ca.crt"
+chmod -R a+rX "${work_dir}/frontend" "${work_dir}/ca" "${work_dir}/invocation" "${work_dir}/invocation-ca" "${work_dir}/invocation-ca-wrong"
 
 # extract_config NAME [helm args...] writes the ConfigMap files to NAME/.
 extract_config() {
@@ -105,6 +111,7 @@ run_envoy() {
     -v "${dir}:/etc/envoy/config:ro" \
     -v "${work_dir}/frontend:/etc/envoy/tls/frontend:ro" \
     -v "${ca_volume}:/etc/envoy/tls/grpc-proxy-ca:ro" \
+    -v "${INVOCATION_CA_DIR:-${work_dir}/invocation-ca}:/etc/envoy/tls/invocation-ca:ro" \
     "${IMAGE}" -c /etc/envoy/config/envoy.yaml -l warning "$@"
 }
 
@@ -127,9 +134,15 @@ admin_get() {
     cat <&3" | awk 'body && !/^[0-9a-fA-F]+\r?$/ { print } /^\r?$/ { body = 1 }'
 }
 
-# Serial of the CA the grpc_proxy_pods upstream trusts.
-ca_serial() {
-  admin_get /certs | jq -r '[.certificates[].ca_cert[]?.serial_number] | first // ""' | sed 's/^0*//'
+# Serials of every CA Envoy has loaded, one per line. The grpc-proxy and
+# invocation CAs are both loaded, and /certs does not say which is which, so the
+# rotation check below looks for the rotated serial among them.
+ca_serials() {
+  admin_get /certs | jq -r '[.certificates[].ca_cert[]?.serial_number] | unique | .[]' | sed 's/^0*//'
+}
+
+has_ca() {
+  ca_serials | grep -qx "$1"
 }
 
 cert_serial() {
@@ -143,20 +156,21 @@ for _ in $(seq 1 30); do
 done
 expect_one="$(cert_serial "${work_dir}/ca/ca_one.crt")"
 expect_two="$(cert_serial "${work_dir}/ca/ca_two.crt")"
-[[ "$(ca_serial)" == "${expect_one}" ]] || fail "Envoy did not load the first CA"
+has_ca "${expect_one}" || fail "Envoy did not load the first CA"
 
 set_ca ca_two.crt
 for _ in $(seq 1 30); do
-  [[ "$(ca_serial)" == "${expect_two}" ]] && break
+  has_ca "${expect_two}" && break
   sleep 1
 done
-[[ "$(ca_serial)" == "${expect_two}" ]] || fail "Envoy did not reload the rotated CA"
+has_ca "${expect_two}" || fail "Envoy did not reload the rotated CA"
 [[ "$(docker inspect -f '{{.RestartCount}}' "${container}")" == "0" ]] || fail "Envoy restarted"
 echo "ok: rotated grpc-proxy CA applied without a restart"
 
 # Routing and idle checks speak raw HTTP/1 to the listener, so they run on a
 # plaintext listener with a plaintext pod port; TLS is checked last.
-extract_config plaintext --set workerCallbackProxy.invocation.tls.enabled=false --set workerCallbackProxy.invocation.port=8080
+extract_config plaintext --set workerCallbackProxy.invocation.tls.enabled=false \
+  --set workerCallbackProxy.invocation.upstream.tls.enabled=false --set workerCallbackProxy.invocation.port=8080
 run_envoy "${work_dir}/plaintext" "-d --name ${plain_container}" >/dev/null
 for _ in $(seq 1 30); do
   docker exec "${plain_container}" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081' 2>/dev/null && break
@@ -189,7 +203,8 @@ pod_name="10-0-0-2.invocation.nvcf.svc.cluster.local"
 # A short stream idle timeout keeps the check fast; the default is checked in
 # verify-render.sh.
 extract_config stream-idle --set-string workerCallbackProxy.timeouts.invocationStreamIdle=3s \
-  --set workerCallbackProxy.invocation.tls.enabled=false --set workerCallbackProxy.invocation.port=8080
+  --set workerCallbackProxy.invocation.tls.enabled=false --set workerCallbackProxy.invocation.upstream.tls.enabled=false \
+  --set workerCallbackProxy.invocation.port=8080
 run_envoy "${work_dir}/stream-idle" \
   "-d --name ${idle_container} --network ${network} --add-host ${pod_name}:${upstream_ip}" >/dev/null
 for _ in $(seq 1 30); do
@@ -281,3 +296,29 @@ port_out="$(worker_get "https://${proxy_host}:10084" "https://${tls_pod}:8080/pi
 [[ "$port_out" == *"CONNECT tunnel failed, response 404"* ]] ||
   fail "the invocation listener tunnelled to a port other than invocation.port: ${port_out}"
 echo "ok: the invocation listener refuses plaintext and other pod ports"
+
+# An invocation callback from a worker that cannot trust the stack CA: TLS to Envoy, which ends it
+# and opens its own TLS to the pod. The worker sends an absolute-form http://
+# request (no CONNECT) and never sees the pod certificate, so it needs no CA
+# for the pod. Envoy verifies the pod with the invocation CA.
+fwd_out="$(worker_get "https://${proxy_host}:10084" "http://${tls_pod}:8443/ping" || true)"
+[[ "${fwd_out}" == "pong" ]] ||
+  fail "a forward-proxy callback did not reach the TLS pod through Envoy's own TLS session: ${fwd_out}"
+echo "ok: forward-proxy callbacks run TLS to Envoy and a separate verified TLS to the pod"
+
+# The worker's trust store never contains the pod CA: with only the frontend CA
+# available the request still works, because the pod certificate is Envoy's
+# concern. A pod certificate from another CA must be refused.
+INVOCATION_CA_DIR="${work_dir}/invocation-ca-wrong" run_envoy "${work_dir}/default" \
+  "-d --name ${wrong_ca_container} --network ${network} --add-host ${tls_pod}:${tls_upstream_ip}" >/dev/null
+for _ in $(seq 1 30); do
+  docker exec "${wrong_ca_container}" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081' 2>/dev/null && break
+  sleep 1
+done
+wrong_ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${network}\").IPAddress}}" "${wrong_ca_container}")"
+wrong_out="$(docker run --rm --network "${network}" --add-host "${proxy_host}:${wrong_ip}" \
+  -v "${work_dir}/ca:/ca:ro" "${CURL_IMAGE}" -sS --max-time 10 \
+  --proxy "https://${proxy_host}:10084" --proxy-cacert /ca/ca_one.crt "http://${tls_pod}:8443/ping" 2>&1 || true)"
+[[ "${wrong_out}" != *pong* ]] ||
+  fail "Envoy accepted a pod certificate that the invocation CA did not sign"
+echo "ok: Envoy refuses a pod certificate from another CA"

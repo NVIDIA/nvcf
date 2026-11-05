@@ -840,8 +840,13 @@ grpcproxy:
 #         name regex (.+)\.<workerDomain with dots escaped>\.$ worker-callback-proxy.nvcf.svc.cluster.local.
 #         answer auto
 #       }
-#   - Give workers the issuing CA through
+#   - Give workers the CA that issued Envoy's frontend certificate through
 #     global.nvcaOperator.agent.workerCallbackCaPem in the compute-plane stack.
+#     Workers need no stack CA when Envoy's frontend certificate comes from a
+#     public CA (tls.frontend below).
+# Workers' TLS always ends at Envoy. Envoy then opens its own TLS session to
+# the invocation-service pod and checks it against the stack CA, unless
+# invocation.upstreamTls.enabled is false.
 # See docs/self-managed/worker-callback-proxy.md.
 workerCallbackProxy:
   enabled: false
@@ -852,6 +857,23 @@ workerCallbackProxy:
   workerDomain: ""
   # Set only for source-tree validation. Empty uses the released OCI chart.
   chartPath: ""
+  # Envoy's frontend certificate, the one workers verify for *.<workerDomain>.
+  # It is independent of the grpc-proxy and invocation-service pod
+  # certificates, which the stack CA always issues. Default: issued by the
+  # stack's OpenBao issuer. Set one of these to use a public CA instead:
+  # tls:
+  #   frontend:
+  #     existingSecret: <kubernetes.io/tls Secret for *.<workerDomain>>
+  #     certificate:
+  #       issuerRef: { kind: ClusterIssuer, name: <issuer> }
+  # How Envoy reaches the invocation-service pod. The worker's own TLS session
+  # ends at Envoy either way.
+  invocation:
+    upstreamTls:
+      # true: Envoy opens a separate TLS session to the pod on 8443 and checks
+      # the pod certificate against the stack CA. false: Envoy sends plain HTTP
+      # to the pod on 8080, only for a trusted network between them.
+      enabled: true
   # replicaCount defaults to the chart value (2).
   # replicaCount: 2
   # Workers in another cluster reach Envoy through this Service, so expose it,

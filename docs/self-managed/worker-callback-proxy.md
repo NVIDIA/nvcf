@@ -11,13 +11,16 @@ forwards each one to the pod that holds the request.
 
 ## How callbacks reach a pod
 
-- **HTTP functions:** invocation-service hands the worker its own address,
-  `https://<dashed-pod-ip>.invocation.nvcf.svc.cluster.local:8443`, and the
-  proxy address `https://invocation.<workerDomain>:10084`. The worker opens TLS
-  to the proxy on TCP 10084 and verifies its `*.<workerDomain>` certificate,
-  then runs a second TLS session through the tunnel to the pod's 8443
-  listener and verifies the pod certificate. The proxy forwards only addresses
-  of that form and never sees the callback in plaintext.
+- **HTTP functions:** invocation-service hands the worker the pod target
+  `http://<dashed-pod-ip>.invocation.nvcf.svc.cluster.local:8443` and the proxy
+  address `https://invocation.<workerDomain>:10084`. The worker opens TLS to
+  the proxy on TCP 10084 and verifies its `*.<workerDomain>` certificate. That
+  session ends at the proxy. Because the target scheme is `http`, the worker
+  sends a forward-proxy request through the session. The proxy then opens its
+  own TLS session to the pod's 8443 listener and verifies the pod certificate
+  against the stack CA and the pod name. The worker never sees the pod
+  certificate. The proxy forwards only addresses of that form. It can read the
+  callback, as it can for gRPC.
 - **gRPC functions:** grpc-proxy serves HTTP/3 callbacks and hands the worker
   `https://<dashed-pod-ip>.<workerDomain>`. DNS resolves that name to the
   proxy. The worker verifies the proxy's `*.<workerDomain>` certificate, and
@@ -33,7 +36,10 @@ forwards each one to the pod that holds the request.
   proxy, grpc-proxy and invocation-service certificates. The LLM add-on is
   not required.
 - An invocation-service image with worker TLS support. The stack turns on its
-  8443 worker TLS listener (`invocation.workerTls`) when the proxy is enabled.
+  8443 worker TLS listener (`invocation.workerTls`) when the proxy is enabled,
+  unless `workerCallbackProxy.invocation.upstreamTls.enabled` is false.
+- Function workers that send `http://` callback targets as forward-proxy
+  requests (worker-utils 1.3.2 or later).
 - No split-plane worker URLs: leave
   `global.workerEndpoints.invocationServiceURL`,
   `global.workerEndpoints.grpcProxyWorkerConnectURL`,
@@ -64,8 +70,8 @@ forwards each one to the pod that holds the request.
 
    Use a private load balancer where you can, and allow only the compute
    cluster's egress addresses through your load balancer or network controls.
-   Both tunnels are TLS, but any client that reaches the Service can open
-   one.
+   Both callback paths are TLS, but any client that reaches the Service can
+   open one.
 
 2. Make `*.<workerDomain>` resolve to the proxy Service from the compute
    cluster, for example with a wildcard DNS record for the load balancer
@@ -78,10 +84,67 @@ forwards each one to the pod that holds the request.
 
 3. Apply the stack: `HELMFILE_ENV=<environment-name> helmfile sync`.
 
+## Certificates and CAs
+
+Every callback uses two TLS sessions that never share a certificate:
+
+| Session | Client | Server certificate | Client verifies with | Set by |
+| --- | --- | --- | --- | --- |
+| Worker to proxy (HTTP on TCP 10084, gRPC on UDP 443) | Worker | Proxy frontend certificate for `*.<workerDomain>` | The worker's CA bundle: the stack CA for the default issuer, its system roots for a public certificate | `workerCallbackProxy.tls.frontend` |
+| Proxy to invocation-service pod (TCP 8443) | Proxy | Pod certificate for `*.invocation.nvcf.svc.cluster.local`, issued by the stack CA | The stack CA bundle in the pod certificate Secret, and the pod name | `workerCallbackProxy.invocation.upstreamTls.enabled` |
+| Proxy to grpc-proxy pod (UDP 10084) | Proxy | Pod certificate for `*.grpc-headless.nvcf.svc.cluster.local`, issued by the stack CA | The stack CA bundle in the pod certificate Secret, and the pod name | Always on |
+
+The pod certificates always come from the stack CA. Only the frontend
+certificate is a choice, and workers never see the pod certificates, so workers
+never need their CA.
+
+To send plain HTTP from the proxy to the invocation-service pod, set
+`workerCallbackProxy.invocation.upstreamTls.enabled: false`. The stack then
+uses the pod's plaintext port 8080 and does not turn on its worker TLS
+listener. Use this only where the network between the proxy and the pod is
+trusted. The worker's session to the proxy stays TLS, and gRPC is not affected.
+
+## Use a public certificate on the proxy
+
+By default the proxy frontend certificate comes from the stack's OpenBao
+issuer, so workers need the stack CA. To let workers validate it with their
+system roots, for example for workers that another scheduler starts and that
+cannot receive a per-stack CA, give the frontend its own certificate. Use an
+issuer for a public CA, such as a Let's Encrypt `ClusterIssuer` with DNS-01
+validation for `*.<workerDomain>`:
+
+```yaml
+workerCallbackProxy:
+  enabled: true
+  workerDomain: grpc-worker.example.com
+  tls:
+    frontend:
+      certificate:
+        issuerRef:
+          kind: ClusterIssuer
+          name: letsencrypt
+```
+
+Or point at an existing `kubernetes.io/tls` Secret for `*.<workerDomain>`:
+
+```yaml
+workerCallbackProxy:
+  tls:
+    frontend:
+      existingSecret: worker-public-tls
+```
+
+The frontend certificate covers both the HTTP and the gRPC callbacks. The proxy
+reloads it when the Secret changes, so a renewal needs no restart. The pod
+certificates stay on the stack CA, and the proxy verifies them. With a public
+frontend certificate you do not need `workerCallbackCaPem`, so skip the next
+section.
+
 ## Give workers the CA
 
-Workers trust only the system roots, so they reject the proxy's certificate
-until they receive the issuing CA.
+Skip this section when the frontend certificate comes from a public CA.
+Otherwise workers trust only the system roots, so they reject the proxy's
+certificate until they receive the issuing CA.
 
 1. Read the CA from the control plane after the proxy certificate is issued:
 

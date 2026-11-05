@@ -47,7 +47,13 @@ public snapshot rules.
 - Keep the admin API on `127.0.0.1`. It can stop Envoy and dump its config;
   only `/ready` and `/stats/prometheus` are exposed, on their own listeners.
 - The invocation route must keep the authority regex. Without it the listener
-  is an open forward proxy. Keep `invocation.tls.enabled` and the 8443
-  `invocation.port` as defaults; plaintext is for test setups only.
+  is an open forward proxy. Keep `invocation.tls.enabled`,
+  `invocation.upstream.tls.enabled` and the 8443 `invocation.port` as defaults.
+  Plaintext, on either side, is for trusted networks and test setups only.
+- The `invocation_pods_tls` cluster takes the pod name from the request
+  authority. It is safe only because the route's authority regex limits it to
+  invocation-service pod names and `auto_san_validation` checks the pod
+  certificate against that name. Do not set `allow_insecure_cluster_options`
+  on it or remove the `invocation_pod_ca` SDS secret.
 - Never commit certificates or private keys. `bin/` is ignored for local
   renders.

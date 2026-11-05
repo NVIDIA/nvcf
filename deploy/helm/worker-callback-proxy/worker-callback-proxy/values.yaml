@@ -57,16 +57,32 @@ workerCallbackProxy:
     serviceName: invocation
     # Defaults to the release namespace.
     namespace: ""
-    # The only invocation-service port workers may tunnel to. 8443 is its
-    # worker TLS listener (invocation.workerTls in its chart), so the tunnel
-    # carries TLS from the worker to the pod. 8080 is plaintext.
+    # The only invocation-service port workers may reach. 8443 is its worker
+    # TLS listener (invocation.workerTls in its chart). 8080 is plaintext and
+    # goes with upstream.tls.enabled: false.
     port: 8443
     tls:
       # Serve TLS on ports.invocationTcp with the *.<workerDomain> frontend
-      # certificate, so the CONNECT request is encrypted too. Workers then use
-      # https://<name>.<workerDomain>:<port> as the proxy address and must
-      # trust the issuing CA.
+      # certificate, so the worker's request is encrypted. The worker's TLS
+      # ends here. Workers then use https://<name>.<workerDomain>:<port> as the
+      # proxy address and validate the frontend certificate.
       enabled: true
+    upstream:
+      tls:
+        # Envoy opens its own TLS session to the pod for forward-proxy
+        # requests (http:// callback targets) and verifies the pod certificate
+        # against caSecret and the pod host name. The worker needs no stack CA.
+        # Set false to send plain HTTP to the pod, only where the network
+        # between Envoy and the pod is trusted. Then set port to 8080.
+        # CONNECT tunnels are not affected: they stay a raw TCP tunnel.
+        enabled: true
+        # CA bundle that signed the invocation-service pod certificate
+        # (invocation.workerTls.tls.certificate in its chart). The default is
+        # its Secret when the release is named invocation-service. Envoy
+        # reloads the file when the Secret changes.
+        caSecret:
+          name: invocation-service-worker-tls
+          key: ca.crt
 
   tls:
     frontend:

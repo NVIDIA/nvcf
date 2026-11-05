@@ -78,6 +78,28 @@
               "properties": {
                 "enabled": { "type": "boolean" }
               }
+            },
+            "upstream": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "tls": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "caSecret": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["name", "key"],
+                      "properties": {
+                        "name": { "type": "string", "minLength": 1 },
+                        "key": { "type": "string", "minLength": 1 }
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         },

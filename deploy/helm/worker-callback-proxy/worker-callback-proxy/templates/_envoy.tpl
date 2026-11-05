@@ -263,7 +263,9 @@ static_resources:
                                 connect_config: {}
                             timeout: 0s
                         # http:// callback targets arrive as absolute-form
-                        # forward-proxy requests, not CONNECT.
+                        # forward-proxy requests, not CONNECT. The worker's TLS
+                        # ends here; with upstream TLS Envoy opens its own
+                        # session to the pod and verifies it.
                         - match:
                             prefix: "/"
                             headers:
@@ -272,7 +274,7 @@ static_resources:
                                   safe_regex:
                                     regex: {{ include "workerCallbackProxy.invocationAuthorityRegex" . | squote }}
                           route:
-                            cluster: invocation_pods
+                            cluster: {{ ternary "invocation_pods_tls" "invocation_pods" (eq (include "workerCallbackProxy.invocationUpstreamTls" .) "true") }}
                             host_rewrite_header: ":authority"
                             timeout: 0s
                 http_filters:
@@ -372,5 +374,42 @@ static_resources:
           explicit_http_config:
             http_protocol_options: {}
           common_http_protocol_options: { idle_timeout: {{ $t.invocationIdle }} }
+  {{- end }}
+  {{- if include "workerCallbackProxy.invocationUpstreamTls" . }}
+    # Forward-proxy requests to the pod over TLS. auto_sni and
+    # auto_san_validation take the pod host name from the request authority,
+    # which the route's regex limits to invocation-service pod names, and check
+    # the pod certificate against it and against the invocation CA.
+    - name: invocation_pods_tls
+      connect_timeout: {{ $t.connect }}
+      lb_policy: CLUSTER_PROVIDED
+      per_connection_buffer_limit_bytes: {{ int $limits.perConnectionBufferLimitBytes }}
+      {{- include "workerCallbackProxy.circuitBreakers" $limits | nindent 6 }}
+      cluster_type:
+        name: envoy.clusters.dynamic_forward_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+          {{- include "workerCallbackProxy.dnsCache" . | nindent 10 }}
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          upstream_http_protocol_options: { auto_sni: true, auto_san_validation: true }
+          explicit_http_config:
+            http_protocol_options: {}
+          common_http_protocol_options: { idle_timeout: {{ $t.invocationIdle }} }
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          common_tls_context:
+            tls_params: { tls_minimum_protocol_version: TLSv1_2 }
+            alpn_protocols: ["http/1.1"]
+            # The CA comes from a filesystem SDS resource that watches the
+            # mounted Secret, so a rotated CA applies without a restart.
+            validation_context_sds_secret_config:
+              name: invocation_pod_ca
+              sds_config:
+                path_config_source:
+                  path: /etc/envoy/config/sds_invocation_ca.yaml
   {{- end }}
 {{- end -}}

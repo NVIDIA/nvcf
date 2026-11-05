@@ -43,3 +43,12 @@ data:
           trusted_ca: { filename: /etc/envoy/tls/grpc-proxy-ca/ca.crt }
           watched_directory: { path: /etc/envoy/tls/grpc-proxy-ca }
   {{- end }}
+  {{- if include "workerCallbackProxy.invocationUpstreamTls" . }}
+  sds_invocation_ca.yaml: |
+    resources:
+      - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+        name: invocation_pod_ca
+        validation_context:
+          trusted_ca: { filename: /etc/envoy/tls/invocation-ca/ca.crt }
+          watched_directory: { path: /etc/envoy/tls/invocation-ca }
+  {{- end }}

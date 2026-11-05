@@ -848,6 +848,14 @@ natsAuthCalloutService:
 {{- if not (kindIs "bool" $workerCallbackProxyEnabled) }}
 {{- fail "workerCallbackProxy.enabled must be a YAML boolean, true or false" }}
 {{- end }}
+{{- /* Envoy ends the worker's TLS. This switch picks how it reaches the
+       invocation-service pod: its own TLS session on the pod's worker TLS port
+       (8443), or plain HTTP on the plaintext port (8080). */}}
+{{- $workerCallbackProxyInvocationUpstreamTls := dig "workerCallbackProxy" "invocation" "upstreamTls" "enabled" true .Values }}
+{{- if not (kindIs "bool" $workerCallbackProxyInvocationUpstreamTls) }}
+{{- fail "workerCallbackProxy.invocation.upstreamTls.enabled must be a YAML boolean, true or false" }}
+{{- end }}
+{{- $workerCallbackProxyInvocationPort := ternary 8443 8080 $workerCallbackProxyInvocationUpstreamTls }}
 {{- $workerCallbackProxyDomain := "" }}
 {{- if $workerCallbackProxyEnabled }}
 {{- $workerCallbackProxyDomain = dig "workerCallbackProxy" "workerDomain" "" .Values | toString | trim | lower }}
@@ -1187,6 +1195,10 @@ invocation:
   {{- end }}
   {{- if $workerCallbackProxyEnabled }}
   {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__PROXY_ADDRESS" (dig "invocationProxyURL" "" $workerEndpoints | default (printf "https://invocation.%s:10084" $workerCallbackProxyDomain)) }}
+  {{- /* The http scheme makes the worker send a forward-proxy request through
+         its TLS session to Envoy, not a CONNECT tunnel, so Envoy can open its
+         own session to the pod. The worker never sees the pod certificate. */}}
+  {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS" (printf "http://invocation.nvcf.svc.cluster.local:%d" (int $workerCallbackProxyInvocationPort)) }}
   {{- end }}
   {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   {{- $invocationSelfAddress := index $secretsInvocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" | default (index $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS") }}
@@ -1216,9 +1228,9 @@ invocation:
   autoscaling:
     enabled: false
   {{- end }}
-  {{- if $workerCallbackProxyEnabled }}
-  {{- /* Envoy tunnels workers to this TLS listener, and the worker verifies
-         the pod as <dashed-pod-ip>.invocation.nvcf.svc.cluster.local. */}}
+  {{- if and $workerCallbackProxyEnabled $workerCallbackProxyInvocationUpstreamTls }}
+  {{- /* Envoy opens its own TLS session to this listener and verifies the pod
+         as <dashed-pod-ip>.invocation.nvcf.svc.cluster.local. */}}
   workerTls:
     enabled: true
     advertise: true
@@ -1503,13 +1515,26 @@ workerCallbackProxy:
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
   {{- end }}
+  {{- /* Envoy's frontend certificate is the one workers see. It has its own
+         issuer or Secret, independent of the pod certificates, so a public CA
+         such as Let's Encrypt can serve it. The default is the stack's OpenBao
+         issuer, which workers trust through workerCallbackCaPem. */}}
+  {{- $frontendIssuer := dig "workerCallbackProxy" "tls" "frontend" "certificate" "issuerRef" dict .Values }}
   tls:
     frontend:
+      {{- with dig "workerCallbackProxy" "tls" "frontend" "existingSecret" "" .Values }}
+      existingSecret: {{ . | quote }}
+      {{- end }}
       certificate:
         issuerRef:
-          kind: {{ dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values | quote }}
-          name: {{ dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values | quote }}
-          group: cert-manager.io
+          kind: {{ dig "kind" (dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values) $frontendIssuer | quote }}
+          name: {{ dig "name" (dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values) $frontendIssuer | quote }}
+          group: {{ dig "group" "cert-manager.io" $frontendIssuer | quote }}
+  invocation:
+    port: {{ $workerCallbackProxyInvocationPort }}
+    upstream:
+      tls:
+        enabled: {{ $workerCallbackProxyInvocationUpstreamTls }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}

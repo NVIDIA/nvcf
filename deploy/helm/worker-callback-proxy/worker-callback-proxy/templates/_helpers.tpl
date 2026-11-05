@@ -93,6 +93,15 @@ app.kubernetes.io/instance: {{ .Release.Name | quote }}
 {{- if or $c.grpcProxy.enabled (and $c.invocation.enabled $c.invocation.tls.enabled) -}}true{{- end -}}
 {{- end -}}
 
+{{/*
+"true" when Envoy opens its own TLS session to the invocation-service pod for
+forward-proxy callbacks.
+*/}}
+{{- define "workerCallbackProxy.invocationUpstreamTls" -}}
+{{- $c := .Values.workerCallbackProxy -}}
+{{- if and $c.invocation.enabled $c.invocation.upstream.tls.enabled -}}true{{- end -}}
+{{- end -}}
+
 {{- define "workerCallbackProxy.invocationAuthorityRegex" -}}
 {{- $c := .Values.workerCallbackProxy -}}
 {{- $ns := default .Release.Namespace $c.invocation.namespace -}}
@@ -130,6 +139,14 @@ Fails the render on value combinations the schema cannot express.
 {{- end -}}
 {{- if and $c.metrics.serviceMonitor.enabled (not $c.metrics.service.enabled) -}}
 {{- fail "workerCallbackProxy.metrics.serviceMonitor.enabled requires metrics.service.enabled" -}}
+{{- end -}}
+{{- if $c.invocation.enabled -}}
+{{- if and $c.invocation.upstream.tls.enabled (eq (int $c.invocation.port) 8080) -}}
+{{- fail "workerCallbackProxy.invocation.upstream.tls.enabled opens TLS to the pod, so invocation.port must be its worker TLS port (8443), not the plaintext port 8080" -}}
+{{- end -}}
+{{- if and (not $c.invocation.upstream.tls.enabled) (eq (int $c.invocation.port) 8443) -}}
+{{- fail "workerCallbackProxy.invocation.upstream.tls.enabled is false, so Envoy sends plain HTTP to the pod: set invocation.port to the plaintext port (8080)" -}}
+{{- end -}}
 {{- end -}}
 {{- $cert := $c.tls.frontend.certificate -}}
 {{- if and (include "workerCallbackProxy.frontendTls" .) $cert.create (not $c.tls.frontend.existingSecret) -}}

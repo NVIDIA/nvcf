@@ -156,6 +156,23 @@ invocation_tls() {
   envoy "$1" '.static_resources.listeners[] | select(.name == "invocation_worker_tcp") | .filter_chains[0].transport_socket.typed_config.common_tls_context.tls_certificate_sds_secret_configs[0].name // "none"'
 }
 expect_eq "invocation listener TLS" "$(invocation_tls "${m}")" "frontend_tls"
+# Session 2: Envoy opens its own TLS to the pod for forward-proxy requests and
+# verifies it with the invocation CA. CONNECT stays a raw tunnel.
+route_cluster() {
+  envoy "$1" "[.static_resources.listeners[] | select(.name == \"invocation_worker_tcp\") | .. | select(has(\"route\")) | select((.match | has(\"connect_matcher\")) == $2) | .route.cluster] | .[0]"
+}
+expect_eq "forward-proxy requests use the TLS cluster" "$(route_cluster "${m}" false)" "invocation_pods_tls"
+expect_eq "CONNECT tunnels stay raw TCP" "$(route_cluster "${m}" true)" "invocation_pods"
+invocation_upstream="$(envoy "${m}" '.static_resources.clusters[] | select(.name == "invocation_pods_tls")')"
+expect_eq "pod host name is the SNI" \
+  "$(yq -r '.typed_extension_protocol_options["envoy.extensions.upstreams.http.v3.HttpProtocolOptions"].upstream_http_protocol_options | [.auto_sni, .auto_san_validation] | join(",")' <<<"${invocation_upstream}")" "true,true"
+expect_eq "no insecure cluster options" "$(yq -r '.cluster_type.typed_config.allow_insecure_cluster_options // "unset"' <<<"${invocation_upstream}")" "unset"
+expect_eq "invocation CA comes from SDS" \
+  "$(yq -r '.transport_socket.typed_config.common_tls_context.validation_context_sds_secret_config.name' <<<"${invocation_upstream}")" "invocation_pod_ca"
+expect_eq "invocation CA Secret" "$(pod "${m}" '.volumes[] | select(.name == "invocation-ca") | .secret.secretName')" "invocation-service-worker-tls"
+expect_eq "invocation CA SDS watches its mount" \
+  "$(q "${m}" 'select(.kind == "ConfigMap") | .data["sds_invocation_ca.yaml"]' | yq -r '.resources[0].validation_context.watched_directory.path')" \
+  "$(pod "${m}" '.containers[0].volumeMounts[] | select(.name == "invocation-ca") | .mountPath')"
 expect_eq "drain time" "$(pod "${m}" '.containers[0].args | .[(to_entries[] | select(.value == "--drain-time-s") | .key) + 1]')" "30"
 expect_eq "access log format" "$(envoy "${m}" '[.. | select(has("json_format")) | .json_format.x_request_id] | unique | .[]')" \
   "%REQ(X-REQUEST-ID)%"
@@ -204,11 +221,23 @@ m="${tmp_dir}/invocation-only.yaml"
 render --set workerCallbackProxy.grpcProxy.enabled=false > "${m}"
 check_wiring "${m}"
 expect_eq "invocation-only keeps the frontend Certificate" "$(q "${m}" 'select(.kind == "Certificate") | .kind')" "Certificate"
-expect_eq "invocation-only mounts only the frontend Secret" "$(pod "${m}" '[.volumes[].name] | join(",")')" "config,frontend-tls"
+expect_eq "invocation-only mounts the frontend and invocation CA Secrets" "$(pod "${m}" '[.volumes[].name] | join(",")')" "config,frontend-tls,invocation-ca"
 expect_eq "invocation-only listener TLS" "$(invocation_tls "${m}")" "frontend_tls"
+# Envoy to the pod in plain HTTP: no session 2, no invocation CA, port 8080.
+m="${tmp_dir}/invocation-plain-upstream.yaml"
+render --set workerCallbackProxy.grpcProxy.enabled=false --set workerCallbackProxy.invocation.upstream.tls.enabled=false \
+  --set workerCallbackProxy.invocation.port=8080 > "${m}"
+check_wiring "${m}"
+expect_eq "plain upstream keeps the frontend listener TLS" "$(invocation_tls "${m}")" "frontend_tls"
+expect_eq "plain upstream mounts only the frontend Secret" "$(pod "${m}" '[.volumes[].name] | join(",")')" "config,frontend-tls"
+expect_eq "plain upstream forward-proxy cluster" "$(route_cluster "${m}" false)" "invocation_pods"
+expect_eq "plain upstream has no TLS cluster" "$(envoy "${m}" '[.static_resources.clusters[] | select(.name == "invocation_pods_tls")] | length')" "0"
+expect_eq "plain upstream has no invocation CA SDS" "$(q "${m}" 'select(.kind == "ConfigMap") | .data | has("sds_invocation_ca.yaml")')" "false"
+assert_render_fails "invocation.port must be its worker TLS port (8443)" --set workerCallbackProxy.invocation.port=8080
+assert_render_fails "set invocation.port to the plaintext port (8080)" --set workerCallbackProxy.invocation.upstream.tls.enabled=false
 m="${tmp_dir}/invocation-plaintext.yaml"
 render --set workerCallbackProxy.grpcProxy.enabled=false --set workerCallbackProxy.invocation.tls.enabled=false \
-  --set workerCallbackProxy.invocation.port=8080 > "${m}"
+  --set workerCallbackProxy.invocation.upstream.tls.enabled=false --set workerCallbackProxy.invocation.port=8080 > "${m}"
 check_wiring "${m}"
 expect_eq "no Certificate without a TLS listener" "$(q "${m}" 'select(.kind == "Certificate") | .kind')" ""
 expect_eq "no TLS volumes without a TLS listener" "$(pod "${m}" '[.volumes[].name] | join(",")')" "config"

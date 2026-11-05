@@ -127,6 +127,11 @@ spec:
               mountPath: /etc/envoy/tls/grpc-proxy-ca
               readOnly: true
             {{- end }}
+            {{- if include "workerCallbackProxy.invocationUpstreamTls" . }}
+            - name: invocation-ca
+              mountPath: /etc/envoy/tls/invocation-ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -147,6 +152,14 @@ spec:
             secretName: {{ $c.grpcProxy.caSecret.name | quote }}
             items:
               - key: {{ $c.grpcProxy.caSecret.key | quote }}
+                path: ca.crt
+        {{- end }}
+        {{- if include "workerCallbackProxy.invocationUpstreamTls" . }}
+        - name: invocation-ca
+          secret:
+            secretName: {{ $c.invocation.upstream.tls.caSecret.name | quote }}
+            items:
+              - key: {{ $c.invocation.upstream.tls.caSecret.key | quote }}
                 path: ca.crt
         {{- end }}
       {{- with $c.nodeSelector }}
