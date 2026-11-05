@@ -47,6 +47,8 @@ wait. Keep deployments, scaling, invocations, and tasks paused at their callers.
    set -euo pipefail
    CONTROL_KUBECONFIG="/absolute/path/to/control-plane-kubeconfig"
    CONTROL_CONTEXT="control-plane-context"
+   NVCF_CLI="/absolute/path/to/nvcf-cli"
+   NVCF_CLI_CONFIG="/absolute/path/to/account-config.yaml"
    NATS_CONTEXT="${NATS_CONTEXT:-default}"
    RECOVERY_RECORD="/absolute/path/to/new-recovery-record"
    umask 077
@@ -56,9 +58,10 @@ wait. Keep deployments, scaling, invocations, and tasks paused at their callers.
        --context "$CONTROL_CONTEXT" "$@"
    }
    NATS_BOX_POD=$(kcp -n nats-system get pod \
-     -l app.kubernetes.io/component=nats-box \
-     -o jsonpath='{.items[0].metadata.name}')
-   test -n "$NATS_BOX_POD"
+     -l app.kubernetes.io/component=nats-box -o json | jq -er '
+       [.items[] | select(.metadata.deletionTimestamp == null) |
+        select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) |
+        .metadata.name][0] // empty')
    nats_read() {
      kcp -n nats-system exec "$NATS_BOX_POD" -- nats --context "$NATS_CONTEXT" "$@"
    }

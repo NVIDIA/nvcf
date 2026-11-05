@@ -15,6 +15,7 @@ import unittest
 DOCS = Path(__file__).resolve().parents[3]
 RECOVERY = DOCS / "self-managed/upgrade-recovery.md"
 UPGRADE = DOCS / "overview/release-notes/0.6.1-to-1.0.1-upgrade.md"
+UPGRADE_11 = DOCS / "overview/release-notes/1.0.x-to-1.1.2-upgrade.md"
 
 
 def block_containing(path, marker):
@@ -35,7 +36,11 @@ class UpgradeRecoveryChecks(unittest.TestCase):
 kubectl() {
   printf '%s\n' "$*" >> "$CALL_LOG"
   case "$*" in
-    *'get pod'*) printf '%s\n' 'test-box' ;;
+    *'get pod'*)
+      case "$*" in
+        *'-o json') printf '%s\n' '{"items":[{"metadata":{"name":"test-box"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
+        *) printf '%s\n' 'test-box' ;;
+      esac ;;
     *'stream info'*) printf '%s\n' '{"state":{"messages":1,"first_seq":7}}' ;;
     *'consumer list'*) printf '%s\n' 'creation-consumer' ;;
     *) return 99 ;;
@@ -58,6 +63,62 @@ kubectl() {
                 prefix + 'consumer list CreateNvcaFunctionTaskStream'])
             self.assertEqual(json.loads((root / "record/stream-before.json").read_text())
                              ['state']['messages'], 1)
+
+    def test_nats_inspection_skips_pending_and_terminating_pods(self):
+        for ready in (True, False):
+            with self.subTest(ready=ready), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                pods = [
+                    {"metadata": {"name": "pending"}, "status": {}},
+                    {"metadata": {"name": "terminating", "deletionTimestamp": "2026-01-01T00:00:00Z"},
+                     "status": {"conditions": [{"type": "Ready", "status": "True"}]}},
+                ]
+                if ready:
+                    pods.append({"metadata": {"name": "ready"},
+                                 "status": {"conditions": [{"type": "Ready", "status": "True"}]}})
+                env = {**os.environ, "PODS": json.dumps({"items": pods}),
+                       "CALL_LOG": str(root / "calls")}
+                stub = r'''
+kubectl() {
+  case "$*" in
+    *'get pod'*'-o json') printf '%s\n' "$PODS" ;;
+    *'get pod'*) printf '%s\n' 'pending' ;;
+    *'exec '*) printf '%s\n' "$*" >> "$CALL_LOG" ;;
+    *) return 99 ;;
+  esac
+}
+'''
+                command = block_containing(RECOVERY, 'NATS_BOX_POD=')
+                command = command.replace('/absolute/path/to/new-recovery-record',
+                                          str(root / "record"))
+                result = subprocess.run(["bash", "-euo", "pipefail", "-c", stub + command],
+                                        env=env, capture_output=True, text=True)
+                if ready:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    calls = (root / "calls").read_text().splitlines()
+                    self.assertEqual(len(calls), 2)
+                    self.assertTrue(all('exec ready -- nats ' in call for call in calls))
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse((root / "calls").exists())
+
+    def test_final_diff_blocks_progress_on_changes_or_errors(self):
+        for status in (0, 1, 2):
+            with self.subTest(status=status):
+                env = {**os.environ, "DIFF_STATUS": str(status), "CONTROL_STACK": "/target",
+                       "HELMFILE_ENV": "site", "CONTROL_KUBECONFIG": "/control"}
+                stub = r'''
+make() { return 0; }
+control_helmfile() {
+  case "$1" in status) return 0 ;; diff) return "$DIFF_STATUS" ;; *) return 99 ;; esac
+}
+'''
+                command = block_containing(UPGRADE_11, 'control_helmfile status')
+                result = subprocess.run(["bash", "-euo", "pipefail", "-c",
+                                         stub + command + '\necho resume-traffic'],
+                                        env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertEqual('resume-traffic' in result.stdout, status == 0)
 
     def test_compute_evidence_preserves_each_cluster_and_repeat_capture(self):
         with tempfile.TemporaryDirectory() as directory:
