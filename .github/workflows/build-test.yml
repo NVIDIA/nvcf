@@ -104,6 +104,9 @@ jobs:
       - name: Test the chart mapping guard
         run: bash tools/ci/test-check-helm-charts
 
+      - name: Test Cassandra image catalog overrides
+        run: make -C deploy/helm/cassandra test
+
       - name: Lint and render every chart with a CI values file
         run: ./tools/ci/check-helm-charts
 

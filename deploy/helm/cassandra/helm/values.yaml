@@ -14,6 +14,11 @@
 # limitations under the License.
 
 ---
+# CI indexes these native image settings. Override them with ordinary values files.
+ownedImages:
+  cassandraServer: cassandra.image
+  cassandraMigrations: cassandra.migrations.image
+
 cassandra:
   # Namespace to deploy chart resources. Defaults to the release namespace.
   namespace: ""
@@ -27,10 +32,8 @@ cassandra:
     defaultStorageClass: ""
 
   image:
-    # registry: must be supplied in additional values
-    # repository: must be supplied in additional values
-    registry: ""
-    repository: ""
+    registry: nvcr.io
+    repository: nvidia/nvcf/cassandra
     tag: 5.0.9-nv-2.0.5
     pullPolicy: IfNotPresent
 
@@ -219,10 +222,8 @@ cassandra:
 
   migrations:
     image:
-      # registry: must be supplied in additional values
-      # repository: must be supplied in additional values
-      registry: ""
-      repository: ""
+      registry: nvcr.io
+      repository: nvidia/nvcf/nvcf-cassandra-migrations
       tag: 0.17.6
       pullPolicy: Always
 
