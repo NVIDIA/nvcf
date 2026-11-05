@@ -551,7 +551,7 @@ natsAuthCalloutService:
 
 Only `natsAuthCalloutService.serviceConfig.logging` reaches the auth callout; the stack ignores other `serviceConfig` keys. A change restarts the auth callout.
 
-If the auth callout logged nothing for a worker with sampling off, its login didn't reach the auth callout. Check the worker's own logs for its NATS connection error.
+With the settings above, if the auth callout logged nothing for a worker, its login didn't reach the auth callout. Check the worker's own logs for its NATS connection error.
 
 ## Observability
 
