@@ -117,7 +117,7 @@ helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
 helm repo update
 
 # Pull the chart
-helm pull "${HELM_NVCA_OPERATOR_REFERENCE:?set HELM_NVCA_OPERATOR_REFERENCE to a published or mirrored helm-nvca-operator reference}" --version 1.37.1
+helm pull nvcf/helm-nvca-operator --version 1.28.0
 
 # Prerelease charts require --devel when searching
 helm search repo nvcf/helm-nvcf-vanity-gateway --versions --devel
@@ -241,18 +241,21 @@ First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nv
 
 ```bash
 # Set stack versions
-export STACK_VERSION="1.1.3"
-export COMPUTE_STACK_VERSION="1.1.0"
-export OBSERVABILITY_STACK_VERSION="1.1.0"
+export STACK_VERSION="1.0.1"
+export COMPUTE_STACK_VERSION="1.0.0"
+export OBSERVABILITY_STACK_VERSION="1.0.0"
 
 # Download a specific control-plane stack version
-# Publication pending: nvcf-self-managed-stack 1.1.3 is not yet available for download.
+ngc registry resource download-version \
+  "nvidia/nvcf/nvcf-self-managed-stack:${STACK_VERSION}"
 
 # Download a specific compute-plane stack version
-# Publication pending: nvcf-compute-plane-stack 1.1.0 is not yet available for download.
+ngc registry resource download-version \
+  "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}"
 
 # Download a specific observability stack version
-# Publication pending: nvcf-observability-stack 1.1.0 is not yet available for download.
+ngc registry resource download-version \
+  "nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_STACK_VERSION}"
 ```
 
 {/*docs-version-sync:END image-mirroring-resource-examples*/}
@@ -266,7 +269,13 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-self-managed-stack 1.1.3 is not yet available for download.
+# Set the version
+export VERSION="1.0.1"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-self-managed-stack:${VERSION}" && \
+   mkdir -p nvcf-self-managed-stack && \
+   tar -xzf nvcf-self-managed-stack_v${VERSION}/nvcf-self-managed-stack-${VERSION}.tar.gz -C nvcf-self-managed-stack && \
+   rm -rf nvcf-self-managed-stack_v${VERSION}
 ```
 
 {/*docs-version-sync:END image-mirroring-stack-snippet*/}
@@ -285,7 +294,13 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-compute-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-compute-plane-stack 1.1.0 is not yet available for download.
+# Set the version
+export COMPUTE_VERSION="1.0.0"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_VERSION}" && \
+   mkdir -p nvcf-compute-plane-stack && \
+   tar -xzf nvcf-compute-plane-stack_v${COMPUTE_VERSION}/nvcf-compute-plane-stack-${COMPUTE_VERSION}.tar.gz -C nvcf-compute-plane-stack && \
+   rm -rf nvcf-compute-plane-stack_v${COMPUTE_VERSION}
 ```
 
 {/*docs-version-sync:END image-mirroring-compute-stack-snippet*/}
@@ -307,7 +322,13 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-observability-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-observability-stack 1.1.0 is not yet available for download.
+# Set the version
+export OBSERVABILITY_VERSION="1.0.0"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_VERSION}" && \
+   mkdir -p nvcf-observability-stack && \
+   tar -xzf nvcf-observability-stack_v${OBSERVABILITY_VERSION}/nvcf-observability-stack-${OBSERVABILITY_VERSION}.tar.gz -C nvcf-observability-stack && \
+   rm -rf nvcf-observability-stack_v${OBSERVABILITY_VERSION}
 ```
 
 {/*docs-version-sync:END image-mirroring-observability-stack-snippet*/}
@@ -436,8 +457,8 @@ helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
 helm repo update
 
 # 2. Pull the Helm chart from NGC
-helm pull "${HELM_NVCA_OPERATOR_REFERENCE:?set HELM_NVCA_OPERATOR_REFERENCE to a published or mirrored helm-nvca-operator reference}" --version 1.37.1
-# This creates: helm-nvca-operator-1.37.1.tgz
+helm pull nvcf/helm-nvca-operator --version 1.28.0
+# This creates: helm-nvca-operator-1.28.0.tgz
 
 # 3. Login to AWS ECR with Helm
 aws ecr get-login-password --region us-east-1 | \
@@ -447,7 +468,7 @@ aws ecr get-login-password --region us-east-1 | \
 aws ecr create-repository --repository-name ${REPO_PREFIX}/helm-nvca-operator --region us-east-1
 
 # 5. Push to ECR as OCI artifact (include repository prefix)
-helm push helm-nvca-operator-1.37.1.tgz oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
+helm push helm-nvca-operator-1.28.0.tgz oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
 ```
 
 <Note>
@@ -525,8 +546,8 @@ helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
 helm repo update
 
 # 2. Pull the Helm chart from NGC
-helm pull "${HELM_NVCA_OPERATOR_REFERENCE:?set HELM_NVCA_OPERATOR_REFERENCE to a published or mirrored helm-nvca-operator reference}" --version 1.37.1
-# This creates: helm-nvca-operator-1.37.1.tgz
+helm pull nvcf/helm-nvca-operator --version 1.28.0
+# This creates: helm-nvca-operator-1.28.0.tgz
 
 # 3. Login to Volcano Engine CR with Helm
 helm registry login ${CR_ENDPOINT} \
@@ -534,7 +555,7 @@ helm registry login ${CR_ENDPOINT} \
   --password "${CR_PASSWORD}"
 
 # 4. Push to Volcano Engine CR as OCI artifact
-helm push helm-nvca-operator-1.37.1.tgz oci://${CR_ENDPOINT}/${NAMESPACE}
+helm push helm-nvca-operator-1.28.0.tgz oci://${CR_ENDPOINT}/${NAMESPACE}
 ```
 
 ## Troubleshooting
