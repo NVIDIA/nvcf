@@ -467,8 +467,9 @@ gateway ends the stream with this event:
 `event: error` and
 `data: {"type":"error","error":{"type":"api_error","message":"upstream stream ended before completion"},"request_id":"<id>"}`.
 If the stream stops inside an event, the gateway first closes that event with
-a `ping` event, which clients skip. An upstream `error` event passes through
-unchanged. A non-streaming or compressed response gets no added bytes. The
+a `ping` event, which clients skip. A whole upstream `error` event passes
+through unchanged. If it is cut, the gateway adds its own error event after the
+`ping`. A non-streaming or compressed response gets no added bytes. The
 gateway records these failures as 502.
 
 The gateway preserves `anthropic-version`, all `anthropic-beta` values,
