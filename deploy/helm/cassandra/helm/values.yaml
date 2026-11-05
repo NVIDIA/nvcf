@@ -236,7 +236,7 @@ cassandra:
     image:
       registry: nvcr.io
       repository: nvidia/nvcf/nvcf-cassandra-migrations
-      tag: 0.19.2
+      tag: 0.19.4
       pullPolicy: Always
 
   dbUser:
