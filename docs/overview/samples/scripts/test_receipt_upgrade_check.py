@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
+from test_recovery_upgrade_check import UPGRADE_11, block_containing
 
 GUIDE = Path(__file__).parents[2] / "release-notes/1.0.2-to-1.0.4-upgrade.md"
 
@@ -102,6 +103,53 @@ kubectl() {
         (self.control / "VERSION").write_text("1.0.0\n", encoding="utf-8")
         result = subprocess.run(["bash", "-c", script], env=self.env, capture_output=True, text=True)
         self.assertNotEqual(0, result.returncode)
+
+
+class Receipt11Checks(unittest.TestCase):
+    def run_checks(self, control_stamp, compute_stamp, receipt, after_preflight=""):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control, compute = root / "control", root / "compute"
+            for stack, stamp in ((control, control_stamp), (compute, compute_stamp)):
+                stack.mkdir()
+                if stamp is not None:
+                    (stack / "VERSION").write_text(stamp)
+            preflight = block_containing(UPGRADE_11, "check_selected_stack_versions() {")
+            final = block_containing(UPGRADE_11, "get job upgrade-receipt")
+            script = r'''
+set -euo pipefail
+control_helmfile() { printf 'APPLIED\n'; }
+kc() { case "$*" in *jsonpath*) printf '%s' "$RECEIPT_VERSION" ;; esac; }
+'''
+            script += preflight + "\n" + after_preflight + "\n" + final + "\nprintf 'CONTINUED\\n'"
+            env = {**os.environ, "CONTROL_STACK": str(control), "COMPUTE_STACK": str(compute),
+                   "STACK_VERSION": "1.1.2", "COMPUTE_STACK_VERSION": "1.1.0",
+                   "WORKDIR": str(root), "RECEIPT_VERSION": receipt}
+            return subprocess.run(["bash", "-c", script], env=env,
+                                  capture_output=True, text=True)
+
+    def test_correct_selection_passes(self):
+        result = self.run_checks("1.1.2", "1.1.0", "1.1.2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CONTINUED", result.stdout)
+
+    def test_missing_wrong_or_shared_wrong_versions_stop(self):
+        for control, compute, receipt in ((None, "1.1.0", "1.1.2"),
+                                          ("1.1.2", "", "1.1.2"),
+                                          ("1.1.0", "1.1.0", "1.1.0"),
+                                          ("1.1.2", "1.1.0", "1.1.0")):
+            with self.subTest(control=control, compute=compute, receipt=receipt):
+                result = self.run_checks(control, compute, receipt)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("CONTINUED", result.stdout)
+                if control != "1.1.2" or compute != "1.1.0":
+                    self.assertNotIn("APPLIED", result.stdout)
+
+    def test_changed_package_stops_before_receipt_apply(self):
+        result = self.run_checks("1.1.2", "1.1.0", "1.1.2",
+                                 'printf "1.1.0\\n" > "$CONTROL_STACK/VERSION"')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("APPLIED", result.stdout)
 
 
 if __name__ == "__main__":
