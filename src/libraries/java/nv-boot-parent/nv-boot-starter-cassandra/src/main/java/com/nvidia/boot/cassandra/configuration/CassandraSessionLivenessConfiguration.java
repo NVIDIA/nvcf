@@ -33,7 +33,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.convert.DurationStyle;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -43,11 +42,12 @@ import org.springframework.core.env.Environment;
  * Registers the {@code cassandraSession} health contributor. Applications opt in by adding it to
  * the liveness group, for example
  * {@code management.endpoint.health.group.liveness.include: [livenessState, cassandraSession]}.
+ * Setting {@code app.cassandra.session-liveness.enabled=false} turns the check off: the
+ * contributor stays registered, because Spring Boot rejects a group that names a missing
+ * contributor, but always reports UP.
  */
 @Slf4j
 @Configuration
-@ConditionalOnProperty(name = "app.cassandra.session-liveness.enabled", havingValue = "true",
-                       matchIfMissing = true)
 public class CassandraSessionLivenessConfiguration {
 
     private static final String HEALTH_QUERY = "SELECT release_version FROM system.local";
@@ -62,6 +62,14 @@ public class CassandraSessionLivenessConfiguration {
                 environment.getProperty("app.cassandra.session-liveness.grace-period", "3m"));
         var checkInterval = DurationStyle.detectAndParse(
                 environment.getProperty("app.cassandra.session-liveness.check-interval", "30s"));
+        var enabled = environment.getProperty("app.cassandra.session-liveness.enabled",
+                                              Boolean.class, true);
+        if (!enabled) {
+            log.info("Cassandra session liveness check is disabled; "
+                     + "cassandraSession always reports UP");
+            return new CassandraSessionLivenessIndicator(() -> true, () -> false, gracePeriod,
+                                                         Clock.systemUTC());
+        }
         var session = sessions.getIfUnique();
         if (session == null) {
             log.info("No unique CqlSession; the cassandraSession liveness check always reports UP");

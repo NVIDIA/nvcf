@@ -35,6 +35,7 @@ import com.datastax.oss.driver.api.core.config.DriverExecutionProfile;
 import com.datastax.oss.driver.api.core.config.OptionsMap;
 import com.datastax.oss.driver.api.core.config.TypedDriverOption;
 import com.datastax.oss.driver.api.core.context.DriverContext;
+import com.datastax.oss.driver.api.core.cql.Statement;
 import com.datastax.oss.driver.internal.core.context.InternalDriverContext;
 import com.nvidia.boot.cassandra.retry.NextHostRetryPolicy;
 import io.micrometer.core.instrument.Metrics;
@@ -43,6 +44,9 @@ import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.health.autoconfigure.actuate.endpoint.HealthEndpointAutoConfiguration;
+import org.springframework.boot.health.autoconfigure.registry.HealthContributorRegistryAutoConfiguration;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -72,11 +76,41 @@ class CassandraSessionLivenessConfigurationTest {
     }
 
     @Test
-    void canBeDisabled() {
+    void reportsUpWithoutCheckingWhenDisabled() {
+        var session = session();
         contextRunner.withPropertyValues("app.cassandra.session-liveness.enabled=false")
-                .withBean(CqlSession.class, CassandraSessionLivenessConfigurationTest::session)
-                .run(context -> assertThat(context)
-                        .doesNotHaveBean(CassandraSessionLivenessIndicator.class));
+                .withBean(CqlSession.class, () -> session)
+                .run(context -> {
+                    var indicator = context.getBean(CassandraSessionLivenessIndicator.class);
+                    indicator.evaluate();
+                    assertThat(indicator.health().getStatus()).isEqualTo(Status.UP);
+                    verify(session, never()).execute(any(Statement.class));
+                });
+    }
+
+    // Spring Boot rejects a health group that names a missing contributor, so a disabled check
+    // must still register cassandraSession for the services that list it in liveness.
+    @Test
+    void disabledCheckKeepsHealthGroupsValid() {
+        livenessGroupRunner("cassandraSession")
+                .withPropertyValues("app.cassandra.session-liveness.enabled=false")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    // Guards the test above: the runner must validate group members for it to mean anything.
+    @Test
+    void livenessGroupRunnerRejectsMissingContributors() {
+        livenessGroupRunner("missingContributor")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    private ApplicationContextRunner livenessGroupRunner(String member) {
+        return contextRunner
+                .withConfiguration(AutoConfigurations.of(
+                        HealthContributorRegistryAutoConfiguration.class,
+                        HealthEndpointAutoConfiguration.class))
+                .withPropertyValues("management.endpoint.health.group.liveness.include=" + member)
+                .withBean(CqlSession.class, CassandraSessionLivenessConfigurationTest::session);
     }
 
     @Test
