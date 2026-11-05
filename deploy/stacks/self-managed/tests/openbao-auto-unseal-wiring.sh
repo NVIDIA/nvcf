@@ -98,4 +98,13 @@ for key in extraContainers volumes volumeMounts; do
   assert_yaml_value "$values" ".openbao.server.$key" null "off: $key must keep the chart default"
 done
 
+# 4. A quoted "false" is truthy in templates and would drop the sidecar while
+#    the chart's init script takes the Shamir path, so it must fail the render.
+printf 'openbao:\n  server:\n    autoUnseal:\n      enabled: "false"\n' >"$environment_file"
+if render_values "$work_dir/quoted.yaml" 2>"$work_dir/quoted.err"; then
+  fail "quoted autoUnseal.enabled must fail the render"
+fi
+grep -q 'openbao.server.autoUnseal.enabled must be a YAML boolean' "$work_dir/quoted.err" ||
+  fail "quoted autoUnseal.enabled: unexpected error: $(tail -3 "$work_dir/quoted.err")"
+
 echo "openbao-auto-unseal-wiring: OK"

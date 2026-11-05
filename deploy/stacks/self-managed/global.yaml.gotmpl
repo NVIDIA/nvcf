@@ -553,9 +553,13 @@ openbao:
       {{- toYaml . | nindent 6 }}
     {{- end }}
     {{- with dig "openbao" "server" "autoUnseal" dict .Values }}
+    {{- $autoUnsealEnabled := dig "enabled" false . }}
+    {{- if not (kindIs "bool" $autoUnsealEnabled) }}
+    {{- fail (printf "openbao.server.autoUnseal.enabled must be a YAML boolean, true or false. Got %q" (toString $autoUnsealEnabled)) }}
+    {{- end }}
     autoUnseal:
       {{- toYaml . | nindent 6 }}
-    {{- if .enabled }}
+    {{- if $autoUnsealEnabled }}
     {{- /* The chart skips the unseal Secret under auto-unseal, so drop the Shamir
            unseal sidecar and the volume that mounts that Secret. */}}
     extraContainers: []
