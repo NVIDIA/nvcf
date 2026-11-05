@@ -48,6 +48,9 @@ type telemetryProviderSpec struct {
 	// tlsSecret marks providers whose secret is an object of optional TLS
 	// material (clientCert and clientKey together, caFile, or both).
 	tlsSecret bool
+	// tokenOrTLSSecret marks providers whose secret is a string token or an
+	// object with a token, a client cert pair, or both, plus an optional caFile.
+	tokenOrTLSSecret bool
 }
 
 var telemetryProviderSpecs = map[string]telemetryProviderSpec{
@@ -71,7 +74,8 @@ var telemetryProviderSpecs = map[string]telemetryProviderSpec{
 		tlsSecret: true,
 	},
 	"OTEL_COLLECTOR": {
-		types: []string{telemetryTypeLogs, telemetryTypeMetrics, telemetryTypeTraces},
+		types:            []string{telemetryTypeLogs, telemetryTypeMetrics, telemetryTypeTraces},
+		tokenOrTLSSecret: true,
 	},
 	"PROMETHEUS": {
 		types:     []string{telemetryTypeMetrics},
@@ -88,6 +92,8 @@ var telemetryProviderSpecs = map[string]telemetryProviderSpec{
 var telemetryProtocols = []string{"HTTP", "GRPC"}
 
 var telemetryTLSSecretKeys = []string{"clientCert", "clientKey", "caFile"}
+
+var telemetryTokenOrTLSSecretKeys = []string{"token", "clientCert", "clientKey", "caFile"}
 
 var telemetryCmd = &cobra.Command{
 	Use:   "telemetry",
@@ -280,6 +286,8 @@ func telemetryProviderHelp() string {
 
 func telemetrySecretDescription(spec telemetryProviderSpec) string {
 	switch {
+	case spec.tokenOrTLSSecret:
+		return `string token, or JSON object with "token", "clientCert" and "clientKey" (together), or both, and optional "caFile"`
 	case spec.tlsSecret:
 		return `JSON object with optional "clientCert" and "clientKey" (together) and "caFile"`
 	case len(spec.secretKeys) > 0:
@@ -404,7 +412,8 @@ func readTelemetrySecret(secret, secretFile string, stdin io.Reader) (interface{
 // reads for the provider.
 func validateTelemetrySecret(provider string, value interface{}) error {
 	spec := telemetryProviderSpecs[provider]
-	if !spec.tlsSecret && len(spec.secretKeys) == 0 {
+	_, isString := value.(string)
+	if (isString && spec.tokenOrTLSSecret) || (!spec.tlsSecret && !spec.tokenOrTLSSecret && len(spec.secretKeys) == 0) {
 		s, ok := value.(string)
 		if !ok || strings.TrimSpace(s) == "" {
 			return fmt.Errorf("provider %s expects the secret to be a string token", provider)
@@ -427,6 +436,9 @@ func validateTelemetrySecret(provider string, value interface{}) error {
 
 	if spec.tlsSecret {
 		return validateTelemetryTLSSecret(provider, obj, present)
+	}
+	if spec.tokenOrTLSSecret {
+		return validateTelemetryTokenOrTLSSecret(provider, obj, present)
 	}
 	var missing []string
 	for _, k := range spec.secretKeys {
@@ -452,6 +464,22 @@ func validateTelemetryTLSSecret(provider string, obj map[string]interface{}, pre
 	}
 	if !present["clientCert"] && !present["caFile"] {
 		return fmt.Errorf(`provider %s secret must set "clientCert" and "clientKey", "caFile", or both`, provider)
+	}
+	return nil
+}
+
+func validateTelemetryTokenOrTLSSecret(provider string, obj map[string]interface{}, present map[string]bool) error {
+	for k := range obj {
+		if !containsString(telemetryTokenOrTLSSecretKeys, k) {
+			return fmt.Errorf("provider %s secret has unknown key %q: allowed keys are %s",
+				provider, k, quoteJoin(telemetryTokenOrTLSSecretKeys))
+		}
+	}
+	if present["clientCert"] != present["clientKey"] {
+		return fmt.Errorf(`provider %s secret must set "clientCert" and "clientKey" together`, provider)
+	}
+	if !present["clientCert"] && !present["token"] {
+		return fmt.Errorf(`provider %s secret must set "token", "clientCert" and "clientKey", or both`, provider)
 	}
 	return nil
 }

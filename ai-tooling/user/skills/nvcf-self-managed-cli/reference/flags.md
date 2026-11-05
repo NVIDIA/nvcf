@@ -304,7 +304,7 @@ Pass exactly one of `--secret-file` or `--secret`; `telemetry update-secret` tak
 | `GRAFANA_CLOUD` | LOGS, METRICS, TRACES | JSON object with `instanceId`, `apiKey` |
 | `KRATOS` | LOGS | JSON object with `collectorId`, `clientCert`, `clientKey` |
 | `KRATOS_THANOS` | METRICS | JSON object with `clientCert` and `clientKey` (together), `caFile`, or both |
-| `OTEL_COLLECTOR` | LOGS, METRICS, TRACES | String bearer token |
+| `OTEL_COLLECTOR` | LOGS, METRICS, TRACES | String bearer token, or JSON object with `token`, `clientCert` and `clientKey` (together), or both, and optional `caFile` |
 | `PROMETHEUS` | METRICS | JSON object with `clientCert` and `clientKey` (together), `caFile`, or both |
 | `SERVICENOW` | TRACES | String access token |
 | `SPLUNK` | LOGS | String HEC token |
