@@ -153,6 +153,9 @@ func resolveEffectiveStackPin(sources map[string][]byte, pin effectiveStackPin) 
 	}
 }
 
+// targetBlock returns the part of body that the pin pattern searches. With a
+// block pattern, it is the single matching block, ending at the next boundary
+// match or the end of body. Without one, it is the whole body.
 func (pin effectiveStackPin) targetBlock(body []byte) ([]byte, error) {
 	if pin.blockPattern == "" {
 		return body, nil
