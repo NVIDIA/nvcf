@@ -555,7 +555,7 @@ openbao:
     {{- with dig "openbao" "server" "autoUnseal" dict .Values }}
     {{- $autoUnsealEnabled := dig "enabled" false . }}
     {{- if not (kindIs "bool" $autoUnsealEnabled) }}
-    {{- fail (printf "openbao.server.autoUnseal.enabled must be a YAML boolean, true or false. Got %q" (toString $autoUnsealEnabled)) }}
+    {{- fail (printf "openbao.server.autoUnseal.enabled must be a YAML boolean, true or false. Quoted strings, null, and empty values are rejected. Got %q" (toString $autoUnsealEnabled)) }}
     {{- end }}
     autoUnseal:
       {{- toYaml . | nindent 6 }}
