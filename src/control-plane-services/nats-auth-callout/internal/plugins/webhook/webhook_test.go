@@ -18,16 +18,20 @@ limitations under the License.
 package webhook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -391,4 +395,64 @@ func TestWebhookPlugin(t *testing.T) {
 			})
 		})
 	})
+}
+
+func TestWebhookPluginAuditLog(t *testing.T) {
+	tests := []struct {
+		name     string
+		response testServerResponse
+		wantErr  bool
+		want     map[string]any
+	}{
+		{
+			name:     "allow",
+			response: testServerResponse{statusCode: http.StatusOK, responseBody: createSuccessfulResponse()},
+			want: map[string]any{
+				"level":       "AUDIT",
+				"msg":         "[AUDIT] Webhook authentication",
+				"plugin":      "webhook",
+				"account":     "test-account",
+				"plugin_name": "webhook-alias",
+				"result":      "allow",
+				"user_id":     "test-user-123",
+			},
+		},
+		{
+			name:     "deny",
+			response: testServerResponse{statusCode: http.StatusUnauthorized},
+			wantErr:  true,
+			want: map[string]any{
+				"level":       "AUDIT",
+				"msg":         "[AUDIT] Webhook authentication",
+				"plugin":      "webhook",
+				"account":     "test-account",
+				"plugin_name": "webhook-alias",
+				"result":      "deny",
+				"error":       "webhook authentication failed",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := createTestServer([]testServerResponse{tt.response})
+			defer server.Close()
+			plugin, err := NewPlugin(Config{URL: server.URL, Timeout: 5 * time.Second, RetryAttempts: 1}, zaptest.NewLogger(t))
+			require.NoError(t, err)
+			var out bytes.Buffer
+			plugin.auditLogger = newAuditLogger(zapcore.AddSync(&out))
+
+			authReq := &types.Request{Account: "test-account", PluginName: "webhook-alias", Payload: "test-token"}
+			_, err = plugin.Authenticate(context.Background(), authReq)
+			assert.Equal(t, tt.wantErr, err != nil, "Authenticate error: %v", err)
+
+			require.Equal(t, 1, strings.Count(out.String(), "\n"), "want exactly one audit entry, got %q", out.String())
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(out.Bytes(), &entry))
+			assert.NotEmpty(t, entry["ts"])
+			delete(entry, "ts")
+			assert.Equal(t, tt.want, entry)
+			assert.NotContains(t, out.String(), authReq.Payload, "audit entry must not contain the token")
+		})
+	}
 }

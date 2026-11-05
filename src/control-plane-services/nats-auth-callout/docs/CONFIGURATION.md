@@ -161,6 +161,8 @@ The application supports comprehensive logging configuration:
 
 **Note**: The version field in logs is automatically populated from build-time version injection and cannot be configured.
 
+The webhook plugin also writes one audit entry for every authentication request it handles. These entries always go to stdout as JSON with the level `AUDIT` and a message that starts with `[AUDIT]`, regardless of the logging settings above, so level filtering and sampling never drop them. Each entry records the account, the plugin name and the result: `allow` with the user ID, or `deny` with the error. The client token is never logged.
+
 ## Metrics Configuration
 
 Metrics are **disabled by default** and must be explicitly enabled. The service uses Prometheus metrics format.

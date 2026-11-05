@@ -23,14 +23,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
 	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/audit"
 
 	"github.com/hashicorp/go-retryablehttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // Config contains Webhook plugin configuration.
@@ -53,6 +56,7 @@ type Plugin struct {
 	config      *Config
 	retryClient *retryablehttp.Client
 	logger      *zap.Logger
+	auditLogger *zap.Logger
 }
 
 // Request represents the request sent to webhook endpoint.
@@ -105,20 +109,46 @@ func NewPlugin(configData any, logger *zap.Logger) (*Plugin, error) {
 		config:      webhookConfig,
 		retryClient: retryClient,
 		logger:      logger.With(zap.String("plugin", "webhook")),
+		auditLogger: newAuditLogger(zapcore.AddSync(os.Stdout)),
 	}
 
 	return plugin, nil
+}
+
+// newAuditLogger returns a logger that writes entries at the AUDIT level. It does
+// not use the service log level or sampling, so every decision is recorded.
+func newAuditLogger(ws zapcore.WriteSyncer) *zap.Logger {
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	encoderConfig.EncodeLevel = audit.AuditLevelEncoder
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(encoderConfig), ws, zapcore.InfoLevel)
+	return zap.New(core).With(zap.String("plugin", "webhook"))
 }
 
 // Authenticate validates the request using webhook and returns auth result.
 func (p *Plugin) Authenticate(ctx context.Context, req *types.Request) (*types.Result, error) {
 	// Call webhook with retries
 	authResult, err := p.callWebhook(ctx, req.Account, req.PluginName, req.Payload)
+	p.auditAuthentication(req, authResult, err)
 	if err != nil {
 		return nil, err
 	}
 
 	return authResult, nil
+}
+
+// auditAuthentication records the allow or deny decision for an authentication request.
+func (p *Plugin) auditAuthentication(req *types.Request, result *types.Result, err error) {
+	fields := []zap.Field{
+		zap.String("account", req.Account),
+		zap.String("plugin_name", req.PluginName),
+	}
+	if err != nil {
+		fields = append(fields, zap.String("result", "deny"), zap.Error(err))
+	} else {
+		fields = append(fields, zap.String("result", "allow"), zap.String("user_id", result.UserID))
+	}
+	p.auditLogger.Info("[AUDIT] Webhook authentication", fields...)
 }
 
 // callWebhook calls the webhook endpoint with retries.
