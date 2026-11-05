@@ -57,6 +57,11 @@ class HealthProbeGroupsTest {
 
     private static ApplicationContextRunner contextRunner(
             String profile, Status cassandra, Status nats, Status cassandraSession) {
+        return contextRunner(profile, Status.UP, cassandra, nats, cassandraSession);
+    }
+
+    private static ApplicationContextRunner contextRunner(String profile, Status livenessState,
+            Status cassandra, Status nats, Status cassandraSession) {
         return new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(HealthEndpointAutoConfiguration.class))
                 .withInitializer(context -> {
@@ -66,7 +71,7 @@ class HealthProbeGroupsTest {
                 })
                 .withBean(HealthContributorRegistry.class, () -> {
                     var registry = new DefaultHealthContributorRegistry();
-                    register(registry, "livenessState", Status.UP);
+                    register(registry, "livenessState", livenessState);
                     register(registry, "readinessState", Status.UP);
                     register(registry, "cassandra", cassandra);
                     register(registry, "nats", nats);
@@ -108,6 +113,13 @@ class HealthProbeGroupsTest {
     void readinessGoesDownWhenOnlyCassandraIsDown(String profile) {
         contextRunner(profile, Status.DOWN, Status.UP, Status.UP).run(context ->
                 assertEquals(Status.DOWN, status(context, "readiness")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ncp"})
+    void livenessGoesDownWhenLivenessStateIsDown(String profile) {
+        contextRunner(profile, Status.DOWN, Status.UP, Status.UP, Status.UP).run(context ->
+                assertEquals(Status.DOWN, status(context, "liveness")));
     }
 
     private static List<PropertySource<?>> load(String resource) {

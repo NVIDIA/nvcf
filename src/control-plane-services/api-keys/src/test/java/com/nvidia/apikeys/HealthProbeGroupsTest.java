@@ -44,6 +44,11 @@ import org.springframework.core.io.ClassPathResource;
 class HealthProbeGroupsTest {
 
     private static ApplicationContextRunner contextRunner(Status cassandraSession) {
+        return contextRunner(Status.UP, cassandraSession);
+    }
+
+    private static ApplicationContextRunner contextRunner(Status livenessState,
+                                                          Status cassandraSession) {
         return new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(HealthEndpointAutoConfiguration.class))
                 .withInitializer(context -> {
@@ -58,7 +63,7 @@ class HealthProbeGroupsTest {
                 })
                 .withBean(HealthContributorRegistry.class, () -> {
                     var registry = new DefaultHealthContributorRegistry();
-                    register(registry, "livenessState", Status.UP);
+                    register(registry, "livenessState", livenessState);
                     register(registry, "readinessState", Status.UP);
                     register(registry, "cassandra", Status.DOWN);
                     register(registry, "cassandraSession", cassandraSession);
@@ -82,6 +87,12 @@ class HealthProbeGroupsTest {
     void readinessGoesDownWhenCassandraIsDown() {
         contextRunner(Status.UP).run(context ->
                 assertEquals(Status.DOWN, status(context, "readiness")));
+    }
+
+    @Test
+    void livenessGoesDownWhenLivenessStateIsDown() {
+        contextRunner(Status.DOWN, Status.UP).run(context ->
+                assertEquals(Status.DOWN, status(context, "liveness")));
     }
 
     private static Status status(ApplicationContext context, String group) {
