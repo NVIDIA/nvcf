@@ -20,6 +20,7 @@ package ratelimit
 import (
 	"context"
 	"errors"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -219,6 +220,88 @@ func (s *RateLimiterTestSuite) TestBucketsRefillOverTime() {
 	s.Equal(int64(70), res3.CurrentValue)
 }
 
+func (s *RateLimiterTestSuite) TestBucketsRefillOverTimeDoesNotOverflowForLargeRateAndLongElapsed() {
+	var (
+		// elapsed(ms) * rate overflows int64 before /periodMs brings it back down.
+		rl = RateLimit{
+			Limit:  5_000_000_000,
+			Period: 30 * 24 * time.Hour, // MO: fixed 30-day month
+		}
+		key = "rl:test:refill_overflow"
+	)
+	limiter := s.newLimiter()
+
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 5_000_000_000, false, "", true)
+	s.Require().NoError(err)
+	s.True(res.Allowed())
+	s.Equal(int64(5_000_000_000), res.CurrentValue)
+	s.Equal(int64(0), res.RemainingValue())
+
+	s.advance(29 * 24 * time.Hour)
+
+	// 29/30 of the period elapsed: (29*5e9)/30 = 4_833_333_333 (floor).
+	res2, err := limiter.CheckLimit(s.ctx, key, rl, 0, true, "", false)
+	s.Require().NoError(err)
+	s.True(res2.Allowed())
+	s.Equal(int64(4_833_333_333), res2.CurrentValue)
+}
+
+func (s *RateLimiterTestSuite) TestBucketsRefillSaturatesInsteadOfOverflowingValuePlusRefill() {
+	var (
+		// rate at int64 max: refill alone is huge relative to rate-value, so
+		// value+refill overflows even though mulDivInt64 computed refill fine.
+		rl = RateLimit{
+			Limit:  math.MaxInt64,
+			Period: time.Hour,
+		}
+		key = "rl:test:refill_add_overflow"
+	)
+	limiter := s.newLimiter()
+
+	// Leave the bucket at rate-1, not empty or full, to exercise the add.
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, false, "", true)
+	s.Require().NoError(err)
+	s.True(res.Allowed())
+	s.Equal(int64(math.MaxInt64), res.CurrentValue)
+	s.Equal(int64(math.MaxInt64-1), res.RemainingValue())
+
+	s.advance(time.Second)
+
+	res2, err := limiter.CheckLimit(s.ctx, key, rl, 0, true, "", false)
+	s.Require().NoError(err)
+	s.True(res2.Allowed())
+	s.Equal(int64(math.MaxInt64), res2.CurrentValue)
+}
+
+func (s *RateLimiterTestSuite) TestRefundSaturatesInsteadOfOverflowingCurrentValueMinusTokensRequested() {
+	var (
+		// A negative tokensRequested is a refund (see
+		// TestBucketsRefilledManuallyWithNegativeTokensRequested); at rate
+		// maxInt64, refunding into a near-full bucket overflows the subtraction.
+		rl = RateLimit{
+			Limit:  math.MaxInt64,
+			Period: time.Hour,
+		}
+		key = "rl:test:refund_overflow"
+	)
+	limiter := s.newLimiter()
+
+	// Leave the bucket at rate-1, not empty or full, to exercise the refund.
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, false, "", true)
+	s.Require().NoError(err)
+	s.Equal(int64(math.MaxInt64-1), res.RemainingValue())
+
+	// Refunding half the rate pushes currentValue-tokensRequested past rate.
+	res2, err := limiter.CheckLimit(s.ctx, key, rl, -(math.MaxInt64 / 2), false, "", true)
+	s.Require().NoError(err)
+	s.True(res2.Allowed())
+	s.Equal(int64(math.MaxInt64), res2.RemainingValue())
+
+	res3, err := limiter.CheckLimit(s.ctx, key, rl, 0, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(math.MaxInt64), res3.CurrentValue)
+}
+
 func (s *RateLimiterTestSuite) TestFailOpenAllowsOnStoreError() {
 	var (
 		rl = RateLimit{
@@ -381,6 +464,138 @@ func (s *RateLimiterTestSuite) TestCASInitialInsertUsesNilExpected() {
 	probe, err := limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
 	s.Require().NoError(err)
 	s.Equal(int64(1), probe.CurrentValue, "insert must have persisted the consume")
+}
+
+func (s *RateLimiterTestSuite) TestMustConsumeWithDebtCarriesOverage() {
+	var (
+		rl  = RateLimit{Limit: 100, Period: time.Minute, AllowDebt: true}
+		key = "rl:test:debt"
+	)
+	limiter := s.newLimiter()
+
+	_, err := limiter.CheckLimit(s.ctx, key, rl, 150, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.False(res.Allowed())
+	s.Equal(int64(-50), res.CurrentValue)
+	s.Equal(int64(0), res.RemainingValue())
+
+	// 30s refills 50 tokens: the debt is paid off but nothing is available yet.
+	s.advance(30 * time.Second)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.False(res.Allowed())
+	s.Equal(int64(0), res.CurrentValue)
+
+	s.advance(time.Second)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.True(res.Allowed())
+}
+
+func (s *RateLimiterTestSuite) TestMustConsumeWithoutDebtStillClampsAtZero() {
+	var (
+		rl  = RateLimit{Limit: 100, Period: time.Minute}
+		key = "rl:test:nodebt"
+	)
+	limiter := s.newLimiter()
+
+	_, err := limiter.CheckLimit(s.ctx, key, rl, 150, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(0), res.CurrentValue)
+
+	s.advance(time.Second)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.True(res.Allowed())
+}
+
+func (s *RateLimiterTestSuite) TestDebtIsCappedAtOneLimit() {
+	var (
+		rl  = RateLimit{Limit: 100, Period: time.Minute, AllowDebt: true}
+		key = "rl:test:debtcap"
+	)
+	limiter := s.newLimiter()
+
+	_, err := limiter.CheckLimit(s.ctx, key, rl, 1000, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(-100), res.CurrentValue)
+
+	s.advance(time.Minute)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(0), res.CurrentValue)
+}
+
+func (s *RateLimiterTestSuite) TestRefundReducesDebt() {
+	var (
+		rl  = RateLimit{Limit: 100, Period: time.Minute, AllowDebt: true}
+		key = "rl:test:debtrefund"
+	)
+	limiter := s.newLimiter()
+
+	_, err := limiter.CheckLimit(s.ctx, key, rl, 150, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+	_, err = limiter.CheckLimit(s.ctx, key, rl, -30, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(-20), res.CurrentValue)
+}
+
+func (s *RateLimiterTestSuite) TestDebtDoesNotOverflowForMaxRate() {
+	var (
+		rl  = RateLimit{Limit: math.MaxInt64, Period: time.Minute, AllowDebt: true}
+		key = "rl:test:debtmax"
+	)
+	limiter := s.newLimiter()
+
+	for range 2 {
+		_, err := limiter.CheckLimit(s.ctx, key, rl, math.MaxInt64, false, "", true /* mustConsume */)
+		s.Require().NoError(err)
+	}
+	res, err := limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(-math.MaxInt64), res.CurrentValue)
+
+	_, err = limiter.CheckLimit(s.ctx, key, rl, math.MinInt64, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(math.MaxInt64), res.CurrentValue)
+
+	_, err = limiter.CheckLimit(s.ctx, key, rl, math.MaxInt64, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+	_, err = limiter.CheckLimit(s.ctx, key, rl, math.MaxInt64, false, "", true /* mustConsume */)
+	s.Require().NoError(err)
+	s.advance(2 * time.Minute)
+	res, err = limiter.CheckLimit(s.ctx, key, rl, 1, true, "", false)
+	s.Require().NoError(err)
+	s.Equal(int64(math.MaxInt64), res.CurrentValue)
+}
+
+func (s *RateLimiterTestSuite) TestDebtBucketTTLCoversFullRepayment() {
+	limiter := s.newLimiter()
+
+	_, err := limiter.CheckLimit(s.ctx, "rl:test:ttl-debt",
+		RateLimit{Limit: 100, Period: time.Minute, AllowDebt: true}, 150, false, "", true)
+	s.Require().NoError(err)
+	_, err = limiter.CheckLimit(s.ctx, "rl:test:ttl-nodebt",
+		RateLimit{Limit: 100, Period: time.Minute}, 150, false, "", true)
+	s.Require().NoError(err)
+
+	// A bucket at -Limit needs two periods to refill; expiring after one would forgive it.
+	s.Equal(2*time.Minute, s.store.lastTTL["rl:test:ttl-debt"])
+	s.Equal(time.Minute, s.store.lastTTL["rl:test:ttl-nodebt"])
 }
 
 func TestRateLimiterTestSuite(t *testing.T) {

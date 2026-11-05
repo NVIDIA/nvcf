@@ -80,3 +80,36 @@ func TestApplySynchronizedEventDoesNotDeduplicateRequestID(t *testing.T) {
 		t.Fatalf("CheckLimit() calls = %d, want 2", limiter.calls)
 	}
 }
+
+func TestApplySynchronizedEventCarriesDebt(t *testing.T) {
+	store := newFakeStore()
+	limiter, err := NewRateLimiter(store)
+	if err != nil {
+		t.Fatalf("NewRateLimiter() error = %v", err)
+	}
+	event := &RateLimitEventWireFormat{
+		Key:         "nvcf:nca-1:output_tokens_minute",
+		Units:       150,
+		Rate:        100,
+		Period:      time.Minute,
+		RequestID:   "req-debt",
+		ClusterName: "cluster-a",
+		CreatedAt:   time.Now().Unix(),
+		MustConsume: true,
+		AllowDebt:   true,
+	}
+
+	if err := ApplySynchronizedEvent(context.Background(), limiter, "cluster-b", true, event); err != nil {
+		t.Fatalf("ApplySynchronizedEvent() error = %v", err)
+	}
+
+	res, err := limiter.CheckLimit(
+		context.Background(), event.Key,
+		RateLimit{Limit: 100, Period: time.Minute, AllowDebt: true}, 1, true, "", false)
+	if err != nil {
+		t.Fatalf("CheckLimit() error = %v", err)
+	}
+	if res.CurrentValue >= 0 {
+		t.Fatalf("current value = %d, want negative (debt replicated)", res.CurrentValue)
+	}
+}
