@@ -465,6 +465,34 @@ For local development, a lower preset may be acceptable when the environment als
 
 </Note>
 
+#### OpenBao auto-unseal
+
+By default OpenBao uses a Shamir seal: the unseal key sits in the Secret `openbao-server-unseal`, and a sidecar unseals each pod with it. An auto-unseal seal, such as a cloud KMS, keeps the unseal key off the cluster. Set it before the first install, so the init hook initializes OpenBao with recovery keys instead of an unseal key:
+
+```yaml
+openbao:
+  server:
+    autoUnseal:
+      enabled: true
+    ha:
+      raft:
+        config: |
+          # The chart's default Raft config, plus the seal stanza.
+          seal "awskms" {
+            region     = "<region>"
+            kms_key_id = "<key-id-or-alias>"
+          }
+    # Drop the Shamir unseal sidecar and its Secret volume.
+    extraContainers: []
+    volumes: []
+    volumeMounts: []
+```
+
+- `ha.raft.config` replaces the chart's whole Raft config. Start from the chart's [auto-unseal example](https://github.com/NVIDIA/nvcf/blob/main/deploy/helm/openbao/helm/values-autounseal.yaml.example), which has the default config with an AWS KMS seal, and change only the `seal` stanza.
+- Give the `openbao-server` service account in `vault-system` the provider's rights on the key. For AWS KMS that is `kms:Encrypt`, `kms:Decrypt`, and `kms:DescribeKey`, for example through EKS Pod Identity or IRSA.
+- After the first install, the init hook leaves every recovery share in the Secret `openbao-server-recovery-keys`. Export the shares, give them to separate custodians, and delete the Secret.
+- An installed cluster moves to a new seal through OpenBao seal migration, not through these values alone.
+
 #### `helm` and `image` Configuration
 
 The `helm` and `image` sections tell NVCF which registries to pull Helm charts and container images from.

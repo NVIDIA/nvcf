@@ -538,9 +538,26 @@ openbao:
       disruptionBudget:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- /* Replaces the chart's whole Raft config; auto-unseal adds its seal stanza here. */}}
+      {{- with dig "openbao" "server" "ha" "raft" "config" "" .Values }}
+      raft:
+        config: |
+          {{- . | nindent 10 }}
+      {{- end }}
     {{- with dig "openbao" "server" "annotations" dict .Values }}
     annotations:
       {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- /* Auto-unseal: autoUnseal switches init to recovery keys, and [] for the
+           other three drops the Shamir unseal sidecar and its Secret volume.
+           Forwarded only when set, so [] reaches the chart and an unset key keeps
+           the chart default. */}}
+    {{- $openbaoServer := dig "openbao" "server" dict .Values }}
+    {{- range $key := list "autoUnseal" "extraContainers" "volumes" "volumeMounts" }}
+    {{- if hasKey $openbaoServer $key }}
+    {{ $key }}:
+      {{- toYaml (index $openbaoServer $key) | nindent 6 }}
+    {{- end }}
     {{- end }}
 
 nats:
