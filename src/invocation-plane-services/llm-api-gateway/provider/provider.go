@@ -108,6 +108,8 @@ type InferenceProvider interface {
 		reqCtx *requestctx.RequestContext,
 		request *NormalizedRequest,
 	) (*models.ChatCompletionResponse, error)
+	// Stream returns events until the upstream stream ends. Callers must read the
+	// channel until it is closed: some sends block, and the upstream body stays open.
 	Stream(
 		ctx context.Context,
 		reqCtx *requestctx.RequestContext,
