@@ -1930,10 +1930,15 @@ func TestHijackHandlerCountsShutdownRejection(t *testing.T) {
 	if _, err := http.ReadResponse(reader, nil); err != nil {
 		t.Fatalf("failed to read CONNECT response %s", err)
 	}
-	// The tunnel is closed once registration fails, and the handler has
-	// returned, so the deferred counter update has run.
+	// The tunnel is closed once registration fails.
 	if _, err := reader.ReadByte(); !errors.Is(err, io.EOF) {
 		t.Fatalf("expected the worker's connection to be closed, got %v", err)
+	}
+	// The handler closes the tunnel before its deferred counter update runs, so
+	// the worker can see EOF before the count is recorded. Wait for it.
+	deadline := time.Now().Add(5 * time.Second)
+	for testutil.ToFloat64(counter)-before < 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
 	}
 	if got := testutil.ToFloat64(counter) - before; got != 1 {
 		t.Fatalf("expected one %s CONNECT, got %v", metrics.ConnectRegisterFailed, got)
