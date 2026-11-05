@@ -460,6 +460,17 @@ validates content blocks, tools, thinking settings, and beta feature support.
 Upstream status codes and SSE event bytes pass through. Backend error bodies
 use the Anthropic error envelope, as described below.
 
+A streaming response must end with `message_stop`. The upstream stream fails
+when it ends without `message_stop`, the connection fails, or the gateway
+request timeout expires. A streaming client already has HTTP 200, so the
+gateway ends the stream with this event:
+`event: error` and
+`data: {"type":"error","error":{"type":"api_error","message":"upstream stream ended before completion"},"request_id":"<id>"}`.
+If the stream stops inside an event, the gateway first closes that event with
+a `ping` event, which clients skip. An upstream `error` event passes through
+unchanged. A non-streaming or compressed response gets no added bytes. The
+gateway records these failures as 502.
+
 The gateway preserves `anthropic-version`, all `anthropic-beta` values,
 `Content-Type`, `Accept`, `User-Agent`, and W3C trace headers. NVCF sets
 `X-Request-Id` from its request context and sends it to the backend. Every
