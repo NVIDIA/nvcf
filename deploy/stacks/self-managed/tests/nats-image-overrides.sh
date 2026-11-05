@@ -34,7 +34,7 @@ assert_equal "$(yq -r '.nats.container.image | .registry + "/" + .repository + "
 assert_equal "$(yq -r '.nats.reloader.image.tag' "$work_dir/default.yaml")" \
   '0.25.0' 'patched reloader default'
 assert_equal "$(yq -r '.nats.natsBox.container.image.tag' "$work_dir/default.yaml")" \
-  '0.20.1-nonroot' 'patched box default'
+  "$(yq -r '.nats.natsBox.container.image.tag' "$repo_root/deploy/helm/nats/values.yaml")" 'box tag matches owning chart'
 assert_equal "$(yq '.nats.natsBox.podTemplate' "$work_dir/default.yaml")" null 'no unconditional box policy'
 # The NVCF image registry must not redirect this upstream diagnostic image.
 assert_equal "$(yq '.nats.natsBox.container.image.registry' "$work_dir/default.yaml")" docker.io 'default box registry'
