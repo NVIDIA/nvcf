@@ -608,6 +608,8 @@ func TestCRIURestore_StoreReadOnlyAndWorkVolumeReserved(t *testing.T) {
 func TestCRIURestore_PlaceholderKnowsItsColdStart(t *testing.T) {
 	recorded := criuCaptureRecord()
 	recorded.SourcePodMeta[ColdEntrypointMeta] = `["/opt/nim/start.sh"]`
+	shellImage := criuCaptureRecord()
+	shellImage.SourcePodMeta[ColdEntrypointMeta] = `["/bin/sh","-c","test $$ -gt 0 && exec /app $(HOME)"]`
 	for _, tc := range []struct {
 		name    string
 		command []string
@@ -622,6 +624,9 @@ func TestCRIURestore_PlaceholderKnowsItsColdStart(t *testing.T) {
 		// this pod: the source pod's values are never reused.
 		{"entrypoint image, args with references", nil, []string{"--bind=$(POD_IP)"}, recorded, []string{"/opt/nim/start.sh", "--bind=$(POD_IP)"}},
 		{"entrypoint image, no args", nil, nil, recorded, []string{"/opt/nim/start.sh"}},
+		// The image's own strings were never expanded: escaped, the
+		// kubelet gives them back as the image has them.
+		{"entrypoint image with $ in its own strings", nil, nil, shellImage, []string{"/bin/sh", "-c", "test $$$$ -gt 0 && exec /app $$(HOME)"}},
 		{"entrypoint image, nothing recorded", nil, []string{"--port", "8000"}, criuCaptureRecord(), nil},
 		{"entrypoint image, no args, nothing recorded", nil, nil, criuCaptureRecord(), nil},
 	} {

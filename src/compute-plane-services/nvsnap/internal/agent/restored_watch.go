@@ -181,10 +181,12 @@ func (c *criuAutoRestorer) failRestored(ctx context.Context, pod *corev1.Pod, re
 	} else {
 		log.WithError(cause).Error("CRIU restore failed after it ran; its capture was verified, so it is kept and the replacement restores from it again")
 	}
-	c.dropRestoreRecord(pod.UID)
 	container := ref.container
 	if container == "" {
 		container = pod.Annotations[webhook.CRIURestoreContainerAnnotation]
 	}
 	c.a.disposeFailedPlaceholder(ctx, pod.Namespace, pod.Name, pod.UID, container, log)
+	// Dropped after: an agent that stops before the pod is marked or gone
+	// finds the record, and the dead engine, again.
+	c.dropRestoreRecord(pod.UID)
 }

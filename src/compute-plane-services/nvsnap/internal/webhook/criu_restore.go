@@ -296,8 +296,9 @@ func (m *Mutator) criuPlaceholderPatches(pod *corev1.Pod, checkpointID string, m
 // pod would without nvsnap: its own command and args when it names a
 // command, else the image entrypoint the capture record man saw the runtime
 // start (the entrypoint lives in the image, not the pod) and c's own args.
-// The args are passed as written: the kubelet expands their $(VAR)
-// references for this pod. Nil when neither is known; the placeholder then
+// The pod's args are passed as written, and the kubelet expands their $(VAR)
+// references for this pod; the image's strings are escaped so it leaves
+// them as they are. Nil when neither is known; the placeholder then
 // cannot start cold in place.
 func ColdArgv(c *corev1.Container, man checkpointstore.Manifest) []string {
 	if len(c.Command) > 0 {
@@ -314,8 +315,13 @@ func ColdArgv(c *corev1.Container, man checkpointstore.Manifest) []string {
 	if err := json.Unmarshal([]byte(raw), &entry); err != nil || len(entry) == 0 || entry[0] == "" || entry[0] == IdleBin {
 		return nil
 	}
+	// The image's own strings were never expanded by the kubelet; in the
+	// placeholder's args they would be, so each "$" is escaped as "$$".
 	argv := make([]string, 0, len(entry)+len(c.Args))
-	return append(append(argv, entry...), c.Args...)
+	for _, e := range entry {
+		argv = append(argv, strings.ReplaceAll(e, "$", "$$"))
+	}
+	return append(argv, c.Args...)
 }
 
 // restoredGatePatches adds the CRIURestoredCondition readiness gate.

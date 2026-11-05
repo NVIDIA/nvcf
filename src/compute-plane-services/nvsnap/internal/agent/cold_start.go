@@ -94,9 +94,35 @@ func (a *Agent) disposeFailedPlaceholder(ctx context.Context, ns, name string, u
 		return
 	}
 	if !podRecreatedOnDelete(pod) {
-		cerr := a.coldStartInPlace(ctx, pod, container, log)
-		if cerr == nil {
+		// A failure that may pass (the runtime or the API server busy, the
+		// pod's status behind its container) is tried again: deleting the
+		// pod is for good. Only a pod that cannot start in place, or keeps
+		// failing to, is deleted.
+		var permanent error
+		cerr := retryUntil(ctx, coldStartRetry.first, coldStartRetry.max, coldStartRetry.total, func() (bool, error) {
+			err := a.coldStartInPlace(ctx, pod, container, log)
+			if errors.Is(err, errNoColdStart) {
+				permanent = err
+				return true, nil
+			}
+			if err == nil {
+				return true, nil
+			}
+			if p, gerr := a.kubeClient.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{}); gerr == nil && p.UID == pod.UID {
+				pod = p
+			}
+			return false, err
+		})
+		if cerr == nil && permanent == nil {
 			log.Warn("CRIU auto-restore failed in a pod nothing would recreate; its workload starts cold in place")
+			return
+		}
+		if permanent != nil {
+			cerr = permanent
+		}
+		if coldStarted(pod) {
+			// Marked: considerColdStart finishes it on the pod's next event.
+			log.WithError(cerr).Error("CRIU auto-restore failed in a pod nothing would recreate; its cold start in place is marked but not done, and is tried again on the pod's next event")
 			return
 		}
 		log.WithError(cerr).Error("CRIU auto-restore failed in a pod nothing would recreate, and it cannot start cold in place; deleting it")
@@ -128,19 +154,23 @@ func (a *Agent) coldStartInPlace(ctx context.Context, pod *corev1.Pod, container
 	if err != nil {
 		return err
 	}
-	if err := writeColdStartMarker(pid, marker); err != nil {
-		return err
-	}
 	if !coldStarted(pod) {
-		// The uid in the patch makes it fail on a pod replaced under the
-		// same name since it was read.
+		// Marked first: from here on no restore is tried in the pod, and
+		// an agent that stops before the restart below leaves a pod
+		// considerColdStart finishes. The uid in the patch makes it fail
+		// on a pod replaced under the same name since it was read.
 		patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{
 			"uid":         pod.UID,
 			"annotations": map[string]string{webhook.ColdStartedAnnotation: time.Now().UTC().Format(time.RFC3339)},
 		}})
-		if _, err := a.kubeClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		p, err := a.kubeClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+		if err != nil {
 			return fmt.Errorf("mark the pod started cold: %w", err)
 		}
+		*pod = *p
+	}
+	if err := writeColdStartMarker(pid, marker); err != nil {
+		return err
 	}
 	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("restart the placeholder container (pid %d): %w", pid, err)
@@ -157,12 +187,12 @@ func (a *Agent) coldStartInPlace(ctx context.Context, pod *corev1.Pod, container
 // marker path that program checks.
 func (a *Agent) coldStartTarget(ctx context.Context, pod *corev1.Pod, container string) (pid int, marker string, err error) {
 	if a.runtime == nil {
-		return 0, "", errors.New("no container runtime client")
+		return 0, "", fmt.Errorf("%w: no container runtime client", errNoColdStart)
 	}
 	if container == "" {
 		// The runtime would answer with the pod's first container, which
 		// may be a sidecar.
-		return 0, "", errors.New("the placeholder container is not named")
+		return 0, "", fmt.Errorf("%w: the placeholder container is not named", errNoColdStart)
 	}
 	info, ferr := a.runtime.FindContainerByPod(ctx, pod.Namespace, pod.Name, container)
 	if ferr != nil {
@@ -210,6 +240,10 @@ func writeColdStartMarker(pid int, marker string) error {
 	}
 	return syscall.Close(fd)
 }
+
+// coldStartRetry bounds the retries of a cold start in place whose failure
+// may pass, as deletes are bounded (deleteRetry).
+var coldStartRetry = deleteRetry
 
 // containerRoot is the root filesystem of the container whose init is pid,
 // as the agent reaches it.

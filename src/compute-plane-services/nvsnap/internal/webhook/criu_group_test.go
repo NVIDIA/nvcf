@@ -267,3 +267,38 @@ func TestCRIUGroupRestore_OnePodGroupStartsLikeALonePod(t *testing.T) {
 		t.Errorf("a rank of a two-pod group runs its wait on its leader: %v", c.Command)
 	}
 }
+
+// A group placeholder gets what the read-only model landing needs in the
+// engine's environment, as the captured pod had: a restored engine keeps its
+// own, but one started cold in place runs with the container's. Its
+// Hugging Face home under the landing would otherwise have it write module
+// sources onto the read-only volume.
+func TestCRIUGroupRestore_PlaceholderGetsTheLandingsEnvironment(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
+	m.CRIUCapture = true
+	m.CheckpointHostRoot = "/var/lib/containerd/nvsnap-checkpoints"
+	m.CRIUGroups = func(_ context.Context, ns, uri string) (CRIUGroup, bool) {
+		return CRIUGroup{Key: "key-of/" + ns + "/" + uri, Checkpoints: []string{"r0__1"}, GPUShare: true}, true
+	}
+	completeModelPV(t, kc, scoped("sr-fn", ngcFunctionKey))
+	pod := ngcFunctionPod()
+	pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env, corev1.EnvVar{Name: "HF_HOME", Value: "/config/models"})
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := applyPatches(t, pod, patches)
+	if got.Annotations[CRIURestoreAnnotation] != "r0__1" {
+		t.Fatalf("not admitted as the restore placeholder: %v", got.Annotations)
+	}
+	modules := ""
+	for _, e := range got.Spec.Containers[0].Env {
+		if e.Name == "HF_MODULES_CACHE" {
+			modules = e.Value
+		}
+	}
+	if modules != criuHFModulesCache {
+		t.Errorf("HF_MODULES_CACHE = %q, want %q off the read-only landing", modules, criuHFModulesCache)
+	}
+}

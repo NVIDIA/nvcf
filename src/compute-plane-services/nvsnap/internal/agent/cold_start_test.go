@@ -17,8 +17,11 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
@@ -353,5 +356,39 @@ func TestContainerColdEntrypoint(t *testing.T) {
 	rt.specs["c1"].Process.Args = []string{webhook.IdleBin, "--bind=10.0.0.7"}
 	if got := a.containerColdEntrypoint(ctx, "ns", "p", "inference"); got != nil {
 		t.Errorf("placeholder argv recorded: %v", got)
+	}
+}
+
+// A failure that may pass (the API server refusing the mark once) is tried
+// again; the pod is not deleted for it.
+func TestDisposeFailedPlaceholder_RetriesAFailureThatMayPass(t *testing.T) {
+	prev := coldStartRetry
+	coldStartRetry = struct{ first, max, total time.Duration }{10 * time.Millisecond, 20 * time.Millisecond, 5 * time.Second}
+	t.Cleanup(func() { coldStartRetry = prev })
+	cmd, marker := startPlaceholder(t, "/bin/sh", "-c", "exec sleep 30")
+	pod := placeholderPod()
+	kc := fake.NewSimpleClientset(pod)
+	failed := false
+	kc.PrependReactor("patch", "pods", func(k8stesting.Action) (bool, kruntime.Object, error) {
+		if !failed {
+			failed = true
+			return true, nil, apierrors.NewInternalError(errors.New("etcd busy"))
+		}
+		return false, nil, nil
+	})
+	a := &Agent{kubeClient: kc, log: logrus.New(), runtime: pidRuntime{pid: procPID(cmd)}}
+	ctx := context.Background()
+
+	a.disposeFailedPlaceholder(ctx, pod.Namespace, pod.Name, pod.UID, "inference", logrus.NewEntry(a.log))
+
+	got, err := kc.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("the pod was deleted after a failure that may pass: %v", err)
+	}
+	if !failed || !coldStarted(got) {
+		t.Errorf("not retried to a cold start: failed once %v, marked %v", failed, coldStarted(got))
+	}
+	if _, err := os.Stat(marker); err != nil || !exited(cmd) {
+		t.Errorf("not restarted to start cold: marker %v", err)
 	}
 }
