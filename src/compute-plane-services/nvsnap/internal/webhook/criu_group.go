@@ -188,7 +188,7 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 		man.SourcePodMeta[BundleMeta] = g.Bundles[ordinal]
 	}
 	id := g.Checkpoints[ordinal]
-	cp, err := m.criuRestorePatches(pod, id, man)
+	cp, err := m.criuPlaceholderPatches(pod, id, man, true)
 	if err != nil {
 		log.WithError(err).Warn("CRIU group restore: cannot prepare the pod; cold start")
 		admit(metrics.AdmitCold, "prepare-failed")

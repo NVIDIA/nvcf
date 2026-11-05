@@ -165,6 +165,14 @@ func CRIUNamespaceScope(ns string) string { return "namespace/" + ns }
 // stays, so the pod becomes Ready when the restored engine serves, and
 // not before the restore is done (CRIURestoredCondition).
 func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man checkpointstore.Manifest) ([]PatchOp, error) {
+	return m.criuPlaceholderPatches(pod, checkpointID, man, false)
+}
+
+// criuPlaceholderPatches is criuRestorePatches for a lone pod (group
+// false) or a rank or companion of a group restore (group true), whose
+// placeholder skips the init containers that would wait on its peers
+// (placeholderInitPatches).
+func (m *Mutator) criuPlaceholderPatches(pod *corev1.Pod, checkpointID string, man checkpointstore.Manifest, group bool) ([]PatchOp, error) {
 	// The capture checkpoints the first container with GPUs, or the
 	// container the record names (a companion's, captured by its
 	// connections to the ranks); that one becomes the placeholder,
@@ -206,7 +214,7 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 	} else if c.Args != nil {
 		patches = append(patches, PatchOp{Op: "remove", Path: base + "/args"})
 	}
-	patches = append(patches, placeholderInitPatches(pod, c)...)
+	patches = append(patches, placeholderInitPatches(pod, group)...)
 	if c.LivenessProbe != nil {
 		patches = append(patches, PatchOp{Op: "remove", Path: base + "/livenessProbe"})
 	}
@@ -383,33 +391,36 @@ func jsonPointerEscape(s string) string {
 	return strings.NewReplacer("~", "~0", "/", "~1").Replace(s)
 }
 
-// placeholderInitPatches skips, in a restore placeholder, the init
-// containers whose output the restored process cannot see: the process
-// already went through its startup when it was captured, so what an init
-// container leaves matters only on a volume the main container mounts,
-// and one that writes none only waits or checks. Waiting is harmful here:
-// a rank that waits for its leader to serve (a Dynamo worker's
-// wait-for-leader) never starts, and the leader is a placeholder until the
-// whole group is restored. A skipped init runs the helper's skip instead,
-// keeping its place so the other patches' indices hold.
+// placeholderInitPatches skips, in a group restore's placeholder, the init
+// containers that would only wait on the instance's peers. A rank that
+// waits for its leader to serve (a Dynamo worker's wait-for-leader) never
+// starts, and the leader is a placeholder until the whole group is
+// restored. The restored process already went through its startup when it
+// was captured, so an init container matters only for what it leaves on a
+// volume that something running in the placeholder reads: the main
+// container, another container or sidecar of the pod, or an init container
+// kept for that reason (an init that extracts files another init merges
+// into the main container's certificates). Those are kept, followed through
+// such chains; the rest only wait or check, and run the helper's skip
+// instead, keeping their place so the other patches' indices hold.
+//
+// A lone placeholder runs every init container, as the pod would without
+// nvsnap: nothing it waits on is a placeholder, and if its restore fails it
+// starts the workload cold in place, which needs whatever they set up.
 //
 // A native sidecar (an init container with restartPolicy Always) is no
 // startup step: it serves beside the main container for the pod's life,
 // like any other sidecar, and runs unchanged. Skipped, it would exit, be
 // restarted, and hold back every init container after it.
-func placeholderInitPatches(pod *corev1.Pod, main *corev1.Container) []PatchOp {
-	volumes := map[string]corev1.Volume{}
-	for _, v := range pod.Spec.Volumes {
-		volumes[v.Name] = v
+func placeholderInitPatches(pod *corev1.Pod, group bool) []PatchOp {
+	if !group {
+		return nil
 	}
-	seen := map[string]bool{}
-	for _, vm := range main.VolumeMounts {
-		seen[vm.Name] = true
-	}
+	keep := initsToKeep(pod)
 	var patches []PatchOp
 	for i := range pod.Spec.InitContainers {
 		init := &pod.Spec.InitContainers[i]
-		if NativeSidecar(init) || writesSharedVolume(init, volumes, seen) {
+		if keep[i] {
 			continue
 		}
 		base := fmt.Sprintf("/spec/initContainers/%d", i)
@@ -418,7 +429,7 @@ func placeholderInitPatches(pod *corev1.Pod, main *corev1.Container) []PatchOp {
 			op = "replace"
 		}
 		patches = append(patches, PatchOp{Op: op, Path: base + "/command",
-			Value: []string{HelperBin, "skip", "--reason", "restore placeholder: " + init.Name + " writes nothing the restored process reads"}})
+			Value: []string{HelperBin, "skip", "--reason", "restore placeholder: " + init.Name + " leaves nothing the pod's running containers read"}})
 		if init.Args != nil {
 			patches = append(patches, PatchOp{Op: "remove", Path: base + "/args"})
 		}
@@ -431,12 +442,50 @@ func placeholderInitPatches(pod *corev1.Pod, main *corev1.Container) []PatchOp {
 	return patches
 }
 
-// writesSharedVolume reports whether init mounts, writable, a volume that
-// holds data (not a ConfigMap, Secret or projection) the main container
-// also mounts.
-func writesSharedVolume(init *corev1.Container, volumes map[string]corev1.Volume, mainMounts map[string]bool) bool {
+// initsToKeep reports, by index, the init containers a group placeholder
+// runs: native sidecars, and every init that writes a data volume read by a
+// container that runs in the placeholder (every regular container, every
+// native sidecar, every init kept), until no more are kept.
+func initsToKeep(pod *corev1.Pod) map[int]bool {
+	volumes := map[string]corev1.Volume{}
+	for i := range pod.Spec.Volumes {
+		volumes[pod.Spec.Volumes[i].Name] = pod.Spec.Volumes[i]
+	}
+	read := map[string]bool{}
+	mount := func(c *corev1.Container) {
+		for _, vm := range c.VolumeMounts {
+			read[vm.Name] = true
+		}
+	}
+	for i := range pod.Spec.Containers {
+		mount(&pod.Spec.Containers[i])
+	}
+	keep := map[int]bool{}
+	for i := range pod.Spec.InitContainers {
+		if NativeSidecar(&pod.Spec.InitContainers[i]) {
+			keep[i] = true
+			mount(&pod.Spec.InitContainers[i])
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for i := range pod.Spec.InitContainers {
+			init := &pod.Spec.InitContainers[i]
+			if keep[i] || !writesReadVolume(init, volumes, read) {
+				continue
+			}
+			keep[i], changed = true, true
+			mount(init)
+		}
+	}
+	return keep
+}
+
+// writesReadVolume reports whether init mounts, writable, a volume that
+// holds data (not a ConfigMap, Secret or projection) and is in read.
+func writesReadVolume(init *corev1.Container, volumes map[string]corev1.Volume, read map[string]bool) bool {
 	for _, vm := range init.VolumeMounts {
-		if vm.ReadOnly || !mainMounts[vm.Name] {
+		if vm.ReadOnly || !read[vm.Name] {
 			continue
 		}
 		v, ok := volumes[vm.Name]

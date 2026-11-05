@@ -361,7 +361,6 @@ func TestCRIURestore_PlaceholderIsTheGPUContainer(t *testing.T) {
 // (a Dynamo worker waiting for its leader) would never end.
 func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
 	alwaysRestart := corev1.ContainerRestartPolicyAlways
-	m := criuMutator(t, criuCaptureRecord())
 	pod := podWithAnnotation("abc123")
 	pod.Spec = criuFunctionPod().Spec
 	pod.Spec.Volumes = []corev1.Volume{
@@ -379,11 +378,73 @@ func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
 		// beacon): skipped, it would exit and be restarted for ever.
 		{Name: "beacon", Image: "img", Command: []string{"serve"}, RestartPolicy: &alwaysRestart},
 	}
+	run := placeholderInits(t, pod, true)
+	want := map[string]bool{"download-model": true, "wait-for-leader": false, "wait-for-nats": false, "own-scratch": false, "beacon": true}
+	for n, w := range want {
+		if run[n] != w {
+			t.Errorf("%s runs = %v, want %v", n, run[n], w)
+		}
+	}
+	// A lone placeholder runs them all, as the pod would without nvsnap: it
+	// waits on no peer, and starts cold in place if its restore fails.
+	for n, r := range placeholderInits(t, pod, false) {
+		if !r {
+			t.Errorf("lone placeholder: %s skipped", n)
+		}
+	}
+	// Through Mutate, a lone pod's inits are untouched.
+	m := criuMutator(t, criuCaptureRecord())
 	patches, err := m.Mutate(context.Background(), pod)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := applyPatches(t, pod, patches)
+	for _, p := range patches {
+		if strings.HasPrefix(p.Path, "/spec/initContainers/") && strings.HasSuffix(p.Path, "/command") {
+			t.Errorf("lone placeholder: init patched: %s", p.Path)
+		}
+	}
+}
+
+// A group placeholder keeps an init whose output reaches a running
+// container only through another init (files one extracts and another
+// merges into the engine's certificates), and one whose output a sidecar
+// reads (a trust bundle for a worker container), as NVCA function pods do.
+func TestCRIURestore_GroupPlaceholderKeepsInitChainsAndSidecarInputs(t *testing.T) {
+	pod := podWithAnnotation("abc123")
+	pod.Spec = criuFunctionPod().Spec
+	empty := corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
+	pod.Spec.Volumes = []corev1.Volume{
+		{Name: "tools", VolumeSource: empty}, {Name: "extracted", VolumeSource: empty},
+		{Name: "merged-certs", VolumeSource: empty}, {Name: "trust-merged", VolumeSource: empty},
+		{Name: "trust-src", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{}}},
+	}
+	pod.Spec.Containers[1].VolumeMounts = []corev1.VolumeMount{{Name: "merged-certs", MountPath: "/certs", ReadOnly: true}}
+	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: "llm-worker", Image: "w",
+		VolumeMounts: []corev1.VolumeMount{{Name: "trust-merged", MountPath: "/tls", ReadOnly: true}}})
+	pod.Spec.InitContainers = []corev1.Container{
+		{Name: "a-toolbox", Command: []string{"cp"}, VolumeMounts: []corev1.VolumeMount{{Name: "tools", MountPath: "/tools"}}},
+		{Name: "b-extract-inference", Command: []string{"/tools/busybox"}, VolumeMounts: []corev1.VolumeMount{
+			{Name: "tools", MountPath: "/tools"}, {Name: "extracted", MountPath: "/extracted"}}},
+		{Name: "fast-merge-certs", Command: []string{"merge"}, VolumeMounts: []corev1.VolumeMount{
+			{Name: "extracted", MountPath: "/extracted"}, {Name: "merged-certs", MountPath: "/merged"}}},
+		{Name: "trust-bundle-install", Command: []string{"install"}, VolumeMounts: []corev1.VolumeMount{
+			{Name: "trust-src", MountPath: "/trust", ReadOnly: true}, {Name: "trust-merged", MountPath: "/merged"}}},
+		{Name: "wait-for-etcd", Command: []string{"sh", "-c", "until nc etcd 2379; do sleep 1; done"}},
+	}
+	run := placeholderInits(t, pod, true)
+	want := map[string]bool{"a-toolbox": true, "b-extract-inference": true, "fast-merge-certs": true, "trust-bundle-install": true, "wait-for-etcd": false}
+	for n, w := range want {
+		if run[n] != w {
+			t.Errorf("%s runs = %v, want %v", n, run[n], w)
+		}
+	}
+}
+
+// placeholderInits applies placeholderInitPatches to pod and reports, by
+// name, whether each init container still runs its own command.
+func placeholderInits(t *testing.T, pod *corev1.Pod, group bool) map[string]bool {
+	t.Helper()
+	got := applyPatches(t, pod, placeholderInitPatches(pod, group))
 	run := map[string]bool{}
 	for _, c := range got.Spec.InitContainers {
 		skipped := len(c.Command) > 1 && c.Command[0] == HelperBin && c.Command[1] == "skip"
@@ -398,12 +459,7 @@ func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
 			}
 		}
 	}
-	want := map[string]bool{"download-model": true, "wait-for-leader": false, "wait-for-nats": false, "own-scratch": false, "beacon": true}
-	for n, w := range want {
-		if run[n] != w {
-			t.Errorf("%s runs = %v, want %v", n, run[n], w)
-		}
-	}
+	return run
 }
 
 // A companion's checkpoint names its container (one of several, picked by

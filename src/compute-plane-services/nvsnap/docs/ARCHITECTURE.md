@@ -389,7 +389,11 @@ leaves a marker on the pod's restore work volume, so a container restart starts
 the workload at once. A placeholder admitted without the argv (an older
 webhook) cannot, and is deleted as before. The liveness and startup probes the
 placeholder dropped stay dropped for that pod (`internal/agent/cold_start.go`,
-`cmd/nvsnap-idle`).
+`cmd/nvsnap-idle`). A lone placeholder runs all of the pod's init containers,
+so a cold start in place has what they set up. A group placeholder skips the
+init containers that would only wait on the instance's peers, and keeps every
+one whose output something running in the pod reads, directly or through
+another kept init (`internal/webhook/criu_restore.go` `initsToKeep`).
 
 ## 11. Platform integration (NVCF and NVCA)
 
