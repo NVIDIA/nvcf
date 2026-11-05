@@ -41,6 +41,11 @@ README.md
 Taskfile.yml
 license-header.txt
 
+# Agent skills and per-tool skill links (kaizen-ui is gitignored)
+.agents/skills/**
+.claude/**
+.cursor/**
+
 # Bazel scaffold
 BUILD.bazel
 **/BUILD.bazel

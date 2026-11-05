@@ -19,7 +19,14 @@
 # non-blocking hook error; `task verify` remains the gate.
 set -uo pipefail
 
-file=$(jq -r '.tool_input.file_path // empty')
+# Node is already required for the UI, so it parses the event instead of jq.
+file=$(node -e '
+let input = "";
+process.stdin.on("data", (chunk) => (input += chunk));
+process.stdin.on("end", () => {
+	process.stdout.write(JSON.parse(input).tool_input?.file_path ?? "");
+});
+') || exit 1
 project_dir="${CLAUDE_PROJECT_DIR:?}"
 ui_dir="$project_dir/ui"
 

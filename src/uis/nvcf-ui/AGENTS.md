@@ -124,7 +124,7 @@ Follow the root `AGENTS.md` and `license-compliance.md`. For the UI:
 
 ## Pull requests
 
-- Use `.github/PULL_REQUEST_TEMPLATE.md` and link a public `NVIDIA/nvcf`
+- Use `.github/PULL_REQUEST_TEMPLATE.md` and link a public `dsx-ai-factory/nvcf`
   issue.
 - Conventional Commit titles with scope `nvcf-ui`. `feat`, `fix`, and `perf`
   create a release; `refactor`, `chore`, `docs`, and `test` do not.

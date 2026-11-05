@@ -8,10 +8,6 @@ description: >-
   deciding whether to extend an existing feature, even if the user does not
   say "feature".
 license: Apache-2.0
-allowed-tools:
-  - Bash
-  - Read
-  - Edit
 ---
 
 # Adding a feature

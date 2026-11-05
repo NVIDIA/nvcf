@@ -23,6 +23,7 @@ import {
 	RouterProvider,
 } from "@tanstack/react-router";
 import { type RenderOptions, render } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { RouteErrorFallback } from "~/components/RouteErrorFallback";
 import { routeTree as appRouteTree } from "~/routeTree.gen";
 
@@ -32,6 +33,22 @@ function createTestQueryClient() {
 			queries: { retry: false },
 		},
 	});
+}
+
+/** Renders a component that reads its own queries but uses no router hooks. */
+export function renderWithQueryClient(
+	ui: ReactElement,
+	renderOptions?: Omit<RenderOptions, "wrapper">,
+) {
+	const queryClient = createTestQueryClient();
+
+	return {
+		...render(
+			<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+			renderOptions,
+		),
+		queryClient,
+	};
 }
 
 interface RenderWithRouterOptions extends Omit<RenderOptions, "wrapper"> {

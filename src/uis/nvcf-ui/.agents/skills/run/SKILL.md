@@ -4,8 +4,6 @@ description: >-
   Start the nvcf-ui development server. Use when asked to run, start, or launch
   the app, or to check a change in the browser.
 license: Apache-2.0
-allowed-tools:
-  - Bash
 ---
 
 # Running nvcf-ui

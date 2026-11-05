@@ -6,9 +6,6 @@ description: >-
   task generate, adding or changing MSW scenarios, troubleshooting generated
   code, or when generated hooks are missing or out of date.
 license: Apache-2.0
-allowed-tools:
-  - Bash
-  - Read
 ---
 
 # Code generation

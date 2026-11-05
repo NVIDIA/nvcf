@@ -201,7 +201,8 @@ leaves the rest intact.
 
 Mock realism is fixed at the source, in the `mock.properties` overrides in
 `ui/orval.config.ts` followed by `task generate`. Never patch generated output
-or the store by hand.
+by hand. The store is handwritten: when you add an endpoint, add its handler to
+`getStoreHandlers` in `ui/src/mocks/store/handlers.ts`.
 
 ## Changing this document
 

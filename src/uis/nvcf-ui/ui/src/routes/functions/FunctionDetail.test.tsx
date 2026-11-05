@@ -16,21 +16,15 @@
  */
 
 import { screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
 import { getGetCloudAccountsMockHandler } from "~/generated/api/account/account.msw";
 import { getGetFunctionDeploymentQueryOptions } from "~/generated/api/function-deployment/function-deployment";
 import {
-	getGetFunctionDeploymentMockHandler,
-	getGetFunctionDeploymentResponseMock,
-} from "~/generated/api/function-deployment/function-deployment.msw";
-import {
 	getGetFunctionVersionMockHandler,
 	getGetFunctionVersionResponseMock,
 } from "~/generated/api/function-management/function-management.msw";
 import { FunctionDtoStatus } from "~/generated/model/functionDtoStatus";
-import { handlers as noDeploymentHandlers } from "~/mocks/scenarios/functions/no-deployment";
 import { server } from "~/mocks/server";
 import { renderWithRouter } from "~/testing/render";
 
@@ -136,56 +130,7 @@ describe("FunctionDetail", () => {
 		).toBeUndefined();
 	});
 
-	it("shows 'No Instance Type Yet' when the function has no deployment specifications", async () => {
-		server.use(
-			getGetFunctionVersionMockHandler({ function: baseFn }),
-			...noDeploymentHandlers,
-		);
-
-		renderDetail();
-
-		// Two sequential MSW delays (function + deployment) — extend timeout
-		expect(
-			await screen.findByText("No Instance Type Yet", {}, { timeout: 3000 }),
-		).toBeInTheDocument();
-	});
-
-	it("shows instance types grouped by GPU for a deployed function", async () => {
-		const deployment = getGetFunctionDeploymentResponseMock().deployment;
-		const spec = deployment.deploymentSpecifications[0];
-		server.use(
-			getGetFunctionVersionMockHandler({ function: baseFn }),
-			getGetFunctionDeploymentMockHandler({
-				deployment: {
-					...deployment,
-					deploymentSpecifications: [
-						{
-							...spec,
-							gpu: "A100",
-							instanceType: "A100.80GB.1x",
-							systemMemory: "251Gi",
-							minInstances: 1,
-							maxInstances: 2,
-						},
-					],
-				},
-			}),
-		);
-
-		renderDetail();
-
-		expect(
-			await screen.findByRole("tab", { name: "A100" }, { timeout: 3000 }),
-		).toBeInTheDocument();
-		expect(
-			screen.getByRole("tab", { name: "A100.80GB.1x" }),
-		).toBeInTheDocument();
-		expect(screen.getByText("251Gi")).toBeInTheDocument();
-		expect(screen.getByText("1 / 2")).toBeInTheDocument();
-	});
-
-	it("keeps a deployment failure inside the instance types panel and recovers on retry", async () => {
-		const user = userEvent.setup();
+	it("keeps a deployment failure inside the instance types panel", async () => {
 		server.use(
 			getGetFunctionVersionMockHandler({ function: baseFn }),
 			http.get(
@@ -208,12 +153,6 @@ describe("FunctionDetail", () => {
 		expect(
 			screen.queryByRole("button", { name: /try again/i }),
 		).not.toBeInTheDocument();
-
-		server.use(...noDeploymentHandlers);
-		await user.click(screen.getByRole("button", { name: "Retry" }));
-		expect(
-			await screen.findByText("No Instance Type Yet", {}, { timeout: 3000 }),
-		).toBeInTheDocument();
 	});
 
 	it("shows error state when the function API fails", async () => {

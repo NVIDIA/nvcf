@@ -5,11 +5,13 @@ A web interface for managing NVIDIA Cloud Functions (NVCF), built as a single-pa
 ## Prerequisites
 
 - Go 1.26+ (see `backend/go.mod`)
-- Node 20.19+ or 22.12+ (see `engines` in `ui/package.json`)
+- Node 22.13+ (required by pnpm 11; see `engines` in `ui/package.json`)
 - pnpm 11 (pinned by `packageManager` in `ui/package.json`)
 - [Task] 3+
+- [golangci-lint] 2.x (backend lint in `task lint` and `task verify`; not installed by `task setup`)
 
 [Task]: https://taskfile.dev
+[golangci-lint]: https://golangci-lint.run/welcome/install/
 
 ## Quick Start
 

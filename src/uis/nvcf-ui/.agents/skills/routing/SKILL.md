@@ -7,10 +7,6 @@ description: >-
   when adding a page, editing a loader or search schema, linking between pages,
   or loading the official TanStack Router skills for this project.
 license: Apache-2.0
-allowed-tools:
-  - Bash
-  - Read
-  - Edit
 ---
 
 # Routing
@@ -106,5 +102,8 @@ TanStack skill and this file disagree, this file wins for project conventions.
 
 ## Validate
 
-1. Run `task lint:fix`.
-2. Run `task verify`.
+1. If you added, renamed, or moved a route file and `task ui:dev` is not
+   running, run `task test` first. It regenerates `routeTree.gen.ts`, and
+   `task verify` typechecks before it runs tests.
+2. Run `task lint:fix`.
+3. Run `task verify`.

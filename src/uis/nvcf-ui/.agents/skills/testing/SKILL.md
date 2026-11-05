@@ -8,10 +8,6 @@ description: >-
   required). TypeScript and React only; Go backend tests follow standard Go
   practice.
 license: Apache-2.0
-allowed-tools:
-  - Bash
-  - Read
-  - Edit
 ---
 
 # Testing
@@ -24,11 +20,13 @@ Adding or changing a component means adding or updating its tests.
 | --- | --- | --- |
 | A page (route file) | `renderWithRouter({ initialLocation: "/functions" })` | Renders the app's generated route tree, so the real loader, search validation, and page run. |
 | A component that uses router hooks but is not a route | `renderWithRouter({ routeTree })` with a test-local tree | Build a small root and stub routes in the test. See `AccountSwitcher.test.tsx`. |
+| A component that reads its own queries but uses no router hooks | `renderWithQueryClient(<Component />)` | Mock its API calls with MSW. See `InstanceTypesPanel.test.tsx`. |
 | A plain component | `render` from `@testing-library/react` | Pass data through props. |
 | Pure logic | A plain unit test | No rendering. |
 
-- `renderWithRouter` lives in `~/testing/render`. It creates a fresh
-  `QueryClient`, memory history, and router context.
+- `renderWithRouter` and `renderWithQueryClient` live in `~/testing/render`.
+  Both create a fresh `QueryClient`; `renderWithRouter` also sets up memory
+  history and router context.
 - Never mock `@tanstack/react-router`. Render a real router instead.
 - The helper sets only the router options tests assert on (today
   `defaultErrorComponent`). Add another option only when a test needs it.
