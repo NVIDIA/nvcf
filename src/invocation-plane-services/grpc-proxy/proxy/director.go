@@ -629,7 +629,10 @@ func (s *StreamDirector) RegisterWorker(ctx context.Context, workerAuthToken str
 		zap.L().Info("worker connected after its client left", zap.Stringer("request id", info.requestId))
 		return nil
 	}
-	w.Value().Established.Store(true)
+	// Evicted while registering: eviction already decided no close follows.
+	if !w.Value().MarkEstablished() {
+		return nil
+	}
 	s.eventLedger.Publish(ctx, newAttachmentEstablished(w.Value(), info, connectedAt))
 	return nil
 }

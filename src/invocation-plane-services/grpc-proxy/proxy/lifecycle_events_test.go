@@ -320,7 +320,9 @@ func TestAttachmentEndEvent(t *testing.T) {
 			wc := worker.NewWorkerConnection(uuid.New(), testFunctionId, testFunctionVersionId, func() {}, func() {})
 			t.Cleanup(func() { _ = wc.Close() })
 			wc.CallerNcaId = "nca-1"
-			wc.Established.Store(tc.established)
+			if tc.established {
+				require.True(t, wc.MarkEstablished())
+			}
 			if tc.connected {
 				workerLink, _ := net.Pipe()
 				require.NoError(t, wc.SetConnection(workerLink))

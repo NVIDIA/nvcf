@@ -130,7 +130,7 @@ func newAttachmentEstablished(wc *worker.WorkerConnection, info workerAuthInfo, 
 // worker arrived before the slot's TTL ran out.
 func attachmentEndEvent(wc *worker.WorkerConnection, cause string, closedAt time.Time, heldFor time.Duration, closeCode string) (cloudevents.Event, bool) {
 	switch {
-	case wc.Established.Load():
+	case wc.MarkEnded():
 		return newLedgerEvent(eventTypeAttachmentClosed, closedAt, wc.RequestId, wc.FunctionId, wc.FunctionVersionId, wc.CallerNcaId,
 			attachmentClosedData{
 				eventHeader:  header(wc.RequestId),
