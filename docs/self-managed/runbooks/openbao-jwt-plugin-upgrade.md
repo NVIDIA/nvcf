@@ -148,6 +148,11 @@ cluster health after each transfer. Stop if a transfer or check fails, or if
 leadership cannot be transferred to an unchecked member. Do not proceed based
 on a status response forwarded from a standby.
 
+OpenBao 2.6.3 step-down has no target selector and can alternate between the
+same two members. If this prevents the all-member check, stop at this gate;
+see [the supported-transfer follow-up](https://github.com/dsx-ai-factory/nvcf/issues/3241).
+Do not change Raft membership or skip a member to continue.
+
 ```bash
 bao_admin jwt-plugin-lifecycle pin-old
 ```
