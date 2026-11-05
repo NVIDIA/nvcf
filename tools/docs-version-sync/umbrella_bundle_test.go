@@ -153,6 +153,39 @@ func TestUmbrellaBundleCommandE2E(t *testing.T) {
 		}
 	}
 	t.Run("render extracted bundle", func(t *testing.T) { renderUmbrellaFixture(t, archive, manifest) })
+	t.Run("reject incorrect version stamps", func(t *testing.T) {
+		paths := map[string]string{"VERSION": manifest.Version}
+		for _, name := range releaseSetStackNames {
+			paths[umbrellaStackDirectory(name)+"/VERSION"] = manifest.Stacks[name].Version
+		}
+		for path, selected := range paths {
+			for _, wrong := range []string{"", "0.0.0", manifest.Version} {
+				if wrong == selected {
+					continue
+				}
+				t.Run(path+"="+wrong, func(t *testing.T) {
+					changed, err := readUmbrellaArchive(archive)
+					if err != nil {
+						t.Fatal(err)
+					}
+					changed[path] = umbrellaFile{data: []byte(wrong + "\n"), mode: 0o644}
+					// A self-consistent checksum and file index cannot establish
+					// the selected release identity. Only the manifest owns it.
+					delete(changed, "bundle-files.json")
+					if err := addUmbrellaFileIndex(changed, manifest, manifestData); err != nil {
+						t.Fatal(err)
+					}
+					broken, err := archiveUmbrellaFiles(changed)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := verifyUmbrellaArchive(broken, manifestData, umbrellaDigest(broken)); err == nil || !strings.Contains(err.Error(), "VERSION mismatch") {
+						t.Fatalf("accepted wrong stamp %q for selected version %q: %v", wrong, selected, err)
+					}
+				})
+			}
+		}
+	})
 	delete(files, umbrellaStackDirectory(releaseSetStackComputePlane)+"/helmfile.d/01-stack.yaml.gotmpl")
 	broken, err := archiveUmbrellaFiles(files)
 	if err != nil {
