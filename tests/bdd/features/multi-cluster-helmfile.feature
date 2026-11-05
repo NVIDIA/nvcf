@@ -20,19 +20,22 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | NGC_API_KEY     |
         | SAMPLE_NGC_ORG  |
         | SAMPLE_NGC_TEAM |
-      # The multi-cluster fixture starts from local service-DNS
-      # endpoint values, then the Background overlays
-      # operator-specific registry values before the first Helmfile
-      # install. Later scenarios reuse that install instead of
-      # reinstalling with different secrets or URLs.
+      # Customer stack artifacts and sample workloads have separate routes.
+      # The customer chart catalog requires the current NGC credential.
       And I prepare Helmfile environment "local-bdd" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" with values:
-        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                    |
-        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
-        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
+        | global.imagePullSecrets[0].name    | nvcr-pull-secret                        |
+        | global.helm.sources.url            | https://helm.ngc.nvidia.com/nvidia/nvcf |
+        | global.helm.sources.username       | $oauthtoken                             |
+        | global.helm.sources.password       | ${NGC_API_KEY}                          |
+        | global.image.repository            | nvidia/nvcf                             |
+        | addons.llm.requestRouter.chartPath |                                         |
+        | ingress.gatewayApi.chartPath       |                                         |
       And I prepare Helmfile environment "local-bdd" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:
-        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
-        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                        |
+        | global.helm.sources.url         | https://helm.ngc.nvidia.com/nvidia/nvcf |
+        | global.helm.sources.username    | $oauthtoken                             |
+        | global.helm.sources.password    | ${NGC_API_KEY}                          |
+        | global.image.repository         | nvidia/nvcf                             |
       And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       # Conflict precheck: single-cluster ncp-local's k3d serverlb
       # claims 0.0.0.0:8080/8443/10081, and ncp-local-cp also
@@ -96,7 +99,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       When I run command "kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml"
       Then the command exit code should be 0
       And the command output should contain "worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071"
-      And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:"
+      And the command output should contain "llm-router-client-image: nvcr.io/nvidia/nvcf/pylon:"
 
       # The dial address chooses the cross-cluster network path. Stargate's
       # per-pod authority remains the gRPC authority and reverse QUIC SNI, so

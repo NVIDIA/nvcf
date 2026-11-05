@@ -13,19 +13,20 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | NGC_API_KEY     |
         | SAMPLE_NGC_ORG  |
         | SAMPLE_NGC_TEAM |
-      # The fixture is a copy of deploy/stacks/self-managed/environments/local.yaml,
-      # which already carries every ncp-local local-mode override (storageClass,
-      # replica counts, NVCA self-managed endpoints, addons.llm.*, agentConfig,
-      # ingress.gatewayApi.*, addons.vanityGateway.*). The Background only overlays the operator-specific
-      # values that vary per NGC org and pull-secret name.
+      # Customer stack artifacts and sample workloads have separate routes.
+      # The customer chart catalog requires the current NGC credential.
       And I prepare Helmfile environment "local-bdd" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
-        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
-        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
-        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                        |
+        | global.helm.sources.url         | https://helm.ngc.nvidia.com/nvidia/nvcf |
+        | global.helm.sources.username    | $oauthtoken                             |
+        | global.helm.sources.password    | ${NGC_API_KEY}                          |
+        | global.image.repository         | nvidia/nvcf                             |
       And I prepare Helmfile environment "local-bdd" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
-        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
-        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                        |
+        | global.helm.sources.url         | https://helm.ngc.nvidia.com/nvidia/nvcf |
+        | global.helm.sources.username    | $oauthtoken                             |
+        | global.helm.sources.password    | ${NGC_API_KEY}                          |
+        | global.image.repository         | nvidia/nvcf                             |
       And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
 
     Scenario: Operator validates the authored Helmfile environment renders
@@ -93,7 +94,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | HTTPRoute | vanity-gateway | envoy-gateway-system | shared-gw |
 
       When I successfully run command "kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml"
-      Then the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:"
+      Then the command output should contain "llm-router-client-image: nvcr.io/nvidia/nvcf/pylon:"
 
       # The fixture intentionally omits these values. Verify the installed
       # gateway received the self-managed plaintext transport default while
