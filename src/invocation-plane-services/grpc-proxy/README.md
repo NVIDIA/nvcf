@@ -496,4 +496,7 @@ per request, so a rejoin replaces the first attachment's events.
 
 | Type | When | Data |
 |---|---|---|
+| `GrpcProxy.Work.Dispatched` | The session request was handed to workers. For a streaming version, once a worker answers it. | `schema_version`, `request_id`, `is_rejoin` |
 | `GrpcProxy.Attachment.Established` | A worker tunnel attaches to a session | `schema_version`, `request_id`, `attachment_id`, `is_rejoin`, `setup_latency_ms` (from the client request starting session setup to the worker attaching) |
+| `GrpcProxy.Attachment.Setup_failed` | Dispatch failed (`phase` is `dispatch`), or no worker attached before the slot's TTL ran out (`worker_wait`). Auth, rate limit and rejoin lookup failures are not published. | `schema_version`, `request_id`, `phase`, `attachment_id` (`worker_wait` only) |
+| `GrpcProxy.Attachment.Closed` | A tunnel that published `Established` leaves the connection cache | `schema_version`, `request_id`, `attachment_id`, `cause` (`client_closed`, `worker_closed`, `shutdown`, `ttl_expired`, `capacity_reached`), `held_for_ms`, `close_code` |
