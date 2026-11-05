@@ -149,6 +149,7 @@ func (m *Metrics) InstrumentedHook(path string, hookRaw http.Handler) http.Handl
 	// Initialize the most likely HTTP status codes.
 	reqTotal.WithLabelValues("200")
 	reqTotal.WithLabelValues("500")
+	reqTotal.WithLabelValues("503") // admission deadline exceeded, see handleWebhook
 	reqInFlight := m.RequestInFlight.With(lbl)
 
 	return promhttp.InstrumentHandlerDuration(

@@ -114,6 +114,7 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/github.com/bombsimon/logrusr/v4:logrusr",
         "//src/compute-plane-services/nvca/vendor/github.com/evanphx/json-patch/v5:json-patch",
         "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/testutil",
         "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
         "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
         "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
