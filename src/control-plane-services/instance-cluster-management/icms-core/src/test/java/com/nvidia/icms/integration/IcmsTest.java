@@ -185,7 +185,10 @@ public class IcmsTest extends IntegrationTest {
 
     @Test
     void testValidateRegistrationAppliesNothing() throws Exception {
-        String clusterId = createCluster("cluster5", "dummy_nca_id_1", OAUTH_CLIENT_ID_1);
+        // A client ID of its own: the cluster ID derives from it, and queues that other
+        // tests create stay in LocalStack.
+        String clusterId = createCluster("cluster5", "dummy_nca_id_1",
+                                         "nvssa-stg-dummy_" + UUID.randomUUID());
         ClusterEntity created =
                 clusterRepository.getClusterInfoByClusterId(clusterId, true).orElseThrow();
         String terminationQueueName = String.format(
