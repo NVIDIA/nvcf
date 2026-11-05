@@ -342,3 +342,106 @@ func TestConnectOptionsReconnectAfterRepeatedAuthRejections(t *testing.T) {
 		})
 	}
 }
+
+// connectOptions must never give up on the connection and must never buffer a
+// publish while reconnecting. Each assertion fails if its option is dropped.
+func TestConnectOptionsReconnectForeverWithoutBuffering(t *testing.T) {
+	options := nats.GetDefaultOptions()
+	for _, option := range connectOptions("test-service", nats.Token(test.FakeNatsToken)) {
+		require.NoError(t, option(&options))
+	}
+	assert.Equal(t, -1, options.MaxReconnect)
+	assert.True(t, options.IgnoreAuthErrorAbort)
+	assert.Equal(t, -1, options.ReconnectBufSize)
+}
+
+// connectReconnecting connects with connectOptions, then drops the connection
+// and stops listening, so it stays reconnecting until the test ends.
+func connectReconnecting(t *testing.T) *nats.Conn {
+	t.Helper()
+	server, err := test.NewFakeNatsServer(test.NatsAcceptThenDrop)
+	require.NoError(t, err)
+	options := append(connectOptions("test-service", nats.Token(test.FakeNatsToken)),
+		nats.ReconnectWait(10*time.Millisecond),
+		nats.ReconnectJitter(0, 0))
+	nc, err := nats.Connect(server.URL, options...)
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	require.NoError(t, server.Close())
+	require.Eventually(t, func() bool { return nc.Status() == nats.RECONNECTING },
+		5*time.Second, 10*time.Millisecond, "status %s", nc.Status())
+	return nc
+}
+
+// A publish while reconnecting must fail at once rather than wait in a buffer
+// and go out after its caller has given up.
+func TestPublishWhileReconnectingIsRefused(t *testing.T) {
+	nc := connectReconnecting(t)
+	assert.ErrorIs(t, nc.Publish("subject", nil), nats.ErrReconnectBufExceeded)
+}
+
+func TestWaitConnected(t *testing.T) {
+	t.Run("returns at once when connected", func(t *testing.T) {
+		server, err := test.NewFakeNatsServer()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = server.Close() })
+		nc, err := nats.Connect(server.URL, nats.Token(test.FakeNatsToken))
+		require.NoError(t, err)
+		t.Cleanup(nc.Close)
+
+		assert.NoError(t, waitConnected(context.Background(), nc))
+	})
+
+	t.Run("returns once reconnected", func(t *testing.T) {
+		// The first connection is dropped and the reconnect is accepted, so
+		// the client spends ReconnectWait reconnecting.
+		server, err := test.NewFakeNatsServer(test.NatsAcceptThenDrop)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = server.Close() })
+		nc, err := nats.Connect(server.URL, nats.Token(test.FakeNatsToken),
+			nats.ReconnectWait(300*time.Millisecond), nats.ReconnectJitter(0, 0))
+		require.NoError(t, err)
+		t.Cleanup(nc.Close)
+		require.Eventually(t, func() bool { return nc.Status() == nats.RECONNECTING },
+			5*time.Second, time.Millisecond, "status %s", nc.Status())
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		require.NoError(t, waitConnected(ctx, nc))
+		assert.True(t, nc.IsConnected())
+	})
+
+	t.Run("gives up when the context ends", func(t *testing.T) {
+		nc := connectReconnecting(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		assert.ErrorIs(t, waitConnected(ctx, nc), context.DeadlineExceeded)
+	})
+
+	t.Run("fails when the connection is closed", func(t *testing.T) {
+		nc := connectReconnecting(t)
+		nc.Close()
+		assert.ErrorIs(t, waitConnected(context.Background(), nc), nats.ErrConnectionClosed)
+	})
+}
+
+func TestNatsConnectedGauge(t *testing.T) {
+	t.Cleanup(func() { metrics.SetNatsStatsConnection(nil) })
+
+	metrics.SetNatsStatsConnection(nil)
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.NatsConnected))
+
+	server, err := test.NewFakeNatsServer(test.NatsAcceptThenDrop)
+	require.NoError(t, err)
+	nc, err := nats.Connect(server.URL, nats.Token(test.FakeNatsToken),
+		nats.MaxReconnects(-1), nats.ReconnectWait(10*time.Millisecond), nats.ReconnectJitter(0, 0))
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	metrics.SetNatsStatsConnection(nc)
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.NatsConnected))
+
+	require.NoError(t, server.Close())
+	require.Eventually(t, func() bool { return nc.Status() == nats.RECONNECTING },
+		5*time.Second, 10*time.Millisecond, "status %s", nc.Status())
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.NatsConnected))
+}

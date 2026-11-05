@@ -73,6 +73,10 @@ func connectOptions(serviceName string, authOption nats.Option) []nats.Option {
 		// authentication error twice, even with unlimited reconnects.
 		nats.MaxReconnects(-1),
 		nats.IgnoreAuthErrorAbort(),
+		// Buffer nothing while reconnecting. With unlimited reconnects a buffered
+		// publish could go out minutes after its caller gave up, handing workers
+		// requests nobody is waiting for. Publishers wait in waitConnected instead.
+		nats.ReconnectBufSize(-1),
 		nats.LameDuckModeHandler(func(conn *nats.Conn) {
 			metrics.NatsLameDuckCounter.Inc()
 			go func() {

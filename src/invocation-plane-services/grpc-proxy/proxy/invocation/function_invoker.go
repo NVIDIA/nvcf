@@ -263,11 +263,15 @@ func (f *FunctionInvoker) startNewSession(ctx context.Context, conn net.Conn, re
 		return cancel, false, nil
 	}
 	subject := f.requestStreamSubject(functionVersion.FunctionVersionId, requestId)
-	_, err = f.js.PublishMsg(ctx, &nats.Msg{
-		Subject: subject,
-		Header:  otelHeaders(ctx),
-		Data:    marshalledInvokeFunctionRequest,
-	})
+	publishCtx, cancelPublish := context.WithTimeout(ctx, publishTimeout)
+	defer cancelPublish()
+	if err = waitConnected(publishCtx, f.nc); err == nil {
+		_, err = f.js.PublishMsg(publishCtx, &nats.Msg{
+			Subject: subject,
+			Header:  otelHeaders(ctx),
+			Data:    marshalledInvokeFunctionRequest,
+		})
+	}
 	if err != nil {
 		cancel()
 		return nil, false, fmt.Errorf("failed to publish function invocation request to nats: %w", err)
@@ -345,6 +349,9 @@ func (f *FunctionInvoker) tryRegionForLLS(ctx context.Context, region string, re
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
+	if err := waitConnected(ctx, f.nc); err != nil {
+		return err
+	}
 	subject := llsRequestSubject(region, functionVersion.FunctionVersionId, requestId)
 	_, err := f.nc.RequestMsgWithContext(ctx, &nats.Msg{
 		Subject: subject,
@@ -360,6 +367,11 @@ func (f *FunctionInvoker) joinExistingSession(ctx context.Context, requestId uui
 	if err != nil {
 		return err
 	}
+	waitCtx, cancel := context.WithTimeout(ctx, publishTimeout)
+	defer cancel()
+	if err := waitConnected(waitCtx, f.nc); err != nil {
+		return fmt.Errorf("failed to publish function invocation request to nats: %w", err)
+	}
 	subject := reconnectSubject(requestId)
 	err = f.nc.PublishMsg(&nats.Msg{
 		Subject: subject,
@@ -368,6 +380,32 @@ func (f *FunctionInvoker) joinExistingSession(ctx context.Context, requestId uui
 	})
 	if err != nil {
 		return fmt.Errorf("failed to publish function invocation request to nats: %w", err)
+	}
+	return nil
+}
+
+// publishTimeout bounds a JetStream or session-join publish, including any wait
+// for a reconnect. It matches JetStream's default API timeout, which is how long
+// a publish already waited for its ack.
+const publishTimeout = 5 * time.Second
+
+// reconnectPollInterval is how often waitConnected checks the connection.
+const reconnectPollInterval = 50 * time.Millisecond
+
+// waitConnected returns once nc is connected, or with an error once ctx ends or
+// the connection is closed. The connection buffers nothing while reconnecting
+// (see connectOptions), so publishers wait here rather than queue a message that
+// would go out after they gave up. Retrying the publish itself instead would
+// leak a response handler for every failed request.
+func waitConnected(ctx context.Context, nc *nats.Conn) error {
+	for !nc.IsConnected() {
+		if nc.IsClosed() {
+			return nats.ErrConnectionClosed
+		}
+		SleepWithContext(ctx, reconnectPollInterval)
+		if ctx.Err() != nil {
+			return fmt.Errorf("nats connection %s: %w", nc.Status(), ctx.Err())
+		}
 	}
 	return nil
 }

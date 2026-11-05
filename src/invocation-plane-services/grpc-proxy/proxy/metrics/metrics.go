@@ -110,6 +110,20 @@ var (
 			Help:      "time to deliver an event to the event ledger, including retries",
 		}, []string{"result"})
 
+	// NatsConnected is 1 while the connection is connected and 0 while it is
+	// reconnecting or closed. The connection reconnects without limit, so this,
+	// not a restart, is the signal that a pod has lost NATS.
+	NatsConnected = promauto.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: NatsNamespace,
+		Name:      "connected",
+		Help:      "1 while the nats connection is connected, 0 while it is reconnecting or closed.",
+	}, func() float64 {
+		nc := nc.Load()
+		if nc == nil || !nc.IsConnected() {
+			return 0
+		}
+		return 1
+	})
 	_ = promauto.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: NatsNamespace,
 		Name:      "out_bytes",
