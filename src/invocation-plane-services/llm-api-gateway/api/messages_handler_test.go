@@ -42,7 +42,7 @@ type messagesCapturedRequest struct {
 
 func messagesTestAPI(t *testing.T, upstream string, cfg *config.Config, limiter *recordingRateLimiter, uris []string) (*echo.Echo, *stubInvocationAuthClient) {
 	t.Helper()
-	p, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream})
+	p, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream, RequestTimeout: cfg.Stargate.RequestTimeout})
 	require.NoError(t, err)
 	auth := &stubInvocationAuthClient{authResponse: &nvcf.InvocationAuthResponse{
 		RoutingKey: "fn-alpha", RateLimitKey: "org-test", AuthContext: map[string]string{"ncaId": "org-test"},
