@@ -59,6 +59,9 @@ func TestMessagesFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 		{name: "clean end mid event", upstreamBody: withoutStop + cutEvent, wantAdded: "\n" + messagesStreamPing + "error", want502: true},
 		{name: "clean end mid event after CRLF line", upstreamBody: withoutStop + "event: content_block_delta\r\n", wantAdded: messagesStreamPing + "error", want502: true},
 		{name: "upstream error event", upstreamBody: withoutStop + upstreamError, want502: true},
+		// A cut upstream error event is not parsed by the client, so the gateway adds its own.
+		{name: "connection drops in upstream error event", upstreamBody: withoutStop + "event: error\n", dropMidway: true, wantAdded: messagesStreamPing + "error", want502: true},
+		{name: "clean end in upstream error data", upstreamBody: withoutStop + "event: error\ndata: {\"type\":\"err", wantAdded: "\n" + messagesStreamPing + "error", want502: true},
 		{name: "connection drops", upstreamBody: withoutStop, dropMidway: true, wantAdded: "error", want502: true},
 		{name: "connection drops mid event", upstreamBody: withoutStop + cutEvent, dropMidway: true, wantAdded: "\n" + messagesStreamPing + "error", want502: true},
 		{name: "gateway timeout", upstreamBody: withoutStop, stall: true, wantAdded: "error", want502: true},

@@ -240,9 +240,12 @@ func failMessagesRelay(c *GatewayContext, relay *messagesRelayWriter, observer *
 	failure := echo.NewHTTPError(http.StatusBadGateway, msgUpstreamStreamIncomplete)
 	var cause error
 	switch {
-	case observer.failed:
-		// The client already has the upstream error event.
+	case observer.failed && !relay.frameOpen():
+		// The client already has the whole upstream error event.
 		return failure.SetInternal(errors.Join(&provider.UpstreamStreamError{}, readErr))
+	case observer.failed:
+		// The upstream error event was cut, so the client cannot parse it.
+		cause = errors.Join(&provider.UpstreamStreamError{}, readErr)
 	case observer.stream && !observer.encoded && observer.stopped:
 		// message_stop ended the stream; a later read error does not change it.
 		return nil
@@ -426,6 +429,8 @@ func (u messagesUsage) chatUsage() *models.ChatCompletionUsage {
 
 // Usage observation is best effort and bounded. Oversized or unknown events
 // still pass through byte for byte; they never block delivery to the client.
+// Completion detection shares this limit: a message_stop event over it counts as
+// a stream that ended before message_stop.
 const messagesUsageBufferLimit = 1 << 20
 
 type messagesUsageObserver struct {
