@@ -31,6 +31,7 @@ func TestMessagesFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 	upstreamError := "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n"
 	largeEvent := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"" +
 		strings.Repeat("a", messagesUsageBufferLimit) + "\"}}\n\n"
+	crLines := func(sse string) string { return strings.ReplaceAll(strings.ReplaceAll(sse, "\r\n", "\n"), "\n", "\r") }
 
 	tests := []struct {
 		name         string
@@ -48,6 +49,9 @@ func TestMessagesFailsWhenUpstreamStreamEndsEarly(t *testing.T) {
 		{name: "ends with message_stop", upstreamBody: messagesTestSSE},
 		{name: "message_stop then [DONE]", upstreamBody: messagesTestSSE + "data: [DONE]\n\n"},
 		{name: "event over the usage buffer limit", upstreamBody: largeEvent + messagesTestSSE},
+		{name: "CR line endings", upstreamBody: crLines(messagesTestSSE)},
+		// "\r\r" already ends the last frame, so no ping seal comes first.
+		{name: "clean end without message_stop, CR line endings", upstreamBody: crLines(withoutStop), wantAdded: "error", want502: true},
 		// message_stop ends the stream, so a later read failure does not change it.
 		{name: "connection drops after message_stop", upstreamBody: messagesTestSSE, dropMidway: true},
 		{name: "gateway timeout after message_stop", upstreamBody: messagesTestSSE, stall: true},
