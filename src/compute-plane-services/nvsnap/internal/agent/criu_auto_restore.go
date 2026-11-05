@@ -408,8 +408,13 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 			checkpointstore.CRIUScopeMetaKey: scope,
 		},
 	}
-	if gpushare {
+	if gpushare || a.podGPUShareMounted(ctx, req.Namespace, req.PodName, req.ContainerName) {
 		// The restore mounts the checkpoint's chunk store and the library.
+		// It must also when the pod had them mounted but its processes
+		// never loaded the library (their GPU state went through the CUDA
+		// plugin): the dump saved those mounts, and CRIU cannot restore a
+		// mount whose mountpoint the placeholder lacks ("Can't stat
+		// mountpoint .../nvsnap").
 		m.SourcePodMeta["gpushare"] = "true"
 	}
 	if id := a.podBundle(ctx, req.Namespace, req.PodName); id != "" {

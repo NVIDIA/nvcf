@@ -165,3 +165,48 @@ func TestRecordCRIUCapture_RecordsTheTenantScope(t *testing.T) {
 		t.Errorf("capture recorded although its scope was unreadable: %v", err)
 	}
 }
+
+// A pod admitted with the gpushare library and store mounted whose
+// processes never loaded the library (their GPU state went through the
+// CUDA plugin) is recorded as gpushare all the same: the dump saved
+// those mounts, and the restore placeholder needs their mountpoints, or
+// CRIU fails with "Can't stat mountpoint .../nvsnap".
+func TestRecordCRIUCapture_RecordsGPUShareMountsTheProcessDidNotUse(t *testing.T) {
+	const hash = "7a117a117a117a117a117a117a117a117a117a117a117a117a117a117a117a11"
+	ctx, log := context.Background(), logrus.NewEntry(logrus.New())
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "fn-ns"}}
+	podWith := func(name string, mounts ...string) *corev1.Pod {
+		var vms []corev1.VolumeMount
+		for _, m := range mounts {
+			vms = append(vms, corev1.VolumeMount{Name: "v", MountPath: m})
+		}
+		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "fn-ns"},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "inference", VolumeMounts: vms}}}}
+	}
+	for _, tc := range []struct {
+		name     string
+		pod      *corev1.Pod
+		gpushare bool
+		want     bool
+	}{
+		{"mounted, library unused", podWith("mounted", "/nvsnap", "/nvsnap-gpushare"), false, true},
+		{"mounted, library used", podWith("used", "/nvsnap", "/nvsnap-gpushare"), true, true},
+		{"not mounted", podWith("plain", "/var/inf"), false, false},
+	} {
+		local, err := checkpointstore.NewLocal(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		cm := checkpointstore.NewConfigMapBackend(local, fake.NewSimpleClientset(), "nvsnap-system", logrus.New())
+		a := &Agent{captureBackend: cm, kubeClient: fake.NewSimpleClientset(ns, tc.pod), log: logrus.New(), config: Config{NodeName: "n1"}}
+		req := CheckpointRequest{Namespace: "fn-ns", PodName: tc.pod.Name, ContainerName: "inference"}
+		a.recordCRIUCapture(ctx, hash, "7a11__1", req, "img", tc.gpushare, log)
+		got, err := cm.Stat(ctx, hash)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if (got.SourcePodMeta["gpushare"] == "true") != tc.want {
+			t.Errorf("%s: recorded gpushare=%q, want %v", tc.name, got.SourcePodMeta["gpushare"], tc.want)
+		}
+	}
+}
