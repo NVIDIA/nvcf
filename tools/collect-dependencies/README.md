@@ -79,6 +79,25 @@ inventory is intentionally absent from `dependencies.md`.
 
 ## External APIs and network calls
 
+HTTP metadata requests and Go module lookups retry transient failures up to
+three times within the original timeout budget. Retries use short, bounded
+backoff and only run while budget remains. An early transport timeout can be
+retried; an attempt that consumes the full deadline ends the lookup. Attempts
+are not given shorter deadlines that could interrupt otherwise valid slow
+requests or module resolution. Authentication, missing-version, checksum and
+other permanent failures are not retried. Diagnostics identify the operation
+and package without printing credentials, remote response bodies or command
+output.
+
+A failed Go or npm lookup remains unresolved and reports that lookup data was
+unavailable. This differs from a successful lookup with no recognized license.
+Fallback sources may still resolve a Go license. No failure implies approval,
+and the license policy is unchanged.
+
+Successful Go lookups are preserved across module roots, recorded versions and
+fallback stages, even when they find no recognized license. Later failures
+cannot replace that result, and later successes can still supply a license.
+
 The tool reads local files first (`go.mod`, `go.sum`, `vendor/`, `Cargo.toml`, Python manifests, Helm charts). The tables below list the HTTPS and subprocess calls used after that for version or license lookup. `go`, `cargo`, and `helm` may add their own traffic (module proxy, git, crates index, chart registries) depending on cache and graph. Those tools must be on `PATH` when those steps run.
 
 ### Go

@@ -395,6 +395,7 @@ require github.com/pkg/errors v0.9.1
 	)
 }
 
+// TestGoListLicenseEnrichmentDoesNotModifyModuleFiles verifies read-only resolution.
 func TestGoListLicenseEnrichmentDoesNotModifyModuleFiles(t *testing.T) {
 	tmp := t.TempDir()
 	moduleFile := filepath.Join(tmp, "go.mod")
@@ -418,7 +419,7 @@ go 1.26
 	}
 	allModules := map[string]struct{}{"example.com/dep": {}}
 	licenses := map[string]map[string]struct{}{}
-	enrichGoLicensesFromGoModuleList(allModules, licenses, []string{tmp})
+	enrichGoLicensesFromGoModuleList(allModules, licenses, []string{tmp}, goLookupResults{})
 
 	if got := formatGoLicense(licenses, "example.com/dep"); got != "BSD-2-Clause" {
 		t.Fatalf("Go license = %q, want BSD-2-Clause", got)

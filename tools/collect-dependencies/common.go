@@ -613,28 +613,39 @@ func httpGetString(rawURL string, timeout time.Duration, headers map[string]stri
 	return body, err
 }
 
+// httpGetBytesWithStatus retries temporary HTTP failures within one timeout and
+// returns safe diagnostics instead of remote error bodies or request URLs.
 func httpGetBytesWithStatus(rawURL string, timeout time.Duration, headers map[string]string) ([]byte, int, error) {
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	for key, value := range headers {
-		req.Header.Set(key, value)
-	}
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return body, resp.StatusCode, fmt.Errorf("http %d", resp.StatusCode)
-	}
-	return body, resp.StatusCode, nil
+	var body []byte
+	var status int
+	err := retryLookup(timeout, func(remaining time.Duration) error {
+		body = nil
+		status = 0
+		ctx, cancel := context.WithTimeout(context.Background(), remaining)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return &lookupError{reason: "invalid registry URL", cause: err}
+		}
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return networkLookupError(err)
+		}
+		defer resp.Body.Close()
+		status = resp.StatusCode
+		if status < 200 || status >= 300 {
+			return &lookupError{reason: fmt.Sprintf("HTTP %d", status), temporary: status == 408 || status == 429 || status == 500 || status == 502 || status == 503 || status == 504}
+		}
+		body, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return networkLookupError(err)
+		}
+		return nil
+	})
+	return body, status, err
 }
 
 func httpGetStringWithStatus(rawURL string, timeout time.Duration, headers map[string]string) (string, int, error) {
