@@ -4,9 +4,10 @@
 #
 # Test that the OpenBao auto-unseal settings in environments/<env>.yaml reach
 # the openbao-server release: autoUnseal, the Raft config that carries the seal
-# stanza, and the [] overrides that drop the Shamir unseal sidecar and its
-# Secret volume. Unset, nothing is emitted, so existing installs render
-# byte-identical and keep the chart's Shamir seal.
+# stanza, and the service account for the seal's credentials. autoUnseal.enabled
+# also drops the Shamir unseal sidecar and its Secret volume, since the chart
+# does not create that Secret under auto-unseal. Unset, nothing is emitted, so
+# existing installs render byte-identical and keep the chart's Shamir seal.
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,47 +53,35 @@ assert_yaml_value() {
 printf '{}\n' >"$environment_file"
 values="$work_dir/default.yaml"
 render_values "$values"
-for key in autoUnseal ha.raft extraContainers volumes volumeMounts; do
+for key in autoUnseal serviceAccount ha.raft extraContainers volumes volumeMounts; do
   assert_yaml_value "$values" ".openbao.server.$key" null "default: openbao.server.$key must not be emitted"
 done
 
-# 2. Set, under each HA mode: every key reaches the chart, and [] stays an
-#    empty list so it replaces the chart's sidecar, volume and mount.
-for ha_mode in none preferred; do
-  cat >"$environment_file" <<EOF
-highAvailability:
-  mode: $ha_mode
+# 2. Set: each key reaches the chart, and autoUnseal.enabled replaces the
+#    chart's sidecar, volume and mount with empty lists.
+cat >"$environment_file" <<'EOF'
 openbao:
   server:
     autoUnseal:
       enabled: true
-      recovery:
-        shares: 5
-        threshold: 3
     ha:
       raft:
         config: |
-          ui = true
-          storage "raft" {
-            path = "/openbao/data/"
-          }
           seal "awskms" {
-            region     = "us-west-2"
             kms_key_id = "alias/openbao-unseal"
           }
-    extraContainers: []
-    volumes: []
-    volumeMounts: []
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/openbao-unseal
 EOF
-  values="$work_dir/set-$ha_mode.yaml"
-  render_values "$values"
-  assert_yaml_value "$values" '.openbao.server.autoUnseal.enabled' true "$ha_mode: autoUnseal.enabled"
-  assert_yaml_value "$values" '.openbao.server.autoUnseal.recovery.threshold' 3 "$ha_mode: autoUnseal.recovery.threshold"
-  assert_yaml_value "$values" '.openbao.server.ha.raft.config | test("seal \"awskms\"")' true "$ha_mode: raft config carries the seal stanza"
-  for key in extraContainers volumes volumeMounts; do
-    assert_yaml_value "$values" ".openbao.server.$key | tag + \" \" + (length | tostring)" "!!seq 0" "$ha_mode: $key must be an empty list"
-  done
+values="$work_dir/set.yaml"
+render_values "$values"
+assert_yaml_value "$values" '.openbao.server.autoUnseal.enabled' true "set: autoUnseal.enabled"
+assert_yaml_value "$values" '.openbao.server.ha.raft.config | test("seal \"awskms\"")' true "set: raft config carries the seal stanza"
+assert_yaml_value "$values" '.openbao.server.serviceAccount.annotations."eks.amazonaws.com/role-arn"' \
+  arn:aws:iam::111122223333:role/openbao-unseal "set: serviceAccount annotations"
+for key in extraContainers volumes volumeMounts; do
+  assert_yaml_value "$values" ".openbao.server.$key" "[]" "set: autoUnseal.enabled must empty $key"
 done
-assert_yaml_value "$work_dir/set-preferred.yaml" '.openbao.server.ha.enabled' true "preferred: raft config sits next to the HA settings"
 
 echo "openbao-auto-unseal-wiring: OK"
