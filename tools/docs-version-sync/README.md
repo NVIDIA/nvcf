@@ -145,6 +145,19 @@ No stack inventory references another stack's Helmfile state.
 
 ## Sync after an automatic stack release
 
+To document an assembled candidate, use its downloaded manifest and inventory
+assets instead of release discovery. This verifies source tags, commits,
+inventory digests and plane ownership before updating the Development catalog:
+
+```bash
+go run -C tools/docs-version-sync . --target main --update-catalog \
+  --release-manifest /path/to/candidate/manifest.json \
+  --inventories /path/to/candidate
+```
+
+This does not qualify or publish the candidate. Changed artifacts remain
+publication-pending until their public catalog publication is verified.
+
 Wait for the GitHub Release and its inventory asset, then run:
 
 ```bash

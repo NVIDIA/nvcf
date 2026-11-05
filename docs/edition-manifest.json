@@ -8,18 +8,18 @@
   },
   "stacks": {
     "compute-plane": {
-      "version": "1.0.4",
-      "source_tag": "deploy/stacks/nvcf-compute-plane/v1.0.4",
-      "source_commit": "aae64c9a13f2f3d0192629f2f501ddc59d9f72c9",
+      "version": "1.0.5",
+      "source_tag": "deploy/stacks/nvcf-compute-plane/v1.0.5",
+      "source_commit": "e6d55edf173c622f3e925cb4650051e3abc9ddfb",
       "inventory_asset": "nvcf-compute-plane-stack-inventory.json",
-      "inventory_url": "https://github.com/dsx-ai-factory/nvcf/releases/download/deploy/stacks/nvcf-compute-plane/v1.0.4/nvcf-compute-plane-stack-inventory.json"
+      "inventory_url": "https://github.com/dsx-ai-factory/nvcf/releases/download/deploy/stacks/nvcf-compute-plane/v1.0.5/nvcf-compute-plane-stack-inventory.json"
     },
     "control-plane": {
-      "version": "1.0.8",
-      "source_tag": "deploy/stacks/self-managed/v1.0.8",
-      "source_commit": "58771029fe4e2610bb2cba64da4cd2400f9e5f5b",
+      "version": "1.0.10",
+      "source_tag": "deploy/stacks/self-managed/v1.0.10",
+      "source_commit": "e4b11e6db4ec8ff2af228579493685eca391447f",
       "inventory_asset": "nvcf-self-managed-stack-inventory.json",
-      "inventory_url": "https://github.com/dsx-ai-factory/nvcf/releases/download/deploy/stacks/self-managed/v1.0.8/nvcf-self-managed-stack-inventory.json"
+      "inventory_url": "https://github.com/dsx-ai-factory/nvcf/releases/download/deploy/stacks/self-managed/v1.0.10/nvcf-self-managed-stack-inventory.json"
     },
     "observability": {
       "version": "1.0.0",

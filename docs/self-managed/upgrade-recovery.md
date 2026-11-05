@@ -12,7 +12,7 @@ versions, if you run tasks. Otherwise, skip this section.
 Task image names and registry wiring changed on this path. Before maintenance:
 
 1. Select the images from the target's [manifest](../overview/manifest.md).
-   The [Self-Managed 1.0.8 inventory](https://github.com/dsx-ai-factory/nvcf/releases/download/deploy/stacks/self-managed/v1.0.8/nvcf-self-managed-stack-inventory.json)
+   The [Self-Managed 1.0.10 inventory](https://github.com/dsx-ai-factory/nvcf/releases/download/deploy/stacks/self-managed/v1.0.10/nvcf-self-managed-stack-inventory.json)
    selects `nvcr.io/nvidia/nvcf/nvcf-worker-init-oss:1.2.4` and
    `nvcr.io/nvidia/nvcf/nvcf-worker-task-oss:1.1.6`. For another target, use
    that release's inventory.
@@ -106,7 +106,7 @@ through 3.10.2, or deployments hang after a NATS restart.
 1. Before rolling NATS, upgrade every affected compute cluster to NVCA 3.10.3
    or a later compatible patch. Preserve registration. Skip clusters already
    fixed; for other release trains, use your guide's corrected selection.
-   Compute Plane 1.0.0 selects NVCA 3.10.0; 1.0.4 selects 3.10.3.
+   Compute Plane 1.0.0 selects NVCA 3.10.0; 1.0.5 selects 3.10.3.
 1. Allow the consumer's `ack_wait` interval for redelivery after the agent
    upgrade. Restarting the old agent alone does not fix reused message IDs.
 1. Repeat the guide's complete drain gate. If creation messages remain or

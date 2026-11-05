@@ -44,7 +44,9 @@ func run(args []string) error {
 	target := flags.String("target", "main", "documentation target to render")
 	catalogPath := flags.String("catalog", "", "version catalog path")
 	check := flags.Bool("check", false, "fail if generated docs differ from checked-in marker blocks")
-	updateCatalog := flags.Bool("update-catalog", false, "fetch the resolved GitHub stack inventory and update the catalog")
+	updateCatalog := flags.Bool("update-catalog", false, "update the catalog from resolved stack inventories")
+	releaseManifest := flags.String("release-manifest", "", "update from this immutable umbrella manifest instead of GitHub release discovery")
+	inventories := flags.String("inventories", "", "directory containing the manifest-selected inventory assets")
 	stackVersion := flags.String("stack-version", "", "self-managed stack version to fetch or inventory")
 	computeStackVersion := flags.String("compute-stack-version", "", "compute-plane stack version to fetch")
 	observabilityStackVersion := flags.String("observability-stack-version", "", "observability stack version to fetch")
@@ -64,6 +66,14 @@ func run(args []string) error {
 	}
 	if err := ValidateTarget(*target); err != nil {
 		return err
+	}
+	if *releaseManifest != "" || *inventories != "" {
+		if !*updateCatalog || *releaseManifest == "" || *inventories == "" {
+			return fmt.Errorf("--release-manifest and --inventories require --update-catalog and each other")
+		}
+		if *stackVersion != "" || *computeStackVersion != "" || *observabilityStackVersion != "" || *inventoryOutput != "" || *compareFrom != "" || *compareTo != "" {
+			return fmt.Errorf("--release-manifest cannot be combined with stack version selection, inventory generation, or comparison")
+		}
 	}
 
 	repoRoot, err := findRepoRoot()
@@ -132,11 +142,16 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		updated, err := updateCatalogFromGitHubInventories(repoRoot, map[string]string{
-			selfManagedStackKey:   *stackVersion,
-			computePlaneStackKey:  *computeStackVersion,
-			observabilityStackKey: *observabilityStackVersion,
-		}, base)
+		var updated *Catalog
+		if *releaseManifest != "" {
+			updated, err = updateCatalogFromManifest(repoRoot, resolveRepoPath(repoRoot, *releaseManifest), resolveRepoPath(repoRoot, *inventories), base)
+		} else {
+			updated, err = updateCatalogFromGitHubInventories(repoRoot, map[string]string{
+				selfManagedStackKey:   *stackVersion,
+				computePlaneStackKey:  *computeStackVersion,
+				observabilityStackKey: *observabilityStackVersion,
+			}, base)
+		}
 		if err != nil {
 			return err
 		}

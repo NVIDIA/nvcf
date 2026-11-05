@@ -34,19 +34,17 @@ Check their egress or mirror configuration before rendering an upgrade:
 | --- | --- |
 | `nats.container.image` | `docker.io/synadia/nats-server` |
 | `nats.reloader.image` | `docker.io/natsio/nats-server-config-reloader` |
+| `nats.natsBox.container.image` | `docker.io/natsio/nats-box` |
 | `api.accountBootstrap.image` | `docker.io/alpine/k8s` |
 | `upgradeReceipt.image` | `docker.io/alpine/k8s` |
 
-The generated image tables below record the selected tags. The two `k8s`
-entries are upstream CLI toolboxes used by different hooks, not Kubernetes
-server images or a requirement to run a cluster at those versions. Changing
-one helper does not change the other. Select client versions compatible with
-your Kubernetes API server when overriding them.
+The generated image tables below record the selected tags. The `k8s` image
+provides a CLI toolbox used by two independently configured hooks. It is not a
+Kubernetes server image. Retain the selected helper versions when mirroring.
 
-The NATS box uses the selected catalog image by default. The optional upstream
-box override below adds another Docker Hub dependency. Other enabled stacks
-and optional components also use upstream registries; inspect every image in
-the render and generated inventory, not just this helper table.
+The NATS box also uses Docker Hub by default. Other enabled stacks and optional
+components use upstream registries; inspect every image in the render and
+generated inventory, not just this helper table.
 
 Verify access from cluster nodes. If Docker Hub requires authentication, add
 its pull secret to `global.imagePullSecrets`. The receipt stage forwards this
@@ -66,7 +64,7 @@ nats:
     image:
       registry: <your-registry>
       repository: <your-repository>/nats-server-config-reloader
-      tag: "0.24.0"
+      tag: "0.25.0"
 
 api:
   accountBootstrap:
@@ -79,7 +77,7 @@ upgradeReceipt:
   image:
     registry: <your-registry>
     repository: <your-repository>/alpine-k8s
-    tag: "1.33.1"
+    tag: "1.37.0"
 ```
 
 ### Use upstream NATS images
@@ -87,7 +85,7 @@ upgradeReceipt:
 To use upstream images, merge these values into
 `deploy/stacks/self-managed/environments/<environment>.yaml`. Helmfile passes
 these settings to the selected NATS chart; no chart or release-definition
-changes are needed. This example uses NATS server 2.14.6, reloader 0.24.0, and
+changes are needed. This example uses NATS server 2.14.9, reloader 0.25.0, and
 NATS box 0.20.1. The box pin identifies the upstream multi-platform index for
 Linux AMD64 and ARM64.
 
@@ -97,12 +95,12 @@ nats:
     image:
       registry: docker.io
       repository: synadia/nats-server
-      tag: "2.14.6-alpine3.22"
+      tag: "2.14.9-alpine3.22"
   reloader:
     image:
       registry: docker.io
       repository: natsio/nats-server-config-reloader
-      tag: "0.24.0"
+      tag: "0.25.0"
   podTemplate:
     merge:
       spec:
@@ -172,8 +170,9 @@ it reloads successfully.
 ### Use upstream cert-manager images
 
 Merge these overrides into the Helmfile environment file
-`deploy/stacks/self-managed/environments/<environment>.yaml` to use upstream
-cert-manager images.
+`deploy/stacks/self-managed/environments/<environment>.yaml` to select the upstream
+cert-manager images already used by this candidate. Keep all components and
+CRDs on the selected version.
 For a private mirror, replace each full `repository`, which takes precedence
 over `global.image`.
 
@@ -181,28 +180,23 @@ over `global.image`.
 certManager:
   image:
     repository: "quay.io/jetstack/cert-manager-controller"
-    tag: "v1.20.2"
-    digest: "sha256:fe0623d7d04a382c888f03343a3a2da716e0d96ad3d5d790c0ebcbcb2a4329a5"
+    tag: "v1.20.5"
   webhook:
     image:
       repository: "quay.io/jetstack/cert-manager-webhook"
-      tag: "v1.20.2"
-      digest: "sha256:baf651128b9f05c426cbd5e60e2036bf382c99ca270f49d0757d6f7d2452f4e5"
+      tag: "v1.20.5"
   cainjector:
     image:
       repository: "quay.io/jetstack/cert-manager-cainjector"
-      tag: "v1.20.2"
-      digest: "sha256:6f5a644135887b2aa7d5cc145072fa56421560e3586ff1f184358022d490f4e1"
+      tag: "v1.20.5"
   startupapicheck:
     image:
       repository: "quay.io/jetstack/cert-manager-startupapicheck"
-      tag: "v1.20.2"
-      digest: "sha256:4e2a69b4a0cc9627905bbeecf720f95d5153ca39cacdab923d2748e73556792b"
+      tag: "v1.20.5"
   acmesolver:
     image:
       repository: "quay.io/jetstack/cert-manager-acmesolver"
-      tag: "v1.20.2"
-      digest: "sha256:cfa55e9c3dcfc6a3cba97575748c1549b04a30fd14d88a2fcb9e2dddef415e2f"
+      tag: "v1.20.5"
 ```
 
 For authenticated mirrors, set `global.imagePullSecrets` for chart pods and
@@ -264,10 +258,9 @@ This changes only the injector distribution source.
 The webhook image is separate from `openbao.injector.agentImage` and
 `openbao.server.image`; keep those matched NVCF OpenBao images unchanged.
 
-<Info>
-Some supporting components such as the GPU Operator, OpenBao, NATS, Cassandra, etc. can alternatively be pulled directly from public NGC Catalog or other public opensource repositories if desired.
-
-</Info>
+Keep the selected NVCF OpenBao server and migrations images. An upstream
+OpenBao image does not contain the NVCF JWT lifecycle binaries and cannot
+replace the bridge image during an upgrade or rollback.
 
 The following tables list the complete artifact inventory.
 
@@ -277,8 +270,8 @@ The following tables list the complete artifact inventory.
 
 | Stack | Version | Source tag |
 | --- | --- | --- |
-| [Self-managed (control plane)](../self-managed/installation.md) | `1.0.8` | `deploy/stacks/self-managed/v1.0.8` |
-| [Compute plane](../compute-plane/cluster-management/index.md) | `1.0.4` | `deploy/stacks/nvcf-compute-plane/v1.0.4` |
+| [Self-managed (control plane)](../self-managed/installation.md) | `1.0.10` | `deploy/stacks/self-managed/v1.0.10` |
+| [Compute plane](../compute-plane/cluster-management/index.md) | `1.0.5` | `deploy/stacks/nvcf-compute-plane/v1.0.5` |
 | [Observability](../observability/observability.md) | `1.0.0` | `deploy/stacks/observability/v1.0.0` |
 
 ### Control plane Helm charts
@@ -288,19 +281,19 @@ The following tables list the complete artifact inventory.
 | `helm-admin-token-issuer-proxy` | `1.5.3` | `self-managed` | Required | Deploys the admin token issuer proxy. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-admin-token-issuer-proxy:1.5.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/admin-token-issuer-proxy) |
 | `helm-nvcf-api` | `1.27.5` | `self-managed` | Required | Deploys the NVCF API service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-api:1.27.5` |  |
 | `helm-nvcf-api-keys` | `1.8.2` | `self-managed` | Required | Deploys the API key management service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-api-keys:1.8.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/api-keys-colocated) |
-| `helm-nvcf-cassandra` | `0.21.3` | `self-managed` | Required | Deploys Cassandra and its initialization jobs. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-cassandra:0.21.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/cassandra) / [Upstream](https://github.com/bitnami/charts/tree/main/bitnami/cassandra) |
-| `helm-nvcf-cert-manager` | `0.1.0` | `self-managed` | Required | Deploys the NVCF cert-manager configuration. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-cert-manager:0.1.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/cert-manager) / [Upstream](https://github.com/cert-manager/cert-manager) |
+| `helm-nvcf-cassandra` | `0.21.4` | `self-managed` | Required | Deploys Cassandra and its initialization jobs. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/cassandra) / [Upstream](https://github.com/bitnami/charts/tree/main/bitnami/cassandra) |
+| `helm-nvcf-cert-manager` | `0.2.0` | `self-managed` | Required | Deploys the NVCF cert-manager configuration. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/cert-manager) / [Upstream](https://github.com/cert-manager/cert-manager) |
 | `helm-nvcf-ess-api` | `1.8.3` | `self-managed` | Required | Deploys the Encrypted Secrets Service API. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-ess-api:1.8.3` |  |
 | `helm-nvcf-function-autoscaler` | `0.5.2` | `self-managed` | Required | Deploys the function autoscaler for observability-driven scaling. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-function-autoscaler:0.5.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/function-autoscaler) |
 | `helm-nvcf-grpc-proxy` | `1.7.4` | `self-managed` | Required | Deploys the gRPC proxy service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-grpc-proxy:1.7.4` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/grpc-proxy) |
 | `helm-nvcf-invocation-service` | `1.6.2` | `self-managed` | Required | Deploys the HTTP invocation service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-invocation-service:1.6.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/http-invocation) |
 | `helm-nvcf-llm-api-gateway` | `1.4.3` | `self-managed` | Optional | Deploys the OpenAI-compatible LLM API gateway. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-llm-api-gateway:1.4.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/llm-api-gateway) |
 | `helm-nvcf-llm-request-router` | `1.14.3` | `self-managed` | Optional | Deploys the LLM request router. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-llm-request-router:1.14.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/llm-request-router) |
-| `helm-nvcf-nats` | `0.8.4` | `self-managed` | Required | Deploys NATS messaging for the control plane. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nats:0.8.4` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nats) / [Upstream](https://github.com/nats-io/k8s) |
+| `helm-nvcf-nats` | `0.8.6` | `self-managed` | Required | Deploys NATS messaging for the control plane. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nats) / [Upstream](https://github.com/nats-io/k8s) |
 | `helm-nvcf-nats-auth-callout-service` | `1.2.1` | `self-managed` | Required | Deploys the NATS authorization callout service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nats-auth-callout-service:1.2.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nats-auth-callout) |
 | `helm-nvcf-notary-service` | `1.6.1` | `self-managed` | Required | Deploys the notary service for signing and validation. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-notary-service:1.6.1` |  |
 | `helm-nvcf-nvct-api` | `1.6.1` | `self-managed` | Required | Deploys the NVCF tenant API service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nvct-api:1.6.1` |  |
-| `helm-nvcf-openbao-server` | `0.32.8` | `self-managed` | Required | Deploys OpenBao secret management. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-openbao-server:0.32.8` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/openbao) / [Upstream](https://github.com/openbao/openbao-helm) |
+| `helm-nvcf-openbao-server` | `0.32.9` | `self-managed` | Required | Deploys OpenBao secret management. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/openbao) / [Upstream](https://github.com/openbao/openbao-helm) |
 | `helm-nvcf-pki` | `0.1.0` | `self-managed` | Optional | Provisions the OpenBao-backed ClusterIssuer for NVCF service TLS. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-pki:0.1.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nvcf-pki) |
 | `helm-nvcf-rate-limiter` | `1.2.1` | `self-managed` | Required | Deploys request rate limiting for supported invocation paths. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-rate-limiter:1.2.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/ratelimiter) |
 | `helm-nvcf-sis` | `2.4.2` | `self-managed` | Required | Deploys the Spot Instance Service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-sis:2.4.2` |  |
@@ -318,30 +311,29 @@ The following tables list the complete artifact inventory.
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
 | `admin-token-issuer-proxy` | `1.1.2` | `self-managed` | Required | Proxies admin token requests for stack services. | `nvcr.io/nvidia/nvcf/admin-token-issuer-proxy:1.1.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/admin-token-issuer-proxy) |
-| `cassandra` | `5.0.9-nv-2.0.5` | `self-managed` | Required | Stores NVCF account, function, cluster, and service state. | `nvcr.io/nvidia/nvcf/cassandra:5.0.9-nv-2.0.5` | [Upstream](https://github.com/apache/cassandra) |
-| `cert-manager-acmesolver` | `v1.20.2` | `self-managed` | Optional | Serves temporary ACME HTTP-01 domain-validation challenges. | `quay.io/jetstack/cert-manager-acmesolver:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
-| `cert-manager-cainjector` | `v1.20.2` | `self-managed` | Required | Injects certificate authority data into Kubernetes resources. | `nvcr.io/nvidia/nvcf/cert-manager-cainjector:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
-| `cert-manager-controller` | `v1.20.2` | `self-managed` | Required | Reconciles certificates and issuers for the control plane. | `nvcr.io/nvidia/nvcf/cert-manager-controller:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
-| `cert-manager-startupapicheck` | `v1.20.2` | `self-managed` | Required | Verifies that the cert-manager API is ready. | `nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
-| `cert-manager-webhook` | `v1.20.2` | `self-managed` | Required | Validates and converts cert-manager API resources. | `nvcr.io/nvidia/nvcf/cert-manager-webhook:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
+| `cassandra` | `5.0.9-nv-2.0.7` | `self-managed` | Required | Stores NVCF account, function, cluster, and service state. | `Publication pending` | [Upstream](https://github.com/apache/cassandra) |
+| `cert-manager-acmesolver` | `v1.20.5` | `self-managed` | Optional | Serves temporary ACME HTTP-01 domain-validation challenges. | `quay.io/jetstack/cert-manager-acmesolver:v1.20.5` | [Upstream](https://github.com/cert-manager/cert-manager) |
+| `cert-manager-cainjector` | `v1.20.5` | `self-managed` | Required | Injects certificate authority data into Kubernetes resources. | `quay.io/jetstack/cert-manager-cainjector:v1.20.5` | [Upstream](https://github.com/cert-manager/cert-manager) |
+| `cert-manager-controller` | `v1.20.5` | `self-managed` | Required | Reconciles certificates and issuers for the control plane. | `quay.io/jetstack/cert-manager-controller:v1.20.5` | [Upstream](https://github.com/cert-manager/cert-manager) |
+| `cert-manager-startupapicheck` | `v1.20.5` | `self-managed` | Required | Verifies that the cert-manager API is ready. | `quay.io/jetstack/cert-manager-startupapicheck:v1.20.5` | [Upstream](https://github.com/cert-manager/cert-manager) |
+| `cert-manager-webhook` | `v1.20.5` | `self-managed` | Required | Validates and converts cert-manager API resources. | `quay.io/jetstack/cert-manager-webhook:v1.20.5` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `ess-agent` | `1.4.4` | `self-managed` | Required | Injects encrypted application secrets into function workloads. | `nvcr.io/nvidia/nvcf/ess-agent:1.4.4` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/ess-agent) |
 | `icms-service-oss` | `0.7.7` | `self-managed` | Required | Manages instance and cluster lifecycle operations. | `nvcr.io/nvidia/nvcf/icms-service-oss:0.7.7` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/instance-cluster-management) |
-| `k8s` | `1.37.0` | `self-managed` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `docker.io/alpine/k8s:1.37.0` | [GitHub](https://github.com/alpine-docker/k8s) |
-| `k8s` | `1.33.1` | `self-managed` | Required | Runs the upgrade receipt hook; separate from the account-bootstrap helper. | `docker.io/alpine/k8s:1.33.1` | [GitHub](https://github.com/alpine-docker/k8s) |
+| `k8s` | `1.37.0` | `self-managed` | Required | Runs account bootstrap and upgrade receipt jobs; check client/server version compatibility. | `docker.io/alpine/k8s:1.37.0` | [GitHub](https://github.com/alpine-docker/k8s) |
 | `llm-api-gateway` | `0.14.11` | `self-managed` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `nvcr.io/nvidia/nvcf/llm-api-gateway:0.14.11` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
-| `nats-box` | `0.19.7-nonroot` | `self-managed` | Required | Provides NATS administration and diagnostic utilities. | `nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
-| `nats-server` | `2.14.6-alpine3.22` | `self-managed` | Required | Provides messaging for function deployment and invocation. | `docker.io/synadia/nats-server:2.14.6-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
+| `nats-box` | `0.20.1-nonroot` | `self-managed` | Required | Provides NATS administration and diagnostic utilities. | `docker.io/natsio/nats-box:0.20.1-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
+| `nats-server` | `2.14.9-alpine3.22` | `self-managed` | Required | Provides messaging for function deployment and invocation. | `docker.io/synadia/nats-server:2.14.9-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
 | `nvcf-ai-api-gateway-service` | `1.35.3` | `self-managed` | Optional | Serves the optional vanity hostname gateway. | `nvcr.io/nvidia/nvcf/nvcf-ai-api-gateway-service:1.35.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/vanity-gateway) |
 | `nvcf-api-keys-service` | `1.9.4` | `self-managed` | Required | Creates and manages NVCF API keys. | `nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.9.4` |  |
-| `nvcf-cassandra-migrations` | `0.17.7` | `self-managed` | Required | Applies the Cassandra schemas required by NVCF services. | `nvcr.io/nvidia/nvcf/nvcf-cassandra-migrations:0.17.7` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
+| `nvcf-cassandra-migrations` | `0.17.8` | `self-managed` | Required | Applies the Cassandra schemas required by NVCF services. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
 | `nvcf-ess` | `0.5.7` | `self-managed` | Required | Provides encrypted application secrets to NVCF workloads. | `nvcr.io/nvidia/nvcf/nvcf-ess:0.5.7` |  |
 | `nvcf-function-autoscaler` | `1.21.10` | `self-managed` | Required | Scales functions from NVCF workload metrics. | `nvcr.io/nvidia/nvcf/nvcf-function-autoscaler:1.21.10` |  |
 | `nvcf-grpc-proxy` | `1.33.7` | `self-managed` | Required | Proxies bidirectional gRPC traffic between the control and compute planes. | `nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.33.7` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/grpc-proxy) |
 | `nvcf-invocation-service` | `0.12.3` | `self-managed` | Required | Routes stateless HTTP function invocation requests. | `nvcr.io/nvidia/nvcf/nvcf-invocation-service:0.12.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/http-invocation) |
 | `nvcf-nats-auth-callout-service` | `0.8.6` | `self-managed` | Required | Authorizes NATS clients for NVCF services and workloads. | `nvcr.io/nvidia/nvcf/nvcf-nats-auth-callout-service:0.8.6` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/nats-auth-callout) |
 | `nvcf-notary` | `1.14.8` | `self-managed` | Required | Signs and validates functions and cluster nodes. | `nvcr.io/nvidia/nvcf/nvcf-notary:1.14.8` |  |
-| `nvcf-openbao` | `2.6.3-nv-1.3.7` | `self-managed` | Required | Stores and manages control-plane secrets. | `nvcr.io/nvidia/nvcf/nvcf-openbao:2.6.3-nv-1.3.7` | [Upstream](https://github.com/openbao/openbao) |
-| `nvcf-openbao-migrations` | `0.19.10` | `self-managed` | Required | Applies the OpenBao configuration required by NVCF. | `nvcr.io/nvidia/nvcf/nvcf-openbao-migrations:0.19.10` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/openbao) |
+| `nvcf-openbao` | `2.6.3-nv-1.3.9` | `self-managed` | Required | Stores and manages control-plane secrets. | `Publication pending` | [Upstream](https://github.com/openbao/openbao) |
+| `nvcf-openbao-migrations` | `0.19.11` | `self-managed` | Required | Applies the OpenBao configuration required by NVCF. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/openbao) |
 | `nvcf-ratelimiter` | `1.17.5` | `self-managed` | Required | Enforces request rate limits for supported invocation paths. | `nvcr.io/nvidia/nvcf/nvcf-ratelimiter:1.17.5` |  |
 | `nvcf-service-oss` | `1.18.2` | `self-managed` | Required | Provides the primary NVCF control-plane API. | `nvcr.io/nvidia/nvcf/nvcf-service-oss:1.18.2` |  |
 | `nvcf-state-metrics-service` | `1.23.7` | `self-managed` | Required | Exports NVCF resource state as Prometheus metrics. | `nvcr.io/nvidia/nvcf/nvcf-state-metrics-service:1.23.7` |  |
@@ -422,15 +414,15 @@ The following tables list the complete artifact inventory.
 
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
-| `nats-server-config-reloader` | `0.24.0` | `compute-plane` / `self-managed` | Required | Reloads NATS configuration for the control plane and optional NVIDIA Dynamo deployment. | `docker.io/natsio/nats-server-config-reloader:0.24.0` | [Upstream](https://github.com/nats-io/k8s) |
+| `nats-server-config-reloader` | `0.25.0` | `compute-plane` / `self-managed` | Required | Reloads NATS configuration for the control plane and optional NVIDIA Dynamo deployment. | `docker.io/natsio/nats-server-config-reloader:0.25.0` | [Upstream](https://github.com/nats-io/k8s) |
 
 ### Tools and deployment resources
 
 | Artifact | Version | Stack | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
 | `nvcf-cli` | `1.16.2` | Independent | Manages functions, deployments, and clusters from the command line. | `nvcr.io/nvidia/nvcf/nvcf-cli:1.16.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli) |
-| `nvcf-compute-plane-stack` | `1.0.4` | `compute-plane` | Provides the Helmfile bundle for compute-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane) |
+| `nvcf-compute-plane-stack` | `1.0.5` | `compute-plane` | Provides the Helmfile bundle for compute-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane) |
 | `nvcf-observability-stack` | `1.0.0` | `observability` | Provides the Helmfile bundle for standalone observability deployment. | `nvcr.io/nvidia/nvcf/nvcf-observability-stack:1.0.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability) |
-| `nvcf-self-managed-stack` | `1.0.8` | `self-managed` | Provides the Helmfile bundle for control-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
+| `nvcf-self-managed-stack` | `1.0.10` | `self-managed` | Provides the Helmfile bundle for control-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
 
 {/*docs-version-sync:END manifest-artifact-registry-paths*/}

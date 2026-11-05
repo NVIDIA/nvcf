@@ -58,7 +58,7 @@ kubectl() {
         self.assertIn("04-upgrade-receipt.yaml.gotmpl apply", (self.root / "apply.log").read_text())
 
     def test_preflight_uses_selected_release_table(self):
-        self.assertEqual(["1.0.8", "1.0.4", "1.0.0"], list(self.selected.values()))
+        self.assertEqual(["1.0.10", "1.0.5", "1.0.0"], list(self.selected.values()))
         for stack, variable in ((self.control, "CONTROL"), (self.compute, "COMPUTE"),
                                 (self.observability, "OBSERVABILITY")):
             self.assertIn(f'export EXPECTED_{variable}_STACK_VERSION="{self.selected[stack]}"', self.preflight)
@@ -78,7 +78,7 @@ kubectl() {
                     stamp.write_text(selected + "\n", encoding="utf-8")
 
     def test_correct_packages_do_not_excuse_a_wrong_receipt(self):
-        for wrong in ("", "1.0.0", self.selected[self.compute], "1.0.8-rc.1"):
+        for wrong in ("", "1.0.0", self.selected[self.compute], "1.0.10-rc.1"):
             with self.subTest(receipt=wrong):
                 result = self.run_blocks(receipt=True, env={**self.env, "RECEIPT_VERSION": wrong})
                 self.assertNotEqual(0, result.returncode)
