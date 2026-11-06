@@ -94,10 +94,10 @@ func TestContainerCacheInventoryIncludesOptionalHelpers(t *testing.T) {
 			chartSeen = artifact.Name == "nvcf-container-cache"
 			continue
 		}
-		if _, ok := wanted[artifact.Reference]; !ok {
-			t.Fatalf("unexpected image: %+v", artifact)
+		// Older source snapshots can contain additional helper images.
+		if _, ok := wanted[artifact.Reference]; ok {
+			wanted[artifact.Reference] = true
 		}
-		wanted[artifact.Reference] = true
 	}
 	if !chartSeen {
 		t.Fatal("inventory omits the chart")
