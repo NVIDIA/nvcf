@@ -12,7 +12,7 @@ import (
 )
 
 // TestProxyTLSHelperDefaultsMatch keeps cache signing and client CA injection on
-// the same helper image without duplicating its release version in the test.
+// the same helper version while preserving their separate registry routes.
 func TestProxyTLSHelperDefaultsMatch(t *testing.T) {
 	root := docsVersionSyncRepoRoot(t)
 	var cache struct {
@@ -28,8 +28,9 @@ func TestProxyTLSHelperDefaultsMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := cache.Images.Certificates
-	if expected == "" {
-		t.Fatal("cache certificate helper default is empty")
+	expectedImage, err := parseResolvedImageReference(expected)
+	if err != nil {
+		t.Fatal(err)
 	}
 	var unbound struct {
 		Images struct {
@@ -50,7 +51,12 @@ func TestProxyTLSHelperDefaultsMatch(t *testing.T) {
 		"images.certificates":       unbound.Images.Certificates,
 		"webhook.certificatesImage": unbound.Webhook.CertificatesImage,
 	} {
-		if actual != expected {
+		image, err := parseResolvedImageReference(actual)
+		if err != nil {
+			t.Errorf("Unbound %s: %v", key, err)
+			continue
+		}
+		if image.Name != expectedImage.Name || image.Version != expectedImage.Version || image.Digest != expectedImage.Digest {
 			t.Errorf("Unbound %s = %q, cache uses %q", key, actual, expected)
 		}
 	}

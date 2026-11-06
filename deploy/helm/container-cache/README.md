@@ -516,11 +516,11 @@ capabilities = ["pull", "resolve"]
 
 The `skip_verify = true` is needed because the proxy's dynamically-generated TLS certificate cannot match every node IP when traffic arrives via NodePort (kube-proxy NATs the original destination IP). The explicit `[host."https://nvcr.io"]` entry ensures containerd falls back to the upstream registry if the cache is unavailable.
 
-### Upgrading private-image installations
+### Upgrading an existing installation
 
 For proxy-cache clients that use NVCF Unbound certificate injection, upgrade
-Unbound with the same certificate-helper image version as the cache. Recreate
-existing function pods after the upgrade so they receive the updated CA bundle.
+Unbound with the same certificate-helper image version as the cache. Roll out
+existing function deployments after the upgrade to refresh their CA bundles.
 
 Set `images.secrets` explicitly in your values file before upgrading an
 installation that pulls private images. Earlier chart versions supplied
