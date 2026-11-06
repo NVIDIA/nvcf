@@ -841,9 +841,11 @@ public class NvcaClusterRegistrationService {
         if (removedInstanceTypeNames.isEmpty()) {
             return;
         }
-        Set<String> activeInstanceIds = instanceServiceHelper.getActiveInstancesFromZoneForInstanceType(
-                clusterId, removedInstanceTypeNames);
-        if (!activeInstanceIds.isEmpty()) {
+        Map<String, Set<String>> activeInstancesByInstanceType = instanceServiceHelper
+                .getActiveInstancesFromZoneByInstanceType(clusterId, removedInstanceTypeNames);
+        if (!activeInstancesByInstanceType.isEmpty()) {
+            Set<String> activeInstanceIds = new HashSet<>();
+            activeInstancesByInstanceType.values().forEach(activeInstanceIds::addAll);
             String errMsg =
                     String.format(
                             "cluster registration failed, active instances exists for removed %s instanceTypes, active instances %s",
@@ -851,8 +853,10 @@ public class NvcaClusterRegistrationService {
             log.error(
                     "Active instances exists for cluster-id {} with {} instanceTypes hence avoiding GPUs reconfiguration, active instances - {}",
                     clusterId, removedInstanceTypeNames, activeInstanceIds);
+            // Only the removed instance types that still have active instances block the
+            // registration, so only those are named.
             throw new IcmsActiveInstancesConflictException(
-                    errMsg, removedInstanceTypeNames, activeInstanceIds);
+                    errMsg, activeInstancesByInstanceType.keySet(), activeInstanceIds);
         }
     }
 

@@ -57,6 +57,8 @@ import com.nvidia.icms.outbound.cassandra.cloudhealth.CloudHealthRepository;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthKey;
 import com.nvidia.icms.outbound.cassandra.instance.InstancePerZoneRepository;
+import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceByZoneEntity;
+import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceByZoneKey;
 import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
 import com.nvidia.icms.outbound.nats.NatsMessageSenderClient;
 import com.nvidia.icms.outbound.sqs.SqsMessageSenderClient;
@@ -70,6 +72,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import java.util.UUID;
 
@@ -338,6 +341,39 @@ class InstanceServiceHelperTest {
         GenericMetric metric = metricsCaptor.getValue().get(0);
         assertEquals(ASYNC_EVENT_TRIGGER_FAILED.toString(), metric.getEventName());
         assertEquals(errorMessage, metric.getError());
+    }
+
+    @Test
+    void getActiveInstancesFromZoneByInstanceType_groupsTheInstancesOfTheGivenTypes() {
+        // Prepare
+        List<InstanceByZoneEntity> instances = List.of(
+                instanceInZone("zone_1", "instance_1", "type_a"),
+                instanceInZone("zone_1", "instance_2", "type_a"),
+                instanceInZone("zone_1", "instance_3", "type_b"),
+                instanceInZone("zone_1", "instance_4", "type_c"));
+        when(instancePerZoneRepository.findAllActiveInstancesByZone("zone_1")).thenReturn(instances);
+
+        // Act
+        Map<String, Set<String>> activeInstances = instanceServiceHelper
+                .getActiveInstancesFromZoneByInstanceType("zone_1",
+                                                          Set.of("type_a", "type_b", "type_d"));
+
+        // Assert
+        assertEquals(Map.of("type_a", Set.of("instance_1", "instance_2"),
+                            "type_b", Set.of("instance_3")),
+                     activeInstances);
+    }
+
+    private static InstanceByZoneEntity instanceInZone(String zone, String instanceId,
+                                                       String instanceType) {
+        return InstanceByZoneEntity.builder()
+                .key(InstanceByZoneKey.builder()
+                             .truncatedTs(Instant.now())
+                             .zone(zone)
+                             .instanceId(instanceId)
+                             .build())
+                .instanceType(instanceType)
+                .build();
     }
 
 }

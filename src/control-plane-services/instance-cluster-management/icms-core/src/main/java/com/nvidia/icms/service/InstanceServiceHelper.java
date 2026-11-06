@@ -519,6 +519,23 @@ public class InstanceServiceHelper {
                 .collect(Collectors.toSet());
     }
 
+    /**
+     * Returns the IDs of the active instances in the zone on the given instance types,
+     * grouped by instance type. Instance types without active instances are left out.
+     */
+    @Observed
+    public Map<String, Set<String>> getActiveInstancesFromZoneByInstanceType(
+            String zoneName,
+            Set<String> instanceTypes) {
+
+        return instancePerZoneRepository.findAllActiveInstancesByZone(zoneName).stream()
+                .filter(instance -> instanceTypes.contains(instance.getInstanceType()))
+                .collect(Collectors.groupingBy(
+                        InstanceByZoneEntity::getInstanceType,
+                        Collectors.mapping(InstanceByZoneEntity::getInstanceId,
+                                           Collectors.toSet())));
+    }
+
     @Observed
     public List<String> getActiveInstancesFromZone(String zoneName) {
         return getActiveInstanceEntitiesFromZone(zoneName).stream()
