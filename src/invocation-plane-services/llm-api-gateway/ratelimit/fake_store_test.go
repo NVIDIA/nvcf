@@ -44,12 +44,15 @@ type fakeStore struct {
 	getCalls int
 	casCalls int
 	casSwaps int
+
+	lastTTL map[string]time.Duration
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		buckets: map[string]bucketState{},
 		exists:  map[string]bool{},
+		lastTTL: map[string]time.Duration{},
 	}
 }
 
@@ -77,12 +80,13 @@ func (f *fakeStore) CompareAndSetBucket(
 	key string,
 	expected *bucketState,
 	state bucketState,
-	_ time.Duration,
+	ttl time.Duration,
 ) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	f.casCalls++
+	f.lastTTL[key] = ttl
 
 	if f.failCAS {
 		return false, errors.New("fake cas error")

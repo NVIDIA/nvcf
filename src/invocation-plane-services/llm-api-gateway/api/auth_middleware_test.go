@@ -222,6 +222,48 @@ func TestNVCFAuthMiddlewarePropagatesResolvedPriority(t *testing.T) {
 	}
 }
 
+func TestNVCFAuthMiddlewarePropagatesAccountTokenRateLimits(t *testing.T) {
+	t.Parallel()
+
+	authClient := &stubInvocationAuthClient{
+		authResponse: &nvcf.InvocationAuthResponse{
+			RoutingKey:                  "fn-chat",
+			ClientAuthID:                "subject-123",
+			AuthContext:                 map[string]string{"ncaId": "nca-456"},
+			RateLimitKey:                "nca-456",
+			AccountInputTokenRateLimit:  "5000-M",
+			AccountOutputTokenRateLimit: "1000-M",
+		},
+	}
+	tc := priorityMiddlewarePaths[0]
+
+	e := echo.New()
+	e.Use(NewContextMiddleware(config.Default()))
+	e.Use(NewNVCFAuthMiddleware(authClient))
+	e.POST(tc.path, func(ec echo.Context) error {
+		reqCtx := ec.(*GatewayContext).RequestContext()
+		if reqCtx == nil {
+			t.Fatal("request context was not set")
+		}
+		if reqCtx.AccountInputTokenRateLimit != "5000-M" || reqCtx.AccountOutputTokenRateLimit != "1000-M" {
+			t.Fatalf("account limits = %q/%q, want 5000-M/1000-M",
+				reqCtx.AccountInputTokenRateLimit, reqCtx.AccountOutputTokenRateLimit)
+		}
+		return ec.NoContent(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer sk-live")
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+}
+
 func TestNVCFAuthMiddlewareLeavesPriorityUnsetWhenAbsent(t *testing.T) {
 	t.Parallel()
 

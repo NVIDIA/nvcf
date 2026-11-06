@@ -185,6 +185,8 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 	// shared by every RPC on a connection with the same function routing, so
 	// no single request's cancellation means nobody is waiting.
 	var purgeDepartedClientWork func(uuid.UUID, string)
+	// Assigned with purgeDepartedClientWork, for the same reason.
+	var director *StreamDirector
 
 	cache := ttlcache.New(
 		ttlcache.WithTTL[workerConnectionKey, *worker.WorkerConnection](consts.Timeout),
@@ -220,6 +222,9 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 					c.Delete(k)
 				}
 				newWorkerConnection := worker.NewWorkerConnection(k.requestId, k.functionId, k.functionVersionId, onActive, onInactive)
+				if auth := workerAuthCache.Get(k.workerAuthToken); auth != nil {
+					newWorkerConnection.CallerNcaId = auth.Value().callerNcaId
+				}
 				// the new connection gets inserted here, not by the return value of the loader func.
 				// this has the happy side effect that we are still holding the ttl update lock.
 				conn, connAlreadyExisted := c.GetOrSet(k, newWorkerConnection)
@@ -311,6 +316,10 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 			))
 		span.End()
 
+		if event, ok := attachmentEndEvent(wc, reasonStr, closedAt, heldFor, closeInfo.Code); ok && director != nil {
+			director.eventLedger.Publish(ctx, event)
+		}
+
 		// Purge here rather than when a request is cancelled. This fires once
 		// for the shared entry, however many requests shared it.
 		//
@@ -334,7 +343,7 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 	})
 	go cache.Start()
 
-	director := &StreamDirector{
+	director = &StreamDirector{
 		workers:         cache,
 		shuttingDown:    shuttingDown,
 		departurePurges: make(chan struct{}, departurePurgeConcurrency),
@@ -620,6 +629,10 @@ func (s *StreamDirector) RegisterWorker(ctx context.Context, workerAuthToken str
 		zap.L().Info("worker connected after its client left", zap.Stringer("request id", info.requestId))
 		return nil
 	}
+	// Evicted while registering: eviction already decided no close follows.
+	if !w.Value().MarkEstablished() {
+		return nil
+	}
 	s.eventLedger.Publish(ctx, newAttachmentEstablished(w.Value(), info, connectedAt))
 	return nil
 }
@@ -792,6 +805,8 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 
 		// Capture API-provided function info in closure
 		var apiFunctionId, apiFunctionVersionId string
+		// Set by the callback, which the invoker runs right before dispatching.
+		var minted invocation.WorkerAuth
 
 		invokeResponse, cancelInvokingWorker, err := s.functionInvoker.InvokeStatefulFunction(ctx, conn, auth, functionId, functionVersionId, requestId, func(workerAuth invocation.WorkerAuth) {
 			// Populate workerAuth cache BEFORE worker is notified (atomicity guarantee)
@@ -813,12 +828,17 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 			// Capture the API response values
 			apiFunctionId = workerAuth.FunctionId
 			apiFunctionVersionId = workerAuth.FunctionVersionId
+			minted = workerAuth
 		})
 		if err != nil {
+			// An error after the callback is the dispatch failing. Earlier errors
+			// come from unverified or rejected callers and are not published.
+			if minted.Token != "" {
+				s.eventLedger.Publish(ctx, newDispatchFailed(minted, time.Now()))
+			}
 			zap.L().Warn("failed to open stateful work request", zap.Error(err), zap.String("function id", functionId), zap.Stringer("request id", requestId))
 			return nil, fmt.Errorf("failed to open stateful work request: %w", err)
 		}
-
 		// Remembered until the worker CONNECTs back, so a shutdown can find the
 		// requests whose tokens are about to be lost with this pod and drop
 		// them from the work queue rather than leave them to be pulled and
@@ -844,6 +864,19 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 			functionId:        apiFunctionId,
 			functionVersionId: apiFunctionVersionId,
 		}).Value()
+		if invokeResponse.StreamingDispatch == nil {
+			s.eventLedger.Publish(ctx, newWorkDispatched(minted, isRejoin, time.Now()))
+		} else {
+			// A streaming request is dispatched once a worker answers it. The
+			// sender always reports, so this goroutine always ends. A worker that
+			// attaches before its answer is seen stops the sender, and SetConnection
+			// marks the connection before that, so an attached worker also counts.
+			go func() {
+				if <-invokeResponse.StreamingDispatch || workerConnection.EverConnected() {
+					s.eventLedger.Publish(ctx, newWorkDispatched(minted, isRejoin, time.Now()))
+				}
+			}()
+		}
 		if cancelInvokingWorker != nil {
 			go func() {
 				// once a connection shows up or the context goes away we should stop looking for a worker
