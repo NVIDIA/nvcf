@@ -300,10 +300,10 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    void runAuthz_shouldReturnTieredRateLimitForServiceAccountRuleBypassingApiKeyIntrospection() {
+    void runAuthz_shouldReturnTieredRateLimitForAccountRateLimitRuleBypassingApiKeyIntrospection() {
         // Arrange
         String namespace = "nvcf";
-        String policyName = "ssa.allow";
+        String policyName = "apikey.account_rate_limit";
         String requestBody = """
                 {
                     "input": {
@@ -327,14 +327,14 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
                 """
                         {"namespace":"nvcf",\
                         "result":{"inputTokenRateLimit":null,"outputTokenRateLimit":null},\
-                        "rule_name":"ssa.allow"}""", response.getBody());
+                        "rule_name":"apikey.account_rate_limit"}""", response.getBody());
     }
 
     @Test
     void runAuthz_shouldReturnErrorForMissingTieredRateKey() {
         // Arrange
         String namespace = "nvcf";
-        String policyName = "ssa.allow";
+        String policyName = "apikey.account_rate_limit";
         String requestBody = """
                 {
                     "input": {}
@@ -358,14 +358,14 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
                         "title":"Bad Request",\
                         "status":400,\
                         "detail":"Tiered rate key is not provided",\
-                        "instance":"/v1/namespaces/nvcf/evaluations/ssa.allow"}""", response.getBody());
+                        "instance":"/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit"}""", response.getBody());
     }
 
     @Test
     void runAuthz_shouldReturnErrorForUnconfiguredNamespaceOnTieredRateLimitRule() {
         // Arrange
         String namespace = "unknown-ns";
-        String policyName = "ssa.allow";
+        String policyName = "apikey.account_rate_limit";
         String requestBody = """
                 {
                     "input": {
@@ -391,6 +391,6 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
                         "title":"Bad Request",\
                         "status":400,\
                         "detail":"Namespace 'unknown-ns' is not configured",\
-                        "instance":"/v1/namespaces/unknown-ns/evaluations/ssa.allow"}""", response.getBody());
+                        "instance":"/v1/namespaces/unknown-ns/evaluations/apikey.account_rate_limit"}""", response.getBody());
     }
 }

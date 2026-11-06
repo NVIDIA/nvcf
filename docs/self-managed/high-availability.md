@@ -434,11 +434,13 @@ kubectl -n nvcf get deploy invocation-service grpc-proxy-deployment -o wide
 kubectl -n ess get deploy ess-api-deployment -o wide
 ```
 
-Confirm the JetStream RF took effect (streams report `Replicas: 3`):
+Confirm the JetStream RF took effect (streams report `Replicas: 3`). The NATS
+CLI is in the `nats-box` deployment; the `nats` server container does not
+include it:
 
 ```bash
-kubectl -n nats-system exec -it nats-0 -- nats stream ls
-kubectl -n nats-system exec -it nats-0 -- nats stream info <stream-name>
+kubectl -n nats-system exec deploy/nats-box -- nats stream ls
+kubectl -n nats-system exec deploy/nats-box -- nats stream info <stream-name>
 ```
 
 Confirm Cassandra keyspace replication:

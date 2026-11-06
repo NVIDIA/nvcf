@@ -271,6 +271,7 @@ func (s *natsSynchronizer) Send(_ context.Context, rle *RateLimitEvent) error {
 		ClusterName: s.clusterName,
 		CreatedAt:   time.Now().Unix(),
 		MustConsume: rle.MustConsume,
+		AllowDebt:   rle.Result.RateLimit.AllowDebt,
 	}
 	telemetry.Record(
 		telemetry.RateLimitSynchronizerQueueWait(),

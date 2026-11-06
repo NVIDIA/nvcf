@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -308,6 +309,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 			servers.WithLogger(logger),
 			servers.WithRegisterServer(func(server *grpc.Server) {}),
 			servers.WithHttpHealthEndpoints("/health"),
+			servers.WithAdditionalHTTPHandlers(map[string]http.Handler{"/livez": livenessHandler(nc)}),
 			servers.WithAdditionalServers(serverPairs...),
 		),
 	}, nil

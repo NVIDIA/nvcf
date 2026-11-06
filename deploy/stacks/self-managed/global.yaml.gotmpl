@@ -752,6 +752,14 @@ apikeys:
 {{- /* The nats-auth-callout chart reads flat, top-level values, so its HA keys and
        pod annotations are emitted at the top level for that release only. */}}
 {{- if eq .Release.Name "nats-auth-callout-service" }}
+{{- /* Logging only: the rest of serviceConfig is auth policy, or is overridden by
+       env vars the chart sets. 02-core adds the stack's own serviceConfig after
+       this file. */}}
+{{- with dig "natsAuthCalloutService" "serviceConfig" "logging" dict .Values }}
+serviceConfig:
+  logging:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
 {{- if $haEnabled }}
 replicaCount: {{ max 2 (dig "natsAuthCalloutService" "replicaCount" 1 .Values | int) }}
 {{- end }}
@@ -2503,6 +2511,8 @@ nvcfGatewayRoutes:
     invocation:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "invocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    llmApiGateway:
+      enabled: {{ dig "addons" "llm" "enabled" false .Values }}
     llmInvocation:
       enabled: {{ dig "addons" "llm" "enabled" false .Values }}
       backend:

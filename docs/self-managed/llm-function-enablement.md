@@ -39,7 +39,8 @@ When enabled, the stack creates:
 
 - `llm-api-gateway` in the `nvcf` namespace.
 - `llm-request-router` in the `nvcf` namespace.
-- The `llm.invocation.<domain>` HTTPRoute when Gateway API ingress is enabled.
+- The `llm.<domain>` and `llm.invocation.<domain>` HTTPRoutes when Gateway API
+  ingress is enabled.
 - LLM worker pods with a `pylon` sidecar that forwards requests to the function
   container on the configured `inferencePort`.
 
@@ -58,8 +59,8 @@ services:
   unless `certManager.enabled: false`.
 - Changed resources: the OpenBao migration Job, which creates the
   `services/all/pki/root` mount and the LLM policies, the NVCF API remote
-  configuration, and the `ingress` release, which adds the
-  `llm.invocation.<domain>` HTTPRoute and the LLM worker routes when enabled.
+  configuration, and the `ingress` release, which adds the `llm.<domain>` and
+  `llm.invocation.<domain>` HTTPRoutes and the LLM worker routes when enabled.
 - No existing Deployment or StatefulSet changes. Running non-LLM functions
   keep serving.
 
@@ -961,10 +962,10 @@ To remove the LLM addon from a running control plane:
    not affected.
 2. Set `addons.llm.enabled: false` in the environment file, or restore the
    environment file from before enablement, and apply the control-plane
-   stack. This removes the `llm.invocation.<domain>` route and clears the
-   LLM settings in the NVCF API remote configuration, so new LLM functions
-   can no longer be invoked or launched with the sidecar. No running
-   Deployment or StatefulSet changes.
+   stack. This removes the `llm.<domain>` and `llm.invocation.<domain>`
+   routes and clears the LLM settings in the NVCF API remote configuration,
+   so new LLM functions can no longer be invoked or launched with the
+   sidecar. No running Deployment or StatefulSet changes.
 3. Remove the addon releases. With the addon disabled, the Helmfile no longer
    contains these releases, so the apply leaves them installed and running
    instead of uninstalling them:

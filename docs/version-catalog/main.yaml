@@ -330,7 +330,6 @@ version_overrides:
     type: resource
     version: 1.16.8
     source: independent source release; not pinned by stack
-publication_pending: []
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
@@ -1008,8 +1007,10 @@ stack:
   source_tag: deploy/stacks/self-managed/v1.0.10
   source_commit: e4b11e6db4ec8ff2af228579493685eca391447f
   pin_sources:
+    - deploy/stacks/self-managed/environments/base.yaml
+    - deploy/stacks/self-managed/global.yaml.gotmpl
     - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
-  pin_source_digest: sha256:28855f1f3508e561a46369ce97f162c148ff463dc6e0be03fe78993695ab6e81
+  pin_source_digest: sha256:8c50dde7d47efb8c9f703b06d75850ccd399124356313c36065a056a22395667
 denylist:
   - name: strap
     reason: Legacy name replaced by nvcf-service-oss
