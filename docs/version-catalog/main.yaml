@@ -1,8 +1,9 @@
 docs_edition:
   version: 1.0.4
-  status: development
+  status: qualified
   previous_version: 1.0.3
   change: patch
+  qualification: https://github.com/dsx-ai-factory/nvcf/pull/3273
 version: 1
 target: main
 registries:

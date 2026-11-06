@@ -1,0 +1,12 @@
+{
+  "source": "06867e7c90d151fe1dcccd4cc744c8952d4a5842",
+  "version": "1.0.4",
+  "previous_version": "1.0.3",
+  "change": "patch",
+  "self_managed": "1.0.10",
+  "compute_plane": "1.0.5",
+  "observability": "1.0.0",
+  "navigation": "navigation.yml",
+  "qualification": "https://github.com/dsx-ai-factory/nvcf/pull/3273",
+  "digest": "fa9c7772a7e2da83901d5e9f2a5684ac0a5aa99a9f658ce1f7e8982caf5a8ca5"
+}
