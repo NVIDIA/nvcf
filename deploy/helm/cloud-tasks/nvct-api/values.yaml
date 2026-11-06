@@ -129,7 +129,7 @@ nvctApi:
       nvct:
         sidecars:
           otel-container: dummy
-          ess-agent-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.4.1"
+          ess-agent-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.4.5"
           otel-collector-container: ""
 
   nodeSelector: {}

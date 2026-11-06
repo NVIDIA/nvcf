@@ -271,7 +271,7 @@ api:
           inference-container: nvcr.io/nvidia/tritonserver:23.04-py3
           otel-container: dummy
           niclls-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_niclls:2.118.2
-          ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.1
+          ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.5
           otel-collector-container: ""
           llm-router-client-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/pylon:0.15.1
         notary:
