@@ -59,9 +59,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods/status"]
     verbs: ["patch"]
+  # configmaps (patch): the function identity labels on capture records
+  # (internal/agent/record_identity.go).
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["get", "list", "watch", "create", "update", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # events (create, patch): what a pod's restore or start did, on the pod
   # (internal/agent/lifecycle_metrics.go).
   - apiGroups: [""]

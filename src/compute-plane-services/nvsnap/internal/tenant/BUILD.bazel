@@ -28,3 +28,13 @@ go_test(
         "@io_k8s_client_go//testing",
     ],
 )
+
+# Sources read by internal/agent's TestAgentRBACCoversItsClientCalls.
+filegroup(
+    name = "go_srcs",
+    srcs = glob(
+        ["*.go"],
+        exclude = ["*_test.go"],
+    ),
+    visibility = ["//src/compute-plane-services/nvsnap/internal/agent:__pkg__"],
+)

@@ -220,6 +220,7 @@ go_test(
         "rails_jobs_test.go",
         "rails_serve_test.go",
         "range_fetch_test.go",
+        "rbac_test.go",
         "record_identity_test.go",
         "replay_mounts_test.go",
         "replication_poll_test.go",
@@ -248,7 +249,17 @@ go_test(
         "tar_extract_test.go",
         "tar_pipe_test.go",
     ],
-    data = glob(["testdata/**"]) + ["//src/compute-plane-services/nvsnap/cmd/nvsnap-idle:c/nvsnap-idle.c"],  # keep
+    data = glob(["testdata/**"]) + [
+        ":go_srcs",
+        "//src/compute-plane-services/nvsnap/cmd/nvsnap-idle:c/nvsnap-idle.c",
+        "//src/compute-plane-services/nvsnap/deploy:helm/nvsnap/templates/agent-rbac.yaml",
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore:go_srcs",
+        "//src/compute-plane-services/nvsnap/internal/election:go_srcs",
+        "//src/compute-plane-services/nvsnap/internal/modelvolume:go_srcs",
+        "//src/compute-plane-services/nvsnap/internal/rootfsonly:go_srcs",
+        "//src/compute-plane-services/nvsnap/internal/tenant:go_srcs",
+        "//src/compute-plane-services/nvsnap/internal/webhook:go_srcs",
+    ],  # keep
     embed = [":agent"],
     deps = [
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
@@ -284,4 +295,13 @@ go_test(
         "@org_golang_google_protobuf//encoding/protowire",
         "@org_golang_x_sys//unix",
     ],
+)
+
+# Sources read by TestAgentRBACCoversItsClientCalls.
+filegroup(
+    name = "go_srcs",
+    srcs = glob(
+        ["*.go"],
+        exclude = ["*_test.go"],
+    ),
 )
