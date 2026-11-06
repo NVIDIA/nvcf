@@ -15,12 +15,17 @@
 
 FROM python:3.10.13-bookworm
 
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY requirements.txt ./
 
-RUN python -m pip install --no-cache-dir -U pip && \
-    python -m pip install --no-cache-dir -r requirements.txt
+# Use the updated OS CA bundle to upgrade pip safely; old pip still trusts the affected emSign chains.
+RUN python3 -m pip install --no-cache-dir \
+        --cert /etc/ssl/certs/ca-certificates.crt 'pip>=26.2.2' && \
+    python3 -m pip install --no-cache-dir -r requirements.txt
 
 COPY echo.proto /app/
 RUN python -m grpc_tools.protoc -I /app/  --python_out=. --pyi_out=. --grpc_python_out=. /app/echo.proto

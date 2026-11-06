@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -208,5 +209,33 @@ func TestPublishDropsWhenTooManySendsInFlight(t *testing.T) {
 func TestNilPublisherDropsEvents(t *testing.T) {
 	var publisher *Publisher
 	publisher.Publish(t.Context(), testEvent("event-1"))
+	publisher.Close()
+}
+
+// Shutdown publishes from eviction goroutines that Close cannot wait for, so
+// Publish racing Close must neither panic nor race: each event is sent or dropped.
+func TestPublishRacingCloseDropsLateEvents(t *testing.T) {
+	ledger := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer ledger.Close()
+	publisher := newTestPublisher(t, ledger.URL)
+
+	var publishers sync.WaitGroup
+	for range 8 {
+		publishers.Add(1)
+		go func() {
+			defer publishers.Done()
+			for range 100 {
+				publisher.Publish(t.Context(), testEvent("event"))
+			}
+		}()
+	}
+	publisher.Close()
+	publishers.Wait()
+
+	dropped := publishCount("dropped")
+	publisher.Publish(t.Context(), testEvent("late"))
+	assert.Equal(t, dropped+1, publishCount("dropped"))
 	publisher.Close()
 }

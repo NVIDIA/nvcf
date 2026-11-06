@@ -71,6 +71,11 @@ type WorkerConnection struct {
 	// AttachmentId identifies this tunnel. A request ID can have several over a
 	// session's life, one per rejoin.
 	AttachmentId uuid.UUID
+	// CallerNcaId is set before the connection enters the cache and never after.
+	CallerNcaId string
+	// attachment is decided once: established when the attachment is reported,
+	// or ended when the connection leaves the cache, whichever happens first.
+	attachment atomic.Int32
 	// CreatedAt is when this connection entered the worker connection cache.
 	// Used to report how long a tunnel stayed open when it is closed.
 	CreatedAt time.Time
@@ -161,6 +166,24 @@ func (w *WorkerConnection) WaitForConnection(ctx context.Context) (http.Handler,
 // silently stop treating that work as undelivered.
 func (w *WorkerConnection) EverConnected() bool {
 	return w.everConnected.Load()
+}
+
+const (
+	attachmentPending int32 = iota
+	attachmentEstablished
+	attachmentEnded
+)
+
+// MarkEstablished reports whether the attachment may be reported established.
+// It is false once the connection has left the cache, so a close is never missed.
+func (w *WorkerConnection) MarkEstablished() bool {
+	return w.attachment.CompareAndSwap(attachmentPending, attachmentEstablished)
+}
+
+// MarkEnded reports whether the attachment was reported established before the
+// connection left the cache, which is when its close must be reported too.
+func (w *WorkerConnection) MarkEnded() bool {
+	return w.attachment.Swap(attachmentEnded) == attachmentEstablished
 }
 
 func (w *WorkerConnection) WorkerClosed() bool {
