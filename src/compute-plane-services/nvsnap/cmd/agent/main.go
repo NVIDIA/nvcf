@@ -223,6 +223,9 @@ func main() {
 	flag.Int64Var(&config.CRIUGhostLimit, "criu-ghost-limit", 0,
 		"Largest deleted file, in bytes, a CRIU dump saves (criu --ghost-limit), such as an engine's CPU KV-cache tier in /dev/shm; 0 is 1 TiB.")
 
+	flag.BoolVar(&config.RestoreCapturedAddress, "restore-captured-address", false,
+		"Give a restored pod its captured pod address on its loopback, translated to its new address at its edge, when no other pod uses that address, so sockets opened after the restore can use it (docs/design/RESTORE-POD-ADDRESS.md).")
+
 	flag.IntVar(&config.Webhook.DynamoLeaseTTL, "webhook-dynamo-lease-ttl", 0,
 		"etcd lease TTL in seconds (ETCD_LEASE_TTL) for the Dynamo components that get the fixed Dynamo namespace, unless they set one; it must outlast a capture's freeze. 0 keeps Dynamo's default.")
 
@@ -267,7 +270,42 @@ func main() {
 	flag.StringVar(&config.L2.WriterPullSecret, "l2-writer-pull-secret", os.Getenv("NVSNAP_L2_WRITER_PULL_SECRET"),
 		"imagePullSecret name for the mount-holder pod (created by operators in the workload namespace). Defaults to nvsnap-agent-pull; set to '-' to disable.")
 
+	// Rails tier of the restore fetch (internal/agent/rails_fetch.go).
+	flag.StringVar(&config.Rails.Image, "rails-image", os.Getenv("NVSNAP_RAILS_IMAGE"),
+		"bedrock-peer image, pinned by digest, for checkpoint copies between nodes over their RDMA NICs. Empty disables the rails tier.")
+	flag.StringVar(&config.Rails.Namespace, "rails-namespace", os.Getenv("NVSNAP_RAILS_NAMESPACE"),
+		"Namespace of the rails serve and fetch pods, their ResourceClaimTemplate and Secret. Defaults to nvsnap-system.")
+	flag.StringVar(&config.Rails.ClaimTemplate, "rails-claim-template", "nvsnap-rails",
+		"ResourceClaimTemplate that claims every RDMA NIC of a node.")
+	flag.StringVar(&config.Rails.SecretName, "rails-secret", "nvsnap-rails",
+		"Secret whose key \"secret\" the rails pods present to each other.")
+	railsPullSecrets := flag.String("rails-pull-secrets", "", "Comma-separated imagePullSecret names for the rails pods.")
+	flag.IntVar(&config.Rails.Port, "rails-port", 0, "Bootstrap port of the rails serve pods (0: 9890).")
+	flag.IntVar(&config.Rails.Connections, "rails-connections", 0, "Parallel connections of a rails fetch (0: 32).")
+	flag.IntVar(&config.Rails.MaxSources, "rails-max-sources", 0, "Most source nodes one rails fetch reads from (0: 2).")
+	flag.StringVar(&config.Rails.MinSize, "rails-min-size", "",
+		"Smallest checkpoint copied over the rails, as a quantity (empty: 16Gi); a smaller one goes to the HTTP peers.")
+	flag.IntVar(&config.Rails.ServeMaxFetchers, "rails-serve-max-fetchers", 0,
+		"Fetches a node's rails serve pod serves at once (0: 4).")
+	flag.StringVar(&config.Rails.ServeCPU, "rails-serve-cpu", "16", "CPU request and limit of a rails serve pod.")
+	flag.StringVar(&config.Rails.ServeMemory, "rails-serve-memory", "32Gi", "Memory request and limit of a rails serve pod.")
+	flag.StringVar(&config.Rails.FetchCPU, "rails-fetch-cpu", "32", "CPU request and limit of a rails fetch pod.")
+	flag.StringVar(&config.Rails.FetchMemory, "rails-fetch-memory", "64Gi", "Memory request and limit of a rails fetch pod.")
+	flag.IntVar(&config.Rails.KeepFreePercent, "rails-keep-free-percent", 0,
+		"Share of the checkpoint filesystem a rails copy must leave free (0: 10).")
+
 	flag.Parse()
+	for _, s := range strings.Split(*railsPullSecrets, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			config.Rails.PullSecrets = append(config.Rails.PullSecrets, s)
+		}
+	}
+	if config.Rails.Namespace == "" {
+		config.Rails.Namespace = "nvsnap-system"
+	}
+	if err := config.Rails.Validate(); err != nil {
+		logrus.WithError(err).Fatal("invalid rails configuration")
+	}
 	agent.KubeClientQPS = float32(*kubeQPS)
 	if raw := os.Getenv("NVSNAP_CRIU_CAPTURE_OPT_IN"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &config.CaptureOptIn); err != nil {

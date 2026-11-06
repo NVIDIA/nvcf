@@ -98,6 +98,26 @@ spec:
             # for the capture-write writer Job. MUST match the hostPath
             # mount below.
             - --checkpoint-host-dir={{ .Values.agent.hostPaths.checkpoints }}
+            {{- with .Values.agent.rails }}
+            {{- if .enabled }}
+            # Rails tier of the restore fetch (templates/rails.yaml).
+            - --rails-image={{ required "agent.rails.image is required when agent.rails.enabled" .image }}
+            - --rails-namespace={{ $.Release.Namespace }}
+            - --rails-claim-template=nvsnap-rails
+            - --rails-secret=nvsnap-rails
+            - --rails-pull-secrets={{ join "," $.Values.nvsnap.imagePullSecrets }}
+            - --rails-port={{ .port }}
+            - --rails-connections={{ .connections }}
+            - --rails-max-sources={{ .maxSources }}
+            - --rails-min-size={{ .minSize }}
+            - --rails-serve-max-fetchers={{ .serveMaxFetchers }}
+            - --rails-serve-cpu={{ .serve.cpu }}
+            - --rails-serve-memory={{ .serve.memory }}
+            - --rails-fetch-cpu={{ .fetch.cpu }}
+            - --rails-fetch-memory={{ .fetch.memory }}
+            - --rails-keep-free-percent={{ .keepFreePercent }}
+            {{- end }}
+            {{- end }}
             - --rootfs-capture
             - --rootfs-cache-dir={{ .Values.agent.hostPaths.nvsnapCache }}
             {{- if .Values.agent.podCacheDir }}
@@ -144,6 +164,9 @@ spec:
             - --overlay-root={{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
             {{- with .Values.agent.criuGhostLimit }}
             - --criu-ghost-limit={{ int64 . }}
+            {{- end }}
+            {{- if .Values.agent.restoreCapturedAddress }}
+            - --restore-captured-address
             {{- end }}
             {{- with .Values.agent.tenantLabel }}
             - --tenant-label={{ . }}

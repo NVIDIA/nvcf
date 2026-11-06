@@ -65,6 +65,10 @@ type Config struct {
 	// CRIUGhostLimit bounds, in bytes, the contents of one deleted file a
 	// dump saves (criu --ghost-limit); 0 is defaultGhostLimit.
 	CRIUGhostLimit int64
+	// RestoreCapturedAddress gives a restored pod the captured pod address
+	// on its loopback, translated at its edge, when no other pod uses it
+	// (restore_address.go).
+	RestoreCapturedAddress bool
 	// CheckpointHostDir is the host filesystem path that backs CheckpointDir
 	// inside the agent container. The capture-write writer Job consumes
 	// CaptureSource.SrcPath as a host path (joined with /host), so the
@@ -172,6 +176,11 @@ type Config struct {
 
 	// ModelVolume enables the write-once model volume for Helm functions.
 	ModelVolume ModelVolumeConfig
+
+	// Rails is the rails tier of EnsureLocal: checkpoint copies between
+	// nodes over their RDMA NICs with bedrock-peer (rails_fetch.go). Off
+	// unless Rails.Image is set.
+	Rails RailsConfig
 
 	// Replication is the opt-in cross-cluster replication config (the L4
 	// tier). See docs/design/cross-cluster-replication.md. When
@@ -322,6 +331,13 @@ type Agent struct {
 	// webhook's SpecCacheURI); nil when the webhook is off.
 	specCacheURI    func(*corev1.Pod) (string, bool)
 	criuRestoreOnce sync.Once
+	// railsRunning holds the cancelled rails fetches that may still write
+	// into their checkpoint directories, by checkpoint (rails_fetch.go).
+	railsRunning sync.Map
+	// railsFetches counts the fetches this node's rails pod runs
+	// (railsFetchStarted).
+	railsFetchMu sync.Mutex
+	railsFetches int
 	// checkpointing holds the pods being checkpointed (namespace/pod).
 	checkpointing sync.Map
 
@@ -738,6 +754,8 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.log.WithError(err).Error("CRIU auto-restore failed to start; CRIU captures will not restore into new pods")
 	}
 	a.startGPUShareStoreReaper(ctx)
+	a.sweepRailsPods(ctx)
+	a.startRailsServeReaper(ctx)
 	if a.modelVolume != nil {
 		// Completes writer volumes and binds them into pending readers on
 		// this node (docs/design/helm-shared-model-volume.md).

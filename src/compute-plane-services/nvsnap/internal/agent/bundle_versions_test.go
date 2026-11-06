@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -110,6 +111,50 @@ func TestBundleTarRoundTrip(t *testing.T) {
 	}
 }
 
+// A fetched version digests the same as the served one under the agent's
+// umask: modes it would strip (group write on 0775) are kept, so the
+// fetch passes the recorded digest.
+func TestBundleTarKeepsModesPastUmask(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	src := bundleAgent(t)
+	stageVersion(t, src, "bbbb", 0)
+	dir := filepath.Join(src.bundleVersionsDir(), "bbbb")
+	if err := os.Mkdir(filepath.Join(dir, "plugins"), 0o775); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"cuda-checkpoint", "plugins/cuda_plugin.so"} {
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(p), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{"plugins", "cuda-checkpoint", "plugins/cuda_plugin.so"} {
+		if err := os.Chmod(filepath.Join(dir, p), 0o775); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := bundleDigest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := writeBundleTar(&buf, dir); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := readBundleTar(&buf, dst); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"plugins", "cuda-checkpoint", "plugins/cuda_plugin.so"} {
+		if st, err := os.Stat(filepath.Join(dst, p)); err != nil || st.Mode().Perm() != 0o775 {
+			t.Errorf("%s: mode %v %v, want 0775", p, st.Mode().Perm(), err)
+		}
+	}
+	if got, err := bundleDigest(dst); err != nil || got != want {
+		t.Errorf("fetched digest %s %v, want the served one %s", got, err, want)
+	}
+}
+
 // A symlink the stream creates cannot carry a later entry outside the
 // bundle.
 func TestReadBundleTarConfinesSymlinks(t *testing.T) {
@@ -133,6 +178,55 @@ func TestReadBundleTarConfinesSymlinks(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outside, "planted.so")); err == nil {
 		t.Fatal("a file landed outside the bundle")
+	}
+}
+
+// A link the stream makes inside the bundle is not followed by a later
+// entry: "x -> ." and then a directory "x" would otherwise change the mode
+// of the extraction root itself. A link no later entry goes through is
+// kept.
+func TestReadBundleTarRefusesEntriesThroughLinks(t *testing.T) {
+	for name, entries := range map[string][]tar.Header{
+		"directory through a link": {{Name: "x", Typeflag: tar.TypeSymlink, Linkname: "."}, {Name: "x", Mode: 0o777, Typeflag: tar.TypeDir}},
+		"file under a link":        {{Name: "d", Mode: 0o755, Typeflag: tar.TypeDir}, {Name: "x", Typeflag: tar.TypeSymlink, Linkname: "d"}, {Name: "x/f", Mode: 0o644, Typeflag: tar.TypeReg}},
+	} {
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		for i := range entries {
+			if err := tw.WriteHeader(&entries[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		dst := t.TempDir()
+		if err := os.Chmod(dst, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := readBundleTar(&buf, dst); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+			t.Errorf("%s: %v, want it refused", name, err)
+		}
+		if st, _ := os.Stat(dst); st.Mode().Perm() != 0o700 {
+			t.Errorf("%s: the extraction root became %v", name, st.Mode().Perm())
+		}
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, h := range []tar.Header{{Name: "lib", Mode: 0o755, Typeflag: tar.TypeDir}, {Name: "lib/link", Typeflag: tar.TypeSymlink, Linkname: "../x.so"}} {
+		if err := tw.WriteHeader(&h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := readBundleTar(&buf, dst); err != nil {
+		t.Fatalf("a plain link was refused: %v", err)
+	}
+	if l, err := os.Readlink(filepath.Join(dst, "lib", "link")); err != nil || l != "../x.so" {
+		t.Errorf("link %q %v", l, err)
 	}
 }
 

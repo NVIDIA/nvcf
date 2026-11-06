@@ -93,7 +93,7 @@ pod is prepared for capture or restore, and every pod starts cold.
 | Value | Default | What it decides |
 |---|---|---|
 | `agent.captureMethod` | `cachedir` | `cachedir` captures caches and the model; `criu` captures the processes ([ARCHITECTURE.md §2](../ARCHITECTURE.md#2-the-two-capture-methods-and-how-one-is-chosen)) |
-| `agent.criuCaptureOptIn` | `[]` | Under `criu`, which multi-pod instances are captured, by pod label (for example `function-id`) |
+| `agent.criuCaptureOptIn` | `[]` | Under `criu`, which multi-pod instances are captured, by pod label (for example `function-id`); an entry without `values` opts in every pod carrying the label |
 | `webhook.injectScope` | `all` | `all` namespaces not labelled `nvsnap.io/inject=false`, or `optIn`: only namespaces labelled `nvsnap.io/inject=true` |
 | `agent.modelVolume.enabled` | `false` | One model volume per model per cluster |
 | `agent.election.enabled` | `false` | One downloader per hash when a chart starts many workers (cachedir only) |
