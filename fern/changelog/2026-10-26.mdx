@@ -15,9 +15,9 @@ selection. Changes below are relative to docs edition 1.0.2.
   maintenance, including NICLLS 2.118.2, Samba 1.0.9 and both compute-plane
   collectors at 0.160.0-nv-0.2.9.
 - Patches the Java service runtime images and updates OpenBao server and agent
-  to 2.6.3 with a staged JWT plugin transition from unversioned mounts through
-  explicit old `v1.3.7` to target `v1.4.1`. The migration image includes patched
-  Kubernetes clients.
+  to 2.6.3 with both old and target JWT plugins installed. Existing mounts retain
+  their selection; new mounts use target `v1.4.1`. Existing-mount migration is a
+  separate procedure. The migration image includes patched Kubernetes clients.
 - Corrects Samba share ownership setup so non-root Helm tasks can create
   their results directory. Samba retains its existing root runtime.
 - Returns a prompt not-found response when an LLM function is sent to the

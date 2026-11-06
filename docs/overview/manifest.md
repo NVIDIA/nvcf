@@ -271,7 +271,12 @@ The webhook image is separate from `openbao.injector.agentImage` and
 
 Keep the selected NVCF OpenBao server and migrations images. An upstream
 OpenBao image does not contain the NVCF JWT lifecycle binaries and cannot
-replace the bridge image during an upgrade or rollback.
+replace the bridge image during an upgrade or rollback. For NVCF 1.0.4, both
+JWT plugin binaries remain installed: existing mounts keep their selection,
+and new mounts use the target plugin. Binary availability does not mean that
+existing mounts have migrated. Follow the
+[upgrade procedure](release-notes/1.0.2-to-1.0.4-upgrade.md) before changing
+mount selections or removing legacy binaries.
 
 The following tables list the complete artifact inventory.
 
