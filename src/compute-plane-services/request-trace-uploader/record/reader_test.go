@@ -6,7 +6,6 @@ package record
 import (
 	"bytes"
 	"compress/gzip"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,17 +134,22 @@ func TestUnknownEventTypeIsKeptAndCounted(t *testing.T) {
 	}
 }
 
-func TestLegacyAuditRecordIsRejected(t *testing.T) {
+func TestLegacyAuditRecordIsDroppedAndCounted(t *testing.T) {
 	path := writeSegment(t,
 		`{"schema_version":1,"request_id":"req-1","requested_streaming":false,"model":"m"}`,
+		`{"schema":"dynamo.request.trace.v1","event_type":"request_end","event_time_unix_ms":1,"request":{"request_id":"kept"}}`,
+		`{"timestamp":1,"event":{"schema_version":1,"request_id":"req-2"}}`,
 	)
 
-	_, _, err := readAll(t, path)
-	if !errors.Is(err, ErrLegacyAuditRecord) {
-		t.Fatalf("err = %v, want ErrLegacyAuditRecord", err)
+	records, stats, err := readAll(t, path)
+	if err != nil {
+		t.Fatalf("read: %v, want older records dropped without ending the scan", err)
 	}
-	if !strings.Contains(err.Error(), "v1.4.0") {
-		t.Errorf("err = %v, want it to name the minimum version", err)
+	if len(records) != 1 || stats.UnsupportedVersion != 2 || stats.Unparseable != 0 {
+		t.Fatalf("records = %d stats = %+v, want 1 record and 2 older records counted", len(records), stats)
+	}
+	if id, _ := records[0].RequestID(); id != "kept" {
+		t.Errorf("record = %q, want the v1.4.0 record after the older one", id)
 	}
 }
 

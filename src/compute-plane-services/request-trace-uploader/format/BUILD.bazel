@@ -10,7 +10,6 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/request-trace-uploader/backend",
-        "//src/compute-plane-services/request-trace-uploader/internal/journalfs",
         "//src/compute-plane-services/request-trace-uploader/segment",
         "//src/compute-plane-services/request-trace-uploader/transform",
     ],
@@ -32,7 +31,6 @@ go_test(
         ":format",
         "//src/compute-plane-services/request-trace-uploader/backend",
         "//src/compute-plane-services/request-trace-uploader/backend/backendtest",
-        "//src/compute-plane-services/request-trace-uploader/internal/journalfs",
         "//src/compute-plane-services/request-trace-uploader/journal",
         "//src/compute-plane-services/request-trace-uploader/segment",
         "//src/compute-plane-services/request-trace-uploader/transform",

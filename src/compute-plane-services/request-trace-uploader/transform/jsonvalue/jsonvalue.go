@@ -1,20 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package compat reads and writes JSON the way Python's json module does, so
-// a record changed by the uploader is written with the same bytes the earlier
-// Python uploader wrote.
+// Package jsonvalue reads and writes the JSON of request trace records.
 //
-// Decode follows json.loads: object keys keep their first position and take
-// their last value, integers keep every digit, NaN, Infinity and -Infinity
-// are accepted, and a \u escape for a lone surrogate is kept. Encode follows
-// json.dumps with separators (",", ":"): non-ASCII is escaped, floats use
-// Python's repr, and key order is kept.
+// Decode accepts standard JSON and keeps what a generic decoder loses: key
+// order, the source text of every number, and a \u escape for a lone
+// surrogate. Object keys keep their first position and take their last
+// value. Encode writes compact JSON in UTF-8, with numbers as they were
+// written, so a changed record differs from its source only where it was
+// changed.
 //
 // Strings hold UTF-8, except that a lone surrogate is stored as its 3-byte
-// generalized UTF-8 form. Those are the bytes Python's "surrogatepass" error
-// handler produces, so hashing a string's bytes matches Python.
-package compat
+// generalized UTF-8 form, so it survives a round trip and hashes the way the
+// earlier uploader hashed it.
+package jsonvalue
 
 import (
 	"errors"
@@ -26,8 +25,7 @@ import (
 	"unicode/utf8"
 )
 
-// MaxDepth bounds nesting, close to Python's own recursion limit, so a
-// hostile line cannot exhaust the stack.
+// MaxDepth bounds nesting, so a hostile line cannot exhaust the stack.
 const MaxDepth = 1000
 
 // Kind is the JSON type of a Value.
@@ -53,8 +51,8 @@ type Member struct {
 type Value struct {
 	kind    Kind
 	boolean bool
-	// digits holds an integer exactly, as Python int does.
-	digits  string
+	// number holds a number's source text, for an integer or a float.
+	number  string
 	float   float64
 	str     string
 	items   []*Value
@@ -69,13 +67,35 @@ func NewNull() *Value { return &Value{kind: Null} }
 func NewBool(b bool) *Value { return &Value{kind: Bool, boolean: b} }
 
 // NewInt returns a JSON integer.
-func NewInt(i int64) *Value { return &Value{kind: Int, digits: strconv.FormatInt(i, 10)} }
+func NewInt(i int64) *Value { return &Value{kind: Int, number: strconv.FormatInt(i, 10)} }
 
 // NewString returns a JSON string.
 func NewString(s string) *Value { return &Value{kind: String, str: s} }
 
 // NewObject returns an empty JSON object.
 func NewObject() *Value { return &Value{kind: Object} }
+
+// Clone returns a deep copy of v.
+func (v *Value) Clone() *Value {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	out.index = nil
+	if v.items != nil {
+		out.items = make([]*Value, len(v.items))
+		for i, item := range v.items {
+			out.items[i] = item.Clone()
+		}
+	}
+	if v.members != nil {
+		out.members = make([]Member, len(v.members))
+		for i, m := range v.members {
+			out.members[i] = Member{Key: m.Key, Value: m.Value.Clone()}
+		}
+	}
+	return &out
+}
 
 // Kind returns the value's JSON type.
 func (v *Value) Kind() Kind { return v.kind }
@@ -96,16 +116,16 @@ func (v *Value) Bool() (bool, bool) {
 	return v.boolean, true
 }
 
-// IntDigits returns the exact decimal digits of a JSON integer.
+// IntDigits returns a JSON integer as it was written.
 func (v *Value) IntDigits() (string, bool) {
 	if v == nil || v.kind != Int {
 		return "", false
 	}
-	return v.digits, true
+	return v.number, true
 }
 
 // Float returns the value of a JSON number written with a fraction or an
-// exponent, or one of NaN, Infinity and -Infinity.
+// exponent. A number too large for a float64 is an infinity.
 func (v *Value) Float() (float64, bool) {
 	if v == nil || v.kind != Float {
 		return 0, false
@@ -148,8 +168,7 @@ func (v *Value) Has(key string) bool {
 	return ok
 }
 
-// Set stores key in an object. An existing key keeps its position, as in a
-// Python dict.
+// Set stores key in an object. An existing key keeps its position.
 func (v *Value) Set(key string, value *Value) {
 	if i, ok := v.lookup(key); ok {
 		v.members[i].Value = value
@@ -192,8 +211,8 @@ func (v *Value) lookup(key string) (int, bool) {
 	return 0, false
 }
 
-// CodePoints returns the length Python's len() gives the string: one per
-// code point, counting each lone surrogate as one.
+// CodePoints returns the number of code points in s, counting each lone
+// surrogate as one. Redaction markers measure media this way.
 func CodePoints(s string) int {
 	n := 0
 	for i := 0; i < len(s); {
@@ -217,7 +236,8 @@ func appendSurrogate(buf []byte, r rune) []byte {
 	return append(buf, 0xe0|byte(r>>12), 0x80|byte(r>>6)&0x3f, 0x80|byte(r)&0x3f)
 }
 
-// Decode parses one JSON text as Python's json.loads does.
+// Decode parses one JSON text. NaN, Infinity and anything else that is not
+// JSON is an error.
 func Decode(data []byte) (*Value, error) {
 	if !utf8.Valid(data) {
 		return nil, errors.New("json: invalid UTF-8")
@@ -284,12 +304,6 @@ func (d *decoder) value(depth int) (*Value, error) {
 		return NewBool(true), nil
 	case c == 'f' && d.literal("false"):
 		return NewBool(false), nil
-	case c == 'N' && d.literal("NaN"):
-		return &Value{kind: Float, float: math.NaN()}, nil
-	case c == 'I' && d.literal("Infinity"):
-		return &Value{kind: Float, float: math.Inf(1)}, nil
-	case c == '-' && d.literal("-Infinity"):
-		return &Value{kind: Float, float: math.Inf(-1)}, nil
 	case c == '-' || (c >= '0' && c <= '9'):
 		return d.number()
 	}
@@ -379,8 +393,9 @@ func (d *decoder) array(depth int) (*Value, error) {
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
-// number matches -?(0|[1-9]\d*)(\.\d+)?([eE][-+]?\d+)? as Python does. A
-// fraction or exponent makes a float; anything else is an exact integer.
+// number matches -?(0|[1-9]\d*)(\.\d+)?([eE][-+]?\d+)?. A fraction or
+// exponent makes a float; anything else is an integer. Either keeps its
+// source text.
 func (d *decoder) number() (*Value, error) {
 	start := d.pos
 	if d.data[d.pos] == '-' {
@@ -420,16 +435,13 @@ func (d *decoder) number() (*Value, error) {
 	}
 	text := string(d.data[start:d.pos])
 	if !isFloat {
-		if text == "-0" {
-			text = "0"
-		}
-		return &Value{kind: Int, digits: text}, nil
+		return &Value{kind: Int, number: text}, nil
 	}
 	f, err := strconv.ParseFloat(text, 64)
 	if err != nil && !errors.Is(err, strconv.ErrRange) {
 		return nil, d.errorf("invalid number")
 	}
-	return &Value{kind: Float, float: f}, nil
+	return &Value{kind: Float, number: text, float: f}, nil
 }
 
 func hexValue(c byte) (rune, bool) {
@@ -531,14 +543,164 @@ func (d *decoder) string() (string, error) {
 	}
 }
 
-// Encode writes v as Python's json.dumps(v, separators=(",", ":")) does.
-func Encode(v *Value) []byte { return encode(nil, v, false) }
+// Encode writes v as compact JSON in UTF-8. Numbers keep their source text.
+// Only quotes, backslashes, control characters and lone surrogates are
+// escaped.
+func Encode(v *Value) []byte { return encodePlain(nil, v) }
 
-// EncodeSorted writes v as json.dumps(v, sort_keys=True,
-// separators=(",", ":")) does.
-func EncodeSorted(v *Value) []byte { return encode(nil, v, true) }
+func encodePlain(buf []byte, v *Value) []byte {
+	switch v.kind {
+	case Null:
+		return append(buf, "null"...)
+	case Bool:
+		if v.boolean {
+			return append(buf, "true"...)
+		}
+		return append(buf, "false"...)
+	case Int, Float:
+		return append(buf, v.number...)
+	case String:
+		return appendQuoted(buf, v.str)
+	case Array:
+		buf = append(buf, '[')
+		for i, item := range v.items {
+			if i > 0 {
+				buf = append(buf, ',')
+			}
+			buf = encodePlain(buf, item)
+		}
+		return append(buf, ']')
+	case Object:
+		buf = append(buf, '{')
+		for i, m := range v.members {
+			if i > 0 {
+				buf = append(buf, ',')
+			}
+			buf = appendQuoted(buf, m.Key)
+			buf = append(buf, ':')
+			buf = encodePlain(buf, m.Value)
+		}
+		return append(buf, '}')
+	}
+	return buf
+}
 
-func encode(buf []byte, v *Value, sortKeys bool) []byte {
+func appendQuoted(buf []byte, s string) []byte {
+	buf = append(buf, '"')
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c >= 0x20 && c != '"' && c != '\\' && c != 0xed {
+			buf = append(buf, c)
+			i++
+			continue
+		}
+		switch c {
+		case '"':
+			buf = append(buf, '\\', '"')
+		case '\\':
+			buf = append(buf, '\\', '\\')
+		case '\n':
+			buf = append(buf, '\\', 'n')
+		case '\r':
+			buf = append(buf, '\\', 'r')
+		case '\t':
+			buf = append(buf, '\\', 't')
+		case '\b':
+			buf = append(buf, '\\', 'b')
+		case '\f':
+			buf = append(buf, '\\', 'f')
+		case 0xed:
+			// 0xed leads both a lone surrogate's stored form and ordinary
+			// code points from U+D000 to U+D7FF.
+			if r, size := DecodeRune(s[i:]); size == 3 && r >= 0xd800 && r <= 0xdfff {
+				buf = appendEscape(buf, r)
+				i += size
+				continue
+			}
+			buf = append(buf, c)
+		default:
+			buf = appendEscape(buf, rune(c))
+		}
+		i++
+	}
+	return append(buf, '"')
+}
+
+// Text returns a value as plain text: a string as it is, a number as it was
+// written, true or false, an empty string for null or a missing value, and
+// compact JSON for an array or object.
+func Text(v *Value) string {
+	if v == nil {
+		return ""
+	}
+	switch v.kind {
+	case Null:
+		return ""
+	case String:
+		return v.str
+	case Int, Float:
+		return v.number
+	}
+	return string(Encode(v))
+}
+
+// Equal reports whether a and b are the same JSON: the same keys in the same
+// order, the same strings, and numbers of the same kind with the same value.
+func Equal(a, b *Value) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.kind != b.kind {
+		return false
+	}
+	switch a.kind {
+	case Bool:
+		return a.boolean == b.boolean
+	case Int:
+		return canonicalInt(a.number) == canonicalInt(b.number)
+	case Float:
+		return a.float == b.float
+	case String:
+		return a.str == b.str
+	case Array:
+		if len(a.items) != len(b.items) {
+			return false
+		}
+		for i := range a.items {
+			if !Equal(a.items[i], b.items[i]) {
+				return false
+			}
+		}
+		return true
+	case Object:
+		if len(a.members) != len(b.members) {
+			return false
+		}
+		for i := range a.members {
+			if a.members[i].Key != b.members[i].Key || !Equal(a.members[i].Value, b.members[i].Value) {
+				return false
+			}
+		}
+		return true
+	}
+	return true
+}
+
+func canonicalInt(text string) string {
+	if text == "-0" {
+		return "0"
+	}
+	return text
+}
+
+// CanonicalSorted writes v with sorted keys in the canonical form the
+// redaction marker hashes for a value that is not a string: every character
+// outside printable ASCII escaped, integers in plain digits, and floats in
+// the shortest form that round-trips (1e-05, 1e+16, 100.0). It is the form
+// the earlier uploader hashed, so marker hashes stay stable.
+func CanonicalSorted(v *Value) []byte { return encodeCanonical(nil, v) }
+
+func encodeCanonical(buf []byte, v *Value) []byte {
 	switch v.kind {
 	case Null:
 		return append(buf, "null"...)
@@ -548,44 +710,39 @@ func encode(buf []byte, v *Value, sortKeys bool) []byte {
 		}
 		return append(buf, "false"...)
 	case Int:
-		return append(buf, v.digits...)
+		return append(buf, canonicalInt(v.number)...)
 	case Float:
 		switch {
-		case math.IsNaN(v.float):
-			return append(buf, "NaN"...)
 		case math.IsInf(v.float, 1):
 			return append(buf, "Infinity"...)
 		case math.IsInf(v.float, -1):
 			return append(buf, "-Infinity"...)
 		}
-		return append(buf, FloatRepr(v.float)...)
+		return append(buf, floatRepr(v.float)...)
 	case String:
-		return AppendQuoted(buf, v.str)
+		return appendASCIIQuoted(buf, v.str)
 	case Array:
 		buf = append(buf, '[')
 		for i, item := range v.items {
 			if i > 0 {
 				buf = append(buf, ',')
 			}
-			buf = encode(buf, item, sortKeys)
+			buf = encodeCanonical(buf, item)
 		}
 		return append(buf, ']')
 	case Object:
-		members := v.members
-		if sortKeys {
-			members = append([]Member(nil), members...)
-			// Byte order of UTF-8, and of the surrogate form, is code point
-			// order, which is how Python sorts str keys.
-			sort.Slice(members, func(i, j int) bool { return members[i].Key < members[j].Key })
-		}
+		members := append([]Member(nil), v.members...)
+		// Byte order of UTF-8, and of the surrogate form, is code point
+		// order.
+		sort.Slice(members, func(i, j int) bool { return members[i].Key < members[j].Key })
 		buf = append(buf, '{')
 		for i, m := range members {
 			if i > 0 {
 				buf = append(buf, ',')
 			}
-			buf = AppendQuoted(buf, m.Key)
+			buf = appendASCIIQuoted(buf, m.Key)
 			buf = append(buf, ':')
-			buf = encode(buf, m.Value, sortKeys)
+			buf = encodeCanonical(buf, m.Value)
 		}
 		return append(buf, '}')
 	}
@@ -598,9 +755,9 @@ func appendEscape(buf []byte, r rune) []byte {
 	return append(buf, '\\', 'u', hexDigits[r>>12&0xf], hexDigits[r>>8&0xf], hexDigits[r>>4&0xf], hexDigits[r&0xf])
 }
 
-// AppendQuoted appends s as a JSON string with every character outside
-// printable ASCII escaped, as Python's json.dumps does by default.
-func AppendQuoted(buf []byte, s string) []byte {
+// appendASCIIQuoted appends s as a JSON string with every character outside
+// printable ASCII escaped.
+func appendASCIIQuoted(buf []byte, s string) []byte {
 	buf = append(buf, '"')
 	for i := 0; i < len(s); {
 		c := s[i]
@@ -641,10 +798,10 @@ func AppendQuoted(buf []byte, s string) []byte {
 	return append(buf, '"')
 }
 
-// FloatRepr formats f as Python's repr(float) does: the shortest digits that
-// round-trip, fixed notation for exponents from -4 to 15 with at least one
-// fractional digit, otherwise d.ddde+XX, and nan, inf and -inf.
-func FloatRepr(f float64) string {
+// floatRepr formats a finite f the way the marker hash form needs: the
+// shortest digits that round-trip, fixed notation for exponents from -4 to
+// 15 with at least one fractional digit, and d.ddde+XX otherwise.
+func floatRepr(f float64) string {
 	switch {
 	case math.IsNaN(f):
 		return "nan"

@@ -11,7 +11,7 @@ import (
 func namedRules() Config {
 	return Config{Rules: []Rule{
 		{Name: "tenants", Headers: []string{"x-tenant"}, Values: []string{"t1"}, Action: DropRecord},
-		{Name: "nca_id", Headers: DefaultHeaders, Values: []string{"acme"}, Action: StripPayload},
+		{Name: "nca_id", Headers: ncaHeaders, Values: []string{"acme"}, Action: StripPayload},
 	}}
 }
 
@@ -104,7 +104,7 @@ func TestConfigValidateRejectsBadNamesAndPolicies(t *testing.T) {
 		cfg  Config
 	}{
 		{name: "duplicate rule name", cfg: Config{Rules: []Rule{
-			{Name: "a", Headers: DefaultHeaders, Values: []string{"x"}, Action: StripPayload},
+			{Name: "a", Headers: ncaHeaders, Values: []string{"x"}, Action: StripPayload},
 			{Name: "a", Headers: []string{"x-tenant"}, Values: []string{"y"}, Action: DropRecord},
 		}}},
 		{name: "unknown headerless policy", cfg: Config{Headerless: "reject"}},

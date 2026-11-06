@@ -44,8 +44,8 @@ func TestCatalogNamesAreUniqueAndLabelsBounded(t *testing.T) {
 
 func TestCatalogNamesAreBackendNeutral(t *testing.T) {
 	for _, instrument := range Instruments() {
-		backends := []string{"s3"}
-		for _, backend := range []config.Backend{config.BackendKratos, config.BackendObjectStore, config.BackendDebug} {
+		backends := []string{"s3", "example"}
+		for _, backend := range []config.Backend{config.BackendObjectStore, config.BackendDebug} {
 			backends = append(backends, string(backend))
 		}
 		for _, backend := range backends {
@@ -65,6 +65,7 @@ func TestCatalogCoversRequiredInstruments(t *testing.T) {
 		JobsStranded, SegmentsEvicted, QuarantineTripped,
 		SpoolUsedBytes, SpoolFreeBytes, PendingBytes, OldestPendingAge,
 		BatchSegments, BatchBytes, BatchSplits,
+		PrepareDuration, ExportLatency,
 	}
 	for _, name := range required {
 		if _, ok := Lookup(name); !ok {
@@ -111,8 +112,8 @@ func TestMemoryRecordsEachKind(t *testing.T) {
 	m.Add(Uploads, 1, Labels{"status": "success"})
 	m.Set(PendingSegments, 7, nil)
 	m.Set(PendingSegments, 4, nil)
-	m.Observe(UploadDuration, 1.5, nil)
-	m.Observe(UploadDuration, 0.5, nil)
+	m.Observe(UploadDuration, 1.5, Labels{"status": "success"})
+	m.Observe(UploadDuration, 0.5, Labels{"status": "success"})
 
 	if got, _ := m.Value(Uploads, Labels{"status": "success"}); got != 3 {
 		t.Errorf("uploads{success} = %v, want 3", got)
@@ -120,7 +121,7 @@ func TestMemoryRecordsEachKind(t *testing.T) {
 	if got, _ := m.Value(PendingSegments, nil); got != 4 {
 		t.Errorf("pending_segments = %v, want 4", got)
 	}
-	count, sum, ok := m.Histogram(UploadDuration, nil)
+	count, sum, ok := m.Histogram(UploadDuration, Labels{"status": "success"})
 	if !ok || count != 2 || sum != 2 {
 		t.Errorf("upload.duration = count %d sum %v ok %v, want 2, 2, true", count, sum, ok)
 	}

@@ -107,9 +107,8 @@ type fakeJob struct {
 func NewFake() *Fake {
 	return &Fake{
 		caps: backend.Capabilities{
-			OutOfOrderTolerant: true,
-			AcceptedFormats:    []backend.Format{backend.FormatGzipJSONL},
-			Exports:            true,
+			AcceptedFormats: []backend.Format{backend.FormatGzipJSONL},
+			Exports:         true,
 		},
 		byID: map[string]*fakeJob{},
 	}

@@ -43,8 +43,9 @@ type RecoverOptions struct {
 //   - A segment found Preparing goes back to Discovered and its partial
 //     transports are removed.
 //   - A batch found Submitting with no receipt may have committed, so it
-//     becomes Ambiguous and is resubmitted, counted. A batch with a receipt
-//     is polled, never resubmitted.
+//     becomes Ambiguous, counted. The caller resubmits it or, when it
+//     retains ambiguous submits, parks it for an operator. A batch with a
+//     receipt is polled, never resubmitted.
 func (s *Store) Recover(opts RecoverOptions) (journal.Plan, error) {
 	if opts.Backend == "" {
 		return journal.Plan{}, errors.New("recover journal: the running backend name is required")

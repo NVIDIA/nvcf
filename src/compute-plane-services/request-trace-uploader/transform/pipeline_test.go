@@ -96,7 +96,7 @@ func TestSpoolToTransport(t *testing.T) {
 	writeSegment(t, filepath.Join(spool, "request-trace.1000001.jsonl.gz"), end)
 
 	cfg := transform.DefaultConfig()
-	cfg.Suppression = suppress.FromIDs([]string{"blocked"})
+	cfg.Suppression = suppress.FromIDs([]string{"blocked"}, "nvcf-ncaid", "nvcf-nca-id")
 	preparer, err := transform.New(cfg)
 	if err != nil {
 		t.Fatal(err)

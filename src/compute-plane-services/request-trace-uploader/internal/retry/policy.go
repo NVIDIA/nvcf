@@ -45,6 +45,11 @@ const (
 	ActionResubmit Action = "resubmit"
 	// ActionRetain keeps the item and waits for an operator.
 	ActionRetain Action = "retain"
+	// ActionResendOnce sends a job's work again as a new job, but only once:
+	// the job failed in a way that may still have landed, so the resend is
+	// counted as a possible duplicate, and a second such failure is kept
+	// for an operator.
+	ActionResendOnce Action = "resend_once"
 )
 
 // Failure is one failed call for one item.
@@ -114,9 +119,10 @@ func (p *Policy) Breaker() *Breaker { return p.breaker }
 //  2. A submit that returned a job id keeps polling that job.
 //  3. An auth fault holds, so auth never splits a batch or quarantines
 //     anything.
-//  4. An ambiguous job keeps polling. An ambiguous submit with no job id
-//     follows Config.AmbiguousWithoutID, unless the backend is resubmit safe,
-//     where it is an ordinary retryable fault.
+//  4. An uncertain job failure is sent again once as a new job. An
+//     uncertain submit with no job id follows Config.AmbiguousWithoutID,
+//     unless the backend is resubmit safe, where it is an ordinary
+//     retryable fault.
 //  5. Backend scope holds.
 //  6. Segment scope quarantines when terminal or after
 //     Config.SegmentScopeFailures attempts, and retries otherwise.
@@ -156,7 +162,7 @@ func (p *Policy) action(caps backend.Capabilities, f Failure, fault backend.Faul
 	case auth:
 		return ActionHold
 	case fault.Class == backend.ClassUncertain && f.Stage == StageJob:
-		return ActionPoll
+		return ActionResendOnce
 	case fault.Class == backend.ClassUncertain && !caps.ResubmitSafe:
 		if p.cfg.AmbiguousWithoutID == AmbiguousRetain {
 			return ActionRetain

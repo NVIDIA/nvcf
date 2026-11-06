@@ -38,7 +38,7 @@ func TestNewPolicyRejectsInvalidConfig(t *testing.T) {
 
 func TestPolicyDecide(t *testing.T) {
 	asyncJobs := backend.Capabilities{MaxBatchFiles: 16}
-	resubmitSafe := backend.Capabilities{ResubmitSafe: true, TerminalOutcomeSync: true}
+	resubmitSafe := backend.Capabilities{ResubmitSafe: true}
 	fault := func(class backend.Class, scope backend.Scope, reason backend.Reason) backend.Fault {
 		return backend.Fault{Class: class, Scope: scope, Reason: reason}
 	}
@@ -133,16 +133,16 @@ func TestPolicyDecide(t *testing.T) {
 			wantHold:  true,
 		},
 		{
-			name:      "ambiguous job with an id keeps polling",
+			name:      "uncertain job failure is sent again once",
 			caps:      asyncJobs,
-			failure:   Failure{Key: "b1", Stage: StageJob, JobID: true, Fault: fault(backend.ClassUncertain, backend.ScopeSegment, "temp_upload_failed"), Attempts: 1},
-			want:      ActionPoll,
+			failure:   Failure{Key: "b1", Stage: StageJob, JobID: true, Fault: fault(backend.ClassUncertain, backend.ScopeSegment, backend.ReasonUploadUnconfirmed), Attempts: 1},
+			want:      ActionResendOnce,
 			wantScope: backend.ScopeSegment,
 		},
 		{
 			name:      "segment terminal job failure is quarantined",
 			caps:      asyncJobs,
-			failure:   Failure{Key: "b1", Stage: StageJob, JobID: true, Fault: fault(backend.ClassPermanent, backend.ScopeSegment, "canceled"), Attempts: 1},
+			failure:   Failure{Key: "b1", Stage: StageJob, JobID: true, Fault: fault(backend.ClassPermanent, backend.ScopeSegment, backend.ReasonJobCanceled), Attempts: 1},
 			want:      ActionQuarantine,
 			wantScope: backend.ScopeSegment,
 		},
@@ -378,7 +378,7 @@ func (s httpStatus) HTTPStatusCode() int { return int(s) }
 // holds; a job id that came back is polled.
 func TestPolicyServerErrorOnCreate(t *testing.T) {
 	asyncJobs := backend.Capabilities{MaxBatchFiles: 16}
-	resubmitSafe := backend.Capabilities{ResubmitSafe: true, TerminalOutcomeSync: true}
+	resubmitSafe := backend.Capabilities{ResubmitSafe: true}
 	tests := []struct {
 		name  string
 		code  int

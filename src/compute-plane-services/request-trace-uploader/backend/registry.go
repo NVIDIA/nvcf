@@ -35,15 +35,16 @@ func Register(name config.Backend, factory Factory) {
 	registry[name] = factory
 }
 
-// New builds the configured backend. A backend that is valid configuration but
-// absent from this build reports that it was not compiled in, so an operator
-// can tell a wiring mistake from a bad setting.
+// New builds the configured backend. A name no linked backend registered
+// reports that it was not compiled in and lists the ones that were, so an
+// operator can tell a wiring mistake from a bad setting. The error leaves the
+// configured value out, in case the setting holds something else by mistake.
 func New(cfg config.Config) (Client, error) {
 	registryMu.RLock()
 	factory, ok := registry[cfg.Backend]
 	registryMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("backend %q is not compiled into this build (available: %v)", cfg.Backend, Registered())
+		return nil, fmt.Errorf("the configured backend is not compiled into this build (available: %v)", Registered())
 	}
 	client, err := factory(cfg)
 	if err != nil {
