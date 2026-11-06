@@ -50,6 +50,8 @@ nvcf_java_test(
     srcs = ICMS_SERVICE_TEST_SRCS,
     deps = ICMS_SERVICE_DEPS + [
         ":app_classes",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_health",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_test",
         "@nv_third_party_deps//:org_springframework_spring_web",
         "@nv_third_party_deps//:org_springframework_spring_core",
         "@nv_third_party_deps//:org_springframework_spring_beans",

@@ -21,13 +21,14 @@ import com.nvidia.boot.cassandra.configuration.CassandraAdvancedConfiguration;
 import com.nvidia.boot.cassandra.configuration.CassandraConverterConfiguration;
 import com.nvidia.boot.cassandra.configuration.CassandraHealthConfiguration;
 import com.nvidia.boot.cassandra.configuration.CassandraMetricsConfiguration;
+import com.nvidia.boot.cassandra.configuration.CassandraSessionLivenessConfiguration;
 import com.nvidia.boot.cassandra.configuration.CassandraSslBundleConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.context.annotation.Import;
 
 /**
  * Auto-configuration for NV Boot Cassandra: custom converters, advanced properties,
- * health indicator, and SSL bundle support with refreshable CqlSession.
+ * health indicators, and SSL bundle support with refreshable CqlSession.
  */
 @AutoConfiguration
 @Import({
@@ -35,6 +36,7 @@ import org.springframework.context.annotation.Import;
     CassandraAdvancedConfiguration.class,
     CassandraHealthConfiguration.class,
     CassandraMetricsConfiguration.class,
+    CassandraSessionLivenessConfiguration.class,
     CassandraSslBundleConfiguration.class
 })
 public class CassandraAutoConfiguration {
