@@ -1,4 +1,2 @@
-CREATE TABLE IF NOT EXISTS sis_api.coderabbit_validation (
-    id uuid PRIMARY KEY,
-    value text
-);
+ALTER TABLE sis_api.cluster_by_cluster_id
+    ADD IF NOT EXISTS coderabbit_validation text;
