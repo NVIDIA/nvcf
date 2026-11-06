@@ -241,8 +241,8 @@ First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nv
 
 ```bash
 # Set stack versions
-export STACK_VERSION="1.0.1"
-export COMPUTE_STACK_VERSION="1.0.0"
+export STACK_VERSION="1.0.10"
+export COMPUTE_STACK_VERSION="1.0.5"
 export OBSERVABILITY_STACK_VERSION="1.0.0"
 
 # Download a specific control-plane stack version
@@ -270,7 +270,7 @@ Download and extract:
 
 ```bash
 # Set the version
-export VERSION="1.0.1"
+export VERSION="1.0.10"
 
 ngc registry resource download-version "nvidia/nvcf/nvcf-self-managed-stack:${VERSION}" && \
    mkdir -p nvcf-self-managed-stack && \
@@ -295,7 +295,7 @@ Download and extract:
 
 ```bash
 # Set the version
-export COMPUTE_VERSION="1.0.0"
+export COMPUTE_VERSION="1.0.5"
 
 ngc registry resource download-version "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_VERSION}" && \
    mkdir -p nvcf-compute-plane-stack && \
@@ -354,7 +354,7 @@ Download and extract:
 
 ```bash
 # Set the version
-export VERSION="1.16.2"
+export VERSION="1.16.8"
 
 # Set your platform (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64)
 export PLATFORM="linux-amd64"

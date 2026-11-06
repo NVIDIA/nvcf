@@ -128,6 +128,13 @@ Self-managed 1.0.0 or later, Compute plane 1.0.0 or later". Stack names use the 
 release changes compatibility, and raise a minimum when a release stops working
 with an older release of another stack. Then regenerate the documentation.
 
+For an umbrella candidate whose exact peer pins describe bundle membership,
+use the `release-selection` renderer for that page's generated block. It renders
+`release_set.stacks` as selected versions without interpreting exact peer pins
+as supported compatibility ranges. Explain the stack train policy and upgrade
+prerequisites separately in the page. Keep the product manifest and catalog
+selection exact; do not widen their pins to express a general support policy.
+
 Each registered stack publishes its own inventory:
 
 - `nvcf-self-managed-stack-inventory.json`
@@ -137,6 +144,19 @@ Each registered stack publishes its own inventory:
 No stack inventory references another stack's Helmfile state.
 
 ## Sync after an automatic stack release
+
+To document an assembled candidate, use its downloaded manifest and inventory
+assets instead of release discovery. This verifies source tags, commits,
+inventory digests and plane ownership before updating the Development catalog:
+
+```bash
+go run -C tools/docs-version-sync . --target main --update-catalog \
+  --release-manifest /path/to/candidate/manifest.json \
+  --inventories /path/to/candidate
+```
+
+This does not qualify or publish the candidate. Changed artifacts remain
+publication-pending until their public catalog publication is verified.
 
 Wait for the GitHub Release and its inventory asset, then run:
 
