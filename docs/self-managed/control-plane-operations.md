@@ -181,9 +181,9 @@ outage. Only do this if you understand the implications for data availability an
 ## Upgrading Services
 
 For a stack upgrade, follow the [staged 1.0.2-to-1.0.4 procedure](../overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
-It covers the docs edition 1.0.2 combination and the required hostname-policy,
-NVCA and control-plane ordering. Other source versions must complete their
-intermediate migration steps first.
+It covers the stack combination in docs editions 1.0.2 and 1.0.3 and the
+required hostname-policy, NVCA and control-plane ordering. Older source stacks
+must complete their intermediate migration steps first.
 
 The commands below are for targeted fixes to individual services. A spot
 upgrade bypasses the stack's coordinated versions and migrations. Review the
