@@ -31,7 +31,7 @@ mod request;
 mod reverse;
 mod webtransport;
 
-pub use body::StreamingBody;
+pub use body::{ResponseHeaderTimeout, StreamingBody};
 pub(crate) use connection::RegistrationConnections;
 pub use direct::QuicHttpProxy;
 pub(crate) use direct::parse_quic_addr;

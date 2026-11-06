@@ -24,6 +24,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::routing_state::RegistrationGeneration;
 use crate::telemetry::inject_trace_context;
+use crate::tunnel::ResponseHeaderTimeout;
 
 use super::{HEADER_ROUTING_METHOD, ProxyAppState};
 
@@ -54,7 +55,11 @@ pub(super) async fn proxy_via_quic_streaming(
         .await
         .map_err(|error| {
             warn!(inference_server_id = %inference_server_id, error = %error, "quic upstream request failed");
-            StatusCode::BAD_GATEWAY
+            if error.is::<ResponseHeaderTimeout>() {
+                StatusCode::GATEWAY_TIMEOUT
+            } else {
+                StatusCode::BAD_GATEWAY
+            }
         })?;
 
     let status = streaming_resp.status;
