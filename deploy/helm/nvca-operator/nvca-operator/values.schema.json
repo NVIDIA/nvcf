@@ -67,7 +67,7 @@
                 "imageTag": {
                     "type": "string",
                     "description": "Image tag of OpenTelemetry Collector sidecar.",
-                    "default": "0.157.0-nv-0.2.1"
+                    "default": "0.160.0-nv-0.4.9"
                 },
                 "resources": {
                     "type": "object",
@@ -725,7 +725,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "BYOO OpenTelemetry Collector image tag.",
-                            "default": "0.157.0-nv-0.2.1"
+                            "default": "0.160.0-nv-0.4.9"
                         }
                     }
                 },
@@ -1015,7 +1015,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
-                            "default": "0.10.2"
+                            "default": "0.11.4"
                         }
                     }
                 },
@@ -1035,7 +1035,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.157.0-nv-0.2.1"
+                            "default": "0.160.0-nv-0.4.9"
                         }
                     }
                 }
@@ -1081,7 +1081,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
-                            "default": "0.10.2"
+                            "default": "0.11.4"
                         }
                     }
                 },
@@ -1101,7 +1101,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.157.0-nv-0.2.1"
+                            "default": "0.160.0-nv-0.4.9"
                         }
                     }
                 },
