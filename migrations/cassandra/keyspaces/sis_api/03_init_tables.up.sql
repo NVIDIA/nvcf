@@ -364,9 +364,8 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_by_group_id_and_cluster_id (
     PRIMARY KEY (cluster_group_id, cluster_id)
 ) WITH CLUSTERING ORDER BY (cluster_id ASC);
 
--- Full cluster state, keyed by cluster_id for direct lookups.
+-- Full cluster state, keyed by cluster_id for direct cluster lookups.
 CREATE TABLE IF NOT EXISTS sis_api.cluster_by_cluster_id (
-    coderabbit_validation              text,
     cluster_name                       text,
     registration_time                  timestamp,
     cluster_id                         text,
