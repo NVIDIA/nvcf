@@ -48,6 +48,10 @@ vanityGateway:
   config:
     mappingPath: /etc/vanity-gateway/config/config.yaml
     nvcfApiEndpoint: http://invocation.nvcf.svc.cluster.local:8080
+    # NVCF API base URL for listing the private models a caller's API key may
+    # access. Empty disables it. In the self-managed stack the NVCF API is
+    # http://api.nvcf.svc.cluster.local:8080.
+    nvcfControlPlaneEndpoint: ""
     llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
     otelExporterOtlpEndpoint: ""
     secretsPath: ""

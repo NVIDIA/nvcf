@@ -110,6 +110,10 @@
             "nvcfApiEndpoint": {
               "$ref": "#/definitions/nonEmptyString"
             },
+            "nvcfControlPlaneEndpoint": {
+              "type": "string",
+              "pattern": "^$|^https?://[^/]+/?$"
+            },
             "llmGatewayEndpoint": {
               "type": "string",
               "pattern": "^$|^https?://[^/]+/?$"

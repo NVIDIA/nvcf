@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM golang:1.23 AS build
+FROM golang:1.26.10 AS build
 
 WORKDIR /src
 COPY http-server/go.mod ./
@@ -22,6 +22,9 @@ COPY http-server/ ./
 RUN CGO_ENABLED=0 go build -o /byoo-telemetry-sample .
 
 FROM alpine:3.20
+
+# Refresh inherited CA roots to reject the compromised emSign chains.
+RUN apk add --no-cache --upgrade 'ca-certificates-bundle>=20261020-r0'
 
 COPY --from=build /byoo-telemetry-sample /app/byoo-telemetry-sample
 RUN adduser -D -H app && chown app:app /app/byoo-telemetry-sample

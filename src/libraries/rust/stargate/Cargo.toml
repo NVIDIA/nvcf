@@ -82,7 +82,7 @@ tracing-opentelemetry = "=0.33.0"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt", "registry"] }
 quinn = { version = "=0.11.11", features = ["futures-io"] }
 rustls = "=0.23.41"
-rustls-webpki = "=0.103.9"
+rustls-webpki = "=0.103.16"
 rcgen = "=0.13.2"
 rustls-pemfile = "=2.2.0"
 url = "=2.5.8"
