@@ -32,13 +32,10 @@ import (
 )
 
 func main() {
-	cfg, warnings, err := loadConfig(os.LookupEnv)
+	cfg, _, err := loadConfig(os.LookupEnv, os.Environ()...)
 	if err != nil {
 		slog.Error("invalid request trace uploader configuration", "error", err)
 		os.Exit(1)
-	}
-	for _, warning := range warnings {
-		slog.Warn("request trace uploader configuration fallback", "setting", warning)
 	}
 
 	slog.Info("request trace uploader starting", "backend", cfg.Backend, "compiled_backends", backend.Registered())
@@ -62,7 +59,10 @@ func main() {
 	}
 }
 
-// loadConfig reads configuration from the uploader's own setting names.
-func loadConfig(lookup config.LookupFunc) (config.Config, []string, error) {
-	return config.Load(lookup)
+// loadConfig reads configuration strictly from the uploader's own setting
+// names, so any invalid value or unknown setting in environ stops startup.
+// Strict loading leaves no warnings to return.
+func loadConfig(lookup config.LookupFunc, environ ...string) (config.Config, []string, error) {
+	cfg, err := config.LoadStrict(lookup, environ)
+	return cfg, nil, err
 }
