@@ -3852,50 +3852,104 @@ fn abandoned_engine(
         .route("/v1/messages", handler)
 }
 
+// Opens a request on a fresh tunnel, then abandons it the way the router does
+// (client gone, or its header timeout): drop both stream halves, keep the connection.
+// Returns whether the engine request was dropped within 3 s.
+async fn router_abandons_request(
+    protocol: TunnelTransportProtocol,
+    state: AbandonedEngineState,
+) -> bool {
+    let (engine_dropped_tx, engine_dropped_rx) = tokio::sync::oneshot::channel();
+    let mut config = test_tunnel_config_for(abandoned_engine(state, engine_dropped_tx)).await;
+    config.tunnel_protocol = protocol;
+    // Pylon relays Responses as SSE; /v1/messages is relayed as a plain body.
+    let (path, body): (&str, &'static [u8]) = match state {
+        AbandonedEngineState::SilentBody => ("/v1/messages", br#"{"stream":false}"#),
+        _ => ("/v1/responses", br#"{"input":"hi","stream":true}"#),
+    };
+    let headers = tunnel_request_headers(path, "model-responses", "req-abandoned", "11");
+    let wait_for_head = !matches!(state, AbandonedEngineState::QueuedNoHeaders);
+    let engine_dropped = match protocol {
+        TunnelTransportProtocol::RawQuic => {
+            let mut tunnel = RawTunnelTest::start(config).await;
+            tunnel.send(headers, body).await;
+            if wait_for_head {
+                tunnel.response_head(StatusCode::OK).await;
+            } else {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            let RawTunnelTest {
+                tunnel: handle,
+                _endpoint: endpoint,
+                send,
+                recv,
+            } = tunnel;
+            drop(recv);
+            drop(send);
+            let engine_dropped =
+                tokio::time::timeout(Duration::from_secs(3), engine_dropped_rx).await;
+            drop(endpoint);
+            let _ = tokio::time::timeout(Duration::from_secs(1), handle.shutdown()).await;
+            engine_dropped
+        }
+        TunnelTransportProtocol::WebTransport => {
+            let tunnel = start_quic_http_tunnel(config).await.unwrap();
+            let session = open_direct_webtransport_session(tunnel.listen_addr()).await;
+            let (mut send, mut recv) = session.connection.open_bi().await.unwrap();
+            let request_head = stargate_protocol::WebTransportHttpRequestHead {
+                method: reqwest::Method::POST,
+                path_and_query: path.to_string(),
+                headers,
+            };
+            let bidi_header = stargate_protocol::WebTransportBidiHeader::new(session.session_id)
+                .unwrap()
+                .to_bytes();
+            stargate_protocol::write_webtransport_http_request_head_after_prefix(
+                &mut send,
+                bidi_header,
+                &request_head,
+            )
+            .await
+            .unwrap();
+            write_direct_webtransport_request_body(&mut send, Bytes::from_static(body)).await;
+            if wait_for_head {
+                let head = stargate_protocol::read_webtransport_http_response_head(&mut recv)
+                    .await
+                    .unwrap();
+                assert_eq!(head.status, StatusCode::OK);
+            } else {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            drop(recv);
+            drop(send);
+            let engine_dropped =
+                tokio::time::timeout(Duration::from_secs(3), engine_dropped_rx).await;
+            session.connection.close(0u32.into(), b"test complete");
+            drop(session);
+            let _ = tokio::time::timeout(Duration::from_secs(1), tunnel.shutdown()).await;
+            engine_dropped
+        }
+        TunnelTransportProtocol::Http3 => panic!("HTTP/3 tunnels cancel only on a failed write"),
+    };
+    engine_dropped.is_ok()
+}
+
 #[tokio::test]
 async fn tunnel_drops_engine_request_when_router_abandons_stream() {
     let mut still_running = Vec::new();
-    for state in [
-        AbandonedEngineState::QueuedNoHeaders,
-        AbandonedEngineState::SilentSse,
-        AbandonedEngineState::SilentBody,
-        AbandonedEngineState::StreamingSse,
+    for protocol in [
+        TunnelTransportProtocol::RawQuic,
+        TunnelTransportProtocol::WebTransport,
     ] {
-        let (engine_dropped_tx, engine_dropped_rx) = tokio::sync::oneshot::channel();
-        let config = test_tunnel_config_for(abandoned_engine(state, engine_dropped_tx)).await;
-        let mut tunnel = RawTunnelTest::start(config).await;
-        // Pylon relays Responses as SSE; /v1/messages is relayed as a plain body.
-        let (path, body): (&str, &'static [u8]) = match state {
-            AbandonedEngineState::SilentBody => ("/v1/messages", br#"{"stream":false}"#),
-            _ => ("/v1/responses", br#"{"input":"hi","stream":true}"#),
-        };
-        tunnel
-            .send(
-                tunnel_request_headers(path, "model-responses", "req-abandoned", "11"),
-                body,
-            )
-            .await;
-        if matches!(state, AbandonedEngineState::QueuedNoHeaders) {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        } else {
-            tunnel.response_head(StatusCode::OK).await;
-        }
-
-        // The router abandons a request (client gone, or its header timeout) by
-        // dropping both stream halves; the QUIC connection stays up.
-        let RawTunnelTest {
-            tunnel: handle,
-            _endpoint: endpoint,
-            send,
-            recv,
-        } = tunnel;
-        drop(recv);
-        drop(send);
-        let engine_dropped = tokio::time::timeout(Duration::from_secs(3), engine_dropped_rx).await;
-        drop(endpoint);
-        let _ = tokio::time::timeout(Duration::from_secs(1), handle.shutdown()).await;
-        if engine_dropped.is_err() {
-            still_running.push(state);
+        for state in [
+            AbandonedEngineState::QueuedNoHeaders,
+            AbandonedEngineState::SilentSse,
+            AbandonedEngineState::SilentBody,
+            AbandonedEngineState::StreamingSse,
+        ] {
+            if !router_abandons_request(protocol, state).await {
+                still_running.push((protocol, state));
+            }
         }
     }
     assert!(
