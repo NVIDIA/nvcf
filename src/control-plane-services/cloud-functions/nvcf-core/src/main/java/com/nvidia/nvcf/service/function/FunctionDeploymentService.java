@@ -145,6 +145,7 @@ public class FunctionDeploymentService {
     private final JsonMapper jsonMapper;
     private final WorkerNatsService workerNatsService;
     private final RegistryArtifactService artifactService;
+    private final FunctionStatusTransitionService functionStatusTransitionService;
 
     // Function deployment is created by the admin.
     @SneakyThrows
@@ -200,6 +201,7 @@ public class FunctionDeploymentService {
         FunctionDeploymentEntity deployment;
         List<GpuSpecificationEntity> gpuSpecEntities;
 
+        Optional<FunctionStatusTransitionService.Transition> transition;
         try {
             var gpuSpecDtoMap = buildUuidGpuSpecificationDtoMap(deploymentRequest);
             deployment = functionMapperService.toFunctionDeploymentEntity(
@@ -228,13 +230,12 @@ public class FunctionDeploymentService {
             // functions_deployment_v2 and gpu_specifications in one batch.
             deploymentBatchWriter.createDeployment(
                     new FunctionDeploymentContext(deployment, gpuSpecEntities));
+            var newStatus = DEPLOYING;
             if (isZeroScaling) {
                 log.info(MESG_ZERO_SCALE, functionId, functionVersionId);
-                function.setFunctionStatus(ACTIVE);
-            } else {
-                function.setFunctionStatus(DEPLOYING);
+                newStatus = ACTIVE;
             }
-            functionsRepository.insert(function);
+            transition = functionStatusTransitionService.persist(function, deploymentId, newStatus);
         } catch (Exception ex) {
             var mesg = format(MESG_FAILED_CREATE_DEPLOYMENT,
                               functionId, functionVersionId, status, ex.getMessage());
@@ -265,11 +266,13 @@ public class FunctionDeploymentService {
         log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION,
                  functionId, functionVersionId, deploymentId, "Created deployment");
 
-        return functionMapperService.toFunctionDeploymentDto(
+        var result = functionMapperService.toFunctionDeploymentDto(
                 new FunctionDeploymentContext(deployment, gpuSpecEntities),
                 function.getFunctionStatus(), function.getFunctionName(),
                 gpuSpecificationService.getInstanceTypesQuietly(
                         ncaId, getFunctionContainerType(function)));
+        functionStatusTransitionService.publish(transition);
+        return result;
     }
 
     // When a deployment is deleted, the status of the function changes to INACTIVE. Also,
@@ -321,8 +324,8 @@ public class FunctionDeploymentService {
 
         try {
             // Mark function as INACTIVE to stop accepting new jobs/tasks for this version.
-            function.setFunctionStatus(INACTIVE);
-            functionsRepository.insert(function);
+            var transition = functionStatusTransitionService.persist(
+                    function, deployment.getDeploymentId(), INACTIVE);
 
             // The current default behavior for deleting a deployment is ungraceful as we whack the
             // queue and the workers. In the future, when we get the opportunity to break backward
@@ -344,6 +347,7 @@ public class FunctionDeploymentService {
                 functionAuditService.auditFunctionUpdate(payloadBuilder, functionJsonBefore,
                                                          function);
             }
+            functionStatusTransitionService.publish(transition);
         } catch (Exception ex) {
             var mesg = format(MESG_FAILED_DELETE_DEPLOYMENT,
                               functionId, functionVersionId, ex.getMessage());
@@ -482,11 +486,11 @@ public class FunctionDeploymentService {
                         });
         var jsonBefore = jsonMapper.valueToTree(function);
 
-        function.setFunctionStatus(ACTIVE);
-        functionsRepository.insert(function);
+        var transition = functionStatusTransitionService.persist(function, deploymentId, ACTIVE);
 
         var summary = SUMMARY_ACTIVATE_FUNCTION.formatted(functionId, functionVersionId);
         functionAuditService.auditFunctionUpdate(summary, STATE_ACTIVATED, jsonBefore, function);
+        functionStatusTransitionService.publish(transition);
         log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, functionVersionId,
                  deploymentId, "Activating");
         return function;
@@ -502,11 +506,12 @@ public class FunctionDeploymentService {
         // Once we set the function status to ERROR we'll no longer attempt to
         // clean its deployment. Org Admin should delete the deployment to reset
         // the function's status to ACTIVE.
-        function.setFunctionStatus(FunctionStatus.ERROR);
-        functionsRepository.insert(function);
+        var transition = functionStatusTransitionService.persist(
+                function, deploymentId, FunctionStatus.ERROR);
 
         var summary = SUMMARY_ERROR_FUNCTION.formatted(functionId, functionVersionId);
         functionAuditService.auditFunctionUpdate(summary, STATE_ERROR, jsonBefore, function);
+        functionStatusTransitionService.publish(transition);
         log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, functionVersionId,
                  deploymentId, "Error");
         return function;
@@ -529,11 +534,11 @@ public class FunctionDeploymentService {
                         });
         var jsonBefore = jsonMapper.valueToTree(function);
 
-        function.setFunctionStatus(DEGRADING);
-        functionsRepository.insert(function);
+        var transition = functionStatusTransitionService.persist(function, deploymentId, DEGRADING);
 
         var summary = SUMMARY_DEGRADING_FUNCTION.formatted(functionId, functionVersionId);
         functionAuditService.auditFunctionUpdate(summary, STATE_DEGRADING, jsonBefore, function);
+        functionStatusTransitionService.publish(transition);
         log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, functionVersionId,
                  deploymentId, "Degrading");
         return function;
@@ -556,11 +561,11 @@ public class FunctionDeploymentService {
                         });
         var jsonBefore = jsonMapper.valueToTree(function);
 
-        function.setFunctionStatus(DEGRADED);
-        functionsRepository.insert(function);
+        var transition = functionStatusTransitionService.persist(function, deploymentId, DEGRADED);
 
         var summary = SUMMARY_DEGRADED_FUNCTION.formatted(functionId, functionVersionId);
         functionAuditService.auditFunctionUpdate(summary, STATE_DEGRADED, jsonBefore, function);
+        functionStatusTransitionService.publish(transition);
         log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, functionVersionId,
                  deploymentId, "Degraded");
         return function;
@@ -582,11 +587,11 @@ public class FunctionDeploymentService {
                         });
         var jsonBefore = jsonMapper.valueToTree(function);
 
-        function.setFunctionStatus(INACTIVE);
-        functionsRepository.insert(function);
+        var transition = functionStatusTransitionService.persist(function, deploymentId, INACTIVE);
 
         var summary = SUMMARY_INACTIVATE_FUNCTION.formatted(functionId, functionVersionId);
         functionAuditService.auditFunctionUpdate(summary, STATE_INACTIVE, jsonBefore, function);
+        functionStatusTransitionService.publish(transition);
         log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, functionVersionId,
                  deploymentId, "Inactivating");
         return function;
