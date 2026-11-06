@@ -56,6 +56,7 @@ func TestProxyTLSHelperDefaultsMatch(t *testing.T) {
 			t.Errorf("Unbound %s: %v", key, err)
 			continue
 		}
+		// Mirrored copies of the same helper can use different registry prefixes.
 		if image.Name != expectedImage.Name || image.Version != expectedImage.Version || image.Digest != expectedImage.Digest {
 			t.Errorf("Unbound %s = %q, cache uses %q", key, actual, expected)
 		}

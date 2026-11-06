@@ -519,8 +519,12 @@ The `skip_verify = true` is needed because the proxy's dynamically-generated TLS
 ### Upgrading an existing installation
 
 For proxy-cache clients that use NVCF Unbound certificate injection, upgrade
-Unbound with the same certificate-helper image version as the cache. Roll out
+Unbound with the same certificate-helper image version as the cache. When reusing
+Unbound overrides, align both `images.certificates` (Kyverno injection) and
+`webhook.certificatesImage` (webhook injection) with that version. Roll out
 existing function deployments after the upgrade to refresh their CA bundles.
+Other existing proxy-cache client pods, including Job pods, also retain their
+old CA bundles. Plan their replacement according to the workload's procedure.
 
 Set `images.secrets` explicitly in your values file before upgrading an
 installation that pulls private images. Earlier chart versions supplied
@@ -532,6 +536,12 @@ images:
   secrets:
     - nvidia-ngcuser-pull-secret
 ```
+
+Before the dry run, update explicitly pinned `images.server`,
+`images.certificates` and `images.exporter` overrides to the intended versions.
+Review `images.init` too if it is set. For mirrored images, keep your registry
+paths and update the versions. If the public chart defaults are appropriate and
+you are not using `--reuse-values`, remove stale image overrides instead.
 
 Include every required values file and `--set` override from the existing
 installation in both the dry run and upgrade. The example below assumes
