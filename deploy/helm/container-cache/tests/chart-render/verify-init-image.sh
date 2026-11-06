@@ -38,9 +38,15 @@ assert_not_has() {
   fi
 }
 
-echo "Checking no image is hard-coded to a public registry org..."
-helm template c ./deploy > "${OUT_FILE}"
-assert_not_has 'nvcr.io/nvidia/'
+echo "Checking ordinary image overrides replace every default registry..."
+helm template c ./deploy \
+  --set images.server=reg.example/org/cache:9 \
+  --set images.exporter=reg.example/org/exporter:9 \
+  --set images.certificates=reg.example/org/certs:9 > "${OUT_FILE}"
+assert_not_has 'image: "nvcr.io/'
+assert_not_has 'image:  nvcr.io/'
+assert_not_has 'image: "docker.io/'
+assert_has 'image: "reg.example/org/cache:9"'
 
 echo "Checking the init container defaults to the certificates image..."
 helm template c ./deploy --set images.certificates=reg.example/org/certs:9 > "${OUT_FILE}"
