@@ -41,6 +41,41 @@ func ExitReason(ctx context.Context, err error) {
 	}
 }
 
+// ExitCodeError makes the nvca command exit with Code. The command has already
+// reported its outcome, so main writes nothing more to the termination log.
+type ExitCodeError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitCodeError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("exit code %d", e.Code)
+	}
+	return e.Err.Error()
+}
+
+func (e *ExitCodeError) Unwrap() error { return e.Err }
+
+// WriteTerminationMessage replaces the Kubernetes termination log with message.
+func WriteTerminationMessage(message []byte) error {
+	if !isKubernetesEnv() {
+		return ErrNotInKubernetesEnv
+	}
+	f, err := os.OpenFile(terminationLogPath, os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open termination log: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Write(message); err != nil {
+		return fmt.Errorf("failed to write to termination log: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("failed to sync termination log: %w", err)
+	}
+	return nil
+}
+
 // writeTerminationLog writes a message to the Kubernetes termination log
 // The message will be visible in the pod's events and logs
 func writeTerminationLog(message string) error {

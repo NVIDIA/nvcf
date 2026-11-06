@@ -128,6 +128,7 @@ func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	resp := &http.Response{
 		StatusCode: int(code),
+		Status:     fmt.Sprintf("%d %s", code, http.StatusText(int(code))),
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    req,
