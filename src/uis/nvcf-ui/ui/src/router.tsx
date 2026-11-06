@@ -16,28 +16,11 @@
  */
 
 import { createRouter } from "@tanstack/react-router";
-import { NotFound } from "./components/NotFound";
-import { RouteErrorFallback } from "./components/RouteErrorFallback";
-import { RouteSpinner } from "./components/RouteSpinner";
-import {
-	clusterDetailRoute,
-	clustersListRoute,
-} from "./features/clusters/routes";
-import { dashboardRoute } from "./features/dashboard/routes";
-import {
-	functionDetailRoute,
-	functionsListRoute,
-} from "./features/functions/routes";
-import { queryClient } from "./lib/queryClient";
-import { rootRoute } from "./rootRoute";
-
-const routeTree = rootRoute.addChildren([
-	clustersListRoute,
-	clusterDetailRoute,
-	dashboardRoute,
-	functionsListRoute,
-	functionDetailRoute,
-]);
+import { NotFound } from "~/components/NotFound";
+import { RouteErrorFallback } from "~/components/RouteErrorFallback";
+import { RouteSpinner } from "~/components/RouteSpinner";
+import { queryClient } from "~/lib/queryClient";
+import { routeTree } from "~/routeTree.gen";
 
 export const router = createRouter({
 	routeTree,

@@ -33,12 +33,18 @@
 # Root files
 .gitignore
 AGENTS.md
+ARCHITECTURE.md
 CLAUDE.md
 NOTICE
 THIRD-PARTY.txt
 README.md
 Taskfile.yml
 license-header.txt
+
+# Agent skills and per-tool skill links (kaizen-ui is gitignored)
+.agents/skills/**
+.claude/**
+.cursor/**
 
 # Bazel scaffold
 BUILD.bazel

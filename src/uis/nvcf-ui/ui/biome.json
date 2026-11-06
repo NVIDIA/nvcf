@@ -14,7 +14,8 @@
 			"**/vite.config.ts",
 			"**/orval.config.ts",
 			"**/orval-transformer.ts",
-			"!**/src/styles.css"
+			"!**/src/styles.css",
+			"!**/src/routeTree.gen.ts"
 		]
 	},
 	"formatter": {

@@ -17,6 +17,7 @@
 
 import type { UseSuspenseQueryResult } from "@tanstack/react-query";
 import { useSuspenseQueries } from "@tanstack/react-query";
+import type { FunctionWithDeployment } from "~/features/functions/types";
 import {
 	type GetAllFunctionDeploymentsSuspenseQueryResult,
 	getGetAllFunctionDeploymentsSuspenseQueryOptions,
@@ -25,7 +26,6 @@ import {
 	type GetAllFunctionsSuspenseQueryResult,
 	getGetAllFunctionsSuspenseQueryOptions,
 } from "~/generated/api/function-management/function-management";
-import type { FunctionWithDeployment } from "../types";
 
 function combine([functionsResult, deploymentsResult]: [
 	UseSuspenseQueryResult<GetAllFunctionsSuspenseQueryResult, Error>,

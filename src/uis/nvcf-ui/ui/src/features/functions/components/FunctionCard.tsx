@@ -22,8 +22,8 @@ import { uniq } from "lodash-es";
 import type { ReactNode } from "react";
 import { CopyText } from "~/components/CopyText";
 import { OverflowGroup } from "~/components/OverflowGroup";
+import type { FunctionWithDeployment } from "~/features/functions/types";
 import { formatDateTime } from "~/utils/formatters";
-import type { FunctionWithDeployment } from "../types";
 import { StatusBadge } from "./StatusBadge";
 
 function Field({

@@ -23,10 +23,9 @@ import {
 	RouterProvider,
 } from "@tanstack/react-router";
 import { type RenderOptions, render } from "@testing-library/react";
-import { NotFound } from "~/components/NotFound";
+import type { ReactElement } from "react";
 import { RouteErrorFallback } from "~/components/RouteErrorFallback";
-import { RouteSpinner } from "~/components/RouteSpinner";
-import { rootRoute } from "~/rootRoute";
+import { routeTree as appRouteTree } from "~/routeTree.gen";
 
 function createTestQueryClient() {
 	return new QueryClient({
@@ -36,29 +35,43 @@ function createTestQueryClient() {
 	});
 }
 
+/** Renders a component that reads its own queries but uses no router hooks. */
+export function renderWithQueryClient(
+	ui: ReactElement,
+	renderOptions?: Omit<RenderOptions, "wrapper">,
+) {
+	const queryClient = createTestQueryClient();
+
+	return {
+		...render(
+			<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+			renderOptions,
+		),
+		queryClient,
+	};
+}
+
 interface RenderWithRouterOptions extends Omit<RenderOptions, "wrapper"> {
 	initialLocation?: string;
-	routes?: AnyRoute[];
+	/**
+	 * Defaults to the app's generated route tree. Pass a test-local tree to
+	 * render a component that uses router hooks without the app's pages.
+	 */
+	routeTree?: AnyRoute;
 }
 
 export function renderWithRouter({
 	initialLocation = "/",
-	routes = [],
+	routeTree = appRouteTree,
 	...renderOptions
 }: RenderWithRouterOptions = {}) {
-	if (routes.length === 0) {
-		throw new Error("At least one route is required.");
-	}
-
 	const queryClient = createTestQueryClient();
-	const routeTree = rootRoute.addChildren(routes);
 	const router = createRouter({
 		routeTree,
 		history: createMemoryHistory({ initialEntries: [initialLocation] }),
 		context: { queryClient },
+		// Same as src/router.tsx, so pages render their real error state.
 		defaultErrorComponent: RouteErrorFallback,
-		defaultNotFoundComponent: NotFound,
-		defaultPendingComponent: RouteSpinner,
 	});
 
 	return {

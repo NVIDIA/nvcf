@@ -1,4 +1,4 @@
-# KUI skill files — synced from node_modules on pnpm install via prepare script
-.claude/skills/kaizen-ui/
+# KUI skill files: synced from node_modules on pnpm install via the prepare script
+.agents/skills/kaizen-ui/
 
 .bazel-cache/

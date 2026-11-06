@@ -22,7 +22,7 @@ tasks:
       - pnpm install
 
   generate:
-    desc: Build OpenAPI spec and generate typed query hooks, schemas, and mocks
+    desc: Generate typed query hooks, models, and mocks from the OpenAPI specs
     cmds:
       - pnpm generate
 
@@ -42,12 +42,12 @@ tasks:
   lint:
     desc: Lint and format check
     cmds:
-      - pnpm check
+      - pnpm lint
 
   lint:fix:
     desc: Auto-fix lint and format issues
     cmds:
-      - pnpm check:fix
+      - pnpm lint:fix
 
   typecheck:
     desc: Run TypeScript type checking
@@ -58,6 +58,13 @@ tasks:
     desc: Run tests
     cmds:
       - pnpm test
+
+  verify:
+    desc: Run lint, typecheck, and tests for the UI
+    cmds:
+      - task: lint
+      - task: typecheck
+      - task: test
 
   vendor-css:
     desc: Fetch KUI foundations CSS from CDN (run after bumping @nvidia/foundations-react-core)

@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(git status:*)",
+      "Bash(task --list)",
+      "Bash(task verify)",
+      "Bash(task lint)",
+      "Bash(task lint:fix)",
+      "Bash(task test)",
+      "Bash(task typecheck)",
+      "Bash(task generate)",
+      "Bash(task ui:verify)",
+      "Bash(task ui:lint)",
+      "Bash(task ui:lint:fix)",
+      "Bash(task ui:typecheck)",
+      "Bash(task ui:test)",
+      "Bash(task backend:lint)",
+      "Bash(task backend:test)",
+      "Bash(task license:check)",
+      "Bash(task license:add)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/format-edited-file.sh",
+            "args": []
+          }
+        ]
+      }
+    ]
+  }
+}

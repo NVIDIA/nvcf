@@ -1,91 +1,149 @@
 # AGENTS.md
 
-Context and conventions for AI agents working in this codebase. Read before making changes.
+Guidance for AI agents working in nvcf-ui, the NVCF admin panel: a React SPA
+(Vite, TanStack Router and Query, Tailwind 4, KUI, Orval, MSW, Vitest) served by
+a Go backend for frontend.
 
-This file covers cross-cutting rules that apply to every task. Verify file paths, function names, and code patterns against the actual codebase before following them.
+## Start sessions here
 
-## Project Structure
+Start the agent in `src/uis/nvcf-ui` when the work is in this app.
+
+A session started at the monorepo root still loads this file and the skills
+below, the first time it touches a file here. It does not load
+`.claude/settings.json`: Claude Code reads project settings only from the
+directory the session started in. Without it you lose the permission allowlist
+and the format-on-edit hook. Nothing else depends on it.
+
+## Read before changing structure
+
+- `ARCHITECTURE.md`: layers, placement rules, routing, data loading, errors,
+  and mocking.
+- `README.md`: setup, Bazel targets, and dev modes.
+- The root `AGENTS.md`: monorepo, commit, and pull request conventions.
+
+Add any new topic document to this list in the same change. Update
+`ARCHITECTURE.md` in the same change that adds or changes a pattern others must
+follow.
+
+## Commands
+
+Run from this directory.
+
+```sh
+task setup             # bootstrap a fresh clone
+task ui:dev MOCK=true  # dev server with mocked APIs (see the run skill)
+task generate          # regenerate hooks, models, and mocks from spec/
+task lint:fix          # fix lint, formatting, and license headers
+task verify            # lint, license, typecheck, and tests (UI and backend)
+```
+
+Run `task verify` before finishing. CI runs the equivalent Bazel targets.
+
+## Skills
+
+| Skill | Use for |
+| --- | --- |
+| `add-feature` | New pages and features, where code goes, the completion checklist |
+| `routing` | Route files, loaders, search and path params, navigation, official TanStack skills |
+| `testing` | Vitest, Testing Library, MSW, and how to render pages and components |
+| `codegen` | OpenAPI specs, `task generate`, MSW scenarios |
+| `run` | Starting the dev server |
+| `kaizen-ui` | KUI components, layout, and styling |
+
+Skill sources live in `.agents/skills/`. `.claude/skills/` and
+`.cursor/skills/` hold one symlink per skill. To add a skill, create
+`.agents/skills/<name>/SKILL.md` and add both symlinks
+(`ln -s ../../.agents/skills/<name> .claude/skills/<name>`, same for
+`.cursor`). `kaizen-ui` is synced from the KUI package on `pnpm install` and is
+gitignored.
+
+## Project structure
 
 ```text
 ui/src/
-├── main.tsx          # Entry point — mounts providers, stays thin
-├── rootRoute.tsx     # Root route — app shell and layout
-├── router.tsx        # Route tree composition — imports feature routes, wires tree
-├── components/       # Shared UI components (feature-agnostic)
-├── features/         # One folder per domain — self-contained modules
-├── generated/        # Orval output — read-only, never edit
-├── hooks/            # Shared hooks (feature-agnostic)
-├── lib/              # Preconfigured instances (fetch client, queryClient)
-├── mocks/            # MSW setup, baseline handlers, custom scenarios
-├── types/            # Shared TypeScript types
-└── utils/            # Pure utility functions
+├── routes/            # pages: one route file per URL (TanStack file-based routing)
+├── routeTree.gen.ts   # generated route tree, committed, never edited
+├── router.tsx         # router setup and app-wide defaults
+├── main.tsx           # entry point, mounts providers
+├── features/          # domain code, one folder per domain
+├── components/        # shared, domain-agnostic UI
+├── hooks/             # shared, domain-agnostic hooks
+├── lib/               # fetch client, queryClient
+├── utils/             # pure helpers
+├── types/             # shared types
+├── generated/         # Orval output, never edited
+├── mocks/             # MSW store, handlers, scenarios
+└── testing/           # render helpers
 ```
 
-## TypeScript
+## Core rules
 
-- `strict: true` — do not use `any`, non-null assertions, or disable strict checks
-- Path alias: `~/` maps to `src/` (configured in `tsconfig.json`)
-- Use `import type` for type-only imports (`verbatimModuleSyntax: true`)
-
-## Import Rules
-
-- Features may import directly from other features, but imports must be **unidirectional** — no circular dependencies
-- **Graduation rule**: graduate shared code to `src/components/`, `src/hooks/`, etc. only when the concept is genuinely domain-agnostic (e.g. `StatusBadge`, `useDebounce`). Domain-specific code stays in its owning feature
-- **Component ownership**: ask "would the source feature's team recognize this as theirs?" If yes, it belongs in the source feature. If shaped by the consumer's layout, it belongs with the consumer
-- Before building new components, check if similar logic or UI already exists — extract and graduate rather than duplicating
-
-## State Management
-
-- TanStack Query owns all server state — no Redux, Zustand, or global stores
-- Local UI state lives in the component or a feature-scoped hook
-
-## Data Loading
-
-- Always use the generated React Query hooks — do not write manual `fetch` calls for endpoints with generated hooks
-- In route components, use suspense hook variants (`useGetFunctionsSuspense`) — not `useQuery` + `isPending` checks
-- Route loaders use `ensureQueryData` with `revalidateIfStale: true` to avoid flashing stale content
-- Use generated query options factories (e.g. `getGetFunctionsQueryOptions`) in loaders
-- Use generated Zod schemas for route search param validation via `validateSearch`
-
-## Fetch and Error Handling
-
-- `lib/fetch.ts` provides a custom fetch mutator used by all generated Orval hooks
-- Non-2xx responses throw an `HttpError` automatically — do not add manual response checks in feature code
-- Route errors surface through the router's global `defaultErrorComponent` (`RouteErrorFallback`), whose retry calls `router.invalidate()` to re-run the loader — don't add per-route `errorComponent` lambdas. Use `AsyncBoundary` for component-level (non-route) suspense/error isolation (e.g. dashboard panels)
-
-## Testing
-
-- Tests are not optional — when adding or modifying a component, add or update the corresponding tests
-- Vitest + Testing Library; test files live alongside code (`Widget.test.tsx` next to `Widget.tsx`)
-- Test user-visible behavior, not implementation details
-
-## Styling
-
-- Tailwind CSS 4 + KUI (NVIDIA design system)
-- Always prefer KUI components (`Text`, `Heading`, `Panel`, `Button`, etc. from `@nvidia/foundations-react-core`) over plain HTML elements
-- The KUI Tailwind plugin overrides default theme values — standard Tailwind classes already use KUI design tokens
-- KUI vendor CSS is committed in `vendor/kui-foundations/` — run `task ui:vendor-css` after bumping the package
+- Layers: pages in `routes/` compose features; features never import other
+  features or `routes/`; shared code imports neither. See `ARCHITECTURE.md`.
+- Place code by what it is: page scaffolding in the route file, domain
+  building blocks in their feature, domain-agnostic code in shared folders.
+- Routes orchestrate data: a route's loader starts the queries its page
+  needs, and components read them. See `ARCHITECTURE.md`.
+- TypeScript is strict. No `any`, no non-null assertions, no disabling strict
+  checks. Use `import type` for type-only imports.
+- Import anything outside the current folder with the `~/` alias (maps to
+  `ui/src/`), including within a feature. `./` is fine for files in the same
+  folder. Never use `../`.
+- TanStack Query owns server state. There is no global store.
+- Never edit `ui/src/generated/` or `ui/src/routeTree.gen.ts`.
+- Prefer KUI components from `@nvidia/foundations-react-core` over plain HTML.
+  KUI vendor CSS lives in `ui/vendor/kui-foundations/`; run
+  `task ui:vendor-css` after bumping the package.
+- Tests are required for new or changed components.
+- Every source file needs the Apache 2.0 license header. `task lint:fix` adds
+  it.
 
 ## Backend
 
-- Go code lives in `backend/` — a self-contained module with its own `go.mod`
+The Go BFF in `backend/` is part of this application. It authenticates
+requests, proxies them upstream, and serves the built SPA.
 
-## Linting and License
+- Self-contained Go module with `cmd/` and `internal/`.
+- `task backend:test` and `task backend:lint` run `go test ./...` and
+  golangci-lint. `task verify` covers both.
+- Standard Go conventions; no project-specific style beyond golangci-lint.
 
-- **UI**: Biome — `task ui:lint` / `task ui:lint:fix`
-- **Backend**: golangci-lint — `task backend:lint` / `task backend:lint:fix`
-- **All**: `task lint` runs everything including license check
-- All source files require an Apache 2.0 license header — `task license:add`
-- Run `task lint:fix` after making changes
+## Dependencies
 
-## Code Generation
+Follow the root `AGENTS.md` and `license-compliance.md`. For the UI:
 
-- Edit the spec files in `spec/` (`control-plane-openapi.yaml`, `nvcf-openapi.yaml`, `sis-openapi.yaml`) directly — never edit anything in `ui/src/generated/`
-- Run `task generate` after spec changes (Orval generates React Query hooks, TypeScript model interfaces, and MSW mock handlers from each spec)
-- The generated models are the source of truth — import types and status enums (e.g. `FunctionDtoStatus`, `GetClusterResponseStatus`) from `~/generated/model/...`; don't hand-roll status constants
+1. Check the license against `.allowed-licenses.txt`. CI does not check npm
+   licenses, so this is manual. Report anything not on the list.
+2. Add with `pnpm add [-D]` from `ui/` and commit `package.json` and
+   `pnpm-lock.yaml`.
+3. Regenerate the root `dependencies.md` from the repo root:
+   `GOWORK=off go run -C ./tools/collect-dependencies .` (CI fails when it is
+   stale).
+4. Name each added or updated dependency and version in the commit body and
+   the pull request.
 
-## Mocking (dev + tests)
+## Pull requests
 
-- The default MSW baseline is a **seeded in-memory store** (`ui/src/mocks/store/`): stable, referentially-consistent data (list ids match detail, keyed by the active account `ncaId`). Both the browser worker and the Node test server use it
-- `VITE_SCENARIO=feature:file` files in `mocks/scenarios/` layer on top — MSW is first-match-wins and scenarios are prepended, so they override the baseline
-- Fix mock-data realism at the **source** — the `mock.properties` overrides in `orval.config.ts`, then `task generate` — never by patching generated output or the store
+- Use `.github/PULL_REQUEST_TEMPLATE.md` and link a public `dsx-ai-factory/nvcf`
+  issue.
+- Conventional Commit titles with scope `nvcf-ui`. `feat`, `fix`, and `perf`
+  create a release; `refactor`, `chore`, `docs`, and `test` do not.
+- Sign off every commit (`git commit -s`).
+
+## Review priorities
+
+- Code in the wrong layer: domain building blocks in a route file, scaffolding
+  in a feature, or code parked in `ui/src/` root.
+- A feature importing another feature or `routes/`.
+- Page data loaded somewhere other than the route's loader.
+- A per-route `errorComponent`, or local handling of an `HttpError` the global
+  fallback covers.
+- Generated code edited by hand, or a hand-written `fetch` where a generated
+  hook exists.
+- Page components with a `Page` suffix instead of a view-type name such as
+  `FunctionsList`.
+- Plain HTML where a KUI component exists, or missing KUI accessibility.
+- `any`, a non-null assertion, or a widened type used to silence `tsc`.
+- A `../` import instead of `~/`.
+- Tests that assert implementation rather than user-visible behavior, or a
+  changed component without tests.

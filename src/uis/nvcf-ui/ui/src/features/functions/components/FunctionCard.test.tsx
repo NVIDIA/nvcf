@@ -18,7 +18,7 @@
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import type { FunctionWithDeployment } from "../types";
+import type { FunctionWithDeployment } from "~/features/functions/types";
 import { FunctionCard } from "./FunctionCard";
 
 vi.mock("@tanstack/react-router", () => ({
