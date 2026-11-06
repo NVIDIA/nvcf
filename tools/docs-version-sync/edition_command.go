@@ -393,6 +393,13 @@ func editionTreeDigest(root string) (string, error) {
 					return err
 				}
 				fmt.Fprintf(hash, "symlink\x00%s\x00", link)
+				if info, err := os.Stat(path); err != nil {
+					return err
+				} else if info.IsDir() {
+					// The target directory is hashed where it lives under docs/ or fern/.
+					_, err = fmt.Fprintf(hash, "%s\x00dir\x00", filepath.ToSlash(relative))
+					return err
+				}
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
