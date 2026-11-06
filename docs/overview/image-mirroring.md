@@ -259,10 +259,9 @@ Use [Consume an NVCF release](umbrella-releases.md) for the selected stack
 packages or an umbrella archive. That guide owns the download commands.
 Continue here when charts or images need a mirror.
 
-That guide runs in its own Bash child shell and can change the working
-directory. Run `exit` to return to this shell before pushing a chart, so
-`CHART_NAME`, `CHART_ARCHIVE` and the downloaded archive remain available.
-Record `BUNDLE_DIR` first if you need it for deployment.
+Run that guide in a separate terminal. It enables fail-fast mode and changes
+the working directory. Push charts from this terminal so `CHART_NAME`,
+`CHART_ARCHIVE` and the downloaded archive remain available.
 
 ### Downloading `nvcf-cli`
 
