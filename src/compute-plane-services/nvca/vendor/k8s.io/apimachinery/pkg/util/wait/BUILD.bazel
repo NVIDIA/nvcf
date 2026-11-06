@@ -12,7 +12,7 @@ go_library(
         "timer.go",
         "wait.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/wait",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/wait",
     importpath = "k8s.io/apimachinery/pkg/util/wait",
     visibility = ["//visibility:public"],
     deps = [

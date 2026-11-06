@@ -10,7 +10,7 @@ go_library(
         "location.go",
         "source.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common",
     importpath = "github.com/google/cel-go/common",
     visibility = ["//visibility:public"],
     deps = [

@@ -17,17 +17,20 @@
 package com.nvidia.nvcf.util;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.equalToJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.nvidia.nvcf.util.TestConstants.TEST_NCA_ID;
 import static com.nvidia.nvcf.util.TestConstants.TEST_OWNER_ID;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.client.MappingBuilder;
 import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult;
 import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult.Resource;
 import com.nvidia.nvcf.service.apikeys.dto.ApiKeyValidationResponse;
 import java.net.URI;
 import java.util.List;
+import java.util.Map;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.experimental.UtilityClass;
@@ -39,6 +42,10 @@ import tools.jackson.databind.json.JsonMapper;
 public class MockApiKeysServer {
 
     private static final JsonMapper OBJECT_MAPPER = new JsonMapper();
+    private static final String API_KEY_PATH = "/v1/namespaces/nvcf/evaluations/apikey.allow";
+    private static final String LLM_API_KEY_PATH = "/v1/namespaces/nvcf/evaluations/apikey.llm_allow";
+    private static final String TIERED_RATE_LIMIT_PATH =
+            "/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit";
     @Getter
     private static WireMockServer mockApiKeysServer;
 
@@ -76,24 +83,66 @@ public class MockApiKeysServer {
             List<Resource> resources,
             List<String> scopes,
             boolean allowed) {
-        var response = new ApiKeyValidationResponse("nvcf", "apikey.allow",
+        stub("apikey.allow", API_KEY_PATH,
+             ncaId, ownerNcaId, ownerId, resources, scopes, allowed, null);
+    }
+
+    @SneakyThrows
+    public static void setApiKeyValidationResponse(
+            String ncaId,
+            String ownerId,
+            List<Resource> resources,
+            List<String> scopes,
+            boolean allowed,
+            ApiKeyValidationResult.RateLimitAttributes accountTokenRateLimit) {
+        stub("apikey.allow", API_KEY_PATH,
+             ncaId, ncaId, ownerId, resources, scopes, allowed, accountTokenRateLimit);
+    }
+
+    @SneakyThrows
+    public static void setLlmApiKeyValidationResponse(
+            String ncaId,
+            String ownerId,
+            List<Resource> resources,
+            List<String> scopes,
+            boolean allowed,
+            ApiKeyValidationResult.RateLimitAttributes accountTokenRateLimit) {
+        stub("apikey.llm_allow", LLM_API_KEY_PATH,
+             ncaId, ncaId, ownerId, resources, scopes, allowed, accountTokenRateLimit);
+    }
+
+    @SneakyThrows
+    private static void stub(
+            String policyName,
+            String path,
+            String ncaId,
+            String ownerNcaId,
+            String ownerId,
+            List<Resource> resources,
+            List<String> scopes,
+            boolean allowed,
+            ApiKeyValidationResult.RateLimitAttributes accountTokenRateLimit) {
+        var response = new ApiKeyValidationResponse("nvcf", policyName,
                                                        new ApiKeyValidationResult(allowed,
                                                               ncaId,
                                                               ownerNcaId,
                                                               ownerId,
                                                               new ApiKeyValidationResult.Policy(resources,
                                                                                          scopes,
-                                                                                         "nv-cloud-functions")
+                                                                                         "nv-cloud-functions"),
+                                                              accountTokenRateLimit
                                           ));
-        byte[] responseBytes = OBJECT_MAPPER.writeValueAsBytes(response);
-        mockApiKeysServer.stubFor(
-                post(urlPathEqualTo("/v1/namespaces/nvcf/evaluations/apikey.allow"))
-                        .willReturn(aResponse().withStatus(200)
-                                            .withHeader(HttpHeaders.CONTENT_TYPE,
-                                                        MediaType.APPLICATION_JSON_VALUE)
-                                            .withBody(responseBytes)));
+        stubJson(post(urlPathEqualTo(path)), response);
     }
 
+    @SneakyThrows
+    private static void stubJson(MappingBuilder request, Object response) {
+        mockApiKeysServer.stubFor(
+                request.willReturn(aResponse().withStatus(200)
+                                           .withHeader(HttpHeaders.CONTENT_TYPE,
+                                                       MediaType.APPLICATION_JSON_VALUE)
+                                           .withBody(OBJECT_MAPPER.writeValueAsBytes(response))));
+    }
 
     @SneakyThrows
     public static void setResponse(
@@ -115,7 +164,28 @@ public class MockApiKeysServer {
         setApiKeyValidationResponse(ncaId, ownerNcaId, ownerId, resources, scopes, true);
     }
 
+    // Matches only a lookup for ncaId; any other key falls through to the no-limit default.
+    @SneakyThrows
+    public static void setTieredRateLimitResponse(
+            String ncaId,
+            ApiKeyValidationResult.RateLimitAttributes rateLimit) {
+        var requestBody = OBJECT_MAPPER.writeValueAsString(
+                Map.of("input", Map.of("tiered_rate_key", ncaId)));
+        stubJson(post(urlPathEqualTo(TIERED_RATE_LIMIT_PATH)).withRequestBody(equalToJson(requestBody)),
+                 new ApiKeyValidationResponse("nvcf", "apikey.account_rate_limit", rateLimit));
+    }
+
+    public static void setTieredRateLimitUnavailable() {
+        mockApiKeysServer.stubFor(
+                post(urlPathEqualTo(TIERED_RATE_LIMIT_PATH))
+                        .willReturn(aResponse().withStatus(503)));
+    }
+
     public static void resetToDefault() {
         setResponse(TEST_NCA_ID, TEST_OWNER_ID, List.of(), List.of());
+        setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID, List.of(), List.of(), true, null);
+        stubJson(post(urlPathEqualTo(TIERED_RATE_LIMIT_PATH)),
+                 new ApiKeyValidationResponse("nvcf", "apikey.account_rate_limit",
+                                              new ApiKeyValidationResult.RateLimitAttributes(null, null)));
     }
 }

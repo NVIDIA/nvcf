@@ -11,7 +11,7 @@ go_library(
         "state.go",
         "trace.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/internal/global",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/internal/global",
     importpath = "go.opentelemetry.io/otel/internal/global",
     visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel:__subpackages__"],
     deps = [

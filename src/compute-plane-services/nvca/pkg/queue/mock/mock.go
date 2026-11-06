@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue"
 )
 
 var _ queue.Client = (*Client)(nil)

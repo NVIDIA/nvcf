@@ -15,7 +15,7 @@
 
 load("@gazelle//:def.bzl", "gazelle")
 
-# gazelle:prefix github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper
+# gazelle:prefix github.com/dsx-ai-factory/nvcf/src/compute-plane-services/image-credential-helper
 # gazelle:exclude vendor
 # gazelle:exclude examples
 # gazelle:exclude pipelines

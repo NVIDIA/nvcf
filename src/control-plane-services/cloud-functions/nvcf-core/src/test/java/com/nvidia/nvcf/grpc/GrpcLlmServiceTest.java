@@ -19,6 +19,7 @@ package com.nvidia.nvcf.grpc;
 import static com.nvidia.nvcf.IntegrationTestConfiguration.MOCK_OAUTH2_TOKEN_SERVER;
 import static com.nvidia.nvcf.service.token.GrpcTokenService.NvcfIssuedToken.TokenType.WORKER;
 import static com.nvidia.nvcf.util.MockApiKeysServer.setApiKeyValidationResponse;
+import static com.nvidia.nvcf.util.MockApiKeysServer.setLlmApiKeyValidationResponse;
 import static com.nvidia.nvcf.util.MockApiKeysServer.setResponse;
 import static com.nvidia.nvcf.util.TestConstants.FAKE_FUNCTION_ID;
 import static com.nvidia.nvcf.util.TestConstants.MD_KEY_AUTHORIZATION;
@@ -37,6 +38,7 @@ import static com.nvidia.nvcf.util.TestConstants.TEST_VERSION_ID_2;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.persistence.function.entity.FunctionType;
 import com.nvidia.nvcf.proto.llm_gateway.AuthLlmInvokeRequest;
 import com.nvidia.nvcf.proto.llm_gateway.AuthLlmInvokeResponse;
@@ -46,7 +48,9 @@ import com.nvidia.nvcf.proto.llm_gateway.LlmGatewayGrpc;
 import com.nvidia.nvcf.rest.function.invocation.BaseFunctionInvocationTest;
 import com.nvidia.nvcf.rest.function.management.dto.LlmInvocationConfigDto;
 import com.nvidia.nvcf.rest.function.management.dto.PriorityDto;
+import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult.RateLimitAttributes;
 import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult.Resource;
+import com.nvidia.nvcf.util.MockApiKeysServer;
 import com.nvidia.nvcf.util.TestUtil;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
@@ -63,9 +67,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.util.ReflectionTestUtils;
 
 @Slf4j
 class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
+
+    @Autowired
+    private GrpcLlmService grpcLlmService;
 
     // ---------------------------------------------------------------------------
     // Helpers
@@ -143,8 +153,6 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
                 .containsExactly("/v1/chat/completions", "/v1/responses");
         assertThat(modelSpec.hasTokenRateLimit()).isTrue();
         assertThat(modelSpec.getTokenRateLimit()).isEqualTo("1-M");
-        assertThat(modelSpec.hasTokenizer()).isTrue();
-        assertThat(modelSpec.getTokenizer()).isEqualTo("meta-llama-tokenizer");
         assertThat(modelSpec.hasRoutingMethod()).isTrue();
         assertThat(modelSpec.getRoutingMethod()).isEqualTo("sticky");
     }
@@ -185,9 +193,9 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
         setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
         saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct",
                 List.of(), null);
-        setResponse(TEST_NCA_ID, TEST_OWNER_ID,
+        setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
                     List.of(new Resource("account-functions", "*")),
-                    List.of(SCOPE_INVOKE_FUNCTION));
+                    List.of(SCOPE_INVOKE_FUNCTION), true, null);
         var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
         var clientToken = "nvapi-stg-some-key";
 
@@ -200,8 +208,179 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
         var modelSpec = response.getModelSpecsMap().get("meta/llama-3.1-70b-instruct");
         assertThat(modelSpec.getUrisList()).isEmpty();
         assertThat(modelSpec.hasTokenRateLimit()).isFalse();
-        assertThat(modelSpec.hasTokenizer()).isFalse();
         assertThat(modelSpec.hasRoutingMethod()).isFalse();
+    }
+
+    @Test
+    void authLlmInvocation_accountRateLimitFromApiKeyAuth() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    List.of(new Resource("account-functions", "*")),
+                    List.of(SCOPE_INVOKE_FUNCTION), true,
+                    new RateLimitAttributes("5000-M", "1000-M"));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = "nvapi-stg-some-key";
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.hasAccountInputTokenRateLimit()).isTrue();
+        assertThat(response.getAccountInputTokenRateLimit()).isEqualTo("5000-M");
+        assertThat(response.hasAccountOutputTokenRateLimit()).isTrue();
+        assertThat(response.getAccountOutputTokenRateLimit()).isEqualTo("1000-M");
+    }
+
+    @Test
+    void authLlmInvocation_noAccountRateLimitWhenApiKeyAuthCarriesNone() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    List.of(new Resource("account-functions", "*")),
+                    List.of(SCOPE_INVOKE_FUNCTION), true, null);
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = "nvapi-stg-some-key";
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.hasAccountInputTokenRateLimit()).isFalse();
+        assertThat(response.hasAccountOutputTokenRateLimit()).isFalse();
+    }
+
+    @Test
+    void authLlmInvocation_apiKeyAuthFallsBackToAccountRateLimitLookupWhenCarriesNone() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        // llm_allow carries no accountTokenRateLimit (older policy deploy); the fallback has
+        // a distinct value, proving it actually fires and its result flows through.
+        setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    List.of(new Resource("account-functions", "*")),
+                    List.of(SCOPE_INVOKE_FUNCTION), true, null);
+        MockApiKeysServer.setTieredRateLimitResponse(TEST_NCA_ID, new RateLimitAttributes("2000-M", "500-M"));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = "nvapi-stg-some-key";
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.hasAccountInputTokenRateLimit()).isTrue();
+        assertThat(response.getAccountInputTokenRateLimit()).isEqualTo("2000-M");
+        assertThat(response.hasAccountOutputTokenRateLimit()).isTrue();
+        assertThat(response.getAccountOutputTokenRateLimit()).isEqualTo("500-M");
+    }
+
+    @Test
+    void authLlmInvocation_accountRateLimitFromJwtAuth() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        MockApiKeysServer.setTieredRateLimitResponse(TEST_NCA_ID, new RateLimitAttributes("5000-M", "1000-M"));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.hasAccountInputTokenRateLimit()).isTrue();
+        assertThat(response.getAccountInputTokenRateLimit()).isEqualTo("5000-M");
+        assertThat(response.hasAccountOutputTokenRateLimit()).isTrue();
+        assertThat(response.getAccountOutputTokenRateLimit()).isEqualTo("1000-M");
+    }
+
+    @Test
+    void authLlmInvocation_noAccountRateLimitWhenFlagDisabled() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        // With the flag off the generic apikey.allow path is used; even if it carries a rate,
+        // nothing is forwarded.
+        setApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    List.of(new Resource("account-functions", "*")),
+                    List.of(SCOPE_INVOKE_FUNCTION), true,
+                    new RateLimitAttributes("5000-M", "1000-M"));
+        MockApiKeysServer.setTieredRateLimitResponse(TEST_NCA_ID, new RateLimitAttributes("2000-M", "500-M"));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = "nvapi-stg-some-key";
+
+        ReflectionTestUtils.setField(grpcLlmService, "accountTokenRateLimitEnabled", false);
+        try {
+            var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+            assertThat(response.hasAccountInputTokenRateLimit()).isFalse();
+            assertThat(response.hasAccountOutputTokenRateLimit()).isFalse();
+        } finally {
+            ReflectionTestUtils.setField(grpcLlmService, "accountTokenRateLimitEnabled", true);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"invalid", "0-M", "9223372036854775808-S"})
+    void authLlmInvocation_dropsMalformedAccountRateLimitFromApiKeyAuth(String malformed) {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    List.of(new Resource("account-functions", "*")),
+                    List.of(SCOPE_INVOKE_FUNCTION), true,
+                    new RateLimitAttributes(malformed, "1000-M"));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = "nvapi-stg-some-key";
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.hasAccountInputTokenRateLimit()).isFalse();
+        assertThat(response.getAccountOutputTokenRateLimit()).isEqualTo("1000-M");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"invalid", "0-M", "9223372036854775808-S"})
+    void authLlmInvocation_dropsMalformedAccountRateLimitFromJwtAuth(String malformed) {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        MockApiKeysServer.setTieredRateLimitResponse(TEST_NCA_ID, new RateLimitAttributes("5000-M", malformed));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.getAccountInputTokenRateLimit()).isEqualTo("5000-M");
+        assertThat(response.hasAccountOutputTokenRateLimit()).isFalse();
+    }
+
+    @Test
+    void authLlmInvocation_noAccountRateLimitWhenJwtAuthCarriesNone() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        MockApiKeysServer.setTieredRateLimitResponse(TEST_NCA_ID, new RateLimitAttributes(null, null));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.hasAccountInputTokenRateLimit()).isFalse();
+        assertThat(response.hasAccountOutputTokenRateLimit()).isFalse();
+    }
+
+    @Test
+    void authLlmInvocation_failsClosedWhenJwtRateLimitLookupUnavailable() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        // No prior successful lookup for this ncaId, so the backup cache is also empty -
+        // matches apikey.allow's fail-closed posture when the external service is unreachable.
+        MockApiKeysServer.setTieredRateLimitUnavailable();
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        assertThatThrownBy(() -> callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID))
+                .isInstanceOf(StatusRuntimeException.class)
+                .hasMessageContaining("UNAVAILABLE");
     }
 
     // ---------------------------------------------------------------------------
@@ -326,6 +505,23 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
     }
 
     @Test
+    void authLlmInvocation_degradedFunction_returnsFailedPrecondition() {
+        setFunctionStatus(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionStatus.DEGRADED);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        assertThatThrownBy(() -> callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID))
+                .isInstanceOf(StatusRuntimeException.class)
+                .satisfies(thrown -> {
+                    var status = ((StatusRuntimeException) thrown).getStatus();
+                    assertThat(status.getCode()).isEqualTo(Status.Code.FAILED_PRECONDITION);
+                    assertThat(status.getDescription()).contains("DEGRADED");
+                });
+    }
+
+    @Test
     void authLlmInvocation_someoneElsesFunction_returnsNotFound() {
         // TEST_FUNCTION_ID_2 belongs to TEST_NCA_ID_2, not TEST_NCA_ID.
         setFunctionActive(TEST_FUNCTION_ID_2, TEST_VERSION_ID_2);
@@ -366,38 +562,38 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
                              FAKE_FUNCTION_ID, UUID.randomUUID(), Status.NOT_FOUND),
                 // 6. apikey auth with wildcard account-functions resource - OK
                 Arguments.of((Supplier<String>) () -> {
-                    setResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
                                 List.of(new Resource("account-functions", "*")),
-                                List.of(SCOPE_INVOKE_FUNCTION));
+                                List.of(SCOPE_INVOKE_FUNCTION), true, null);
                     return "nvapi-stg-some-key";
                 }, TEST_FUNCTION_ID, TEST_VERSION_ID_1, Status.OK),
                 // 7. apikey auth with function-scoped resource - OK
                 Arguments.of((Supplier<String>) () -> {
-                    setResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
                                 List.of(new Resource("function",
                                                      TEST_FUNCTION_ID + "/*")),
-                                List.of(SCOPE_INVOKE_FUNCTION));
+                                List.of(SCOPE_INVOKE_FUNCTION), true, null);
                     return "nvapi-stg-some-key";
                 }, TEST_FUNCTION_ID, TEST_VERSION_ID_1, Status.OK),
                 // 8. apikey auth missing scope - PERMISSION_DENIED
                 Arguments.of((Supplier<String>) () -> {
-                    setResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
                                 List.of(new Resource("account-functions", "*")),
-                                List.of());
+                                List.of(), true, null);
                     return "nvapi-stg-some-key";
                 }, TEST_FUNCTION_ID, TEST_VERSION_ID_1, Status.PERMISSION_DENIED),
                 // 9. apikey auth wrong resource type - PERMISSION_DENIED
                 Arguments.of((Supplier<String>) () -> {
-                    setResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
                                 List.of(new Resource("functions", "*")),
-                                List.of(SCOPE_INVOKE_FUNCTION));
+                                List.of(SCOPE_INVOKE_FUNCTION), true, null);
                     return "nvapi-stg-some-key";
                 }, TEST_FUNCTION_ID, TEST_VERSION_ID_1, Status.PERMISSION_DENIED),
                 // 10. apikey with bad key (passes nvapi prefix filter) - PERMISSION_DENIED
                 Arguments.of((Supplier<String>) () -> {
-                    setApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
                                    List.of(new Resource("account-functions", "*")),
-                                   List.of(SCOPE_INVOKE_FUNCTION), false);
+                                   List.of(SCOPE_INVOKE_FUNCTION), false, null);
                     return "nvapi-stg-bad-key";
                 }, TEST_FUNCTION_ID, TEST_VERSION_ID_1, Status.PERMISSION_DENIED),
                 // 11. No client token - UNKNOWN (null token becomes NPE before reaching grpc)

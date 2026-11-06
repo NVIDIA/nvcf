@@ -6,7 +6,7 @@ go_library(
         "ip.go",
         "parse.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/utils/internal/third_party/forked/golang/net",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/utils/internal/third_party/forked/golang/net",
     importpath = "k8s.io/utils/internal/third_party/forked/golang/net",
     visibility = ["//src/compute-plane-services/nvca/vendor/k8s.io/utils:__subpackages__"],
 )

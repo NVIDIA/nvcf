@@ -499,6 +499,13 @@ openbao:
     topologySpreadConstraints: |
       {{- . | nindent 6 }}
     {{- end }}
+    {{- if $haEnabled }}
+    # Hide not-ready members from the client Service so a lost node's member
+    # drops out at NotReady instead of at Pod eviction. Unsealing is done by
+    # the per-Pod sidecar and does not need sealed Pods reachable here.
+    service:
+      publishNotReadyAddresses: false
+    {{- end }}
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
@@ -531,6 +538,10 @@ openbao:
       disruptionBudget:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+    {{- with dig "openbao" "server" "annotations" dict .Values }}
+    annotations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
 
 nats:
   {{- $natsServerTags := dig "nats" "config" "merge" "server_tags" (list "dc:ncp" "aws-region:ncp") .Values }}
@@ -557,12 +568,12 @@ nats:
       {{- end }}
     {{- end }}
     image:
-      registry: {{ dig "nats" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
-      repository: {{ dig "nats" "container" "image" "repository" "" .Values | default (printf "%s/nats-server" .Values.global.image.repository) }}
-      tag: {{ dig "nats" "container" "image" "tag" "" .Values | default "2.14.6-alpine3.22" | quote }}
+      registry: {{ dig "nats" "container" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "nats" "container" "image" "repository" "" .Values | default "synadia/nats-server" }}
+      tag: {{ dig "nats" "container" "image" "tag" "" .Values | default "2.14.9-alpine3.22" | quote }}
   {{- $natsReloaderRegistry := dig "nats" "reloader" "image" "registry" "" .Values }}
   {{- $natsReloaderRepository := dig "nats" "reloader" "image" "repository" "" .Values }}
-  {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values }}
+  {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values | default "0.25.0" }}
   {{- $natsReloaderSecurityContext := dig "nats" "reloader" "merge" "securityContext" dict .Values }}
   {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag $natsReloaderSecurityContext }}
   reloader:
@@ -615,6 +626,11 @@ nats:
   {{- $natsTopoSpread := include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) }}
   podTemplate:
     merge:
+      {{- with dig "nats" "podAnnotations" dict .Values }}
+      metadata:
+        annotations:
+          {{- toYaml . | nindent 10 }}
+      {{- end }}
       spec:
         securityContext:
           {{- dig "nats" "podTemplate" "merge" "spec" "securityContext" dict .Values | toYaml | nindent 10 }}
@@ -728,10 +744,22 @@ apikeys:
   env:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- with dig "apikeys" "podAnnotations" dict .Values }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
-{{- /* The nats-auth-callout chart reads flat, top-level values, so its HA keys are
-       emitted at the top level for that release only. */}}
+{{- /* The nats-auth-callout chart reads flat, top-level values, so its HA keys and
+       pod annotations are emitted at the top level for that release only. */}}
 {{- if eq .Release.Name "nats-auth-callout-service" }}
+{{- /* Logging only: the rest of serviceConfig is auth policy, or is overridden by
+       env vars the chart sets. 02-core adds the stack's own serviceConfig after
+       this file. */}}
+{{- with dig "natsAuthCalloutService" "serviceConfig" "logging" dict .Values }}
+serviceConfig:
+  logging:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
 {{- if $haEnabled }}
 replicaCount: {{ max 2 (dig "natsAuthCalloutService" "replicaCount" 1 .Values | int) }}
 {{- end }}
@@ -748,6 +776,17 @@ podDisruptionBudget:
 {{- end }}
 {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "nats-auth-callout-service" "class" "controlplane") }}
 {{- . | nindent 0 }}
+{{- end }}
+{{- with dig "natsAuthCalloutService" "podAnnotations" dict .Values }}
+{{- /* The stack sets these in token mode so a worker auth change restarts the
+       callout; an operator copy would survive a switch back to nkey and stop it. */}}
+{{- range $key, $_ := . }}
+{{- if hasPrefix "nvcf.nvidia.com/nats-worker-auth" $key }}
+{{- fail (printf "natsAuthCalloutService.podAnnotations: %s is reserved for the stack" $key) }}
+{{- end }}
+{{- end }}
+podAnnotations:
+  {{- toYaml . | nindent 2 }}
 {{- end }}
 {{- end }}
 
@@ -1104,6 +1143,10 @@ api:
   {{- $apiEnv = mergeOverwrite $apiEnv $renderedApiEnv }}
   env:
     {{- toYaml $apiEnv | nindent 4 }}
+  {{- with dig "api" "podAnnotations" dict .Values }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 invocation:
   {{- $configuredInvocationEnv := dig "invocation" "env" dict .Values }}
@@ -1201,6 +1244,10 @@ invocation:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   {{- end }}
+  {{- with dig "invocation" "podAnnotations" dict .Values }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 {{- $configuredNvctApiRemoteConfigData := dig "nvctApi" "remoteConfig" "configData" dict .Values }}
 {{- if not (kindIs "map" $configuredNvctApiRemoteConfigData) }}
@@ -1276,6 +1323,10 @@ nvctApi:
     MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
     MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_TRANSPORT: "grpc"
     {{- end }}
+  {{- with dig "nvctApi" "podAnnotations" dict .Values }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 eventLedger:
   {{- if .Values.global.imagePullSecrets }}
@@ -1358,7 +1409,7 @@ grpcproxy:
     RATE_LIMIT_ENABLED: "true"
     RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
     {{- end }}
-    {{- if dig "addons" "eventLedger" "enabled" false .Values }}
+    {{- if and (dig "addons" "eventLedger" "enabled" false .Values) (dig "addons" "eventLedger" "grpcProxyEvents" "enabled" false .Values) }}
     EVENT_LEDGER_ADDR: "http://event-ledger.nvcf.svc.cluster.local:8080"
     {{- end }}
   {{- if $grpcProxyScaled }}
@@ -1372,6 +1423,10 @@ grpcproxy:
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- end }}
+  {{- with dig "grpcproxy" "podAnnotations" dict .Values }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 rateLimiter:
@@ -1463,6 +1518,10 @@ ess:
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- end }}
+  {{- with dig "ess" "podAnnotations" dict .Values }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 notary:
@@ -2452,6 +2511,8 @@ nvcfGatewayRoutes:
     invocation:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "invocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    llmApiGateway:
+      enabled: {{ dig "addons" "llm" "enabled" false .Values }}
     llmInvocation:
       enabled: {{ dig "addons" "llm" "enabled" false .Values }}
       backend:

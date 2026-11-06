@@ -27,12 +27,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/go-chi/render"
 	"github.com/stretchr/testify/assert"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
 
-	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/reval"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/helm-reval/reval"
 )
 
 func TestErrsToStrs(t *testing.T) {

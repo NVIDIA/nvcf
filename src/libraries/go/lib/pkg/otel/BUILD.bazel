@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "otel",
     srcs = ["otel.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otel",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/otel",
     visibility = ["//visibility:public"],
     deps = [
         "@io_opentelemetry_go_otel//attribute",

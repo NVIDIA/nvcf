@@ -12,7 +12,7 @@ go_library(
         "blake2x.go",
         "register.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/blake2b",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/blake2b",
     importpath = "golang.org/x/crypto/blake2b",
     visibility = ["//visibility:public"],
     deps = select({

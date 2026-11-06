@@ -21,15 +21,36 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 var ErrProxyNotSupported = errors.New("openai proxy endpoints are not supported by this provider")
+
+// ErrStreamIncomplete marks a stream that failed after the upstream answered 200.
+var ErrStreamIncomplete = errors.New("upstream stream incomplete")
+
+// UpstreamStreamError is an error event the upstream sent in a chat, Responses,
+// or Messages stream after it answered 200. It unwraps to ErrStreamIncomplete.
+type UpstreamStreamError struct {
+	// Message is the upstream error message; empty when the event has no string message.
+	Message string
+}
+
+func (e *UpstreamStreamError) Error() string {
+	// Like UpstreamError, the log text carries no upstream text: engine error
+	// events can echo request content. The client still gets Message.
+	return fmt.Sprintf("%s: upstream error event", ErrStreamIncomplete)
+}
+
+func (e *UpstreamStreamError) Unwrap() error {
+	return ErrStreamIncomplete
+}
 
 type AdmissionPlan interface {
 	FinalizeTokens(
@@ -87,6 +108,8 @@ type InferenceProvider interface {
 		reqCtx *requestctx.RequestContext,
 		request *NormalizedRequest,
 	) (*models.ChatCompletionResponse, error)
+	// Stream returns events until the upstream stream ends. Callers must read the
+	// channel until it is closed: some sends block, and the upstream body stays open.
 	Stream(
 		ctx context.Context,
 		reqCtx *requestctx.RequestContext,

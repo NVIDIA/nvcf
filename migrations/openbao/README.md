@@ -50,13 +50,18 @@ The shipped `job.yaml` sets a default placeholder value for this variable so the
 
 The `Dockerfile` uses the public upstream OpenBao 2.6.3 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/net v0.60.0, x/crypto v0.57.0, gRPC v1.83.2, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
 
-The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.2.
+The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.3.
 It rebuilds Kubernetes v1.37.2 `kubectl` from the checksum-pinned official source
 archive with a digest-pinned Go 1.26.10 toolchain. The build retains the
 `golang.org/x/net` v0.60.0 HTTP/2 security floor, synchronizes the Kubernetes
 workspace, and regenerates vendored dependencies before offline compilation.
 The client reports a dirty source tree to identify that dependency patch.
 Build checks verify its source, toolchain, architecture, and runtime identity.
+The final image requires Alpine `ca-certificates` and
+`ca-certificates-bundle` 20261020-r0 or newer. Run
+`tests/runtime-packages-test.sh` with `RUNTIME_IMAGE` to verify the installed
+packages, check that the affected emSign root is absent from Go-loaded CA paths,
+and inspect the server and `jwker` binaries copied into the image.
 
 The default client aligns with the Kubernetes toolbox at 1.37.2. The same
 image includes a patched 1.36.6 client for Kubernetes 1.35 clusters. Both clients

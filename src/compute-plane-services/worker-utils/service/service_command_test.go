@@ -29,8 +29,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/config"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/worker-utils/worker"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/config"
 )
 
 // noopLogger builds the production logger only to satisfy NewRootCommand's

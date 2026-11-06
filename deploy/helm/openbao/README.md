@@ -78,6 +78,15 @@ openbao:
       repository: <your-org>/nvcf-openbao
 ```
 
+The injector Deployment uses `openbao.injector.image` (`oss-vault-k8s`). The
+Vault Agent sidecars it creates use `openbao.injector.agentImage`. The
+self-managed stack selects `nvcf-openbao` for both the agent and server; the
+auto-unseal sidecar also uses the server image. The chart checks that their
+tags match. The shipped stack selects no third-party Vault Agent image.
+Standalone installs supply the registries and repositories shown above.
+Operators who select a separate agent image own its toolchain and CA bundle
+verification.
+
 ## Installation
 
 This chart is intended to be installed by invoking Helm directly from source.

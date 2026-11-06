@@ -6,7 +6,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 go_library(
     name = "discover-gpus_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/discover-gpus",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/cmd/discover-gpus",
     visibility = ["//visibility:private"],
     deps = [
         "//src/compute-plane-services/nvca/cmd/internal",

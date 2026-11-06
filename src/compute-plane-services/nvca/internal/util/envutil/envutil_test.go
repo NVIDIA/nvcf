@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
 
 func TestApplyEnvOverrides(t *testing.T) {
@@ -156,6 +156,58 @@ func TestEncodeDecodeRoundtrip(t *testing.T) {
 			assert.Equal(t, tt.envs, decoded)
 		})
 	}
+}
+
+// NVCA re-encodes overridden environments, so EncodeEnvB64 must match the function API
+// encoder (IcmsClient.encodeEnvironmentValue) byte for byte. The encoded literals here
+// match that encoder and the decoder cases in icms-translate common.
+func TestEncodeEnvB64_QuotesControlCharacters(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string // the KEY= portion after the key, before the trailing newline
+	}{
+		{"no control character stays unquoted", "nvcr.io/x:v1", "nvcr.io/x:v1"},
+		{"equals sign stays unquoted", "abc=def", "abc=def"},
+		{"line feed is quoted", "a\nEXTRA=1", `"a\u000aEXTRA=1"`},
+		{"carriage return and tab are quoted", "a\rb\tc", `"a\u000db\u0009c"`},
+		{"backslash and quote are escaped", "a\\b\"c\n", `"a\\b\"c\u000a"`},
+		{"C1 control character is quoted", "a\u0085b", `"a\u0085b"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := base64.StdEncoding.DecodeString(EncodeEnvB64(map[string]string{"KEY": tt.value}))
+			require.NoError(t, err)
+			assert.Equal(t, "KEY="+tt.want+"\n", string(raw))
+
+			// The decoder reverses the encoding back to the original value, as one entry.
+			decoded, err := common.DecodeEnvironmentB64(
+				EncodeEnvB64(map[string]string{"KEY": tt.value}), common.EnvDecoderText)
+			require.NoError(t, err)
+			assert.Equal(t, map[string]string{"KEY": tt.value}, decoded)
+		})
+	}
+}
+
+// ApplyEnvOverrides decodes, applies overrides, and re-encodes. A control character in
+// an untouched value must survive the round-trip as one entry.
+func TestApplyEnvOverrides_PreservesControlCharEncoding(t *testing.T) {
+	// The function API wire format: the containerArgs value is quoted on the way out, so
+	// ApplyEnvOverrides unquotes it on decode and must re-quote it on re-encode.
+	wire := "FIRST=1\nINFERENCE_CONTAINER_ARGS=\"a\\u000aEXTRA=injected\"\n"
+	envB64 := base64.StdEncoding.EncodeToString([]byte(wire))
+
+	result, err := ApplyEnvOverrides(envB64, map[string]string{"NEW": "value"})
+	require.NoError(t, err)
+
+	decoded, err := common.DecodeEnvironmentB64(result, common.EnvDecoderText)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"FIRST":                    "1",
+		"INFERENCE_CONTAINER_ARGS": "a\nEXTRA=injected",
+		"NEW":                      "value",
+	}, decoded)
 }
 
 func TestRawEnvB64Format(t *testing.T) {

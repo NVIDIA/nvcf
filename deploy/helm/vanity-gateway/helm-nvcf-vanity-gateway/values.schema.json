@@ -149,6 +149,9 @@
                 "anthropicMessages": {
                   "$ref": "#/definitions/openAIStickyEndpointRoutes"
                 },
+                "typesafeSystemOne": {
+                  "$ref": "#/definitions/openAIDecisionRoutes"
+                },
                 "vanity": {
                   "$ref": "#/definitions/vanityRoutes"
                 }
@@ -277,6 +280,29 @@
                                 "required": [
                                   "embeddings"
                                 ]
+                              },
+                              {
+                                "properties": {
+                                  "decisions": {
+                                    "not": {
+                                      "additionalProperties": {
+                                        "not": {
+                                          "properties": {
+                                            "functionType": {
+                                              "const": "LLM"
+                                            }
+                                          },
+                                          "required": [
+                                            "functionType"
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "decisions"
+                                ]
                               }
                             ]
                           }
@@ -306,6 +332,29 @@
                         },
                         "required": [
                           "anthropicMessages"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "typesafeSystemOne": {
+                            "not": {
+                              "additionalProperties": {
+                                "not": {
+                                  "properties": {
+                                    "functionType": {
+                                      "const": "LLM"
+                                    }
+                                  },
+                                  "required": [
+                                    "functionType"
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "required": [
+                          "typesafeSystemOne"
                         ]
                       }
                     ]
@@ -360,6 +409,9 @@
         },
         "embeddings": {
           "$ref": "#/definitions/openAILLMEndpointRoutes"
+        },
+        "decisions": {
+          "$ref": "#/definitions/openAIDecisionRoutes"
         },
         "responses": {
           "$ref": "#/definitions/openAIStickyEndpointRoutes"
@@ -786,6 +838,24 @@
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/openAINonStickyLLMModelRoute"
+      }
+    },
+    "openAIDecisionRoutes": {
+      "description": "Decision routes return backend 429 bodies unchanged, so tooManyRequestsMessage must be empty.",
+      "type": "object",
+      "additionalProperties": {
+        "allOf": [
+          {
+            "$ref": "#/definitions/openAINonStickyLLMModelRoute"
+          },
+          {
+            "patternProperties": {
+              "^(?i)toomanyrequestsmessage$": {
+                "maxLength": 0
+              }
+            }
+          }
+        ]
       }
     },
     "openAINonStickyLLMModelRoute": {

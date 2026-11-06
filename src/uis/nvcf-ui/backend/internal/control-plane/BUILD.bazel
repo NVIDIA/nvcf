@@ -24,7 +24,7 @@ go_library(
         "httphealth.go",
         "k8shealth.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/internal/control-plane",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/nvcf-ui/backend/internal/control-plane",
     visibility = ["//src/uis/nvcf-ui/backend:__subpackages__"],
     deps = [
         "//src/uis/nvcf-ui/backend/internal/utils",

@@ -686,10 +686,15 @@ mod tests {
             inputs.cache_affinity_key = affinity_key;
             let mut run = ProxyRequestRun::new(&app, prepared_request(&app, inputs));
             run.failed_cluster_ids.insert("cluster-a".to_string());
-            let result = run.run_routing_attempt().await;
-            assert!(
-                matches!(result, Some(Err(StatusCode::SERVICE_UNAVAILABLE))),
-                "all registered candidates are permanently excluded; got {result:?}",
+            let response = run
+                .run_routing_attempt()
+                .await
+                .expect("permanent exclusions should finalize")
+                .expect("permanent exclusions should return a response");
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                response.headers()[super::super::HEADER_STARGATE_ERROR_CODE],
+                "no_ready_backends"
             );
         }
         app.state.end_registration(registration).await;

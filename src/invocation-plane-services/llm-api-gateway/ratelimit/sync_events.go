@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const (
@@ -40,6 +40,7 @@ type RateLimitEventWireFormat struct {
 	ClusterName string        `json:"cluster_name"`
 	CreatedAt   int64         `json:"created_at"`
 	MustConsume bool          `json:"must_consume"`
+	AllowDebt   bool          `json:"allow_debt,omitempty"`
 }
 
 func ApplySynchronizedEvent(
@@ -106,8 +107,9 @@ func ApplySynchronizedEvent(
 		limiter,
 		rle.Key,
 		RateLimit{
-			Limit:  rle.Rate,
-			Period: rle.Period,
+			Limit:     rle.Rate,
+			Period:    rle.Period,
+			AllowDebt: rle.AllowDebt,
 		},
 		rle.Units,
 		false,

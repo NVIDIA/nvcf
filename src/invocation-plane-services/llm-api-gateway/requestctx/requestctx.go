@@ -18,7 +18,7 @@ limitations under the License.
 package requestctx
 
 import (
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 )
 
 // Session sources recorded in RequestContext.SessionSource.
@@ -53,4 +53,9 @@ type RequestContext struct {
 	// when no priority config applies. Lower value is higher priority, 0 is
 	// highest. Forwarded to Stargate as the X-Priority header when set.
 	Priority *uint32
+	// AccountInputTokenRateLimit and AccountOutputTokenRateLimit are the
+	// account-scoped token rate limit resolved by NVCF API, keyed by OrgID
+	// (ncaId) rather than any one function. Empty when none applies.
+	AccountInputTokenRateLimit  string
+	AccountOutputTokenRateLimit string
 }

@@ -36,6 +36,7 @@ pub use snapshots::{RoutedClusterSnapshot, RoutedInferenceServerSnapshot};
 pub(crate) use snapshots::{RoutingTargetSnapshot, SelectedRoutedCluster};
 
 pub(crate) use keys::RegistrationIdentity;
+pub use registration::DEFAULT_DEREGISTERED_MODEL_GRACE;
 #[cfg(test)]
 pub(crate) use registration::test_registration_generation;
 pub(crate) use registration::{RegistrationGeneration, RunningRegistration};
@@ -72,6 +73,12 @@ impl StargateState {
         }
     }
 
+    /// How long a model stays known (`503`, not `404`) after its last backend leaves; zero disables.
+    pub fn with_deregistered_model_grace(mut self, grace: Duration) -> Self {
+        self.registrations = registration::RegistrationRegistry::new(grace);
+        self
+    }
+
     pub(crate) fn begin_registration(
         &self,
         identity: &RegistrationIdentity,
@@ -82,7 +89,7 @@ impl StargateState {
     /// Ends `running` and removes its routes. Returns the model ids that were
     /// routable through this registration so callers can report routing impact.
     pub(crate) async fn end_registration(&self, running: RunningRegistration) -> BTreeSet<String> {
-        let Some(ended) = self.registrations.end_registration(running) else {
+        let Some(ended) = self.registrations.end_registration(running, Instant::now()) else {
             return BTreeSet::new();
         };
 
@@ -137,9 +144,11 @@ impl StargateState {
         // Publish the full heartbeat membership before per-target awaits while
         // retaining the cleanup union until every routing mutation commits.
         let current_models: BTreeSet<String> = update.models.keys().cloned().collect();
-        let removed_models = self
-            .registrations
-            .begin_advertised_model_update(running, current_models);
+        let removed_models = self.registrations.begin_advertised_model_update(
+            running,
+            current_models,
+            Instant::now(),
+        );
         let removed_targets: HashSet<RoutingTargetKey> = removed_models
             .iter()
             .map(|model_id| RoutingTargetKey::new(routing_key.clone(), model_id))
@@ -226,7 +235,8 @@ impl StargateState {
     }
 
     pub fn has_registered_model_for_target(&self, target: &RoutingTargetKey) -> bool {
-        self.registrations.has_registered_model_for_target(target)
+        self.registrations
+            .has_registered_model_for_target(target, Instant::now())
     }
 
     pub async fn list_active_models(

@@ -755,3 +755,20 @@ func TestFunctionRoutingKey(t *testing.T) {
 		}
 	})
 }
+
+// Registration and eviction race for the same connection. Whichever wins, an
+// attachment reported established must also be reported ended.
+func TestAttachmentEstablishedAndEndedAreExclusive(t *testing.T) {
+	for range 1000 {
+		w := NewWorkerConnection(uuid.New(), "function", "version", func() {}, func() {})
+		var established, closeReported bool
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); established = w.MarkEstablished() }()
+		go func() { defer wg.Done(); closeReported = w.MarkEnded() }()
+		wg.Wait()
+		if established != closeReported {
+			t.Fatalf("established=%v but close reported=%v", established, closeReported)
+		}
+	}
+}

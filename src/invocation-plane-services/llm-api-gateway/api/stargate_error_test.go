@@ -33,8 +33,8 @@ import (
 	zlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
 type upstreamErrorEndpoint struct {
@@ -100,6 +100,12 @@ func TestUpstreamErrorEnvelopes(t *testing.T) {
 			status: http.StatusBadRequest, routerCode: "malformed_expression",
 			body:       `{"error":"P3: commas are not allowed","code":"malformed_expression"}`,
 			wantStatus: http.StatusBadRequest, wantMessage: "P3: commas are not allowed",
+		},
+		{
+			name:   "no ready backends",
+			status: http.StatusServiceUnavailable, routerCode: "no_ready_backends",
+			body:       `{"error":"no ready backends","code":"no_ready_backends"}`,
+			wantStatus: http.StatusServiceUnavailable, wantMessage: "no ready backends",
 		},
 		{
 			name:   "overloaded",
@@ -248,10 +254,7 @@ func TestUpstreamErrorEnvelopes(t *testing.T) {
 					require.Equal(t, tc.wantStatus, rec.Code, rec.Body.String())
 					require.Equal(t, echo.MIMEApplicationJSON, rec.Header().Get(echo.HeaderContentType))
 					require.Equal(t, "request-a", rec.Header().Get(HeaderRequestID))
-					if endpoint.path != "/v1/chat/completions" {
-						// Proxy endpoints keep upstream headers; chat completions never relayed them.
-						require.Equal(t, "2", rec.Header().Get("Retry-After"))
-					}
+					require.Equal(t, "2", rec.Header().Get("Retry-After"))
 					require.Empty(t, rec.Header().Values("X-Stargate-Error-Code"))
 
 					switch {

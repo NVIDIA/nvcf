@@ -470,6 +470,33 @@ func TestPrivateModelLookupRefreshesWhenPrivateFunctionsChange(t *testing.T) {
 	require.EqualValues(t, 2, nvcf.calls.Load())
 }
 
+// Private aliases on native protocol sections are listed and annotated like
+// public ones, and model lookup returns them to keys with access.
+func TestPrivateModelsOnNativeProtocolSections(t *testing.T) {
+	_, endpoint := newFakeFunctionIDs(t)
+	entry := config.ModelFunctionDetails{ModelName: "private/team/decide", FunctionID: allowedPrivateFunctionID}
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = openAIHost
+	mappings.OpenAI.Decisions = map[string]config.ModelFunctionDetails{"decide": entry}
+	mappings.TypeSafeSystemOne = map[string]config.ModelFunctionDetails{"decide": entry}
+	mux, err := buildChiMux(mappings, Config{
+		NvcfApiEndpoint:              "http://nvcf.invalid",
+		NvcfControlPlaneEndpoint:     endpoint,
+		PrivateModelNameRegexPattern: "^private/",
+	})
+	require.NoError(t, err)
+
+	rec := listModels(t, mux, "/v1/models", keyHeaders("good"))
+	var list ModelListResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &list), rec.Body.String())
+	require.Len(t, list.Data, 1)
+	require.Equal(t, "private/team/decide", list.Data[0].Id)
+	require.Equal(t, []string{decisionsPath, systemOnePath}, list.Data[0].SupportedEndpoints)
+
+	require.Equal(t, http.StatusOK, listModels(t, mux, "/v1/models/private/team/decide", keyHeaders("good")).Code)
+	require.Equal(t, http.StatusNotFound, listModels(t, mux, "/v1/models/private/team/decide", nil).Code)
+}
+
 // A mapping reload builds a new router but keeps the cached lookups.
 func TestPrivateModelLookupCacheSurvivesMappingReload(t *testing.T) {
 	nvcf, endpoint := newFakeFunctionIDs(t)

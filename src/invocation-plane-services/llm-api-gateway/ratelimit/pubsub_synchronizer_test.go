@@ -35,11 +35,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	orionpubsub "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/pubsub"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/testdata"
-	oriontesting "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/testing"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	orionpubsub "github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/pubsub"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/testdata"
+	oriontesting "github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/testing"
 )
 
 type subscriber struct {
@@ -110,8 +110,9 @@ func TestPubSubSynchronizer(t *testing.T) {
 
 	var (
 		rateLimit = RateLimit{
-			Limit:  1000,
-			Period: 60 * time.Second,
+			Limit:     1000,
+			Period:    60 * time.Second,
+			AllowDebt: true,
 		}
 		rateLimitResult = &RateLimitResult{
 			Requested: 256,
@@ -160,4 +161,5 @@ func TestPubSubSynchronizer(t *testing.T) {
 	assert.Equal(t, time.Second*60, rateLimitEventResult.Period)
 	assert.Equal(t, "req_00aaaaaaaaaaaaaaaaaaaaaaaaa", rateLimitEventResult.RequestID)
 	assert.Equal(t, "cluster-a", rateLimitEventResult.ClusterName)
+	assert.True(t, rateLimitEventResult.AllowDebt)
 }

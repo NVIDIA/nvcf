@@ -3,6 +3,25 @@
 
 ARG GOSU_GO_IMAGE=golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4
 
+# Cassandra 5.0.9 still copies an older Temurin 17 JRE. Use the patched
+# Temurin 17.0.21+9 trust store without changing Cassandra or the JVM binary.
+FROM --platform=$BUILDPLATFORM alpine:3.23@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde849b6703d63 AS patched-cacerts
+ARG TARGETARCH
+RUN apk add --no-cache curl && \
+    case "${TARGETARCH}" in \
+      amd64) jre_arch=x64; jre_sha256=9f41bf88c7900c7097444a1bdeb84146ae692bc08842490ab098063c74bf9a8a ;; \
+      arm64) jre_arch=aarch64; jre_sha256=1114f09d6174f54270c3117410b5e4022b43ebc0b43b751af08b927c55ed7bb5 ;; \
+      *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL --retry 7 --retry-all-errors -o /tmp/temurin-jre.tar.gz \
+      "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jre_${jre_arch}_linux_hotspot_17.0.21_9.tar.gz" && \
+    printf '%s  /tmp/temurin-jre.tar.gz\n' "${jre_sha256}" | sha256sum -c - && \
+    mkdir -p /tmp/temurin-jre /out && \
+    tar -xzf /tmp/temurin-jre.tar.gz -C /tmp/temurin-jre && \
+    cacerts=$(find /tmp/temurin-jre -type f -path '*/lib/security/cacerts') && \
+    test -f "${cacerts}" && \
+    cp "${cacerts}" /out/cacerts
+
 FROM --platform=$BUILDPLATFORM ${GOSU_GO_IMAGE} AS gosu-builder
 
 ARG TARGETARCH
@@ -77,8 +96,10 @@ RUN if [ -s /tmp/exporter-input.jar ] && [ -z "${EXPORTER_JAVAAGENT}" ]; then \
     MAVEN_REPOSITORY_BASE="${MAVEN_REPOSITORY_BASE}" \
     repack-exporter-netty /tmp/exporter-input.jar /tmp/cassandra-exporter-agent.jar
 
-FROM cassandra:5.0.9@sha256:d35e159439b302146f964919904f84fd3c2cebf347272b8cb8c4368c1cf200e5
+FROM cassandra:5.0.9@sha256:ae4cc2e4b62a5b2a2dd1645ba827cb50c589cc7531bcffe8b8b60ac3b1adc79d
 
+COPY --from=patched-cacerts --chmod=0644 /out/cacerts /opt/java/openjdk/lib/security/cacerts
+COPY --chmod=0644 NOTICE /usr/share/doc/cacerts-NOTICE
 COPY --from=gosu-builder --chmod=0555 /out/gosu /usr/local/bin/gosu
 
 # Refresh the OpenSSL runtime packages independently of the upstream image

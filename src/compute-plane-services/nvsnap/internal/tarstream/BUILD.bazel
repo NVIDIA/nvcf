@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "tarstream",
     srcs = ["tarstream.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tarstream",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvsnap/internal/tarstream",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
 )
 

@@ -36,7 +36,7 @@ go_library(
         "serializers.go",
         "validators.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/ecrpublic",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/ecrpublic",
     importpath = "github.com/aws/aws-sdk-go-v2/service/ecrpublic",
     visibility = ["//visibility:public"],
     deps = [

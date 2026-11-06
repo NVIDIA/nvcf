@@ -8,7 +8,7 @@ go_library(
         "exporter.go",
         "version.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace",
     importpath = "go.opentelemetry.io/otel/exporters/otlp/otlptrace",
     visibility = ["//visibility:public"],
     deps = [

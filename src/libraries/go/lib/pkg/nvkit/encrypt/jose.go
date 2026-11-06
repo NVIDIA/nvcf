@@ -24,7 +24,7 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 )
 
 // JOSEEncryptionProvider provides the complete interface necessary to manage JOSE encryption/decryption

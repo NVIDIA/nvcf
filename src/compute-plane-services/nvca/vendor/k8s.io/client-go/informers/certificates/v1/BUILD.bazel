@@ -6,7 +6,7 @@ go_library(
         "certificatesigningrequest.go",
         "interface.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/certificates/v1",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/certificates/v1",
     importpath = "k8s.io/client-go/informers/certificates/v1",
     visibility = ["//visibility:public"],
     deps = [

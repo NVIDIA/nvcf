@@ -9,7 +9,7 @@ go_library(
         "kubectl.go",
         "plane.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/controlplane",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/controlplane",
     importpath = "sigs.k8s.io/controller-runtime/pkg/internal/testing/controlplane",
     visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
     deps = [

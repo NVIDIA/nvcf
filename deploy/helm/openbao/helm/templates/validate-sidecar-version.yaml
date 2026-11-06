@@ -76,13 +76,16 @@ OUTPUT
   {{- if eq $c.name "auto-unseal-sidecar" -}}
     {{- $subchartContext := dict "Values" (dict "server" $.Values.openbao.server) "Chart" $.Chart -}}
     {{- $sidecarImage := tpl ($c.image | default "") $subchartContext -}}
-    {{- $parts := splitList ":" $sidecarImage -}}
-    {{- if gt (len $parts) 1 -}}
-      {{- $sidecarTag := last $parts -}}
-      {{- if ne $sidecarTag $serverTag -}}
-        {{- $msg := printf "OpenBao image tag mismatch.\n\n  server              openbao.server.image.tag: %s\n  auto-unseal sidecar openbao.server.extraContainers[%d].image tag: %s\n\nThe server, injected agent, and auto-unseal sidecar must use the same nvcf-openbao tag.\nRemove the stale openbao.server.extraContainers override so the chart default sidecar is used, or set the sidecar image tag to '%s'." $serverTag $idx $sidecarTag $serverTag -}}
-        {{- fail $msg -}}
-      {{- end -}}
+    {{- $imageName := last (splitList "/" $sidecarImage) -}}
+    {{- $taggedImageName := first (splitList "@" $imageName) -}}
+    {{- if not (regexMatch "^[^:]+:[^:]+$" $taggedImageName) -}}
+      {{- fail (printf "OpenBao auto-unseal sidecar image requires an explicit tag. Set openbao.server.extraContainers[%d].image to a tagged image matching openbao.server.image.tag '%s' (got %q)." $idx $serverTag $sidecarImage) -}}
+    {{- end -}}
+    {{- /* Keep the digest's colon in tag@sha256:digest references. */ -}}
+    {{- $sidecarTag := join ":" (rest (splitList ":" $imageName)) -}}
+    {{- if ne $sidecarTag $serverTag -}}
+      {{- $msg := printf "OpenBao image tag mismatch.\n\n  server              openbao.server.image.tag: %s\n  auto-unseal sidecar openbao.server.extraContainers[%d].image tag: %s\n\nThe server, injected agent, and auto-unseal sidecar must use the same nvcf-openbao tag.\nRemove the stale openbao.server.extraContainers override so the chart default sidecar is used, or set the sidecar image tag to '%s'." $serverTag $idx $sidecarTag $serverTag -}}
+      {{- fail $msg -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}

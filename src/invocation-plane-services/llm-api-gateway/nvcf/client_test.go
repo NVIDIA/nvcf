@@ -36,7 +36,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 
-	llmgatewaypb "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf/pb"
+	llmgatewaypb "github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/nvcf/pb"
 )
 
 func TestGRPCClientAuthorizeInvocation(t *testing.T) {
@@ -109,6 +109,12 @@ func TestGRPCClientAuthorizeInvocation(t *testing.T) {
 	}
 	if len(spec.URIs) != 1 || spec.URIs[0] != "https://example.com/model" {
 		t.Fatalf("uris = %#v, want [https://example.com/model]", spec.URIs)
+	}
+	if authResponse.AccountInputTokenRateLimit != "9-M" {
+		t.Fatalf("account input token rate limit = %q, want 9-M", authResponse.AccountInputTokenRateLimit)
+	}
+	if authResponse.AccountOutputTokenRateLimit != "4-M" {
+		t.Fatalf("account output token rate limit = %q, want 4-M", authResponse.AccountOutputTokenRateLimit)
 	}
 	if authResponse.Priority != nil {
 		t.Fatalf("priority = %d, want unset", *authResponse.Priority)
@@ -400,9 +406,11 @@ func (s *stubInvocationService) AuthLlmInvocation(
 	}
 
 	resp := &llmgatewaypb.AuthLlmInvokeResponse{
-		RoutingKey:        "fn-123",
-		ClientAuthSubject: clientAuthID,
-		Priority:          s.priority,
+		RoutingKey:                  "fn-123",
+		ClientAuthSubject:           clientAuthID,
+		Priority:                    s.priority,
+		AccountInputTokenRateLimit:  stringPtr("9-M"),
+		AccountOutputTokenRateLimit: stringPtr("4-M"),
 		ModelSpecs: map[string]*llmgatewaypb.AuthLlmInvokeResponse_ModelSpec{
 			"gateway-model": {
 				Uris:           []string{"https://example.com/model"},

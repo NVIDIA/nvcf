@@ -24,11 +24,11 @@ import (
 	echo "github.com/labstack/echo/v4"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 type Handlers struct {
@@ -100,7 +100,7 @@ func NewHandlers(
 		config:        cfg,
 		provider:      p,
 		rateLimiter:   limiter,
-		limitResolver: CallerLimitResolver{},
+		limitResolver: CompositeLimitResolver{CallerLimitResolver{}, AccountLimitResolver{}},
 		observability: newObservabilityMetrics(),
 	}
 	if proxyProvider, ok := any(p).(provider.OpenAIProxyProvider); ok {

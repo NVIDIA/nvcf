@@ -30,7 +30,7 @@ import (
 	"github.com/nats-io/nats.go"
 	zlog "github.com/rs/zerolog/log"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const defaultNATSAckWait = 30 * time.Second
@@ -271,6 +271,7 @@ func (s *natsSynchronizer) Send(_ context.Context, rle *RateLimitEvent) error {
 		ClusterName: s.clusterName,
 		CreatedAt:   time.Now().Unix(),
 		MustConsume: rle.MustConsume,
+		AllowDebt:   rle.Result.RateLimit.AllowDebt,
 	}
 	telemetry.Record(
 		telemetry.RateLimitSynchronizerQueueWait(),

@@ -47,7 +47,9 @@ Feature: Install a local single-cluster stack with upstream supporting images
     # the same rendered release.
     Then the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-nats" should contain:
       | text                                                               |
+      | docker.io/synadia/nats-server:                                      |
       | docker.io/natsio/nats-server-config-reloader:                       |
+      | docker.io/natsio/nats-box:                                          |
       | # Source: helm-nvcf-nats/templates/nkey-secret.yaml                |
 
     # Cassandra initialization currently uses its migrations image. Selecting
@@ -59,6 +61,16 @@ Feature: Install a local single-cluster stack with upstream supporting images
     And the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-api" should contain:
       | text                  |
       | docker.io/alpine/k8s: |
+
+    # Keep the installed cert-manager components and the on-demand solver on
+    # one chart release. The chart supplies their version at render time.
+    And the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-cert-manager" should contain:
+      | text                          |
+      | cert-manager-controller:      |
+      | cert-manager-webhook:         |
+      | cert-manager-cainjector:      |
+      | cert-manager-startupapicheck: |
+      | cert-manager-acmesolver:      |
 
     # Keep this focused on the releases that own or exercise this configuration.
     # A full local stack install also starts unrelated service images that may
@@ -79,6 +91,7 @@ Feature: Install a local single-cluster stack with upstream supporting images
     Then these Helm releases should be deployed using context "k3d-ncp-local":
       | name                      | namespace        |
       | nats                      | nats-system      |
+      | cert-manager              | cert-manager     |
       | cassandra                 | cassandra-system |
       | ess-api                   | ess              |
       | nats-auth-callout-service | nats-system      |

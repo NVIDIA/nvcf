@@ -35,12 +35,22 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class AuthzRequestValidator {
 
-    private static final Pattern SUPPORTED_POLICY_NAME = Pattern.compile("[\\w-]+\\.allow");
+    // llm_allow is the LLM-invocation-specific rule; also carries accountTokenRateLimit.
+    private static final Pattern SUPPORTED_POLICY_NAME = Pattern.compile("[\\w-]+\\.(allow|llm_allow)");
 
     private final NakProperties nakProperties;
 
     public PolicyEvaluationRequestVo validate(
             String namespace, String ruleName, AuthzRequest request) {
+        if (ruleName != null && ruleName.equals(nakProperties.getTieredRateLimitRuleName())) {
+            resolveAudienceServiceId(namespace);
+            return PolicyEvaluationRequestVo.builder()
+                    .namespace(namespace)
+                    .policyName(ruleName)
+                    .tieredRateKey(getTieredRateKey(request))
+                    .build();
+        }
+
         assertValidRuleName(ruleName);
 
         IntrospectionRequest introspectionRequest = IntrospectionRequest.builder()
@@ -71,6 +81,14 @@ public class AuthzRequestValidator {
                 .map(ApiKeyInput::getApiKey)
                 .filter(StringUtils::isNotEmpty)
                 .orElseThrow( () -> new BadRequestException("Api key is not provided"));
+    }
+
+    private String getTieredRateKey(AuthzRequest request) {
+        return Optional.ofNullable(request)
+                .map(AuthzRequest::getApiKeyInput)
+                .map(ApiKeyInput::getTieredRateKey)
+                .filter(StringUtils::isNotEmpty)
+                .orElseThrow(() -> new BadRequestException("Tiered rate key is not provided"));
     }
 
     private void assertValidRuleName(String policyName) {

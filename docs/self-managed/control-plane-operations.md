@@ -40,6 +40,37 @@ and resource type. Use these values in the commands throughout this section.
 | `nvca-operator` | NVCA Operator | `nvca-operator` | Deployment |
 | `envoy-gateway-system` | Envoy Gateway | `envoy-gateway` | Deployment |
 
+### Pod Annotations
+
+Set pod annotations for a service in `environments/<environment-name>.yaml`, for example to opt its
+pods into a log or metrics agent. Each key is passed to the chart unchanged; unset keys render
+nothing.
+
+| Service | Key |
+| --- | --- |
+| NVCF API | `api.podAnnotations` |
+| NVCT API | `nvctApi.podAnnotations` |
+| Invocation Service | `invocation.podAnnotations` |
+| gRPC Proxy | `grpcproxy.podAnnotations` |
+| API Keys Service | `apikeys.podAnnotations` |
+| ESS API | `ess.podAnnotations` |
+| NATS auth callout | `natsAuthCalloutService.podAnnotations` |
+| NATS | `nats.podAnnotations` |
+| OpenBao | `openbao.server.annotations` |
+
+```yaml
+# environments/<environment-name>.yaml
+api:
+  podAnnotations:
+    example.com/scrape: "true"
+```
+
+Annotation values must be strings, so quote numbers and booleans (`"8080"`, `"true"`), and do not
+set keys the charts manage themselves, such as `checksum/config`. A change rolls the Deployments and
+NATS. OpenBao uses the `OnDelete` update strategy, so its pods pick up new annotations only when
+they are restarted. Keys starting with `nvcf.nvidia.com/nats-worker-auth` are reserved for the auth
+callout's restart on a worker auth change, and setting them fails the render.
+
 ### Restarting a Service
 
 **Restarting a Deployment:**
@@ -487,7 +518,7 @@ Switching back to `nkey` restores the shared key for new workers and restarts th
 
 ### Verifying
 
-The auth callout logs each successful login, with the account and the user it assigned. Worker logins in token mode show the account `APP` and a user named after the function version:
+The auth callout logs successful logins, with the account and the user it assigned. Worker logins in token mode show the account `APP` and a user named after the function version:
 
 ```bash
 kubectl logs -n nats-system -l app.kubernetes.io/instance=nats-auth-callout-service \
@@ -507,7 +538,20 @@ kubectl logs -n nats-system -l app.kubernetes.io/instance=nats-auth-callout-serv
 | `Authentication denied`, with `status_code` 401 or 403 | The NVCF API refused the worker's token or account. Check the API's logs |
 | `webhook request failed` | The auth callout can't reach the NVCF API at the webhook URL |
 
-If the auth callout logged nothing for a worker, its login didn't reach the auth callout. Check the worker's own logs for its NATS connection error.
+The auth callout samples its logs: per message, the first 100 lines a second, then 1 in 100, so a burst of worker logins can drop lines. While debugging, log every login and turn on debug logs, which include each webhook request to the NVCF API, in `environments/<environment-name>.yaml`:
+
+```yaml
+natsAuthCalloutService:
+  serviceConfig:
+    logging:
+      level: debug
+      sampling:
+        initial: 0
+```
+
+Only `natsAuthCalloutService.serviceConfig.logging` reaches the auth callout; the stack ignores other `serviceConfig` keys. A change restarts the auth callout.
+
+With the settings above, if the auth callout logged nothing for a worker, its login didn't reach the auth callout. Check the worker's own logs for its NATS connection error.
 
 ## Observability
 

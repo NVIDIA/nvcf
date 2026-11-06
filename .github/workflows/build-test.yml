@@ -175,6 +175,11 @@ jobs:
           NVCF_RECEIPT_INVENTORY_E2E: "1"
         run: go test -C tools/docs-version-sync -run '^TestReceiptInventoryIncludesBundledChartAndDefaultHookImage$' -count=1
 
+      - name: Verify prefilled images and Helm overrides for core dependencies
+        env:
+          NVCF_IMAGE_CATALOG_E2E: "1"
+        run: go test -C tools/docs-version-sync -run '^TestImageCatalogCharts$' -count=1
+
       - name: Run observability Helmfile profile tests
         run: make -C deploy/stacks/observability test
 
@@ -193,6 +198,7 @@ jobs:
       - name: Test OpenBao declarative JWT lifecycle
         run: |
           bash deploy/helm/openbao/tests/jwt-plugin-lifecycle.sh
+          sh infra/openbao/tests/verify-runtime-ca-test.sh
           python3 -B -m unittest discover -s infra/openbao/tests
           bash migrations/openbao/tests/jwt-plugin-version-test.sh
 
@@ -243,6 +249,7 @@ jobs:
         run: |
           make -C tools/ncp-local-cluster test-cluster-lifecycle-make
           make -C tools/ncp-local-cluster test-multicluster-make
+          make -C tools/ncp-local-cluster test-destroy-all-ncp-local
           make -C tools/ncp-local-cluster test-gateway-timeout-compatibility
 
       # The repo tooling modules carry tests that no workflow ran, so a pull

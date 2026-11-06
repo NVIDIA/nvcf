@@ -27,9 +27,9 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"go.uber.org/zap"
 
-	api_error "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/api/error"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/nvca"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
+	api_error "github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/cmd/api/error"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/nvca"
+	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 )
 
 const nvcaIdentityContextKey contextKey = "nvca_identity"

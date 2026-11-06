@@ -6,7 +6,7 @@ go_library(
         "js_ek_tpm_other.go",
         "js_ek_tpm_windows.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server/tpm",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server/tpm",
     importpath = "github.com/nats-io/nats-server/v2/server/tpm",
     visibility = ["//visibility:public"],
     deps = select({

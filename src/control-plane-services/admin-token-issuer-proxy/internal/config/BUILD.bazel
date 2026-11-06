@@ -6,7 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "config",
     srcs = ["config.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/config",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/config",
     visibility = ["//src/control-plane-services/admin-token-issuer-proxy:__subpackages__"],
 )
 

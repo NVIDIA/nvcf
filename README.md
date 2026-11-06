@@ -1,13 +1,12 @@
 <!-- markdownlint-disable-next-line MD041 -->
 ![NVCF banner](docs/overview/images/nvcf-banner.svg)
 
-[![bazel](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml/badge.svg?branch=main)](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml?query=branch%3Amain)
+[![bazel](https://github.com/dsx-ai-factory/nvcf/actions/workflows/bazel.yml/badge.svg?branch=main)](https://github.com/dsx-ai-factory/nvcf/actions/workflows/bazel.yml?query=branch%3Amain)
 
 [Docs](https://docs.nvidia.com/nvcf/overview) | [Roadmap](#roadmap) | [Installation](docs/self-managed/installation.md) | [API Reference](docs/overview/api.md) | [Contributing](CONTRIBUTING.md) | [License](#license) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
 
-> Repository move: this repo moves from `NVIDIA/nvcf` to `dsx-ai-factory/nvcf`
-> on Tuesday, 2026-11-03, at 9:15 AM Pacific (17:15 UTC). A PR merge freeze
-> begins at 8:45 AM Pacific (16:45 UTC) and lasts until the move is complete.
+> Repository move: this repo moved from `NVIDIA/nvcf` to `dsx-ai-factory/nvcf`
+> on 2026-11-03.
 >
 > GitHub redirects old clone, fetch, and `go get` URLs to the new location, so
 > existing links and `github.com/NVIDIA/nvcf` module paths keep working. Update
@@ -189,19 +188,19 @@ See [`BAZEL.md`](BAZEL.md) for the complete setup, cache, and CI map.
 
 ## Roadmap
 
-[GitHub issue #27](https://github.com/NVIDIA/nvcf/issues/27) is the current
+[GitHub issue #27](https://github.com/dsx-ai-factory/nvcf/issues/27) is the current
 public roadmap for the quarter. Use that issue as the source of truth for
 active priorities, status updates, and follow-up proposals.
 
-The broader [issues board](https://github.com/NVIDIA/nvcf/issues) tracks the
+The broader [issues board](https://github.com/dsx-ai-factory/nvcf/issues) tracks the
 remaining backlog. Have an idea or a request that is not covered by the
-quarterly roadmap? Start a [Discussion](https://github.com/NVIDIA/nvcf/discussions)
-or file a [feature issue](https://github.com/NVIDIA/nvcf/issues/new/choose).
+quarterly roadmap? Start a [Discussion](https://github.com/dsx-ai-factory/nvcf/discussions)
+or file a [feature issue](https://github.com/dsx-ai-factory/nvcf/issues/new/choose).
 
 ## Support
 
-- File bugs, feature ideas, and documentation requests as [GitHub issues](https://github.com/NVIDIA/nvcf/issues/new/choose). Use the appropriate template and include the component name in the title (for example, [nvcf-nvca] Pod fails to start on arm64).
-- Use [GitHub Discussions](https://github.com/NVIDIA/nvcf/discussions) for support and usage help.
+- File bugs, feature ideas, and documentation requests as [GitHub issues](https://github.com/dsx-ai-factory/nvcf/issues/new/choose). Use the appropriate template and include the component name in the title (for example, [nvcf-nvca] Pod fails to start on arm64).
+- Use [GitHub Discussions](https://github.com/dsx-ai-factory/nvcf/discussions) for support and usage help.
 - To report a security vulnerability see [`SECURITY.md`](SECURITY.md). Do not open a public issue.
 
 ## Contributing
@@ -212,7 +211,7 @@ We welcome contributions of all sizes, from typo fixes to new features. See
 NVCF is a new open source project, and we are actively smoothing the
 contribution workflow. We accept external contributions through GitHub pull
 requests today, with a few temporary wrinkles while the repository becomes more
-[GitHub-native](https://github.com/NVIDIA/nvcf/issues/27).
+[GitHub-native](https://github.com/dsx-ai-factory/nvcf/issues/27).
 
 Before changing a service, read [`AGENTS.md`](AGENTS.md) and the nearest nested
 `AGENTS.md`. The nested file is the best source for service-specific build,

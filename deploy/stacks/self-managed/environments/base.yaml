@@ -184,6 +184,7 @@ functionAutoscaler:
 # the LLM addon is enabled, the stack defaults the Pylon image from
 # global.sidecars (or global.image) at version 0.25.0.
 api:
+  podAnnotations: {}
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
   # global.workerEndpoints.essServiceURL. In split-plane deployments that value
@@ -200,6 +201,7 @@ api:
 # Remote config is passed to the NVCT API chart and overrides its packaged
 # application profile, mirroring api.remoteConfig.
 nvctApi:
+  podAnnotations: {}
   essBaseURL: ""
   remoteConfig:
     configData: {}
@@ -234,6 +236,7 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  podAnnotations: {}
   # How workers authenticate to NATS.
   #   nkey: the NVCF API gives every worker the control plane's shared NATS
   #     NKey as NKEY_SEED. The default.
@@ -280,6 +283,8 @@ nats:
     #   tls:
     #     enabled: true
     #     secretName: nats-server-tls   # cert-manager-issued; SAN = external NATS hostname
+  # The server defaults to docker.io/synadia/nats-server:2.14.9-alpine3.22.
+  # Set container.image.registry, repository, and tag together for a mirror.
   # CPU and memory for each NATS server container. The chart sets none, so the
   # servers run as BestEffort and nats-server sizes its Go runtime to every
   # core on the node. Set a CPU limit so the runtime sizes itself to it, and
@@ -297,14 +302,14 @@ nats:
   #         cpu: <cores>
   # Image overrides for the NATS config reloader. The reloader is not
   # republished under the public nvidia/nvcf catalog, so it defaults to its
-  # upstream source, docker.io/natsio/nats-server-config-reloader:0.24.0.
+  # upstream source, docker.io/natsio/nats-server-config-reloader:0.25.0.
   # Leave these unset unless you have mirrored the image into your own
   # registry, in which case set registry and repository together:
   # reloader:
   #   image:
   #     registry: <your-registry>
   #     repository: <your-repository>/nats-server-config-reloader
-  #     tag: "0.24.0"
+  #     tag: "0.25.0"
   # NATS box also defaults to its public upstream image, independently of
   # global.image. Set registry and repository together for a private mirror.
   # natsBox:
@@ -364,7 +369,7 @@ certManager:
   # and has no namespace. The nvcf-pki Helm release that creates it and the
   # cert-manager ServiceAccount it authenticates as both live in the
   # cert-manager namespace. The bundled helm-nvcf-cert-manager chart ships
-  # installCRDs=true by default. Set this to false when cert-manager is
+  # crds.enabled=true by default. Set enabled to false when cert-manager is
   # installed outside this stack; that external installation must still
   # provide ServiceAccount/cert-manager in the cert-manager namespace.
   enabled: true
@@ -373,7 +378,7 @@ certManager:
   # acmesolver:
   #   image:
   #     repository: nvcr.io/YOUR_ORG/YOUR_TEAM/cert-manager-acmesolver
-  #     tag: "v1.20.2"
+  #     tag: "v1.20.5"
 
 openbao:
   enabled: true
@@ -407,6 +412,7 @@ openbao:
     podDisruptionBudget:
       minAvailable: 1
   server:
+    annotations: {}
     ha:
       # PDB for the HA Raft StatefulSet. The upstream chart enables this by
       # default with maxUnavailable derived from replica count.
@@ -541,6 +547,10 @@ addons:
   # When enabled, deploys the event-ledger service backed by Cassandra.
   eventLedger:
     enabled: true
+    # gRPC proxy session events: one record per worker attachment, never
+    # expired. Off until Event Ledger can expire them.
+    grpcProxyEvents:
+      enabled: false
 
   # Vanity Gateway addon for optional vanity and OpenAI-compatible invocation routes.
   # Disabled by default; enabling this deploys the vanity-gateway service and its
@@ -613,6 +623,7 @@ icms:
 # Set enabled: true for any service running more than one replica.
 
 apikeys:
+  podAnnotations: {}
   # Operator-set api-keys service env, deep-merged over the chart defaults
   # (AWS_REGION / SPRING_PROFILES_ACTIVE). Set NVCF_NCA_ID to the NCA the
   # api-keys service authorizes keys against. Leave unset to keep the chart
@@ -625,11 +636,13 @@ apikeys:
     maxUnavailable: 1
 
 ess:
+  podAnnotations: {}
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
 
 invocation:
+  podAnnotations: {}
   env:
     # Keep request subjects aligned with the API and worker consumers.
     NATS_PROPERTIES__REGION: ncp
@@ -778,6 +791,7 @@ ingress:
         # listenerName defaults to llm-quic in the gateway-routes chart.
 
 grpcproxy:
+  podAnnotations: {}
   # PDB: disabled by default. highAvailability.mode replaces it with the HA PDB
   # when it scales grpc-proxy.
   podDisruptionBudget:

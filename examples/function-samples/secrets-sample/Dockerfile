@@ -21,8 +21,10 @@ WORKDIR /app
 
 COPY requirements.txt ./
 
-RUN python -m pip install --no-cache-dir -U pip && \
-    python -m pip install --no-cache-dir -r requirements.txt
+# Use the fixed OS CA bundle without merging pip's affected bundled emSign roots.
+RUN python3 -m pip install --no-cache-dir --use-deprecated=legacy-certs \
+        --cert /etc/ssl/certs/ca-certificates.crt 'pip>=26.2.2' && \
+    python3 -m pip install --no-cache-dir -r requirements.txt
 
 COPY http_server.py /app/
 

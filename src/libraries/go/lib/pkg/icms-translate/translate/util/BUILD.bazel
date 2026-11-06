@@ -22,7 +22,7 @@ go_library(
         "encode.go",
         "iso8601_duration.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util",
     visibility = ["//visibility:public"],
     deps = [
         "@io_k8s_api//apps/v1:apps",

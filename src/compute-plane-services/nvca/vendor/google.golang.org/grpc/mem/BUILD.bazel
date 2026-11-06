@@ -7,7 +7,7 @@ go_library(
         "buffer_slice.go",
         "buffers.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/mem",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/mem",
     importpath = "google.golang.org/grpc/mem",
     visibility = ["//visibility:public"],
     deps = [

@@ -22,12 +22,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/bits"
 	"math/rand/v2"
 	"time"
 
 	"github.com/rs/zerolog"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 // limiterMode is the state-transition mode used inside leakyBucket. It is an
@@ -66,6 +67,9 @@ var ErrCASExhausted = errors.New("rate limit bucket CAS retries exhausted")
 type RateLimit struct {
 	Limit  int64
 	Period time.Duration
+	// AllowDebt lets a must-consume charge take the bucket below zero (down to -Limit),
+	// so usage only known after the fact, like actual output tokens, is not dropped.
+	AllowDebt bool
 }
 
 func (l RateLimit) String() string {
@@ -132,7 +136,7 @@ func (rl *rateLimiter) checkLimit(
 		Str("requestID", requestID).
 		Msg("checking rate limit")
 
-	currentValue, err := rl.leakyBucket(ctx, key, l.Limit, l.Period, tokensRequested, testOnly, mustConsume)
+	currentValue, err := rl.leakyBucket(ctx, key, l.Limit, l.Period, tokensRequested, testOnly, mustConsume, l.AllowDebt)
 	if err != nil {
 		if rl.failOpen {
 			log := log.Sample(zerolog.Often)
@@ -202,6 +206,7 @@ func (rl *rateLimiter) leakyBucket(
 	tokensRequested int64,
 	testOnly bool,
 	mustConsume bool,
+	allowDebt bool,
 ) (int64, error) {
 	var mode limiterMode
 	switch {
@@ -236,11 +241,16 @@ func (rl *rateLimiter) leakyBucket(
 		}
 		var refill int64
 		if periodMs > 0 {
-			refill = elapsed * rate / periodMs
+			refill = mulDivInt64(elapsed, rate, periodMs)
 		}
-		currentValue := value + refill
-		if currentValue > rate {
+		// value is in [-rate, rate], so compare before adding rather than
+		// clamping after - value+refill can overflow for a long-idle bucket.
+		// Debt is at most one period's worth, so two periods always refill fully.
+		var currentValue int64
+		if (periodMs > 0 && elapsed >= 2*periodMs) || refill > saturatingSub(rate, value) {
 			currentValue = rate
+		} else {
+			currentValue = value + refill
 		}
 		allowed := currentValue >= tokensRequested
 
@@ -251,13 +261,15 @@ func (rl *rateLimiter) leakyBucket(
 			return currentValue, true, nil
 		}
 
-		newValue := currentValue - tokensRequested
-		if newValue < 0 {
-			newValue = 0
+		var floor int64
+		if allowDebt && mode == limiterModeMustConsume {
+			floor = -rate
 		}
-		if newValue > rate {
-			newValue = rate
+		ttl := period
+		if allowDebt {
+			ttl = 2 * period // repaying -rate takes two periods; expiring earlier forgives debt
 		}
+		newValue := saturatingConsume(currentValue, tokensRequested, floor, rate)
 
 		var expected *bucketState
 		if exists {
@@ -269,13 +281,61 @@ func (rl *rateLimiter) leakyBucket(
 			key,
 			expected,
 			bucketState{Value: newValue, LastRefill: nowMs},
-			period,
+			ttl,
 		)
 		if err != nil {
 			return 0, false, fmt.Errorf("cas rate limit bucket: %w", err)
 		}
 		return currentValue, swapped, nil
 	})
+}
+
+// saturatingConsume computes current-requested, clamped to [floor, rate].
+// requested can be negative (a refund), which turns this into an addition;
+// splitting by sign avoids overflowing either direction. current must
+// already be in [-rate, rate] and floor in [-rate, 0].
+func saturatingConsume(current, requested, floor, rate int64) int64 {
+	switch {
+	case requested >= 0:
+		if requested > saturatingSub(current, floor) {
+			return floor
+		}
+		return current - requested
+	case requested == math.MinInt64:
+		return rate // negating MinInt64 itself would overflow
+	default:
+		refund := -requested
+		if refund > saturatingSub(rate, current) {
+			return rate
+		}
+		return current + refund
+	}
+}
+
+// saturatingSub computes a-b, clamped to the int64 range.
+func saturatingSub(a, b int64) int64 {
+	switch {
+	case b < 0 && a > math.MaxInt64+b:
+		return math.MaxInt64
+	case b > 0 && a < math.MinInt64+b:
+		return math.MinInt64
+	default:
+		return a - b
+	}
+}
+
+// mulDivInt64 computes a*b/c for non-negative a, b, c without a*b
+// overflowing int64, even when the final quotient comfortably fits.
+func mulDivInt64(a, b, c int64) int64 {
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	if hi >= uint64(c) {
+		return math.MaxInt64 // quotient itself would overflow; caller saturates
+	}
+	q, _ := bits.Div64(hi, lo, uint64(c))
+	if q > uint64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	return int64(q)
 }
 
 // casRetry drives an optimistic-concurrency closure. attempt returns

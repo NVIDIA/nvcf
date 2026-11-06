@@ -29,7 +29,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc/metadata"
 
-	serverutils "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/servers/utils"
+	serverutils "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/servers/utils"
 )
 
 func TestStandardLogger(t *testing.T) {

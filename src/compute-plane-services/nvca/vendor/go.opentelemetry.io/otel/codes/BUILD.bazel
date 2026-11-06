@@ -6,7 +6,7 @@ go_library(
         "codes.go",
         "doc.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/codes",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/codes",
     importpath = "go.opentelemetry.io/otel/codes",
     visibility = ["//visibility:public"],
 )

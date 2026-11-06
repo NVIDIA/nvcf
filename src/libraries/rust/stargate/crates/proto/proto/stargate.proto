@@ -52,12 +52,14 @@ message WatchStargatesResponse {
 // ListModels is an eventually consistent discovery hint, not a routing
 // reservation. Results come from a periodically refreshed local snapshot. A
 // model returned here can disappear before a later proxy request, and other
-// stargate pods may not have converged to the same registration state yet. API
-// frontends can distinguish that case by the proxy's 404 NOT_FOUND response
-// with x-stargate-error-code: no_eligible_candidates. After a recent positive
-// ListModels result, frontends may treat that response as transient and retry
-// after their configured discovery-convergence delay before reporting the model
-// as unavailable.
+// stargate pods may not have converged to the same registration state yet. A
+// model whose last backend left within the deregistered-model grace period gets
+// the proxy's 503 SERVICE_UNAVAILABLE response with x-stargate-error-code:
+// no_ready_backends and Retry-After. A model that no backend advertised on this
+// pod within that period gets 404 NOT_FOUND with x-stargate-error-code:
+// no_eligible_candidates. After a recent positive ListModels result, frontends
+// may treat that 404 as transient and retry after their configured
+// discovery-convergence delay before reporting the model as unavailable.
 message ListModelsRequest {
   // Optional model filter. When empty, all active and healthy local models for
   // the requested routing key on this stargate are returned.

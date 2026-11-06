@@ -12,7 +12,7 @@ go_library(
         "validator_custom.go",
         "webhook.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/admission",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/admission",
     importpath = "sigs.k8s.io/controller-runtime/pkg/webhook/admission",
     visibility = ["//visibility:public"],
     deps = [

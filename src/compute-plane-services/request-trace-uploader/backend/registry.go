@@ -8,7 +8,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
+	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/config"
 )
 
 // Factory builds one backend from the loaded configuration.

@@ -6,7 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "mock",
     srcs = ["mock.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/mock",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/queue/mock",
     visibility = ["//visibility:public"],
     deps = ["//src/compute-plane-services/nvca/pkg/queue"],
 )

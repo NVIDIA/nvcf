@@ -24,7 +24,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 

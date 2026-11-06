@@ -31,12 +31,14 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/must"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/must"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
+
+const msgUpstreamStreamIncomplete = "upstream stream ended before completion"
 
 type UnaryResponseSender func(
 	c *GatewayContext,
@@ -151,7 +153,9 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 	finalizeCtx := context.WithoutCancel(c.UserContext())
 	finalization := &streamFinalizationState{}
 	defer func() {
-		if finalization.IsFinalized() {
+		// The drain below can still deliver a usage chunk, so claim the state:
+		// a release followed by a finalize charges the input tokens twice.
+		if !finalization.MarkFinalized() {
 			return
 		}
 		h.handlers.releaseReservedTokenConsumption(finalizeCtx, request)
@@ -177,6 +181,16 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 		stream,
 		finalization,
 	)
+	if wrappedStream != nil {
+		// A handler that stops reading early, for example after a failed client write,
+		// must not strand the stream goroutines: drain until the provider closes the stream.
+		defer func() {
+			go func() {
+				for range wrappedStream {
+				}
+			}()
+		}()
+	}
 	if overrideStreamResponseSender != nil {
 		return overrideStreamResponseSender(c, wrappedStream, request)
 	}
@@ -189,10 +203,10 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 
 	for event := range wrappedStream {
 		if event.Err != nil {
-			if !errors.Is(event.Err, context.Canceled) {
-				return echo.NewHTTPError(http.StatusBadGateway, event.Err.Error())
+			if errors.Is(event.Err, context.Canceled) {
+				return nil
 			}
-			return nil
+			return failChatCompletionStream(c, event.Err)
 		}
 
 		if event.Chunk == nil {
@@ -224,6 +238,30 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 	return err
 }
 
+// failChatCompletionStream ends a stream whose upstream failed after the 200: an error
+// event instead of [DONE] makes OpenAI SDKs raise, and the 502 marks the request failed.
+// An upstream error event keeps its message but takes the gateway's error shape.
+func failChatCompletionStream(c *GatewayContext, cause error) error {
+	failure := echo.NewHTTPError(http.StatusBadGateway, msgUpstreamStreamIncomplete)
+	message := msgUpstreamStreamIncomplete
+	var upstreamErr *provider.UpstreamStreamError
+	if errors.As(cause, &upstreamErr) && upstreamErr.Message != "" {
+		message = upstreamErr.Message
+	}
+	payload, err := json.Marshal(openAIErrorResponse{Error: openAIError{
+		Message: message,
+		Type:    openAIErrorType(http.StatusBadGateway),
+	}})
+	if err != nil {
+		return failure.SetInternal(errors.Join(cause, err))
+	}
+	_, writeErr := fmt.Fprintf(c.Response(), "data: %s\n\n", payload)
+	if writeErr == nil {
+		c.Response().Flush()
+	}
+	return failure.SetInternal(errors.Join(cause, writeErr))
+}
+
 type streamFinalizationState struct {
 	mu        sync.Mutex
 	finalized bool
@@ -239,13 +277,6 @@ func (s *streamFinalizationState) MarkFinalized() bool {
 
 	s.finalized = true
 	return true
-}
-
-func (s *streamFinalizationState) IsFinalized() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.finalized
 }
 
 func (h *OpenAIChatHandlers) wrapStreamForFinalization(

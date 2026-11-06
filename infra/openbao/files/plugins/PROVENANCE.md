@@ -17,7 +17,7 @@ are verified through the committed `go.sum` checksums.
 
 Held deliberately, not incidental to a `go mod tidy`:
 
-- Go 1.27.0 - security floor for the standard library
+- Go 1.27.3 - security floor for the standard library
 - `golang.org/x/crypto v0.56.0` - security floor
 - `golang.org/x/net v0.58.0` - selected by `google.golang.org/grpc v1.83.2`
 - `golang.org/x/text v0.41.0` - selected by `golang.org/x/crypto v0.56.0`

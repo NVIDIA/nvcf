@@ -5,8 +5,8 @@ locally compiled OpenBao binary. The runtime filesystem, entrypoint, default
 configuration, user, and command remain from `openbao/openbao:2.6.3`.
 The runtime image is pinned to multi-architecture manifest digest
 `sha256:a60afafda36337abe833c4a63894bf1095098f29abea4091e7e555a33dd52889`.
-The Go 1.27.0 Alpine builder is pinned to multi-architecture manifest digest
-`sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc`.
+The Go 1.27.3 Alpine 3.23 builder is pinned to multi-architecture manifest digest
+`sha256:8a5046497cda39860b832ffdbe8dd66018a0f05bb01352f533a36e7e2ced66a0`.
 
 ## Source
 
@@ -27,7 +27,7 @@ The MPL-2.0 license remains in the upstream runtime image at
 The source build enforces these module and toolchain floors before compiling
 the server:
 
-- Go 1.27.0
+- Go 1.27.3
 - `golang.org/x/crypto v0.56.0`
 - `google.golang.org/grpc v1.83.2`
 - `github.com/moby/go-archive v0.3.0`
@@ -38,3 +38,8 @@ with the upstream `ui` build tag and release version metadata.
 
 `scripts/verify-openbao.sh` asserts both target architectures and the three
 dependency floors against the module metadata embedded in each binary.
+The final image requires Alpine `ca-certificates` and
+`ca-certificates-bundle` 20261020-r0 or newer. Run
+`scripts/test-runtime-packages.sh` with `RUNTIME_IMAGE` to verify the installed
+packages, check that the affected emSign root is absent from Go-loaded CA paths,
+and inspect the server and target plugin binaries copied into the image.

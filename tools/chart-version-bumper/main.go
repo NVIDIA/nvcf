@@ -128,6 +128,10 @@ func Run(root, tag, base string, write bool, out, errOut io.Writer) (int, error)
 	refused := 0
 	level := ""
 	for _, chart := range charts {
+		if chart.ManualBumpReason != "" {
+			fmt.Fprintf(out, "  %s: skipped automatic bump; manual review required: %s\n", chart.ID, chart.ManualBumpReason)
+			continue
+		}
 		var p Plan
 		var err error
 		if len(chart.ValuesPaths) > 0 || len(chart.ValuesFiles) > 0 {

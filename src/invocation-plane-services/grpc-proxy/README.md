@@ -483,5 +483,20 @@ counted in `nvcf_grpc_proxy_service_event_ledger_publish_total` by
 
 Authentication follows the same rule as the NVCF API client. If the secrets
 file has an `eventLedgerToken` key, that token is sent as a bearer token and
-reloaded when the file changes. Otherwise the proxy uses OAuth2 client
-credentials against `OAUTH2_FQDN` with the scope `fnds:createEvent`.
+reloaded when the file changes. Otherwise the proxy uses the secrets file's
+OAuth2 client credentials against `EVENT_LEDGER_OAUTH2_ADDR` (for example
+`https://oauth2.example.com`) with the scope `fnds:createEvent`. This
+is the namespace the ledger trusts, which can differ from `OAUTH2_FQDN`, so
+that namespace must grant the proxy's client the scope.
+
+Events use source `grpc-proxy` and carry the extensions `functionversionid`,
+`functionid`, `resourceid` (the NVCF request ID) and `ncaid` (the
+authenticated caller's NCA ID). The ledger keeps the latest event of each type
+per request, so a rejoin replaces the first attachment's events.
+
+| Type | When | Data |
+|---|---|---|
+| `GrpcProxy.Work.Dispatched` | The session request was handed to workers. For a streaming version, once a worker answers it. | `schema_version`, `request_id`, `is_rejoin` |
+| `GrpcProxy.Attachment.Established` | A worker tunnel attaches to a session | `schema_version`, `request_id`, `attachment_id`, `is_rejoin`, `setup_latency_ms` (from the client request starting session setup to the worker attaching) |
+| `GrpcProxy.Attachment.Setup_failed` | Dispatch failed (`phase` is `dispatch`), or no worker attached before the slot's TTL ran out (`worker_wait`). Auth, rate limit and rejoin lookup failures are not published. | `schema_version`, `request_id`, `phase`, `attachment_id` (`worker_wait` only) |
+| `GrpcProxy.Attachment.Closed` | A tunnel that published `Established` leaves the connection cache | `schema_version`, `request_id`, `attachment_id`, `cause` (`client_closed`, `worker_closed`, `shutdown`, `ttl_expired`, `capacity_reached`), `held_for_ms`, `close_code` |

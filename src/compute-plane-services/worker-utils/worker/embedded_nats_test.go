@@ -23,7 +23,7 @@ import (
 
 	"github.com/nats-io/nats-server/v2/server"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/worker/test/testutils"
 )
 
 // newEmbeddedNats starts an in-process NATS server on an OS-assigned ephemeral

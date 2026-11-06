@@ -335,7 +335,7 @@ class XAccountTaskManagementControllerTest {
                              secrets,
                              TEST_RESULTS_LOCATION_1,
                              TEST_CONTAINER_ENVIRONMENT,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // URIs containing team name.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(ADMIN_SCOPE_LAUNCH_TASK,
@@ -1000,7 +1000,7 @@ class XAccountTaskManagementControllerTest {
                              secrets,
                              TEST_UNKNOWN_ORG_NAME + "/" + TEST_MODEL_NAME,
                              TEST_CONTAINER_ENVIRONMENT,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Invalid/unknown team name in resultsLocation.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(ADMIN_SCOPE_LAUNCH_TASK,
@@ -1018,7 +1018,7 @@ class XAccountTaskManagementControllerTest {
                              secrets,
                              TEST_VALID_ORG_NAME + "/" + TEST_UNKNOWN_TEAM_NAME + "/" + TEST_MODEL_NAME,
                              TEST_CONTAINER_ENVIRONMENT,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Invalid resultsLocation with just org name and resultsHandlingStrategy NONE.
                 // resultsLocation is not validated if resultHandlingStrategy is NONE.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
@@ -1374,7 +1374,7 @@ class XAccountTaskManagementControllerTest {
                                                              100),
                              "unknown-account",
                              List.of(),
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Some admin list tasks in TEST_NCA_ID account.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt("some-admin",
                                                              List.of(ADMIN_SCOPE_LIST_TASKS),
@@ -1491,7 +1491,7 @@ class XAccountTaskManagementControllerTest {
                                                              100),
                              "unknown-account",
                              TEST_TASK_ID_1,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // TEST_TASK_ID_1 does not belong to the TEST_NCA_ID_2 account.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(ADMIN_SCOPE_TASK_DETAILS,
@@ -1602,7 +1602,7 @@ class XAccountTaskManagementControllerTest {
                              "unknown-account",
                              TEST_TASK_ID_1,
                              QUEUED,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // TEST_TASK_ID_1 does not belong to the TEST_NCA_ID_2 account.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(ADMIN_SCOPE_TASK_DETAILS,
@@ -1746,7 +1746,7 @@ class XAccountTaskManagementControllerTest {
                                                              100),
                              "unknown-account",
                              TEST_TASK_ID_1,
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // TEST_TASK_ID_1 does not belong to the TEST_NCA_ID_2 account.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(ADMIN_SCOPE_TASK_DETAILS,

@@ -6,7 +6,7 @@ go_library(
         "floor.go",
         "floor_go1.9.go",
     ],
-    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/internal/sdkmath",
+    importmap = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/internal/sdkmath",
     importpath = "github.com/aws/aws-sdk-go/internal/sdkmath",
     visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go:__subpackages__"],
 )

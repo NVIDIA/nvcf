@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -34,11 +35,11 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/servers"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/servers"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 
 	"nvcf-grpc-proxy/nvcf/pb"
 	"nvcf-grpc-proxy/proxy/consts"
@@ -81,6 +82,7 @@ type Config struct {
 	ClusterName              string `mapstructure:"CLUSTER_NAME"`
 	JetstreamPlacementTag    string `mapstructure:"JETSTREAM_PLACEMENT_TAG"`
 	EventLedgerAddr          string `mapstructure:"EVENT_LEDGER_ADDR"`
+	EventLedgerOAuth2Addr    string `mapstructure:"EVENT_LEDGER_OAUTH2_ADDR"`
 }
 
 type NVCFProxy struct {
@@ -241,10 +243,12 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 
 	var eventLedger *eventledger.Publisher
 	if config.EventLedgerAddr != "" {
-		eventLedger, err = eventledger.New(config.EventLedgerAddr, config.SecretsPath, config.OAuth2Fqdn)
+		// The ledger trusts its own OAuth2 namespace, not the NVCF API's.
+		eventLedger, err = eventledger.New(config.EventLedgerAddr, config.SecretsPath, config.EventLedgerOAuth2Addr)
 		if err != nil {
 			return nil, err
 		}
+		director.eventLedger = eventLedger
 	}
 
 	http2Server := createHttp2Server(director, "0.0.0.0:10081", healthManager)
@@ -305,6 +309,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 			servers.WithLogger(logger),
 			servers.WithRegisterServer(func(server *grpc.Server) {}),
 			servers.WithHttpHealthEndpoints("/health"),
+			servers.WithAdditionalHTTPHandlers(map[string]http.Handler{"/livez": livenessHandler(nc)}),
 			servers.WithAdditionalServers(serverPairs...),
 		),
 	}, nil

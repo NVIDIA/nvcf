@@ -25,8 +25,8 @@ import (
 
 	zlog "github.com/rs/zerolog/log"
 
-	orionpubsub "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/pubsub"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
+	orionpubsub "github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/pubsub"
+	"github.com/dsx-ai-factory/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const (
@@ -81,6 +81,7 @@ func (s *pubSubSynchronizer) Send(ctx context.Context, rle *RateLimitEvent) erro
 			ClusterName: s.clusterName,
 			CreatedAt:   createdAt,
 			MustConsume: rle.MustConsume,
+			AllowDebt:   rle.Result.RateLimit.AllowDebt,
 		}
 	)
 

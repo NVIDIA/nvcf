@@ -19,10 +19,12 @@ package envutil
 
 import (
 	"encoding/base64"
+	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
 
 // ApplyEnvOverrides decodes a base64-encoded environment string,
@@ -71,7 +73,8 @@ func NormalizeEnvOverrideName(name string) string {
 }
 
 // EncodeEnvB64 encodes a map of environment variables to a base64 text string.
-// Format: KEY=value separated by newlines.
+// Format: KEY=value separated by newlines; a value that contains a control
+// character is double-quoted so it stays a single entry.
 func EncodeEnvB64(envs map[string]string) string {
 	if len(envs) == 0 {
 		return ""
@@ -88,9 +91,37 @@ func EncodeEnvB64(envs map[string]string) string {
 	for _, k := range keys {
 		sb.WriteString(k)
 		sb.WriteString("=")
-		sb.WriteString(envs[k])
+		sb.WriteString(encodeEnvValue(envs[k]))
 		sb.WriteString("\n")
 	}
 
 	return base64.StdEncoding.EncodeToString([]byte(sb.String()))
+}
+
+// encodeEnvValue mirrors the function API encoder (IcmsClient.encodeEnvironmentValue).
+// A value with a control character is emitted in Go double-quoted form so a line break
+// cannot forge a second KEY=value entry; EnvDecoderText reverses it with strconv.Unquote.
+// A value with no control character is returned unchanged, so values without control
+// characters stay byte-identical. unicode.IsControl matches the API encoder's
+// Character.isISOControl (the C0 and C1 control ranges).
+func encodeEnvValue(value string) string {
+	if !strings.ContainsFunc(value, unicode.IsControl) {
+		return value
+	}
+
+	var sb strings.Builder
+	sb.WriteByte('"')
+	for _, r := range value {
+		switch {
+		case r == '"' || r == '\\':
+			sb.WriteByte('\\')
+			sb.WriteRune(r)
+		case unicode.IsControl(r):
+			sb.WriteString(fmt.Sprintf(`\u%04x`, r))
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	sb.WriteByte('"')
+	return sb.String()
 }

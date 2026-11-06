@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "logger",
     srcs = ["logger.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/logger",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/logger",
     visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
     deps = [
         "//src/control-plane-services/nats-auth-callout/internal/config",

@@ -46,7 +46,7 @@ formatters:
       sections:
         - standard
         - default
-        - prefix(github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper)
+        - prefix(github.com/dsx-ai-factory/nvcf/src/compute-plane-services/image-credential-helper)
         - blank
         - dot
         - alias

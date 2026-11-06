@@ -1,6 +1,6 @@
 # LLM Gateway
 
-The LLM Gateway handles OpenAI-compatible and native Anthropic Messages invocation for NVCF LLM functions in
+The LLM Gateway handles OpenAI-compatible, native Anthropic Messages, and beta decision model invocation for NVCF LLM functions in
 self-managed deployments. Use LLM functions when requests should enter through
 the LLM invocation route and NVCF should route them by function and model.
 
@@ -91,6 +91,8 @@ gateway does not wrap it in a second NVCF envelope.
 | `/v1/responses` | Supports native Responses API requests. Streaming clients receive server-sent events (SSE). Non-streaming clients receive the terminal Responses JSON object. |
 | `/v1/embeddings` | Supports embeddings requests with string or string array input. |
 | `/v1/messages` | Preserves native Anthropic Messages JSON responses and server-sent events, including tool and thinking content blocks. |
+| `/v1/decisions` | Beta. Forwards OpenAI Decisions requests unchanged except for the model value, and returns responses unchanged. Meant for non-streaming responses. |
+| `/v1/systemone` | Beta. Forwards TypeSafe System One requests unchanged except for the model value, and returns responses unchanged. Meant for non-streaming responses. |
 
 `llmConfig.routingMethod` is a routing algorithm name, optionally followed by
 tuning parameters, such as `pulsar;seed=stable-a;consider_kv_free_tokens=true`.
@@ -101,7 +103,7 @@ For the mapping to Stargate algorithms, the request-router allowlist, and the
 tuning parameters, see
 [LLM Request Router Load Balancing](../self-managed/llm-request-router-load-balancing.md).
 
-`llmConfig.tokenRateLimit` applies a per-model token limit. Use one or more comma-separated limits in `<value>-<unit>` format, where `<value>` is a positive integer and `<unit>` is one of `S` (seconds), `M` (minutes), `H` (hours), `D` (days), or `W` (weeks). A single limit is one token budget over one time window, such as `1000-S`. A combined limit is multiple token budgets over distinct time windows, such as `1000-S,5000-M,100000-H,500000-D,1000000-W`; do not repeat a unit in the same value.
+`llmConfig.tokenRateLimit` applies a per-model token limit. Use one or more comma-separated limits in `<value>-<unit>` format, where `<value>` is a positive integer and `<unit>` is one of `S` (seconds), `M` (minutes), `H` (hours), `D` (days), `W` (weeks), or `MO` (30 days). A single limit is one token budget over one time window, such as `1000-S`. The budget refills continuously over the window rather than resetting at a fixed time, so `3000000-MO` returns about 100000 tokens per day. A combined limit is multiple token budgets over distinct time windows, such as `1000-S,5000-M,100000-H,500000-D,1000000-W`; do not repeat a unit in the same value.
 
 The same configuration can be provided with CLI flags:
 
@@ -145,10 +147,10 @@ curl -sS -X POST "http://${GATEWAY_ADDR}/v1/chat/completions" \
   }'
 ```
 
-When `stream` is `true`, the gateway relays server-sent events. When `stream` is false or omitted, the gateway returns the final JSON response from the upstream service.
+When `stream` is `true`, the gateway relays server-sent events. When `stream` is false or omitted, the gateway returns one JSON chat completion.
 
-For a non-streaming request, the upstream container must return an
-OpenAI-compatible chat completion. For example:
+For a non-streaming request, the gateway returns an OpenAI-compatible chat
+completion. For example:
 
 ```json
 {
@@ -174,9 +176,19 @@ OpenAI-compatible chat completion. For example:
 }
 ```
 
-For streaming requests, the upstream container returns OpenAI-compatible SSE
-chunks and terminates with `data: [DONE]`. The gateway relays the upstream
-response; it does not synthesize model output or token usage.
+The gateway always sends `stream: true` to the upstream container, also when
+the client asks for a non-streaming response. The container must return
+OpenAI-compatible SSE chunks and end every stream with `data: [DONE]`. The
+gateway relays the upstream response; it does not synthesize model output or
+token usage.
+
+The upstream stream fails when it ends before `data: [DONE]`, the connection
+fails, the gateway request timeout expires, or the upstream sends an error
+event such as `data: {"error":{...}}`. A non-streaming client receives HTTP 502.
+A streaming client already has HTTP 200, so the stream ends with this event
+instead of `data: [DONE]`, with the upstream message when there is one:
+`data: {"error":{"message":"upstream stream ended before completion","type":"server_error","param":null,"code":null}}`.
+The gateway records these failures as 502.
 
 ### Routing checks versus token-generation tests
 
@@ -208,7 +220,7 @@ The gateway requires the routed model to declare `/v1/responses` in `llmConfig.u
 
 For upstream compatibility, the gateway sends native Responses requests to the router as streaming requests. If the client requested streaming, the gateway relays SSE. If the client requested a non-streaming response, the gateway consumes the upstream SSE stream and returns the terminal Responses JSON object.
 
-If the upstream stream closes without a `response.completed`, `response.failed`, or `response.incomplete` event, a non-streaming client receives HTTP 502. A streaming client has already received HTTP 200, so the gateway ends the stream with a `response.failed` event whose `error.code` is `server_error`. This also applies when the upstream connection fails during a streaming response. The gateway records these cases as 502 in its logs and metrics.
+The gateway treats the upstream stream as failed when it closes without a `response.completed`, `response.failed`, or `response.incomplete` event, when the upstream connection fails, or when the upstream sends an `error` event before a terminal event. A non-streaming client receives HTTP 502. A streaming client has already received HTTP 200, so the gateway ends the stream with a `response.failed` event whose `error.code` is `server_error`. The gateway does not relay an upstream `error` event; its message becomes the `response.failed` message. The gateway records these cases as 502 in its logs and metrics.
 
 ### Embeddings
 
@@ -242,6 +254,7 @@ body.
 | `/v1/chat/completions` | `model` with the `<function-id>/` prefix, `stream`, `max_tokens`, `max_completion_tokens`, `prompt_cache_key`, `stream_options`, and a non-empty `messages` array |
 | `/v1/responses` | `model` with the `<function-id>/` prefix, `stream`, `max_output_tokens`, `prompt_cache_key`, `conversation.id`, and a non-empty `input` unless `prompt`, `previous_response_id`, or `conversation` is present |
 | `/v1/embeddings` | `model` with the `<function-id>/` prefix, and a non-empty `input` with at most 2048 entries |
+| `/v1/decisions`, `/v1/systemone` | `model` with the `<function-id>/` prefix, and a body nested at most 64 levels deep. No other field. |
 
 The body must be a JSON object. A checked field that appears twice in
 different letter cases returns `400`.
@@ -251,9 +264,173 @@ The gateway forwards the body unchanged except for these fields:
 - Chat: sets `model` and `stream`, merges `stream_options`, and removes `debug`.
 - Responses: sets `model` and `stream`.
 - Embeddings: sets `model`.
+- Decisions and System One: replaces only the value of `model`. Every other
+  byte of the body, including key order and spacing, is unchanged.
 
 The gateway does not add `service_tier`. The backend receives it only when the
 client sends it.
+
+### Decision models (beta)
+
+Decision models answer typed questions about an input and return probabilities
+instead of generated text. Two beta routes pass these requests through:
+
+- `POST /v1/decisions` for the OpenAI Decisions format.
+- `POST /v1/systemone` for the TypeSafe System One format.
+
+The gateway reads only `model` and replaces its value with the backend model
+name. The body is forwarded unchanged except for the model value. The gateway
+does not translate between the two formats, so the backend must implement each
+route that it declares. The routes are meant for non-streaming responses: the
+gateway does not read `stream` and does not ask for an event stream. Whether a
+backend streams depends on the request it receives, which is forwarded as
+described above.
+
+```bash
+curl -sS -X POST "http://${GATEWAY_ADDR}/v1/decisions" \
+  -H "Host: llm.invocation.${GATEWAY_ADDR}" \
+  -H "Authorization: Bearer ${NVCF_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "<function-id>/decision-model",
+    "input": "The sky is clear.",
+    "questions": [{"type": "predicate", "name": "raining", "instructions": "Is it raining?"}]
+  }'
+```
+
+The gateway returns `400` for a body it cannot route:
+
+- The body is not valid JSON (`invalid_json`).
+- The body is not a JSON object, or `model` is missing, not a string, or has
+  no `<function-id>/` prefix (`invalid_request`).
+- The body has two `model` keys that differ only in letter case, such as
+  `model` and `Model` (`invalid_request`).
+- The body is nested more than 64 levels deep (`invalid_request`).
+
+A model is enabled for a route only when its `llmConfig.uris` lists that path.
+A model with no `uris`, or without the route in them, returns `404` in the
+error shape of the route. These routes have no default-allow, and
+`MODEL_URI_ALLOWLIST_ENABLED` does not change this. `llmConfig.uris` is fixed
+when the function is created, so declare the decision routes at creation.
+
+#### Headers
+
+Client headers, including `TypeSafe-Danger-Zone-Images`, reach the backend,
+with these exceptions:
+
+- Credentials are not forwarded. The gateway removes `Authorization`,
+  `X-Api-Key`, `Proxy-Authorization`, and `Cookie`.
+- The gateway owns the request router control headers. It removes
+  `X-Max-Wait-Ms`, `X-Request-Slo-Ms`, `X-Cache-Affinity-Key`,
+  `X-Input-Tokens`, and `X-Token-Estimate` sent by the client, and sets
+  `X-Input-Tokens` and `X-Token-Estimate` to its own estimate, at least `1`.
+
+#### Token estimate
+
+Token admission counts one request and an estimate of the input tokens. The
+estimate counts every string in the body as text, with these exceptions for
+images:
+
+- Each image counts a flat number of tokens, `1024` by default, set with
+  `llmApiGateway.config.decisionImageTokens` in the Helm chart
+  (`NVCF_DECISION_IMAGE_TOKENS` on the gateway).
+- An image is an element of `images`, a value of `assets`, or a string that
+  starts with `data:image/<type>;base64,`. Its base64 data is not counted.
+- A nested object with `type` set to `input_image` counts one image in place
+  of its `image_url` and `base64` fields. Its other strings still count as
+  text. The top-level object is never counted as an image.
+
+Base64 data in any other field, or in a data URL that is not an image, counts
+as text.
+
+When a successful response reports `usage.input_tokens`, the gateway records it
+on `llm_api_gateway_llm_tokens_total` and counts the response in
+`llm_api_gateway_decision_usage_observations_total` with `status="observed"`. A
+response without it counts as `absent`. The estimate remains the admission
+value.
+
+#### Request size
+
+By default the gateway does not limit request body size, and it holds the
+whole body in memory while it reads `model` and estimates tokens. Image
+requests can be large, so limit request body size in front of the gateway when
+you enable these routes.
+
+#### Errors
+
+Errors that the gateway, the request router, or the Vanity Gateway generate
+use the shape of the route:
+
+- `/v1/decisions` uses the OpenAI error shape,
+  `{"error":{"message","type","param","code"}}`. `type` follows the status, as
+  for the other OpenAI endpoints.
+- `/v1/systemone` uses `{"error":{"code","message","request_id"},"request_id"}`.
+  `request_id` equals the `X-Request-ID` response header.
+
+| Status | `/v1/decisions` code | `/v1/systemone` code |
+| --- | --- | --- |
+| `400`, body is not valid JSON | `invalid_json` | `invalid_json` |
+| `400`, any other reason | `invalid_request` | `invalid_request` |
+| `401` | `invalid_api_key` | `invalid_api_key` |
+| `403` | `forbidden` | `forbidden` |
+| `404` | `model_not_found` | `not_found` |
+| `410`, model past end of life | `model_expired` | `not_found` |
+| `413` | `request_too_large` | `request_too_large` |
+| `415` | `unsupported_media_type` | `unsupported_media_type` |
+| `422` | `invalid_request` | `invalid_request` |
+| `429` | `rate_limit_exceeded` | `rate_limit_exceeded` |
+| `499` | `request_cancelled` | `request_cancelled` |
+| `502`, `503`, `529` | `provider_unavailable` | `provider_unavailable` |
+| `504` | `provider_timeout` | `provider_timeout` |
+| Other `4xx` | `invalid_request` | `invalid_request` |
+| Other `5xx` | `internal_error` | `internal_error` |
+
+An error from the backend is relayed unchanged, whatever its shape, size, or
+encoding. The request router marks the errors it generates with the
+`X-Stargate-Error-Code` response header. For older request router builds that
+do not set the marker, the gateway also treats a `413`, `499`, `502`, `503`, or
+`504` with an empty body as a router error and rewrites it in the route's
+shape. A backend response with one of these statuses and an empty body is
+therefore rewritten too.
+
+#### Vanity Gateway mapping
+
+To serve decision models through the Vanity Gateway, map them under
+`v2config.openai.decisions` and `v2config.typesafeSystemOne` on the shared API
+host. A model is enabled for a route only when it is listed in that route's
+section. An entry with `functionType: LLM` reaches the function through this
+gateway, which keeps the path:
+
+```json
+{
+  "v2config": {
+    "openai": {
+      "host": "api.example.com",
+      "decisions": {
+        "decision-model": {
+          "modelName": "decision-model",
+          "functionID": "<function-id>",
+          "functionType": "LLM"
+        }
+      }
+    },
+    "typesafeSystemOne": {
+      "decision-model": {
+        "modelName": "decision-model",
+        "functionID": "<function-id>",
+        "functionType": "LLM"
+      }
+    }
+  }
+}
+```
+
+The Vanity Gateway rejects `usePexec` on `functionType: LLM` entries. For a
+direct entry, one without `functionType: LLM`, of a function that serves both
+routes, set `usePexec: false`. A direct `usePexec: true` entry reaches only the
+function's default invocation path. On the decision routes the Vanity Gateway
+returns `415` when a request sets a `Content-Type` other than
+`application/json`, and accepts request bodies up to 25 MB.
 
 ### Anthropic Messages
 
@@ -282,6 +459,18 @@ requires a positive `max_tokens` and a non-empty `messages` array. The backend
 validates content blocks, tools, thinking settings, and beta feature support.
 Upstream status codes and SSE event bytes pass through. Backend error bodies
 use the Anthropic error envelope, as described below.
+
+A streaming response must end with `message_stop`. The upstream stream fails
+when it ends without `message_stop`, the connection fails, or the gateway
+request timeout expires. A streaming client already has HTTP 200, so the
+gateway ends the stream with this event:
+`event: error` and
+`data: {"type":"error","error":{"type":"api_error","message":"upstream stream ended before completion"},"request_id":"<id>"}`.
+If the stream stops inside an event, the gateway first closes that event with
+a `ping` event, which clients skip. A whole upstream `error` event passes
+through unchanged. If it is cut, the gateway adds its own error event after the
+`ping`. A non-streaming or compressed response gets no added bytes. The
+gateway records these failures as 502.
 
 The gateway preserves `anthropic-version`, all `anthropic-beta` values,
 `Content-Type`, `Accept`, `User-Agent`, and W3C trace headers. NVCF sets

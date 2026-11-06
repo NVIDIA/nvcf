@@ -7,8 +7,8 @@
 # Cassandra defaults to the mirrored <global.image.repository>/cassandra path.
 # The ACME solver, NATS config reloader, and account-bootstrap alpine-k8s image
 # are not republished under the public nvidia/nvcf catalog. Their charts default
-# to upstream sources. The stack forwards environment overrides only when an
-# operator mirrors one of these images.
+# to upstream sources. The stack pins the patched NATS reloader tag because the
+# published chart still defaults to an older version.
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -58,8 +58,8 @@ test "$acme_solver_default_namespace" = "jetstack" ||
   fail "cert-manager chart must own the upstream ACME solver namespace default"
 test "$acme_solver_default_name" = "cert-manager-acmesolver" ||
   fail "cert-manager chart must own the upstream ACME solver image name default"
-test "$acme_solver_default_tag" = "1.20.2" ||
-  fail "cert-manager wrapper must pin the ACME solver app version"
+test "v$acme_solver_default_tag" = "$(yq -r '.appVersion' "$cert_manager_chart/charts/cert-manager/Chart.yaml")" ||
+  fail "cert-manager wrapper must match the ACME solver app version"
 
 mkdir -p "$test_stack_dir"
 cp -R "$stack_dir"/. "$test_stack_dir"
@@ -68,7 +68,7 @@ printf '{}\n' >"$secrets_file"
 helm template cert-manager "$cert_manager_chart" --namespace cert-manager \
   >"$work_dir/cert-manager-default.yaml"
 grep -qF -- \
-  '--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.20.2' \
+  "--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v$acme_solver_default_tag" \
   "$work_dir/cert-manager-default.yaml" ||
   fail "cert-manager chart must render the upstream ACME solver image"
 
@@ -140,6 +140,12 @@ assert_yaml_path_absent() {
   [[ -z "$actual" ]] || fail "$label: $path should not be in the rendered values"
 }
 
+assert_reloader_default_tag() {
+  local values_file="$1" label="$2"
+  test "$(yq -r '.nats.reloader.image.tag' "$values_file")" = "$nats_reloader_default_tag" ||
+    fail "$label: expected the patched reloader tag"
+}
+
 # Both Cassandra image blocks share one default repository, so a count keeps the
 # server and dynamicSeedDiscovery containers honest when they are not overridden.
 assert_repository_count() {
@@ -150,9 +156,9 @@ assert_repository_count() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. No overrides. Cassandra keeps its stack default. The stack omits the ACME
-#    solver, NATS reloader, and API account-bootstrap images so their charts
-#    keep the defaults.
+# 1. No overrides. Cassandra keeps its stack default. The stack pins the NATS
+#    reloader tag and leaves its upstream registry and repository chart-owned.
+#    It omits the ACME solver and API account-bootstrap images.
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:
@@ -169,10 +175,11 @@ test "$(yq -r '.nats.podTemplate.merge.spec.securityContext | tag' "$work_dir/de
   fail "nats pod security-context defaults must be a map"
 test "$(yq -r '.nats.podTemplate.merge.spec.securityContext | length' "$work_dir/default-values.yaml")" = 0 ||
   fail "nats pod security-context defaults must remain chart-owned"
-assert_absent "$work_dir/default-values.yaml" \
-  natsio/nats-server-config-reloader "nats.reloader chart default"
+assert_reloader_default_tag "$work_dir/default-values.yaml" "nats.reloader default"
 assert_yaml_path_absent "$work_dir/default-values.yaml" \
-  .nats.reloader "nats.reloader chart default"
+  .nats.reloader.image.registry "nats.reloader chart registry default"
+assert_yaml_path_absent "$work_dir/default-values.yaml" \
+  .nats.reloader.image.repository "nats.reloader chart repository default"
 assert_absent "$work_dir/default-values.yaml" \
   alpine/k8s "api.accountBootstrap chart default"
 assert_yaml_path_absent "$work_dir/default-values.yaml" \
@@ -284,9 +291,7 @@ assert_image "$work_dir/partial-values.yaml" \
 assert_image "$work_dir/partial-values.yaml" \
   mirror/cassandra-seeds nvcr.io "" "cassandra.dynamicSeedDiscovery repository-only override"
 assert_image "$work_dir/partial-values.yaml" \
-  mirror/nats-server-config-reloader "" "" "nats.reloader repository-only forwarding"
-assert_yaml_path_absent "$work_dir/partial-values.yaml" \
-  .nats.reloader.image.tag "nats.reloader repository-only forwarding"
+  mirror/nats-server-config-reloader "" "$nats_reloader_default_tag" "nats.reloader repository-only forwarding"
 assert_image "$work_dir/partial-values.yaml" \
   mirror/alpine-k8s "" "" "api.accountBootstrap repository-only forwarding"
 assert_image "$work_dir/partial-values.yaml" \
@@ -357,8 +362,7 @@ grep -q 'registry: ""' "$work_dir/empty-values.yaml" &&
   fail "explicit empty: an empty registry reached the chart values"
 assert_absent "$work_dir/empty-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader explicit empty"
-assert_yaml_path_absent "$work_dir/empty-values.yaml" \
-  .nats.reloader "nats.reloader explicit empty"
+assert_reloader_default_tag "$work_dir/empty-values.yaml" "nats.reloader explicit empty"
 assert_absent "$work_dir/empty-values.yaml" \
   alpine/k8s "api.accountBootstrap explicit empty"
 assert_yaml_path_absent "$work_dir/empty-values.yaml" \
@@ -382,8 +386,7 @@ EOF
 render_values "$work_dir/public-catalog-values.yaml"
 assert_absent "$work_dir/public-catalog-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader public catalog"
-assert_yaml_path_absent "$work_dir/public-catalog-values.yaml" \
-  .nats.reloader "nats.reloader public catalog"
+assert_reloader_default_tag "$work_dir/public-catalog-values.yaml" "nats.reloader public catalog"
 assert_absent "$work_dir/public-catalog-values.yaml" \
   alpine/k8s "api.accountBootstrap public catalog"
 assert_yaml_path_absent "$work_dir/public-catalog-values.yaml" \
@@ -425,9 +428,7 @@ EOF
 
 render_values "$work_dir/mirror-values.yaml"
 assert_image "$work_dir/mirror-values.yaml" \
-  mirror/nvcf/nats-server-config-reloader mirror.example.com "" "nats.reloader mirror forwarding"
-assert_yaml_path_absent "$work_dir/mirror-values.yaml" \
-  .nats.reloader.image.tag "nats.reloader mirror forwarding"
+  mirror/nvcf/nats-server-config-reloader mirror.example.com "$nats_reloader_default_tag" "nats.reloader mirror forwarding"
 assert_image "$work_dir/mirror-values.yaml" \
   mirror/nvcf/alpine-k8s mirror.example.com "" "api.accountBootstrap mirror forwarding"
 assert_image "$work_dir/mirror-values.yaml" \
@@ -478,6 +479,6 @@ test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroupChangePolicy'
   fail "nats pod filesystem-group change policy must be preserved"
 test "$(yq -r '.nats.container.merge.securityContext.readOnlyRootFilesystem' "$work_dir/security-context-values.yaml")" = true ||
   fail "nats container security settings must be preserved"
-assert_yaml_path_absent "$work_dir/security-context-values.yaml" .nats.reloader.image "nats security-only override"
+assert_reloader_default_tag "$work_dir/security-context-values.yaml" "nats security-only override"
 
 echo "image-override-wiring: OK"

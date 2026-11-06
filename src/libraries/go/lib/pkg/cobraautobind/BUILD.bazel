@@ -21,7 +21,7 @@ go_library(
         "autobind.go",
         "errors.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/cobraautobind",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/cobraautobind",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_spf13_cobra//:cobra",

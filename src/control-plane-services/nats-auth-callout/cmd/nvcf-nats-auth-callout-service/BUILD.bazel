@@ -21,7 +21,7 @@ go_library(
     name = "nvcf-nats-auth-callout-service_lib",
     srcs = ["main.go"],
     embedsrcs = ["config.yaml"],
-    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service",
     visibility = ["//visibility:private"],
     # Build-time stamping into internal/version, resolved by
     # tools/workspace_status.sh when bazel is invoked with --stamp (the CI
@@ -30,12 +30,12 @@ go_library(
     # tracing via version.GetVersion() matches the image tag. Unstamped
     # builds keep the "dev" / "unknown" defaults.
     x_defs = {
-        "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version.Version": "{STABLE_VERSION}",
-        "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version.GitCommit": "{STABLE_GIT_COMMIT}",
-        "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version.BuildDate": "{BUILD_DATE}",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-nats-auth-callout-service",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
+        "github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/version.Version": "{STABLE_VERSION}",
+        "github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/version.GitCommit": "{STABLE_GIT_COMMIT}",
+        "github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/version.BuildDate": "{BUILD_DATE}",
+        "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-nats-auth-callout-service",
+        "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
     },
     deps = ["//src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service/cli"],
 )

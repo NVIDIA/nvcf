@@ -17,7 +17,10 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "test",
-    srcs = ["http.go"],
+    srcs = [
+        "http.go",
+        "nats.go",
+    ],
     importpath = "nvcf-grpc-proxy/proxy/internal/test",
     visibility = ["//src/invocation-plane-services/grpc-proxy/proxy:__subpackages__"],
     deps = ["@org_uber_go_zap//:zap"],

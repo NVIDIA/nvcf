@@ -888,7 +888,7 @@ service name to parallel lists in `.github/workflows/bazel.yml`.
 The `ci_lane` descriptor field has two supported values:
 
 - `build-container`: GitHub Actions runs the job inside the pinned
-  `ghcr.io/nvidia/nvcf/bazel-ci` image. Its build tools are preinstalled, but
+  `ghcr.io/dsx-ai-factory/nvcf/bazel-ci` image. Its build tools are preinstalled, but
   it does not expose the host Docker daemon. Use it only when the component's
   complete test scope does not require Testcontainers or Docker commands.
 - `docker-host`: GitHub Actions runs directly on the `ubuntu-latest` virtual

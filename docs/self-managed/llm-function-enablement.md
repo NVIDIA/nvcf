@@ -23,11 +23,24 @@ Standard HTTP, gRPC, and LLS functions do not require this addon, even when a
 container exposes paths such as `/v1/chat/completions`, `/v1/responses`, or
 `/v1/embeddings`.
 
+The addon also serves the beta decision model routes, `POST /v1/decisions` and
+`POST /v1/systemone`. The gateway forwards their bodies unchanged except for
+the model value, does not forward the caller's credentials, and does not stream
+responses. Declare each route the container serves in
+`models[].llmConfig.uris` when you create the function, for example
+`--llm-model "name=<model>,uris=/v1/decisions|/v1/systemone"`. The `uris` of a
+function cannot change after creation, and a model gets a `404` on a decision
+route that it does not declare. The gateway does not limit request body size
+by default, so limit it in front of the gateway when you enable these routes.
+See the [LLM Gateway guide](../overview/llm-gateway.md#decision-models-beta),
+including how to map these models in the Vanity Gateway.
+
 When enabled, the stack creates:
 
 - `llm-api-gateway` in the `nvcf` namespace.
 - `llm-request-router` in the `nvcf` namespace.
-- The `llm.invocation.<domain>` HTTPRoute when Gateway API ingress is enabled.
+- The `llm.<domain>` and `llm.invocation.<domain>` HTTPRoutes when Gateway API
+  ingress is enabled.
 - LLM worker pods with a `pylon` sidecar that forwards requests to the function
   container on the configured `inferencePort`.
 
@@ -46,8 +59,8 @@ services:
   unless `certManager.enabled: false`.
 - Changed resources: the OpenBao migration Job, which creates the
   `services/all/pki/root` mount and the LLM policies, the NVCF API remote
-  configuration, and the `ingress` release, which adds the
-  `llm.invocation.<domain>` HTTPRoute and the LLM worker routes when enabled.
+  configuration, and the `ingress` release, which adds the `llm.<domain>` and
+  `llm.invocation.<domain>` HTTPRoutes and the LLM worker routes when enabled.
 - No existing Deployment or StatefulSet changes. Running non-LLM functions
   keep serving.
 
@@ -949,10 +962,10 @@ To remove the LLM addon from a running control plane:
    not affected.
 2. Set `addons.llm.enabled: false` in the environment file, or restore the
    environment file from before enablement, and apply the control-plane
-   stack. This removes the `llm.invocation.<domain>` route and clears the
-   LLM settings in the NVCF API remote configuration, so new LLM functions
-   can no longer be invoked or launched with the sidecar. No running
-   Deployment or StatefulSet changes.
+   stack. This removes the `llm.<domain>` and `llm.invocation.<domain>`
+   routes and clears the LLM settings in the NVCF API remote configuration,
+   so new LLM functions can no longer be invoked or launched with the
+   sidecar. No running Deployment or StatefulSet changes.
 3. Remove the addon releases. With the addon disabled, the Helmfile no longer
    contains these releases, so the apply leaves them installed and running
    instead of uninstalling them:
@@ -1020,7 +1033,7 @@ authentication hop.
 The LLM API Gateway returns errors in the format OpenAI and Anthropic SDKs
 read. Errors from the gateway and the LLM request router use the OpenAI
 format on `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, and the
-other OpenAI-compatible endpoints:
+other OpenAI-compatible endpoints, including `/v1/decisions`:
 
 ```json
 {"error":{"message":"no eligible candidates","type":"invalid_request_error","param":null,"code":null}}
@@ -1037,7 +1050,21 @@ The `type` follows the HTTP status. For example, `401` is
 `overloaded_error`. On OpenAI-compatible endpoints, `529` always has
 `code: "overloaded_error"`.
 
-Model server errors already in the endpoint's format are returned unchanged,
+On `/v1/systemone`, they use the System One format, with `error.code`,
+`error.message`, and `error.request_id`. On `/v1/decisions` and
+`/v1/systemone`, `error.code` follows the decision route code table. See the
+[LLM Gateway guide](../overview/llm-gateway.md#decision-models-beta) for the
+codes.
+
+On `/v1/decisions` and `/v1/systemone`, model server errors are returned
+unchanged, whatever their shape, size, or encoding, with one exception. For
+older request router builds that do not mark their own errors with
+`X-Stargate-Error-Code`, the gateway treats a `413`, `499`, `502`, `503`, or
+`504` with an empty body as a router error and rewrites it in the route's
+format. A model server response with one of these statuses and an empty body is
+therefore rewritten too.
+
+On the other endpoints, model server errors already in the endpoint's format are returned unchanged,
 including the server's `type` and `code`. Other model server bodies are
 converted to the endpoint's format, keeping up to 32 KiB of the server's
 message when the gateway can read it. The gateway reads uncompressed and gzip error bodies up
@@ -1057,8 +1084,15 @@ A `404` with `no eligible candidates` from `llm.invocation.<domain>` means the
 request reached the LLM Gateway, but the requested function or model was
 unknown or was not registered on the selected request router. The message is
 in `error.message`, as described in [Error Responses](#error-responses).
-Similar `503` candidate errors mean the router knows the target but has no
-active eligible backend. Check:
+A `503` with `no ready backends` means the router knows the model but no
+backend is ready, for example while the only instance is replaced or the model
+is still loading. The response carries `Retry-After`, and clients should retry.
+By default the router keeps a model known for 15 minutes after its last
+backend leaves, so a removed function returns this `503` before it returns
+`404`. The request router flag `--deregistered-model-grace-ms` sets this
+period, and `0` disables it. Each request router replica keeps this in
+memory, so a replica that never saw the model, or restarted since, returns
+`404` right away. Check:
 
 - The deployment became `ACTIVE` more than about one minute ago. The sidecar
   registers with the request routers after the pod is `Running`.

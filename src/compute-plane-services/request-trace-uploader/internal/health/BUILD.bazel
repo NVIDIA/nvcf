@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "health",
     srcs = ["health.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/health",
+    importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/internal/health",
     visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
 )
 

@@ -52,6 +52,10 @@ public class NakProperties {
     @NotEmpty
     private Map<String, String> serviceIdMap;
 
+    // Must equal the rule in nvcf-core's default nvcf.api-keys.account-rate-limit-evaluation-uri.
+    @Builder.Default
+    private String tieredRateLimitRuleName = "apikey.account_rate_limit";
+
     // api key properties
     @NotBlank
     private String keyPrefix;

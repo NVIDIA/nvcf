@@ -19,10 +19,11 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/hellofresh/health-go/v5"
 	"github.com/nats-io/nats.go"
 	pb "google.golang.org/grpc/health/grpc_health_v1"
@@ -71,4 +72,18 @@ func healthManager(nvcfApiHost string, nc *nats.Conn) (*health.Health, error) {
 			return nil
 		},
 	}))
+}
+
+// livenessHandler serves /livez on the admin port. It fails only when the NATS
+// connection is closed: nats.go never reopens a closed connection, so a restart
+// is the only recovery. nvcf-api and a reconnecting NATS connection are left
+// to readiness, so their outages do not restart the pod.
+func livenessHandler(nc *nats.Conn) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if nc.IsClosed() {
+			http.Error(w, "nats connection closed", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 }

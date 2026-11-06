@@ -26,7 +26,7 @@ import (
 	"net"
 	"time"
 
-	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
+	nverrors "github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 	"github.com/google/uuid"
 	grpcretry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
 	"github.com/nats-io/nats.go"
@@ -125,9 +125,23 @@ type Result struct {
 	// look up a stream that cannot hold the message, which costs a round trip
 	// and reports a failure that reads as missing purge rights.
 	QueuedToWorkStream bool
+	// StreamingDispatch is set for a streaming version, whose request is still
+	// being sent when the invoke returns. It receives once: true when a worker
+	// answers, false when the request is abandoned first.
+	StreamingDispatch <-chan bool
 }
 
-func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.Conn, clientAuth, functionId, functionVersionId string, existingRequestId *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (Result, context.CancelFunc, error) {
+// WorkerAuth is what a worker must present when it connects back for a session.
+type WorkerAuth struct {
+	Token             string
+	RequestId         uuid.UUID
+	FunctionId        string
+	FunctionVersionId string
+	// CallerNcaId is the authenticated client's NCA ID, not the function owner's.
+	CallerNcaId string
+}
+
+func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.Conn, clientAuth, functionId, functionVersionId string, existingRequestId *uuid.UUID, onWorkerAuthSet func(WorkerAuth)) (Result, context.CancelFunc, error) {
 	ctx, span := otel.GetTracerProvider().Tracer("proxy-tracer").Start(ctx, "InvokeStatefulFunction",
 		trace.WithAttributes(
 			attribute.String("function_id", functionId),
@@ -166,9 +180,15 @@ func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.C
 			return Result{}, nil, err
 		}
 
-		onWorkerAuthSet(workerAuthToken, requestId, proxyAuthResponse.FunctionId, functionVersion.FunctionVersionId)
+		onWorkerAuthSet(WorkerAuth{
+			Token:             workerAuthToken,
+			RequestId:         requestId,
+			FunctionId:        proxyAuthResponse.FunctionId,
+			FunctionVersionId: functionVersion.FunctionVersionId,
+			CallerNcaId:       proxyAuthResponse.ClientNcaId,
+		})
 
-		cancelInvokingWorker, queued, err := f.startNewSession(ctx, conn, requestId, proxyAuthResponse, workerAuthToken, functionVersion)
+		cancelInvokingWorker, queued, streamingDispatch, err := f.startNewSession(ctx, conn, requestId, proxyAuthResponse, workerAuthToken, functionVersion)
 		if err != nil {
 			return Result{}, nil, err
 		}
@@ -178,6 +198,7 @@ func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.C
 			WorkerAuthorizationToken: workerAuthToken,
 			RequestId:                requestId,
 			QueuedToWorkStream:       queued,
+			StreamingDispatch:        streamingDispatch,
 		}, cancelInvokingWorker, nil
 	} else {
 		// if there is an existing request id, check that it matches up with an existing request
@@ -202,7 +223,13 @@ func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.C
 			return Result{}, nil, fmt.Errorf("existing session invoker NCA ID mismatch for request id %s", requestId)
 		}
 
-		onWorkerAuthSet(workerAuthToken, requestId, existingSession.FunctionId, existingSession.FunctionVersionId)
+		onWorkerAuthSet(WorkerAuth{
+			Token:             workerAuthToken,
+			RequestId:         requestId,
+			FunctionId:        existingSession.FunctionId,
+			FunctionVersionId: existingSession.FunctionVersionId,
+			CallerNcaId:       proxyAuthResponse.ClientNcaId,
+		})
 
 		err = f.joinExistingSession(ctx, requestId, proxyAuthResponse, workerAuthToken)
 		if err != nil {
@@ -228,17 +255,19 @@ func pickFunctionVersion(proxyAuthResponse *pb.ProxyAuthResponse) (*pb.ProxyAuth
 	return proxyAuthResponse.FunctionVersions[rand.IntN(len(proxyAuthResponse.FunctionVersions))], nil
 }
 
-func (f *FunctionInvoker) startNewSession(ctx context.Context, conn net.Conn, requestId uuid.UUID, proxyAuthResponse *pb.ProxyAuthResponse, workerAuthToken string, functionVersion *pb.ProxyAuthResponse_FunctionVersion) (context.CancelFunc, bool, error) {
+func (f *FunctionInvoker) startNewSession(ctx context.Context, conn net.Conn, requestId uuid.UUID, proxyAuthResponse *pb.ProxyAuthResponse, workerAuthToken string, functionVersion *pb.ProxyAuthResponse_FunctionVersion) (context.CancelFunc, bool, <-chan bool, error) {
 	marshalledInvokeFunctionRequest, err := f.marshalStatefulSessionRequest(requestId, proxyAuthResponse, workerAuthToken)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	if functionVersion.GetType() == pb.ProxyAuthResponse_FunctionVersion_STREAMING {
-		go f.sendLLSInvocationRequest(ctx, conn, requestId, functionVersion, marshalledInvokeFunctionRequest)
+		// Buffered so the send never blocks if nobody reads the outcome.
+		dispatched := make(chan bool, 1)
+		go f.sendLLSInvocationRequest(ctx, conn, requestId, functionVersion, marshalledInvokeFunctionRequest, dispatched)
 		// Published to llsrq, which PurgePendingWork cannot drop from, and for
 		// a streaming version the rq stream may not exist at all.
-		return cancel, false, nil
+		return cancel, false, dispatched, nil
 	}
 	subject := f.requestStreamSubject(functionVersion.FunctionVersionId, requestId)
 	_, err = f.js.PublishMsg(ctx, &nats.Msg{
@@ -248,12 +277,15 @@ func (f *FunctionInvoker) startNewSession(ctx context.Context, conn net.Conn, re
 	})
 	if err != nil {
 		cancel()
-		return nil, false, fmt.Errorf("failed to publish function invocation request to nats: %w", err)
+		return nil, false, nil, fmt.Errorf("failed to publish function invocation request to nats: %w", err)
 	}
-	return cancel, true, nil
+	return cancel, true, nil, nil
 }
 
-func (f *FunctionInvoker) sendLLSInvocationRequest(ctx context.Context, conn net.Conn, requestId uuid.UUID, functionVersion *pb.ProxyAuthResponse_FunctionVersion, marshalledInvokeFunctionRequest []byte) {
+// sendLLSInvocationRequest reports once on dispatched whether a worker answered.
+func (f *FunctionInvoker) sendLLSInvocationRequest(ctx context.Context, conn net.Conn, requestId uuid.UUID, functionVersion *pb.ProxyAuthResponse_FunctionVersion, marshalledInvokeFunctionRequest []byte, dispatched chan<- bool) {
+	answered := false
+	defer func() { dispatched <- answered }()
 	ctx, span := otel.GetTracerProvider().Tracer("proxy-tracer").Start(ctx, "sendLLSInvocationRequest",
 		trace.WithAttributes(
 			attribute.Stringer("request_id", requestId),
@@ -273,6 +305,7 @@ func (f *FunctionInvoker) sendLLSInvocationRequest(ctx context.Context, conn net
 	for i := 0; i < len(regions) && ctx.Err() == nil; {
 		err := f.tryRegionForLLS(ctx, regions[i], requestId, functionVersion, marshalledInvokeFunctionRequest)
 		if err == nil {
+			answered = true
 			return
 		}
 		// short circuit and try the next region
