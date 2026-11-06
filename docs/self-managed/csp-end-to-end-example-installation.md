@@ -14,25 +14,15 @@ annotations on the Gateway, the `storageClass` name, and the `kubectl` context
 names. Substitute the equivalents for GKE, AKS, or on-prem.
 
 For a deeper reference on each release and on values, see
-[Helmfile Installation](./helmfile-installation.md). For pulling and mirroring
-the bundles and images, see [Image Mirroring](../overview/image-mirroring.md).
+[Helmfile Installation](./helmfile-installation.md). For stack packages, use [Consume an NVCF release](../overview/umbrella-releases.md).
+Use [Image Mirroring](../overview/image-mirroring.md) when charts or images need
+a private registry.
 
-<Info>
-This guide assumes you have already downloaded and extracted the control-plane
-Helmfile bundle and have a source checkout for the compute plane:
-
-- `nvcf-self-managed-stack` for the control plane.
-- `deploy/stacks/nvcf-compute-plane` in the source repository for the compute
-  plane (NVCA operator).
-
-Control-plane commands run from inside the `nvcf-self-managed-stack` directory.
-Compute-plane commands run from the repository root with `make -C`.
-
-```bash
-git clone https://github.com/nvidia/nvcf.git
-```
-
-</Info>
+Control-plane commands run from `$BUNDLE_DIR/deploy/stacks/self-managed`.
+Compute-plane commands run from the extracted `BUNDLE_DIR` with `make -C`.
+Keep all selected stack directories together and use an installed `nvcf-cli`
+binary. The [consumption guide](../overview/umbrella-releases.md) defines the
+package layout and customer artifact access settings.
 
 ## Installation order
 
@@ -107,9 +97,6 @@ export CLUSTER_REGION="<region-label>"                      # e.g. us-east-1
 export HELMFILE_ENV="eks"                                   # single-cluster example
 # export HELMFILE_ENV="eks-multi"                           # multi-cluster example
 
-# Repository path the bundles use for charts and images
-export REPOSITORY="<your-ngc-org>/<your-ngc-team>"          # or your mirror path
-
 # NGC credential used for chart/image pulls and the dockerconfig secret
 export NGC_API_KEY="<your-ngc-api-key>"
 
@@ -120,14 +107,17 @@ export NVCF_CLI="<path-to>/nvcf-cli"
 export STORAGE_CLASS="gp3"
 ```
 
-### Log in to the chart and image registry
+### Configure chart and image access
 
-The bundles pull OCI charts through Helm, so host-side registry auth must exist
-before any `helmfile sync`:
+Use the [customer artifact access settings](../overview/umbrella-releases.md#configure-customer-artifact-access)
+for both stack environments. HTTPS chart authentication, Kubernetes image pull
+secrets and worker credentials are separate inputs. An OCI login alone does
+not authenticate the HTTPS chart catalog.
 
-```bash
-printf '%s' "${NGC_API_KEY}" | helm registry login nvcr.io --username '$oauthtoken' --password-stdin
-```
+This example uses `nvcr-pull-secret` as the image pull secret name in both
+planes. Replace the consumption guide's example `nvcf-registry` entry with
+that name when merging the values. Keep one `global.imagePullSecrets` list;
+do not paste duplicate keys or add a second secret name.
 
 ## Step 1: Install the Gateway and capture the load balancer address
 
@@ -165,20 +155,21 @@ in the compute-plane environment file in Step 5. This requires
 
 ## Step 2: Configure the control-plane environment and secrets files
 
-This step produces two files in the `nvcf-self-managed-stack` bundle: the
+This step produces two files under `$BUNDLE_DIR/deploy/stacks/self-managed`: the
 environment values file `environments/<env>.yaml` (copied from `base.yaml`) and
 the secrets file `secrets/<env>-secrets.yaml` (copied from
 `secrets.yaml.template`). Both are required before the install.
 
-From the `nvcf-self-managed-stack` directory, copy the base template. The file
+From `$BUNDLE_DIR/deploy/stacks/self-managed`, copy the base template. The file
 name (`<env>`) must match `HELMFILE_ENV`.
 
 ```bash
-cd <path to nvcf-self-managed-stack>/
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 cp environments/base.yaml "environments/${HELMFILE_ENV}.yaml"
 ```
 
-Edit `environments/${HELMFILE_ENV}.yaml`. Every field is explained inline below.
+Merge the deployment values below into `environments/${HELMFILE_ENV}.yaml`,
+keeping the artifact access settings configured above. Every field is explained inline.
 Lines marked `CHANGE` must be updated for your cluster; replace the `${...}`
 values with the literals you exported earlier.
 
@@ -186,17 +177,10 @@ values with the literals you exported earlier.
 global:
   domain: "${GATEWAY_ADDR}"        # CHANGE: from "localhost". Builds HTTPRoute hostnames (api.<domain>, etc.)
 
-  helm:
-    sources:
-      registry: "nvcr.io"          # OCI registry NVCF charts are pulled from. Change only if you mirror.
-      repository: "${REPOSITORY}"  # CHANGE: from "YOUR_ORG/YOUR_TEAM". NGC org/team or mirror path.
+  # Include chart/image settings from the customer artifact access guide.
 
   imagePullSecrets:
     - name: nvcr-pull-secret       # CHANGE: from []. Pull secret applied to all workloads (created below).
-
-  image:
-    registry: nvcr.io              # Container image registry. Change only if you mirror.
-    repository: "${REPOSITORY}"    # CHANGE: from "YOUR_ORG/YOUR_TEAM". NGC org/team or mirror path.
 
   workerEndpoints:
     nvcfServiceURL: ""             # CHANGE (multi-cluster): "http://api.${GATEWAY_ADDR}". Worker env NVCF_FQDN.
@@ -399,10 +383,10 @@ cluster-specific and credential material.
 
 ## Step 3: Install the control plane
 
-Run from the `nvcf-self-managed-stack` bundle directory:
+Run from the selected Self-Managed stack directory:
 
 ```bash
-cd <path to nvcf-self-managed-stack>/
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 kubectl config use-context "${CONTROL_PLANE_CONTEXT}"
 make install HELMFILE_ENV="${HELMFILE_ENV}"
 ```
@@ -458,10 +442,10 @@ export NVCF_CLI_CONFIG="$(pwd)/nvcf-cli.yaml"
 ## Step 5: Register the GPU cluster and install the NVCA operator
 
 This is where single-cluster and multi-cluster diverge. Pick the matching
-section. Run both from the source repository root.
+section. Run both from the extracted bundle root.
 
 ```bash
-cd <path-to-nvcf-repository>
+cd "$BUNDLE_DIR"
 ```
 
 Create the compute-plane environment file for either topology. The compute-plane
@@ -475,16 +459,15 @@ cp deploy/stacks/nvcf-compute-plane/environments/base.yaml \
   "deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml"
 ```
 
-Set these keys in
-`deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml`:
+Merge the same [customer artifact access settings](../overview/umbrella-releases.md#configure-customer-artifact-access)
+used by the control plane into
+`deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml`. Keep the
+HTTPS chart URL and authentication, image registry and namespace consistent
+between both planes. Then add these deployment-specific keys:
 
 ```yaml
 global:
-  helm:
-    sources:
-      repository: "${REPOSITORY}"
-  image:
-    repository: "${REPOSITORY}"
+  # Keep helm.sources and image settings from the customer artifact access guide.
   imagePullSecrets:
     - name: nvcr-pull-secret
   nvcaOperator:

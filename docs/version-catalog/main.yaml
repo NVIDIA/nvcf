@@ -1759,16 +1759,12 @@ outputs:
     blocks:
       - marker: manifest-artifact-registry-paths
         renderer: manifest-artifact-registry-paths
+  - path: docs/overview/umbrella-releases.md
+    blocks:
+      - marker: stack-package-downloads
+        renderer: stack-package-downloads
   - path: docs/overview/image-mirroring.md
     blocks:
-      - marker: image-mirroring-resource-examples
-        renderer: image-mirroring-resource-examples
-      - marker: image-mirroring-stack-snippet
-        renderer: image-mirroring-stack-snippet
-      - marker: image-mirroring-compute-stack-snippet
-        renderer: image-mirroring-compute-stack-snippet
-      - marker: image-mirroring-observability-stack-snippet
-        renderer: image-mirroring-observability-stack-snippet
       - marker: image-mirroring-cli-snippet
         renderer: image-mirroring-cli-snippet
   - path: docs/compute-plane/cluster-management/self-managed.md

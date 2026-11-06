@@ -2,8 +2,8 @@
 
 The generated tables list the stack packages, charts and images selected by
 this docs edition. Stack, chart and image versions are independent. Use
-[Image Mirroring](image-mirroring.md) for package downloads and customer
-registry setup.
+[Consume an NVCF release](umbrella-releases.md) to obtain the packages and
+configure customer registry access.
 
 `Publication pending` means the catalog has no verified customer download
 location for that exact artifact. Bundled charts are included in their stack
@@ -21,9 +21,10 @@ components require the corresponding deployment profile.
 
 ## Prepare Helm charts for Helmfile
 
-Follow [chart mirroring](image-mirroring.md#pulling-helm-charts) to obtain the
-selected charts. Bundled charts remain inside their stack directories and need
-no separate chart publication.
+Use the [customer artifact access settings](umbrella-releases.md#configure-customer-artifact-access)
+to pull the selected charts directly. For a private registry, follow
+[chart mirroring](image-mirroring.md#pulling-helm-charts). Bundled charts remain
+inside their stack directories and need no separate chart publication.
 
 ### Supporting images that ship from Docker Hub
 
