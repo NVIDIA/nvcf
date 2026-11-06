@@ -210,6 +210,9 @@ releases:
       - ../global.yaml.gotmpl
       - image:
           repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
+          # Chart 1.4.2 defaults to appVersion 0.8.7. 0.8.8 is the same service
+          # rebuilt with Go 1.26.10 and the patched CA bundle (CVE-2026-111943).
+          tag: "0.8.8"
       - serviceConfig:
           service:
             nats_url: "nats://nats.nats-system.svc.cluster.local:4222"

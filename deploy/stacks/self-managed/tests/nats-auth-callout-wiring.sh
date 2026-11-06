@@ -93,9 +93,11 @@ helm template nats-auth-callout-service \
 chart_app_version="$(yq -r '.appVersion // ""' "$stack_dir/../../helm/nats-auth-callout/Chart.yaml")"
 test -n "$chart_app_version" ||
   fail "could not read appVersion from the NATS auth-callout Chart.yaml"
+# The stack can pin a patched image ahead of a chart release; that tag wins.
+stack_image_tag="$(yq -r '.image.tag // ""' "$values_file")"
 
 actual_image="$(yq -r '.spec.template.spec.containers[0].image // ""' "$manifest_file")"
-expected_image="$expected_repository:$chart_app_version"
+expected_image="$expected_repository:${stack_image_tag:-$chart_app_version}"
 test "$actual_image" = "$expected_image" ||
   fail "rendered image is $actual_image, expected $expected_image"
 
