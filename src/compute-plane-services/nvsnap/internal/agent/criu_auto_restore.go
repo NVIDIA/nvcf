@@ -85,6 +85,10 @@ type criuAutoRestorer struct {
 	goneSince sync.Map // restored pod UID -> when its engine was first seen gone
 	verdicts  sync.Map // pod UID, checkpoint, group key -> why its restore is refused ("" admitted); restore_trust.go
 	seenReady sync.Map // pod UID -> struct{}: seen Ready, so its failures are not a failed start (criu_fallback.go)
+	// captureDecided: leader pod UID -> struct{}: whether its instance is
+	// captured is settled (captured, failed or refused), so it is not
+	// held out of service for it (capture_hold.go).
+	captureDecided sync.Map
 	// readyObserved: pod UID -> struct{}: its start was recorded
 	// (lifecycle_metrics.go); pods Ready before watchStart are not.
 	readyObserved sync.Map
@@ -154,7 +158,7 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	c.ensurePlaceholderBundles(ctx, pod)
 	c.considerFallback(ctx, pod)
 	c.considerReservePIDs(ctx, pod)
-	c.considerGroupCapture(ctx, pod)
+	c.considerCaptureHold(ctx, pod, c.considerGroupCapture(ctx, pod))
 	c.considerCompanionPlaceholder(ctx, pod)
 	c.considerRestored(ctx, pod)
 	c.considerRestoredCondition(ctx, pod)

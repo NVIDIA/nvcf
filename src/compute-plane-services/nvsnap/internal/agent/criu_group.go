@@ -338,44 +338,97 @@ func (a *Agent) captureCandidate(ctx context.Context, pod *corev1.Pod) bool {
 	return labels[criuCaptureAnnotation] == "true" || a.optInMatches(labels)
 }
 
-func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1.Pod) {
+// mayCaptureInstance reports whether pod may lead a capture of its
+// instance once it is warm: criuGroupCaptureLeader's conditions that do
+// not depend on its readiness, and the multi-pod opt-in.
+func (c *criuAutoRestorer) mayCaptureInstance(pod *corev1.Pod) bool {
+	if pod.Annotations[cacheURIAnnotation] == "" || pod.Annotations[webhook.CRIURestoreAnnotation] != "" {
+		return false
+	}
+	o, size, isRank := podRank(pod, modelvolume.CacheOrdinalAnnotation, modelvolume.CacheGroupSizeAnnotation)
+	if !isRank || o != 0 || gpuContainer(pod) == "" || !hasInstance(pod) {
+		return false
+	}
+	return size == 1 || c.a.captureOptedIn(pod)
+}
+
+// considerGroupCapture starts the capture of pod's instance when pod is
+// its leader and it is due. undecided is true while whether pod's
+// instance is captured is not known yet: its capture runs or is waited
+// for, or the pod is not warm yet. A pod held out of service for its
+// capture (capturehold) is released once it is decided.
+func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1.Pod) (undecided bool) {
+	if pod.DeletionTimestamp != nil {
+		return false
+	}
 	if pod.Annotations[webhook.FallbackReasonAnnotation] != "" {
 		// Admitted to fall back (criu_fallback.go): its cachedir is
 		// captured instead, and a CRIU placeholder would not have it.
-		return
+		return false
 	}
-	if name := c.a.identityBlocksCapture(pod); name != "" && rootfsonly.IsPodReady(pod) && pod.Annotations[cacheURIAnnotation] != "" {
+	if !c.mayCaptureInstance(pod) {
+		// Never captured, whatever its readiness: decided now, so that a
+		// pod that never becomes warm holds no other rank of its instance.
+		return false
+	}
+	if !rootfsonly.IsPodReady(pod) {
+		return true // not warm yet: nothing is decided
+	}
+	if name := c.a.identityBlocksCapture(pod); name != "" && pod.Annotations[cacheURIAnnotation] != "" {
 		if _, seen := c.attempted.LoadOrStore("identity/"+string(pod.UID), struct{}{}); !seen {
 			c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "env": name}).
 				Info("CRIU group capture: skipped; the pod names its own instance in its configuration, so a restore would run as the wrong instance (it starts from the caches)")
 		}
-		return
+		return false
 	}
 	uri, size, ok := criuGroupCaptureLeader(pod)
 	if !ok || (size > 1 && !c.a.captureOptedIn(pod)) {
-		return
+		return false
+	}
+	if _, done := c.captureDecided.Load(pod.UID); done {
+		return false
+	}
+	if _, running := c.attempted.Load("capture/" + string(pod.UID)); running {
+		// Its capture runs: the record it claimed says "capturing", which
+		// below would read as captured by another.
+		return true
+	}
+	if holdExpired(pod) {
+		// Held longer than any capture takes, it is released into service
+		// (capture_hold.go): a capture started now would stop it serving.
+		c.captureDecided.Store(pod.UID, struct{}{})
+		c.a.log.WithField("pod", pod.Namespace+"/"+pod.Name).
+			Warn("CRIU group capture: skipped; the pod has been held past the hold limit and is released into service")
+		return false
 	}
 	scope, err := c.a.criuGroupScope(ctx, pod.Namespace)
 	if err != nil {
 		c.a.log.WithError(err).WithField("namespace", pod.Namespace).Warn("CRIU group capture: cannot read the namespace's scope")
-		return
+		return true // tried again on the pod's next event
 	}
 	if size == 1 {
 		// One pod: its record is known now, so a captured configuration
 		// is not waited on again.
 		if prev, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(criuGroupKey(uri, scope)), metav1.GetOptions{}); err == nil && !c.groupRecaptures(ctx, prev.Data) {
-			return
+			return false
 		}
 	}
 	if _, busy := c.attempted.LoadOrStore("capture/"+string(pod.UID), struct{}{}); busy {
-		return
+		return true // its capture runs
 	}
 	go func() {
-		if retry := c.captureGroup(ctx, pod, scope, size); retry {
+		retry := c.captureGroup(ctx, pod, scope, size)
+		if retry {
 			// Not ready yet: a later event of the pod tries again.
 			c.attempted.Delete("capture/" + string(pod.UID))
+			return
 		}
+		// Captured (its pods are gone, replaced by its restore), failed
+		// or refused: what holds the instance out of service is over.
+		c.captureDecided.Store(pod.UID, struct{}{})
+		c.releaseInstanceHold(context.WithoutCancel(ctx), pod, "CaptureSettled", "the instance's capture is over or does not apply")
 	}()
+	return true
 }
 
 // captureGroup captures leader's instance. retry is true when the
@@ -399,6 +452,10 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	// (missed_ranks.go). Its replacement is admitted anew, so the capture
 	// is tried again on a later event.
 	if c.considerMissed(pods.Items, leader, size, log) {
+		// Not captured while that rank runs, however long: the instance
+		// serves meanwhile. A later attempt finds it serving and is
+		// skipped (holdForCapture).
+		c.releaseInstanceHold(context.WithoutCancel(ctx), leader, "NotCaptured", "a rank of the instance was admitted without nvsnap; it is not captured")
 		return true
 	}
 	// The ranks need not share one configuration: a Grove leader and its
@@ -500,9 +557,25 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		}
 		return false
 	}
+	// Held for the capture before it is claimed: a member already
+	// released into service (its hold expired) is not stopped for it.
+	if serves, err := c.holdForCapture(ctx, members, log); serves != "" {
+		log.WithField("member", serves).Warn("CRIU group capture: skipped; a member of the instance already serves")
+		c.unholdForCapture(ctx, members, log)
+		return false
+	} else if err != nil {
+		log.WithError(err).Info("CRIU group capture: cannot hold the instance for its capture; tried again")
+		// The members it marked before the failure did not start a
+		// capture either.
+		c.unholdForCapture(ctx, members, log)
+		return true
+	}
 	record, err := c.claimGroupRecord(ctx, key, leader, len(uris))
 	if err != nil {
 		log.WithError(err).Warn("CRIU group capture: cannot claim the group record")
+		// Not captured yet: the members are held as before, by the limit
+		// since they became warm, not by a capture that did not start.
+		c.unholdForCapture(ctx, members, log)
 		return true
 	}
 	if record == nil {

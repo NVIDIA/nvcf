@@ -51,6 +51,7 @@ where the files column says.
 | `nvsnap.io/capture` | `CaptureLabel` (internal/webhook/mutate.go)<br>`DefaultCaptureLabel` (internal/rootfsonly/watcher.go)<br>`rootfsCaptureLabel` (internal/server/server.go) | Is the pod-label key the agent watches for capture candidates. |
 | `nvsnap.io/capture-hash` | `CMAnnotationHash` (internal/checkpointstore/cmregistry.go) | Is the full sha256 hex; annotations have a per-object 256KiB total cap so 64 chars is fine. |
 | `nvsnap.io/capture-method` | `CaptureMethodAnnotation` (internal/webhook/criu_fallback.go) | Names how a pod of a CRIU cluster is captured when it is not by CRIU: "cachedir" for a fallback pod. |
+| `nvsnap.io/capture-settled` | inline: internal/capturehold/capturehold.go |  |
 | `nvsnap.io/checkpoint` | `railsAnnoCheckpoint` (internal/agent/rails_fetch.go) |  |
 | `nvsnap.io/checkpoint-on-warm` | `CheckpointOnWarmAnnotation` (internal/podtimings/podtimings.go) | Is the annotation key NVCA's Hook A stamps for Cold pods so Hook B's reconciler knows to capture them after readiness. |
 | `nvsnap.io/ckpt-size` | `annCkptSize` (internal/server/manifests.go) |  |

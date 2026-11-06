@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/capturehold"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
@@ -1774,8 +1775,14 @@ func (c *ModelVolumeController) scanWarmRank(ctx context.Context, pod *corev1.Po
 // files belong to startup.
 const readyGrace = 5 * time.Second
 
-// readyAt is the pod's Ready transition time, zero when unknown.
+// readyAt is the pod's Ready transition time, zero when unknown. A pod
+// held out of service until its capture is settled became ready, for the
+// files of its startup, when it became warm.
 func readyAt(pod *corev1.Pod) time.Time {
+	if capturehold.Held(pod) {
+		at, _ := capturehold.WarmSince(pod)
+		return at
+	}
 	for _, c := range pod.Status.Conditions {
 		if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
 			return c.LastTransitionTime.Time

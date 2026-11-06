@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "capturehold",
+    srcs = ["capturehold.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/capturehold",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = ["@io_k8s_api//core/v1:core"],
+)
+
+go_test(
+    name = "capturehold_test",
+    srcs = ["capturehold_test.go"],
+    embed = [":capturehold"],
+    deps = [
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+    ],
+)

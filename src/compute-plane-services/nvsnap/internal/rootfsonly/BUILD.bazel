@@ -13,6 +13,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
+        "//src/compute-plane-services/nvsnap/internal/capturehold",
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/criu/mountinfo",
         "//src/compute-plane-services/nvsnap/internal/tracing",

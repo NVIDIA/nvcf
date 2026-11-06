@@ -65,6 +65,10 @@ type WebhookConfig struct {
 	DynamoLeaseTTL int
 	// CaptureLivenessBudget is webhook.Mutator.CaptureLivenessBudget.
 	CaptureLivenessBudget int
+	// CaptureHold is webhook.Mutator.CaptureHold: a pod a capture may
+	// freeze is held out of service until its capture is settled
+	// (capture_hold.go).
+	CaptureHold bool
 
 	// CacheSalt is folded into every cache identity the webhook composes
 	// (rootfsonly.HashInputComposer.Salt). Bump it to start fresh captures
@@ -239,6 +243,12 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// their liveness probes widened.
 		mut.CaptureCandidate = a.captureCandidate
 		mut.CRIUCapture = true
+		// The node agents release held pods (startCRIUAutoRestore runs
+		// whenever CRIU is the default).
+		mut.CaptureHold = cfg.CaptureHold
+		if a.kubeClient != nil {
+			mut.CaptureHoldAdmits = a.captureHoldAdmits
+		}
 	}
 	if a.kubeClient != nil {
 		mut.Kube = a.kubeClient

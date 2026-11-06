@@ -10,6 +10,7 @@ go_library(
         "bundle_versions.go",
         "cache_rank_handler.go",
         "capture_cascade.go",
+        "capture_hold.go",
         "capture_marker.go",
         "capture_peer.go",
         "capture_preflight.go",
@@ -98,6 +99,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/agent",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
+        "//src/compute-plane-services/nvsnap/internal/capturehold",
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/containerd",
         "//src/compute-plane-services/nvsnap/internal/criu/mountinfo",
@@ -159,6 +161,7 @@ go_test(
         "bundle_tools_test.go",
         "bundle_versions_test.go",
         "capture_candidate_test.go",
+        "capture_hold_test.go",
         "capture_marker_test.go",
         "capture_preflight_test.go",
         "cascade_fetch_test.go",
@@ -262,6 +265,7 @@ go_test(
     ],  # keep
     embed = [":agent"],
     deps = [
+        "//src/compute-plane-services/nvsnap/internal/capturehold",
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/containerd",
         "//src/compute-plane-services/nvsnap/internal/fnstatus",
@@ -287,6 +291,7 @@ go_test(
         "@io_k8s_apimachinery//pkg/runtime",
         "@io_k8s_apimachinery//pkg/runtime/schema",
         "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_client_go//kubernetes",
         "@io_k8s_client_go//kubernetes/fake",
         "@io_k8s_client_go//rest",
         "@io_k8s_client_go//testing",

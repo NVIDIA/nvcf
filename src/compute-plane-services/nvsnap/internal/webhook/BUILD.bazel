@@ -8,6 +8,7 @@ go_library(
         "bundle_mount.go",
         "cache_volume.go",
         "cachedir.go",
+        "capture_hold.go",
         "cert.go",
         "criu_fallback.go",
         "criu_group.go",
@@ -36,6 +37,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
+        "//src/compute-plane-services/nvsnap/internal/capturehold",
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/election",
         "//src/compute-plane-services/nvsnap/internal/metrics",
@@ -61,6 +63,7 @@ go_test(
         "admitted_config_test.go",
         "cachedir_noshim_test.go",
         "cachedir_test.go",
+        "capture_hold_test.go",
         "criu_companion_test.go",
         "criu_fallback_test.go",
         "criu_group_test.go",
@@ -86,6 +89,7 @@ go_test(
     ],
     embed = [":webhook"],
     deps = [
+        "//src/compute-plane-services/nvsnap/internal/capturehold",
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/election",
         "//src/compute-plane-services/nvsnap/internal/metrics",

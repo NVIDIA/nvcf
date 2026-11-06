@@ -389,6 +389,14 @@ type Mutator struct {
 	// is a candidate whenever it is set. Nil (captures do not freeze
 	// processes: the capture method is not CRIU) widens no probe.
 	CaptureCandidate func(ctx context.Context, pod *corev1.Pod) bool
+	// CaptureHold keeps a pod a capture may freeze out of service until
+	// the agent settles its capture (capture_hold.go). It needs the
+	// agent of the pod's node to release the pod.
+	CaptureHold bool
+	// CaptureHoldAdmits reports whether pod may be held for its capture:
+	// not a pod of a StatefulSet that creates its pods in order. Nil
+	// admits.
+	CaptureHoldAdmits func(ctx context.Context, pod *corev1.Pod) (bool, string)
 
 	// CRIUCompanionAdmits reports whether a pod without GPUs may be admitted
 	// as a companion of a group restore: not while a GPU rank of its
@@ -631,7 +639,9 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// gpushare placement is independent of every other decision below and
 	// rides along with whichever patches they return.
 	if !isFallback || fallback.Reason != FallbackGPUShareFailed {
-		injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
+		gp := m.gpusharePatches(ctx, pod)
+		injectPatches = append(injectPatches, gp...)
+		injectPatches = append(injectPatches, m.captureHoldPatches(ctx, pod, len(gp) > 0)...)
 	}
 	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
 	injectPatches = append(injectPatches, m.dynamoNamespacePatches(ctx, pod)...)
