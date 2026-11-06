@@ -23,8 +23,10 @@ go_library(
     name = "http-server_lib",
     srcs = [
         "decisions.go",
+        "diagnostics.go",
         "main.go",
         "messages.go",
+        "sse_format.go",
     ],
     importpath = "nvcf-openai-compatible-sample",
     visibility = ["//visibility:private"],
@@ -40,9 +42,11 @@ go_test(
     name = "http-server_test",
     srcs = [
         "decisions_test.go",
+        "diagnostics_test.go",
         "echo_test.go",
         "main_test.go",
         "messages_test.go",
+        "sse_format_test.go",
     ],
     embed = [":http-server_lib"],
 )

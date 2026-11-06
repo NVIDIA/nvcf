@@ -55,6 +55,8 @@ to all POST routes.
 | Stream truncate | `X-Load-Tester-Stream-Truncate-After-Chunks` | `x_load_tester_stream_truncate_after_chunks` | unset | Close a stream without its completion event after this many chunks. |
 | Concurrency limit | `X-Load-Tester-Max-Concurrency` | `x_load_tester_max_concurrency` | `0` | Return 429 when the global in-flight request count exceeds this value. |
 | Echo | `X-Load-Tester-Echo` | `x_load_tester_echo` | `false` | Return the raw request body as the output text. |
+| SSE line ending | `X-Load-Tester-SSE-Line-Ending` | `x_load_tester_sse_line_ending` | `lf` | `/v1/messages` streams only: write the stream with `lf`, `crlf` or `cr` line endings. |
+| SSE split bytes | `X-Load-Tester-SSE-Split-Bytes` | `x_load_tester_sse_split_bytes` | `0` | `/v1/messages` streams only: write the stream in pieces of this many bytes and flush after each, so a multi-byte UTF-8 character can be split across two writes. |
 
 Timing values are non-negative integer milliseconds and are capped at five
 minutes. Output is capped at 1 MiB and the startup chunk limit. The
@@ -140,12 +142,213 @@ A request needs `model`, a non-negative integer `max_tokens`, and a non-empty
   `rate_limit_error`, 500 `api_error`, 504 `timeout_error`, and 529
   `overloaded_error`. Other 4xx codes use `invalid_request_error` and other 5xx
   codes use `api_error`.
+- The SSE line ending and split bytes controls change only how a stream is
+  written, not its events. Structural newlines are replaced; newlines inside
+  text deltas are JSON-escaped and stay untouched. With `x_load_tester_chunk`
+  set to a multi-byte string and `x_load_tester_sse_split_bytes` set to `1`,
+  every byte is its own write, so characters are split between writes. Both are
+  off by default.
 - The stream error control sends an `error` event with type `api_error`. Stream
   error and truncate controls end the stream without `message_stop`.
 
 Tool use, thinking blocks, images, documents, citations, stop sequences,
 prompt caching, token counting, and Message Batches are not implemented.
 `GET /v1/models` keeps the OpenAI shape.
+
+## Backend diagnostics
+
+The Messages route can report which replica served a request and which headers
+the replica received. Use it to check replica affinity across requests, to see
+which caller headers a gateway or proxy forwarded, and to tell which function
+version answered. It is off by default and has no effect on other routes.
+
+Set the top-level body field `x_load_tester_echo_diagnostics` to `true` to turn
+it on. It is a body field only, with no header form. Unlike the benchmark
+controls, it still applies when the request carries an `X-Load-Tester-*` header.
+
+When it is on, the response carries:
+
+- Response headers `x-backend-replica` and, when the version id is known,
+  `x-backend-function-version`. They are set before the body, so they are
+  readable on streamed responses too.
+- An `x_backend` object in the message body. For a stream, the object is in the
+  `message` of the `message_start` event.
+
+| `x_backend` field | Source |
+|-------------------|--------|
+| `replica` | `NVCF_INSTANCE_ID` (the pod name on NVCF), else the hostname, else `unknown` |
+| `function_id` | `NVCF_FUNCTION_ID`, omitted when unset |
+| `function_version_id` | `NVCF_FUNCTION_VERSION_ID`, omitted when unset |
+| `method` | HTTP method the replica saw |
+| `path` | Request path the replica saw |
+| `query` | Raw query string, omitted when empty |
+| `host` | `Host` the replica saw, omitted when empty |
+| `remote_addr` | Peer address of the connection, omitted when empty |
+| `content_length` | Request `Content-Length`, `-1` when unknown |
+| `received_headers` | Every request header. Names are lower-cased and each value is a list |
+
+Diagnostics are added only to successful responses. Error responses, such as
+status injection, a concurrency 429, or a validation 400, carry no `x_backend`
+and no diagnostic headers.
+
+The values of `Authorization`, `Proxy-Authorization`, `X-Api-Key` and
+`Cookie` are replaced with `<redacted>`. The names stay, so you can still see
+whether a gateway forwarded them. Other header values are echoed as received.
+
+### Non-streaming request
+
+```bash
+curl -sS http://localhost:18000/v1/messages \
+  --include \
+  --header 'Content-Type: application/json' \
+  --header 'X-Test-Header: hello' \
+  --data '{
+    "model": "test-model",
+    "max_tokens": 16,
+    "messages": [{"role": "user", "content": "hello"}],
+    "x_load_tester_echo_diagnostics": true
+  }'
+```
+
+The response headers include `x-backend-replica: <pod name>`. The body looks
+like this, trimmed:
+
+```json
+{
+  "id": "msg_2",
+  "type": "message",
+  "content": [{"type": "text", "text": "xxxx"}],
+  "stop_reason": "end_turn",
+  "x_backend": {
+    "replica": "0-sr-1a2b3c",
+    "function_id": "<function id>",
+    "function_version_id": "<version id>",
+    "method": "POST",
+    "path": "/v1/messages",
+    "host": "localhost:18000",
+    "remote_addr": "172.17.0.1:53012",
+    "content_length": 143,
+    "received_headers": {
+      "content-type": ["application/json"],
+      "x-test-header": ["hello"]
+    }
+  }
+}
+```
+
+### Streaming request
+
+Add `"stream": true`. The headers are on the HTTP response and `x_backend` is in
+the first event.
+
+```bash
+curl -sSN http://localhost:18000/v1/messages \
+  --include \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "test-model",
+    "max_tokens": 16,
+    "stream": true,
+    "messages": [{"role": "user", "content": "hello"}],
+    "x_load_tester_echo_diagnostics": true
+  }'
+```
+
+### Read only the replica or the headers
+
+```bash
+BODY='{"model":"test-model","max_tokens":1,"messages":[{"role":"user","content":"hi"}],"x_load_tester_echo_diagnostics":true}'
+
+# Which replica answered
+curl -sS -o /dev/null -D - http://localhost:18000/v1/messages \
+  --header 'Content-Type: application/json' --data "$BODY" | grep -i '^x-backend-'
+
+# Which headers a gateway forwarded
+curl -sS http://localhost:18000/v1/messages \
+  --header 'Content-Type: application/json' --data "$BODY" \
+  | jq '.x_backend.received_headers'
+```
+
+### Check replica spread
+
+Send the same request repeatedly and count replicas. One replica means all
+requests landed on it. Several means the router spread them.
+
+```bash
+for _ in $(seq 1 50); do
+  curl -sS -o /dev/null -D - http://localhost:18000/v1/messages \
+    --header 'Content-Type: application/json' --data "$BODY" \
+    | tr -d '\r' | awk -F': ' 'tolower($1)=="x-backend-replica"{print $2}'
+done | sort | uniq -c
+```
+
+For affinity, repeat the loop with the header or session value your gateway
+uses for sticky routing and confirm the count stays at one replica.
+
+### Combine with benchmark controls
+
+Diagnostics combine with every Messages control. A request can set latency,
+chunk count, and diagnostics together:
+
+```bash
+curl -sS http://localhost:18000/v1/messages \
+  --header 'Content-Type: application/json' \
+  --header 'X-Load-Tester-TTFT-Ms: 200' \
+  --header 'X-Load-Tester-Output-Chunks: 3' \
+  --data '{
+    "model": "test-model",
+    "max_tokens": 16,
+    "messages": [{"role": "user", "content": "hello"}],
+    "x_load_tester_echo_diagnostics": true
+  }'
+```
+
+### Anthropic Python client
+
+The Anthropic client passes unknown body fields through `extra_body`. Read the
+response headers with `with_raw_response`. `x_backend` is not a modeled field,
+so it is in `model_extra`.
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    api_key="not-needed",
+    base_url="http://localhost:18000",
+)
+
+raw = client.messages.with_raw_response.create(
+    model="test-model",
+    max_tokens=16,
+    messages=[{"role": "user", "content": "hello"}],
+    extra_body={"x_load_tester_echo_diagnostics": True},
+)
+print(raw.headers["x-backend-replica"])
+message = raw.parse()
+print(message.model_extra["x_backend"]["received_headers"])
+```
+
+### Request log
+
+Set `LOG_REQUESTS=true` in the container environment to log one line for each
+Messages request, whether or not the request asks for diagnostics:
+
+```text
+messages request id=req_7 replica=0-sr-1a2b3c method=POST path=/v1/messages headers=content-length,content-type,x-test-header
+```
+
+The log has the request id, replica, method, path, and the sorted header names.
+It never logs header values. The server reads the variable once at startup. Use
+it with `kubectl logs` to see what reached a replica when the client cannot
+send the diagnostics field. The request id matches the `request-id` response
+header.
+
+| Environment variable | Accepted values | Default |
+|----------------------|-----------------|---------|
+| `LOG_REQUESTS` | `true` enables the log. Any other value disables it | unset (off) |
+| `NVCF_INSTANCE_ID` | Replica name reported in diagnostics. NVCF sets it | hostname |
+| `NVCF_FUNCTION_ID` | Function id reported in diagnostics. NVCF sets it | omitted |
+| `NVCF_FUNCTION_VERSION_ID` | Version id reported in diagnostics. NVCF sets it | omitted |
 
 ## Build and run
 

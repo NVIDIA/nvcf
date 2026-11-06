@@ -35,6 +35,9 @@ type messagesRequest struct {
 	MaxTokens json.RawMessage `json:"max_tokens"`
 	Messages  json.RawMessage `json:"messages"`
 	Stream    bool            `json:"stream"`
+	// EchoDiagnostics asks the backend to report its replica id and the headers
+	// it received (see diagnostics.go).
+	EchoDiagnostics bool `json:"x_load_tester_echo_diagnostics"`
 	benchmarkBodyControls
 }
 
@@ -47,6 +50,8 @@ type messagesResponse struct {
 	StopReason   *string             `json:"stop_reason"`
 	StopSequence *string             `json:"stop_sequence"`
 	Usage        messagesUsage       `json:"usage"`
+	// Backend is set only when the request carries x_load_tester_echo_diagnostics.
+	Backend *backendDiagnostics `json:"x_backend,omitempty"`
 }
 
 type messagesTextBlock struct {
@@ -75,6 +80,9 @@ type messagesErrorResponse struct {
 func handleMessages(w http.ResponseWriter, r *http.Request, config serverConfig) {
 	requestID := fmt.Sprintf("req_%d", responseSequence.Add(1))
 	w.Header().Set("request-id", requestID)
+	if logRequests {
+		logMessagesRequest(r, requestID)
+	}
 	writeError := func(w http.ResponseWriter, status int, message, _ string) {
 		writeMessagesError(w, status, message, requestID)
 	}
@@ -112,6 +120,10 @@ func handleMessages(w http.ResponseWriter, r *http.Request, config serverConfig)
 		stopReason = messagesStopMaxTokens
 	}
 	message := newMessagesResponse(request.Model)
+	if request.EchoDiagnostics {
+		message.Backend = newBackendDiagnostics(r)
+		setDiagnosticHeaders(w, message.Backend)
+	}
 	if request.Stream {
 		streamMessages(r.Context(), w, message, tuning, stopReason)
 		return
@@ -160,6 +172,7 @@ func setMessagesOutput(message *messagesResponse, chunks []string, stopReason st
 }
 
 func streamMessages(ctx context.Context, w http.ResponseWriter, message messagesResponse, tuning benchmarkTuning, stopReason string) {
+	w = newSSEFormatWriter(w, tuning.SSELineEnding, tuning.SSESplitBytes)
 	setSSEHeaders(w)
 	if !waitFor(ctx, tuning.TTFT, tuning.TTFTJitter) {
 		return
