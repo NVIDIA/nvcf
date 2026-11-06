@@ -2,15 +2,23 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "config",
-    srcs = ["config.go"],
+    srcs = [
+        "config.go",
+        "suppression.go",
+    ],
     importpath = "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/config",
     visibility = ["//visibility:public"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/transform/suppress"],
 )
 
 go_test(
     name = "config_test",
-    srcs = ["config_test.go"],
+    srcs = [
+        "config_test.go",
+        "suppression_test.go",
+    ],
     embed = [":config"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/transform/suppress"],
 )
 
 alias(

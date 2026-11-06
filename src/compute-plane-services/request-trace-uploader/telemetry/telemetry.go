@@ -80,6 +80,17 @@ const (
 	BatchSegments     = "batch_segments"
 	BatchBytes        = "batch_bytes"
 	BatchSplits       = "batch_splits"
+	// RecordsEvaluated counts records checked against suppression rules,
+	// RecordsSuppressed the records a rule acted on, and
+	// SuppressionHeaderPresent the evaluated records that carried a rule's
+	// header, matched or not. A rule is labeled by its operator-assigned
+	// name, never by a header name or value.
+	RecordsEvaluated         = "records_evaluated"
+	RecordsSuppressed        = "records_suppressed"
+	SuppressionHeaderPresent = "suppression_header_present"
+	// RecordsIncomplete counts payload records whose source says
+	// payload_complete is false.
+	RecordsIncomplete = "records_incomplete"
 )
 
 // Labels are the attributes of one observation, without BackendLabel.
@@ -107,11 +118,20 @@ var allowedLabelKeys = map[string]bool{
 	"scope":       true,
 	"stage":       true,
 	"kind":        true,
+	"rule":        true,
+	"action":      true,
 }
 
 var labelValuePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 
 var outcome = map[string][]string{"status": {"success", "failure"}}
+
+// payloadRecords is the one record type that carries headers in Dynamo
+// v1.4.0, so the only one suppression evaluates.
+var payloadRecords = map[string][]string{"record_type": {"request_payload"}}
+
+// SuppressionActions are the action label values of RecordsSuppressed.
+var SuppressionActions = []string{"strip_payload", "drop_record"}
 
 var catalog = []Instrument{
 	{Name: Uploads, Kind: Counter, Unit: "1", Labels: []string{"status"}, Values: outcome},
@@ -141,6 +161,11 @@ var catalog = []Instrument{
 	{Name: BatchSegments, Kind: Histogram, Unit: "1"},
 	{Name: BatchBytes, Kind: Histogram, Unit: "By"},
 	{Name: BatchSplits, Kind: Counter, Unit: "1"},
+	{Name: RecordsEvaluated, Kind: Counter, Unit: "1", Labels: []string{"record_type"}, Values: payloadRecords},
+	{Name: RecordsSuppressed, Kind: Counter, Unit: "1", Labels: []string{"rule", "action"},
+		Values: map[string][]string{"action": SuppressionActions}},
+	{Name: SuppressionHeaderPresent, Kind: Counter, Unit: "1", Labels: []string{"rule"}},
+	{Name: RecordsIncomplete, Kind: Counter, Unit: "1", Labels: []string{"record_type"}, Values: payloadRecords},
 }
 
 var byName = func() map[string]Instrument {

@@ -35,6 +35,9 @@ var DefaultHeaders = []string{"nvcf-ncaid", "nvcf-nca-id"}
 
 // Rule matches records whose header group resolves to one of Values.
 type Rule struct {
+	// Name is the operator-assigned name that labels this rule's counters.
+	// It must be unique in a Config. It never holds a header name or value.
+	Name string
 	// Headers lists lower-case header names. The first name with a
 	// non-empty value decides.
 	Headers []string
@@ -43,10 +46,26 @@ type Rule struct {
 	Action Action
 }
 
+// HeaderlessPolicy says what happens to records of a type that carries no
+// request headers, so no rule can be evaluated on them. In Dynamo v1.4.0 that
+// is every type except request_payload. It applies only while some rule is
+// configured.
+type HeaderlessPolicy string
+
+const (
+	// HeaderlessExport exports such records as they are. It is the default.
+	HeaderlessExport HeaderlessPolicy = "export"
+	// HeaderlessDrop removes such records from the export.
+	HeaderlessDrop HeaderlessPolicy = "drop"
+)
+
 // Config is the ordered rule list. The first matching rule wins. No rules
 // means suppression is off.
 type Config struct {
 	Rules []Rule
+	// Headerless is the policy for records that carry no headers. Empty
+	// means HeaderlessExport.
+	Headerless HeaderlessPolicy
 }
 
 // FromIDs builds the configuration for a list of suppressed NCA ids: one
@@ -66,9 +85,22 @@ func FromIDs(ids []string) Config {
 }
 
 // Validate rejects a rule with an unknown action, no header, a header that
-// is blank or not lower case, or no non-blank value.
+// is blank or not lower case, no non-blank value, or a name another rule
+// already has, and an unknown headerless policy.
 func (c Config) Validate() error {
+	switch c.Headerless {
+	case "", HeaderlessExport, HeaderlessDrop:
+	default:
+		return fmt.Errorf("suppression: unknown headerless policy %q", c.Headerless)
+	}
+	names := make(map[string]bool, len(c.Rules))
 	for i, rule := range c.Rules {
+		if rule.Name != "" {
+			if names[rule.Name] {
+				return fmt.Errorf("suppression rule %d: name %q is used twice", i, rule.Name)
+			}
+			names[rule.Name] = true
+		}
 		switch rule.Action {
 		case StripPayload, DropRecord:
 		default:
@@ -103,6 +135,7 @@ func normalizedSet(values []string) map[string]struct{} {
 }
 
 type compiledRule struct {
+	name    string
 	headers []string
 	values  map[string]struct{}
 	action  Action
@@ -110,7 +143,8 @@ type compiledRule struct {
 
 // Engine applies a validated rule list.
 type Engine struct {
-	rules []compiledRule
+	rules          []compiledRule
+	dropHeaderless bool
 }
 
 // New validates cfg and builds an engine.
@@ -118,9 +152,10 @@ func New(cfg Config) (*Engine, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	engine := &Engine{}
+	engine := &Engine{dropHeaderless: cfg.Headerless == HeaderlessDrop}
 	for _, rule := range cfg.Rules {
 		engine.rules = append(engine.rules, compiledRule{
+			name:    rule.Name,
 			headers: append([]string(nil), rule.Headers...),
 			values:  normalizedSet(rule.Values),
 			action:  rule.Action,
@@ -144,11 +179,20 @@ type Outcome struct {
 	Action Action
 	// ID is the normalized header value that matched.
 	ID string
+	// Rule is the name of the rule that matched.
+	Rule string
+	// Present lists, in rule order, the names of the rules whose header
+	// group had a value on this record, whether or not the value matched.
+	Present []string
+	// Headerless reports that the record carries no headers and the
+	// headerless policy decided Action.
+	Headerless bool
 }
 
 // Apply evaluates record and returns what to export: record itself when no
 // rule matches, the stub for StripPayload, and nil for DropRecord. record is
-// never changed.
+// never changed. Every rule's header group is checked, so Outcome.Present is
+// complete even after an earlier rule matched.
 func (e *Engine) Apply(record *compat.Value) (*compat.Value, Outcome) {
 	var outcome Outcome
 	if len(e.rules) == 0 {
@@ -156,27 +200,44 @@ func (e *Engine) Apply(record *compat.Value) (*compat.Value, Outcome) {
 	}
 	event := EventOf(record)
 	if !CarriesPayload(event) {
+		if e.dropHeaderless {
+			outcome.Action = DropRecord
+			outcome.Headerless = true
+			return nil, outcome
+		}
 		return record, outcome
 	}
 	outcome.Evaluated = true
 	sets := HeaderSets(event)
-	for _, rule := range e.rules {
+	var matched *compiledRule
+	for i := range e.rules {
+		rule := &e.rules[i]
 		id := NormalizeID(ResolveHeader(sets, rule.headers...))
 		if id == "" {
 			continue
 		}
 		outcome.HeaderPresent = true
-		if _, ok := rule.values[id]; !ok {
+		if rule.name != "" {
+			outcome.Present = append(outcome.Present, rule.name)
+		}
+		if matched != nil {
 			continue
 		}
-		outcome.Action = rule.action
-		outcome.ID = id
-		if rule.action == DropRecord {
-			return nil, outcome
+		if _, ok := rule.values[id]; ok {
+			matched = rule
+			outcome.Action = rule.action
+			outcome.ID = id
+			outcome.Rule = rule.name
 		}
-		return stub(record, event, id), outcome
 	}
-	return record, outcome
+	switch {
+	case matched == nil:
+		return record, outcome
+	case matched.action == DropRecord:
+		return nil, outcome
+	default:
+		return stub(record, event, outcome.ID), outcome
+	}
 }
 
 // EventOf returns the event of a record: the "event" member of a wrapped
