@@ -30,6 +30,7 @@ test:
 	@tests/check-llm-pki-issuer.sh
 	@tests/pdb-value-wiring.sh
 	@tests/pod-annotations-wiring.sh
+	@tests/openbao-auto-unseal-wiring.sh
 	@tests/invocation-env-wiring.sh
 	@tests/invocation-tracing-baggage.sh
 	@tests/java-tracing-env-wiring.sh
