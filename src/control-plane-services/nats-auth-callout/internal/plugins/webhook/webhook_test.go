@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -460,13 +461,15 @@ func TestWebhookPluginAuditLog(t *testing.T) {
 }
 
 // TestWebhookPluginAuditLogOmitsURLCredentials checks that a failed request does not
-// write credentials from the configured webhook URL to the audit entry or the error.
+// write credentials from the configured webhook URL or a redirect Location to the
+// audit entry or the error.
 func TestWebhookPluginAuditLogOmitsURLCredentials(t *testing.T) {
-	secrets := []string{"audit-user", "audit-password", "audit-query-secret"}
+	secrets := []string{"audit-user", "audit-password", "audit-query-secret", "redirect-secret"}
 	tests := []struct {
-		name       string
-		handler    http.HandlerFunc
-		wantPrefix string
+		name      string
+		handler   http.HandlerFunc
+		timeout   time.Duration
+		wantError string
 	}{
 		{
 			name: "transport failure",
@@ -476,14 +479,32 @@ func TestWebhookPluginAuditLogOmitsURLCredentials(t *testing.T) {
 					conn.Close()
 				}
 			},
-			wantPrefix: "webhook request failed: Post: ",
+			wantError: "webhook request failed: Post: connection failed",
+		},
+		{
+			name: "timeout",
+			handler: func(_ http.ResponseWriter, r *http.Request) {
+				// Reading the body lets the server notice the client hanging up.
+				_, _ = io.Copy(io.Discard, r.Body)
+				<-r.Context().Done()
+			},
+			timeout:   50 * time.Millisecond,
+			wantError: "webhook request failed: Post: timeout",
+		},
+		{
+			name: "malformed redirect location",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Location", "http://[::1%zz?token="+secrets[3])
+				w.WriteHeader(http.StatusFound)
+			},
+			wantError: "webhook request failed: Post: request error",
 		},
 		{
 			name: "retries exhausted",
 			handler: func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusServiceUnavailable)
 			},
-			wantPrefix: "webhook request failed: retries exhausted",
+			wantError: "webhook request failed: retries exhausted",
 		},
 	}
 
@@ -496,7 +517,11 @@ func TestWebhookPluginAuditLogOmitsURLCredentials(t *testing.T) {
 			webhookURL.User = url.UserPassword(secrets[0], secrets[1])
 			webhookURL.RawQuery = "token=" + secrets[2]
 
-			plugin, err := NewPlugin(Config{URL: webhookURL.String(), Timeout: 5 * time.Second, RetryAttempts: 1}, zaptest.NewLogger(t))
+			timeout := 5 * time.Second
+			if tt.timeout > 0 {
+				timeout = tt.timeout
+			}
+			plugin, err := NewPlugin(Config{URL: webhookURL.String(), Timeout: timeout, RetryAttempts: 1}, zaptest.NewLogger(t))
 			require.NoError(t, err)
 			var out bytes.Buffer
 			plugin.auditLogger = newAuditLogger(zapcore.AddSync(&out))
@@ -504,7 +529,7 @@ func TestWebhookPluginAuditLogOmitsURLCredentials(t *testing.T) {
 			authReq := &types.Request{Account: "test-account", PluginName: "webhook-alias", Payload: "test-token"}
 			_, err = plugin.Authenticate(context.Background(), authReq)
 			require.Error(t, err)
-			assert.True(t, strings.HasPrefix(err.Error(), tt.wantPrefix), "error %q should start with %q", err, tt.wantPrefix)
+			assert.Equal(t, tt.wantError, err.Error())
 
 			var entry map[string]any
 			require.NoError(t, json.Unmarshal(out.Bytes(), &entry))

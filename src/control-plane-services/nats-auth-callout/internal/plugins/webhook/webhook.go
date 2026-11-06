@@ -20,9 +20,12 @@ package webhook
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -198,21 +201,36 @@ func (p *Plugin) callWebhook(ctx context.Context, account, pluginName, payload s
 	return p.parseSuccessResponse(resp)
 }
 
-// describeRequestError describes a failed webhook request without the request URL.
-// The retryable client and net/http both put the URL into their error text, and
-// the configured URL can carry credentials in its userinfo or query string.
+// describeRequestError describes a failed webhook request with a fixed category.
+// The retryable client and net/http put the request URL and upstream values such
+// as a redirect Location into their error text, and the configured URL can carry
+// credentials in its userinfo or query string, so none of that text is kept.
 func describeRequestError(err error) string {
-	var urlErr *url.Error
+	var (
+		urlErr  *url.Error
+		netErr  net.Error
+		opErr   *net.OpError
+		certErr *tls.CertificateVerificationError
+	)
+	var category string
 	switch {
-	case errors.As(err, &urlErr):
-		return urlErr.Op + ": " + urlErr.Err.Error()
 	case errors.Is(err, context.Canceled):
-		return context.Canceled.Error()
-	case errors.Is(err, context.DeadlineExceeded):
-		return context.DeadlineExceeded.Error()
+		category = "canceled"
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		category = "timeout"
+	case errors.As(err, &certErr):
+		category = "certificate verification failed"
+	case errors.As(err, &opErr), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		category = "connection failed"
+	case errors.As(err, &urlErr):
+		category = "request error"
 	default:
 		return "retries exhausted"
 	}
+	if errors.As(err, &urlErr) {
+		return urlErr.Op + ": " + category
+	}
+	return category
 }
 
 // handleErrorResponse handles non-2xx HTTP responses and converts them to appropriate auth errors.
