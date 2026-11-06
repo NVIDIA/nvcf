@@ -763,7 +763,7 @@ class NvcaControllerTest extends IntegrationTest {
                 eq(DUMMY_CLUSTER_ID), eq(validJwks), eq(rotatedIssuer),
                 Mockito.anyString());
         verify(clusterRepository, Mockito.never())
-                .updateClusterInfo(Mockito.any(ClusterEntity.class), Mockito.any(), eq(false));
+                .updateClusterInfo(Mockito.any(ClusterEntity.class));
     }
 
     @Test
@@ -905,7 +905,7 @@ class NvcaControllerTest extends IntegrationTest {
 
         // Regression guard: malformed JWKS must not be persisted anywhere.
         verify(clusterRepository, Mockito.never())
-                .updateClusterInfo(Mockito.any(ClusterEntity.class), Mockito.any(), eq(false));
+                .updateClusterInfo(Mockito.any(ClusterEntity.class));
         verify(clusterOidcIdentityService, Mockito.never()).updateOidcIdentity(
                 Mockito.anyString(), Mockito.anyString(), Mockito.anyString(),
                 Mockito.anyString());

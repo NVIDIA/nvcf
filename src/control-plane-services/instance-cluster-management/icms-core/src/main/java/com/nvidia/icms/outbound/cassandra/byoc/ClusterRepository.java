@@ -16,19 +16,14 @@
  */
 package com.nvidia.icms.outbound.cassandra.byoc;
 
-import static com.nvidia.icms.outbound.cassandra.byoc.NvcaConverter.toClusterGroupsByAuthorizedAccountsEntity;
 import static com.nvidia.icms.service.byoc.nvca.clustermanagement.ClusterCreationService.getClusterIdFromAuthClientId;
 
-import com.nvidia.icms.errors.IcmsConflictException;
 import com.nvidia.icms.errors.IcmsInternalServerException;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupByGroupIdEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAccountEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterHealthEntity;
-import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.scheduled.request.ClusterHealthMonitorTask;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.constraints.NotNull;
@@ -44,7 +39,6 @@ import org.springframework.stereotype.Repository;
 
 @Slf4j
 @Repository
-// TODO: Once we remove BART support, evaluate if this repository can be deprecated and move useful function to NvcaClusterRepository class
 public class ClusterRepository {
 
     public static final String WILDCARD = "WILDCARD";
@@ -53,68 +47,14 @@ public class ClusterRepository {
     public static final String AUTHORIZED_NCA_IDS_WILDCARD = "*";
 
     private final ClusterByIdRepo clusterByIdRepo;
-    private final ClusterGroupsByAuthorizedAccountsRepo clusterGroupsByAuthorizedAccountsRepo;
     private final ClusterHealthRepo clusterHealthRepo;
-    private final ComputePlatformService computePlatformService;
 
     public ClusterRepository(
             ClusterByIdRepo clusterByIdRepo,
-            ClusterGroupsByAuthorizedAccountsRepo clusterGroupsByAuthorizedAccountsRepo,
-            ClusterHealthRepo clusterHealthRepo,
-            ComputePlatformService computePlatformService) {
+            ClusterHealthRepo clusterHealthRepo) {
 
         this.clusterByIdRepo = clusterByIdRepo;
-        this.clusterGroupsByAuthorizedAccountsRepo = clusterGroupsByAuthorizedAccountsRepo;
         this.clusterHealthRepo = clusterHealthRepo;
-        this.computePlatformService = computePlatformService;
-    }
-
-    public void saveClusterInfo(ClusterEntity entity) {
-
-        String errMsg = String.format(
-                "Cannot save cluster with name %s and id %s and group %s and group id %s.",
-                entity.getClusterName(),
-                entity.getClusterId(),
-                entity.getClusterGroupName(),
-                entity.getClusterGroupId());
-
-        boolean groupExists = !clusterByIdRepo.findAllByClusterGroupId(entity.getClusterGroupId())
-                .isEmpty();
-        // TODO: Replace isInserted and its result check with a simple insert command.
-        if (!clusterByIdRepo.isInserted(entity)) {
-            log.error(errMsg);
-            throw new IcmsConflictException(errMsg);
-        }
-
-        // cluster_groups_by_authorized_accounts belongs to the deprecated flow and will be
-        // removed soon. A failed group write can be skipped on retry because the cluster exists;
-        // this is an accepted temporary risk until that flow is removed.
-        if (!groupExists && !insertForAuthorizedAccounts(entity)) {
-            log.error(errMsg);
-            throw new IcmsConflictException(errMsg);
-        }
-    }
-
-    private boolean insertForAuthorizedAccounts(ClusterEntity entity) {
-        Set<String> authorizedNcaIds = entity.getAuthorizedNcaIds();
-        ClusterGroupsByAuthorizedAccountsEntity clusterGroupsByAuthorizedAccountsEntity =
-                toClusterGroupsByAuthorizedAccountsEntity(entity,
-                                                          entity.getNcaId());
-        if (!clusterGroupsByAuthorizedAccountsRepo.isInserted(clusterGroupsByAuthorizedAccountsEntity)) {
-            return false;
-        }
-        for (String ncaId : authorizedNcaIds) {
-            if (ncaId.equals("*")) {
-                clusterGroupsByAuthorizedAccountsEntity.getKey().setNcaIdKey(WILDCARD);
-            } else {
-                clusterGroupsByAuthorizedAccountsEntity.getKey().setNcaIdKey(ncaId);
-            }
-            if (!clusterGroupsByAuthorizedAccountsRepo.isInserted(
-                    clusterGroupsByAuthorizedAccountsEntity)) {
-                return false;
-            }
-        }
-        return true;
     }
 
     /**
@@ -153,12 +93,6 @@ public class ClusterRepository {
                 .map(NvcaConverter::toClusterGroupsByAccountsEntity);
     }
 
-
-    public List<ClusterGroupsByAuthorizedAccountsEntity> getAllClusterGroupsInAuthorizedAccount(
-            String ncaId) {
-
-        return clusterGroupsByAuthorizedAccountsRepo.findAllByKeyNcaIdKey(ncaId);
-    }
 
     public Optional<ClusterGroupByGroupIdEntity> getClusterGroupInfoByClusterGroupId(
             String clusterGroupId) {
@@ -199,17 +133,9 @@ public class ClusterRepository {
         return List.copyOf(clustersById.values());
     }
 
-    public void updateClusterInfo(
-            ClusterEntity entity, Set<String> oldAuthorizedNcaId,
-            boolean isAuthorizedNcaIdUpdated) {
+    public void updateClusterInfo(ClusterEntity entity) {
         try {
             clusterByIdRepo.update(entity);
-
-            // Preserve the original comparison against the compute-platform provider name.
-            if (computePlatformService.isComputePlatformBackend(entity.getClusterGroupName()) ||
-                    isAuthorizedNcaIdUpdated) {
-                updateForAuthorizedAccounts(entity, oldAuthorizedNcaId);
-            }
         } catch (Exception e) {
             String errMsg = String.format(
                     "Cannot update cluster with name %s and id %s and group %s and group id %s.",
@@ -222,86 +148,12 @@ public class ClusterRepository {
         }
     }
 
-    private void updateForAuthorizedAccounts(ClusterEntity entity, Set<String> oldAuthorizedNcaId) {
-
-        // Deleting older authorized entries
-        if (!oldAuthorizedNcaId.isEmpty()) {
-            deleteForAuthorizedAccounts(entity.getNcaId(), oldAuthorizedNcaId,
-                                        entity.getClusterGroupName(), entity.getClusterGroupId());
-        }
-
-        // Adding updated authorized NCA-ID
-        Set<String> authorizedNcaIds = entity.getAuthorizedNcaIds();
-        ClusterGroupsByAuthorizedAccountsEntity clusterGroupsByAuthorizedAccountsEntity =
-                toClusterGroupsByAuthorizedAccountsEntity(entity,
-                                                          entity.getNcaId());
-        clusterGroupsByAuthorizedAccountsEntity.getKey().setNcaIdKey(
-                clusterGroupsByAuthorizedAccountsEntity.getNcaId());
-        clusterGroupsByAuthorizedAccountsRepo.update(clusterGroupsByAuthorizedAccountsEntity);
-        for (String ncaId : authorizedNcaIds) {
-            if (ncaId.equals("*")) {
-                clusterGroupsByAuthorizedAccountsEntity.getKey().setNcaIdKey(WILDCARD);
-            } else {
-                clusterGroupsByAuthorizedAccountsEntity.getKey().setNcaIdKey(ncaId);
-            }
-            clusterGroupsByAuthorizedAccountsRepo.update(clusterGroupsByAuthorizedAccountsEntity);
-        }
-    }
-
-
-    public void deleteClusterInfo(ClusterEntity entity) {
-        try {
-            clusterByIdRepo.deleteById(entity.getClusterId());
-
-            // if this is the last cluster in the cluster group then remove the group references as well
-            if (getAllClustersInAGroup(entity.getClusterGroupId()).isEmpty()) {
-                deleteForAuthorizedAccounts(entity.getNcaId(), entity.getAuthorizedNcaIds(),
-                                            entity.getClusterGroupName(),
-                                            entity.getClusterGroupId());
-            }
-        } catch (Exception e) {
-            String errMsg = String.format(
-                    "Cannot remove references of cluster with name %s and id %s and group %s and group id %s.",
-                    entity.getClusterName(),
-                    entity.getClusterId(),
-                    entity.getClusterGroupName(),
-                    entity.getClusterGroupId());
-            log.error(errMsg);
-            throw new IcmsInternalServerException(errMsg);
-        }
-    }
-
     public List<ClusterByGroupIdAndIdEntity> getClustersFromClusterGroup(String clusterGroupId) {
 
         return clusterByIdRepo.findAllByClusterGroupId(clusterGroupId).stream()
                 .map(NvcaConverter::toClusterByGroupIdAndIdEntity)
                 .collect(Collectors.toList());
 
-    }
-
-    private void deleteForAuthorizedAccounts(
-            String ncaId, Set<String> authorizedNcaIds,
-            String groupName, String groupId) {
-        clusterGroupsByAuthorizedAccountsRepo.deleteById(ClusterGroupsByAuthorizedAccountsKey.builder()
-                        .ncaIdKey(ncaId)
-                        .clusterGroupName(groupName)
-                        .clusterGroupId(groupId)
-                        .build());
-        for (String authorizedNcaId : authorizedNcaIds) {
-            if (authorizedNcaId.equals("*")) {
-                clusterGroupsByAuthorizedAccountsRepo.deleteById(ClusterGroupsByAuthorizedAccountsKey.builder()
-                                                                         .ncaIdKey(WILDCARD)
-                                                                         .clusterGroupName(groupName)
-                                                                         .clusterGroupId(groupId)
-                                                                         .build());
-            } else {
-                clusterGroupsByAuthorizedAccountsRepo.deleteById(ClusterGroupsByAuthorizedAccountsKey.builder()
-                                                                         .ncaIdKey(authorizedNcaId)
-                                                                         .clusterGroupName(groupName)
-                                                                         .clusterGroupId(groupId)
-                                                                         .build());
-            }
-        }
     }
 
     /**

@@ -54,53 +54,6 @@ public class ClusterByIdReadsIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void bartSaveAndUpdate_doNotWriteUnusedTables() {
-        ClusterEntity entity = getDummyClusterEntity();
-        entity.setClusterId(UUID.randomUUID().toString());
-        entity.setClusterName("name-" + entity.getClusterId());
-        entity.setClusterGroupId("group-id-" + entity.getClusterId());
-        entity.setClusterGroupName("group-" + entity.getClusterId());
-        entity.setNcaId("owner-bart-unused-tables");
-        entity.setAuthorizedNcaIds(Set.of("auth-bart-unused-tables"));
-
-        clusterRepository.saveClusterInfo(entity);
-        entity.setClusterStatus(ClusterStatusEnum.READY);
-        clusterRepository.updateClusterInfo(entity, Set.of(), false);
-
-        assertNoUnusedRows(entity);
-        Assertions.assertEquals(1, clusterRepository.getAllClusterGroupsInAuthorizedAccount(
-                "auth-bart-unused-tables").size());
-    }
-
-    @Test
-    void bartSaveInExistingGroup_doesNotRecreateAuthorizedGroup() {
-        ClusterEntity first = getDummyClusterEntity();
-        first.setClusterId(UUID.randomUUID().toString());
-        first.setClusterGroupId("group-id-" + first.getClusterId());
-        first.setClusterGroupName("group-" + first.getClusterId());
-        first.setClusterName("name-" + first.getClusterId());
-        first.setNcaId("owner-first");
-        first.setAuthorizedNcaIds(Set.of("auth-first"));
-        clusterRepository.saveClusterInfo(first);
-
-        ClusterEntity second = getDummyClusterEntity();
-        second.setClusterId(UUID.randomUUID().toString());
-        second.setClusterName("name-" + second.getClusterId());
-        second.setClusterGroupId(first.getClusterGroupId());
-        second.setClusterGroupName(first.getClusterGroupName());
-        second.setNcaId("owner-second");
-        second.setAuthorizedNcaIds(Set.of("auth-second"));
-        clusterRepository.saveClusterInfo(second);
-
-        Assertions.assertEquals(1, clusterRepository.getAllClusterGroupsInAuthorizedAccount(
-                "auth-first").size());
-        Assertions.assertTrue(clusterRepository.getAllClusterGroupsInAuthorizedAccount(
-                "auth-second").isEmpty());
-        Assertions.assertEquals(2, clusterRepository.getAllClustersInAGroup(
-                first.getClusterGroupId()).size());
-    }
-
-    @Test
     void getAllClustersInAuthorizedAccount_preservesLegacyPartitionSemantics() {
         // Prepare
         ClusterEntity owned = saveCluster("owner-a", Set.of("auth-a"));
@@ -202,8 +155,6 @@ public class ClusterByIdReadsIntegrationTest extends IntegrationTest {
         Assertions.assertTrue(clusterRepository.getAllClustersInAnAccount("missing-nca").isEmpty());
         Assertions.assertTrue(
                 clusterRepository.getClustersFromClusterGroup("missing-group").isEmpty());
-        Assertions.assertTrue(clusterRepository.getAllClusterGroupsInAuthorizedAccount(
-                "missing-nca").isEmpty());
         Assertions.assertTrue(nvcaClusterRepository.getAllClustersInAuthorizedAccount(
                 "missing-nca").isEmpty());
     }
