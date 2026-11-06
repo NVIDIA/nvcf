@@ -259,9 +259,16 @@ Use [Consume an NVCF release](umbrella-releases.md) for the selected stack
 packages or an umbrella archive. That guide owns the download commands and
 sibling directory layout. Continue here when charts or images need a mirror.
 
+That guide runs in its own Bash child shell and can change the working
+directory. Run `exit` to return to this shell before pushing a chart, so
+`CHART_NAME`, `CHART_ARCHIVE` and the downloaded archive remain available.
+Record `BUNDLE_DIR` first if you need it for deployment.
+
 ### Downloading `nvcf-cli`
 
 The `nvcf-cli` is a command-line interface for managing NVIDIA Cloud Functions in self-hosted deployments.
+Install and configure the [NGC CLI](https://org.ngc.nvidia.com/setup/installers/cli)
+with your Personal API key before downloading it.
 
 <Warning>
 Use the CLI version shown in the artifact manifest for this stack release.
