@@ -230,8 +230,14 @@ func podRank(pod *corev1.Pod, ordinalKey, sizeKey string) (ordinal, size int, ok
 
 // instanceRanks returns the pods of leader's instance that pass keep, in
 // rank order, or an error naming the first rank missing.
+//
+// The leader's rank is the leader itself. The replicas of a Deployment
+// share its ReplicaSet as their controller and are each the one rank of
+// an instance of one, so by controller and ordinal alone any replica
+// would fill it, and a capture decided on one would dump another.
 func instanceRanks(pods []corev1.Pod, leader *corev1.Pod, size int, ordinalKey, sizeKey string, keep func(*corev1.Pod) bool) ([]*corev1.Pod, error) {
 	ranks := make([]*corev1.Pod, size)
+	leaderRank, _, leaderRanked := podRank(leader, ordinalKey, sizeKey)
 	for i := range pods {
 		p := &pods[i]
 		if p.DeletionTimestamp != nil || !groupMember(leader, p) || !keep(p) {
@@ -239,6 +245,9 @@ func instanceRanks(pods []corev1.Pod, leader *corev1.Pod, size int, ordinalKey, 
 		}
 		o, s, ok := podRank(p, ordinalKey, sizeKey)
 		if !ok || s != size || ranks[o] != nil {
+			continue
+		}
+		if leaderRanked && o == leaderRank && p.UID != leader.UID {
 			continue
 		}
 		ranks[o] = p
