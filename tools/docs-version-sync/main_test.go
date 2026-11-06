@@ -578,8 +578,16 @@ func TestCatalogRefreshPreservesReleaseSelectionRenderer(t *testing.T) {
 }
 
 func TestBundledChartDistribution(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	for _, base := range []string{"https://github.com/NVIDIA/nvcf/tree", resolvedInventoryRepository} {
+		t.Run(base, func(t *testing.T) {
+			testBundledChartDistribution(t, base+"/"+sha+"/deploy/stacks/self-managed/charts", sha)
+		})
+	}
+}
+
+func testBundledChartDistribution(t *testing.T, repository, sha string) {
 	catalog := testCatalog()
-	repository := "https://github.com/NVIDIA/nvcf/tree/" + strings.Repeat("a", 40) + "/deploy/stacks/self-managed/charts"
 	artifact := Artifact{Name: "receipt", Type: ArtifactTypeChart, Version: "0.1.0",
 		UpstreamRepository: publicUpstreamRepository(repository, ArtifactTypeChart)}
 	if artifact.UpstreamRepository != repository {
@@ -597,7 +605,7 @@ func TestBundledChartDistribution(t *testing.T) {
 	if _, err := catalog.chartPullReference(artifact); err == nil {
 		t.Fatal("bundled source must not render a Helm repository pull")
 	}
-	if got := publicUpstreamRepository(strings.Replace(repository, strings.Repeat("a", 40), "main", 1), ArtifactTypeChart); got != "" {
+	if got := publicUpstreamRepository(strings.Replace(repository, sha, "main", 1), ArtifactTypeChart); got != "" {
 		t.Fatalf("mutable source accepted as a bundled chart: %s", got)
 	}
 }

@@ -2,7 +2,7 @@
 
 Changes, fixes, and upgrade procedures for NVCF releases. From 1.0.0 onward each
 Helm stack releases independently; the [compatibility matrix](../compatibility-matrix.md)
-lists the stack releases that are qualified to run together.
+lists the stack releases selected for this docs edition.
 
 ## Current
 

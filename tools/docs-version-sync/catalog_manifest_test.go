@@ -68,7 +68,7 @@ func TestManifestCatalogRejectsChangedInventoryAndSourceTag(t *testing.T) {
 				editionGit(t, repo, "tag", "-f", stack.SourceTag)
 			}
 			_, err := updateCatalogFromManifest(repo, path, directory, testCatalog())
-			if err == nil || !(strings.Contains(err.Error(), "checksum mismatch") || strings.Contains(err.Error(), "source tag does not resolve")) {
+			if err == nil || (!strings.Contains(err.Error(), "checksum mismatch") && !strings.Contains(err.Error(), "source tag does not resolve")) {
 				t.Fatalf("changed immutable input accepted: %v", err)
 			}
 		})

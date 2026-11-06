@@ -595,7 +595,7 @@ func publicUpstreamRepository(repository string, artifactType ArtifactType) stri
 	return repository
 }
 
-var bundledChartRepositoryPattern = regexp.MustCompile(`^https://github\.com/NVIDIA/nvcf/tree/[0-9a-f]{40}/deploy/(stacks|helm)/[A-Za-z0-9_./-]+$`)
+var bundledChartRepositoryPattern = regexp.MustCompile(`^https://github\.com/(NVIDIA|dsx-ai-factory)/nvcf/tree/[0-9a-f]{40}/deploy/(stacks|helm)/[A-Za-z0-9_./-]+$`)
 
 func isBundledChartRepository(repository string) bool {
 	return bundledChartRepositoryPattern.MatchString(repository) && !strings.Contains(repository, "/../")
