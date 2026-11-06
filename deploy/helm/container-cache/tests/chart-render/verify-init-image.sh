@@ -31,16 +31,23 @@ assert_has() {
   fi
 }
 
-assert_not_has() {
-  if grep -F -q -- "$1" "${OUT_FILE}"; then
-    echo "FAILED: unexpected pattern found: $1" >&2
+# assert_no_default_registry rejects registry defaults after image overrides.
+assert_no_default_registry() {
+  if grep -Eq "^[[:space:]]*image:[[:space:]]*['\"]?(nvcr\\.io|docker\\.io)/" "${OUT_FILE}"; then
+    echo "FAILED: an image override retained a default registry" >&2
     exit 1
   fi
 }
 
-echo "Checking no image is hard-coded to a public registry org..."
-helm template c ./deploy > "${OUT_FILE}"
-assert_not_has 'nvcr.io/nvidia/'
+echo "Checking ordinary image overrides replace every default registry..."
+helm template c ./deploy \
+  --set images.server=reg.example/org/cache:9 \
+  --set images.exporter=reg.example/org/exporter:9 \
+  --set images.certificates=reg.example/org/certs:9 \
+  --set monitoring.enabled=true > "${OUT_FILE}"
+assert_no_default_registry
+assert_has 'image: "reg.example/org/cache:9"'
+assert_has 'image: "reg.example/org/exporter:9"'
 
 echo "Checking the init container defaults to the certificates image..."
 helm template c ./deploy --set images.certificates=reg.example/org/certs:9 > "${OUT_FILE}"

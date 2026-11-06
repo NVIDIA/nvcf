@@ -49,3 +49,10 @@ lua-resty-http
   License: BSD-2-Clause
   URL:     https://github.com/ledgetech/lua-resty-http
   Used by: deploy/files/lua/lua-access.lua (resty.http)
+
+------------------------------------------------------------------------
+NGINX Prometheus Exporter 1.5.3
+------------------------------------------------------------------------
+  License: Apache-2.0
+  URL:     https://github.com/nginx/nginx-prometheus-exporter
+  Used by: Optional container-cache monitoring sidecar.
