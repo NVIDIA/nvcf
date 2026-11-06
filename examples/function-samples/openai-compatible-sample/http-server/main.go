@@ -64,6 +64,8 @@ const (
 	headerStreamTruncateAfter = "X-Load-Tester-Stream-Truncate-After-Chunks"
 	headerMaxConcurrency      = "X-Load-Tester-Max-Concurrency"
 	headerEcho                = "X-Load-Tester-Echo"
+	headerSSELineEnding       = "X-Load-Tester-SSE-Line-Ending"
+	headerSSESplitBytes       = "X-Load-Tester-SSE-Split-Bytes"
 
 	bodyQueueDelay          = "x_load_tester_queue_delay_ms"
 	bodyTTFT                = "x_load_tester_ttft_ms"
@@ -78,6 +80,8 @@ const (
 	bodyStreamTruncateAfter = "x_load_tester_stream_truncate_after_chunks"
 	bodyMaxConcurrency      = "x_load_tester_max_concurrency"
 	bodyEcho                = "x_load_tester_echo"
+	bodySSELineEnding       = "x_load_tester_sse_line_ending"
+	bodySSESplitBytes       = "x_load_tester_sse_split_bytes"
 
 	loadTesterHeaderPrefix = "x-load-tester-"
 )
@@ -102,6 +106,9 @@ type benchmarkTuning struct {
 	StreamErrorAfter    int
 	StreamTruncateAfter int
 	MaxConcurrency      int
+	// SSELineEnding and SSESplitBytes change how the Messages stream is written (see sse_format.go).
+	SSELineEnding string
+	SSESplitBytes int
 }
 
 type serverConfig struct {
@@ -130,6 +137,8 @@ type benchmarkBodyControls struct {
 	StreamTruncateAfter json.RawMessage `json:"x_load_tester_stream_truncate_after_chunks"`
 	MaxConcurrency      json.RawMessage `json:"x_load_tester_max_concurrency"`
 	Echo                json.RawMessage `json:"x_load_tester_echo"`
+	SSELineEnding       json.RawMessage `json:"x_load_tester_sse_line_ending"`
+	SSESplitBytes       json.RawMessage `json:"x_load_tester_sse_split_bytes"`
 
 	// requestBody is the raw body for routes that support the echo control.
 	requestBody []byte
@@ -713,6 +722,20 @@ func resolveBenchmarkTuning(r *http.Request, body benchmarkBodyControls, config 
 		return benchmarkTuning{}, fmt.Errorf("%s and %s cannot be combined", streamErrorName, streamTruncateName)
 	}
 	if tuning.MaxConcurrency, _, _, err = integerControl(r, headerMaxConcurrency, bodyMaxConcurrency, body.MaxConcurrency, 0, 0, maxConcurrencyLimit); err != nil {
+		return benchmarkTuning{}, err
+	}
+
+	lineEnding, hasLineEnding, lineEndingName, err := textControl(r, headerSSELineEnding, bodySSELineEnding, body.SSELineEnding)
+	if err != nil {
+		return benchmarkTuning{}, err
+	}
+	if hasLineEnding {
+		if !validSSELineEnding(lineEnding) {
+			return benchmarkTuning{}, fmt.Errorf("%s must be lf, crlf or cr", lineEndingName)
+		}
+		tuning.SSELineEnding = lineEnding
+	}
+	if tuning.SSESplitBytes, _, _, err = integerControl(r, headerSSESplitBytes, bodySSESplitBytes, body.SSESplitBytes, 0, 0, maxOutputBytes); err != nil {
 		return benchmarkTuning{}, err
 	}
 
