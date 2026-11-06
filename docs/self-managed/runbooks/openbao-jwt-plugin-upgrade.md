@@ -126,7 +126,29 @@ The driver also runs outside Kubernetes or Helm using an authenticated `bao`:
 set `JWT_VERSIONS_FILE` to the image's version manifest and `JWT_PLUGIN_DIR` to
 its extracted plugin directory. It does not register plugins or restart servers.
 
+## Defer Existing Mount Migration
+
+Use this option only when the selected release's upgrade guide supports it.
+The [NVCF 1.0.4 procedure](../../overview/release-notes/1.0.2-to-1.0.4-upgrade.md)
+installs the bridge on every server and verifies existing mount identities,
+versions, hashes and consumers without tuning or reloading plugins.
+
+After those checks, [enable migrations](#enable-migrations) in `versioned`
+mode. Existing mounts retain their selection; new mounts use the target
+plugin. Keep both binaries and the original catalog entries. Existing mounts
+do not receive the target plugin's fixes until a separate maintenance window
+completes the migration below. Do not leave the final stack in `bridge` mode;
+that suppresses migrations.
+
+The all-member active checks below apply when changing existing mount
+selections. They remain a qualification requirement for that separate
+procedure; installing both binaries alone does not complete it.
+
 ## Pin, Rotate, Then Upgrade
+
+When returning from the deferred path, repeat preflight and start here.
+Retain `versioned` mode and the bridge images; do not repeat the bridge-mode
+apply or remove either binary.
 
 After each tune below, rotate all members to load the configured plugin
 version. A local reload and a status check on the active member do not prove
@@ -148,6 +170,11 @@ cluster health after each transfer. Stop if a transfer or check fails, or if
 leadership cannot be transferred to an unchecked member. Do not proceed based
 on a status response forwarded from a standby.
 
+OpenBao 2.6.3 step-down has no target selector and can alternate between the
+same two members. If this prevents the all-member check, stop at this gate;
+see [the supported-transfer follow-up](https://github.com/dsx-ai-factory/nvcf/issues/3241).
+Do not change Raft membership or skip a member to continue.
+
 ```bash
 bao_admin jwt-plugin-lifecycle pin-old
 ```
@@ -168,7 +195,11 @@ Rotate and check every member again, using
 configured metadata; rotation switches the running backend. If a check fails,
 stop and inspect `status`. Preserve existing keys, roles, and policies.
 
-After every member runs the bridge and verification passes, change
+## Enable Migrations
+
+Use this step after the selected guide's deferred-migration checks, or after
+the full plugin migration above. Once every member runs the bridge and its
+applicable checks pass, change
 `openbao.jwtPluginLifecycle.mode` to `versioned` in the persistent release
 values and stack environment. Apply with hooks enabled:
 
@@ -196,6 +227,9 @@ catalog against the candidate binary. Migrations can then create their first
 mount. Manual `verify`, tuning, and cleanup still reject empty inventories.
 
 ## Rollback During the Window
+
+Use this section only to reverse a plugin-selection change. A server upgrade
+that retained existing mount selections does not need plugin rollback.
 
 Keep both versioned binaries and their declarative config throughout the
 rollback window. Pause migrations and new mount creation during rollback.
@@ -252,9 +286,10 @@ policy; rollback to the retired plugin ends after cleanup.
 ```mermaid
 flowchart LR
   A[Unversioned mounts] --> B[Bridge with original and versioned commands]
-  B --> C[Pin old and rotate members]
+  B --> H[Enable migrations and retain existing selections]
+  H --> C[Separate window: pin old and rotate members]
   C --> D[Tune target and rotate members]
-  D --> E[Validate and retain rollback window]
+  D --> E[Validate all mounts and retain rollback window]
   E --> F[Later target-only image]
   F --> G[Verify then remove old catalog entries]
   D --> C

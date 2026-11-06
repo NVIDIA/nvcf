@@ -99,8 +99,11 @@ NVIDIA Cloud Functions glyphs inside green icon boxes must stay white in both mo
 
 Before finishing SVG changes, render light and dark previews for every changed SVG and compare them together for consistent background tone, panel contrast, connector contrast, text readability, and accent brightness.
 
-Use `--update-catalog` only when synchronizing artifact versions and registry
-paths from the latest stable releases of all three stacks. Presentation-only changes to
+Use `--update-catalog` to synchronize artifact versions and registry paths.
+It selects the latest stable releases of all three stacks by default. For an
+assembled umbrella candidate, pass `--release-manifest` and `--inventories`
+together to preserve its exact selection; see the maintainer workflow above.
+This does not qualify or publish the candidate. Presentation-only changes to
 `manifest.entries` use the regeneration command above.
 
 To synchronize the development catalog and generated blocks from the latest
