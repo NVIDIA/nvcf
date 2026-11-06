@@ -196,7 +196,7 @@ api:
     configData:
       nvcf:
         sidecars:
-          ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.4
+          ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.5
 
 # NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
@@ -208,7 +208,7 @@ nvctApi:
     configData:
       nvct:
         sidecars:
-          ess-agent-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.4.4
+          ess-agent-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.4.5
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog. The API chart defaults to
