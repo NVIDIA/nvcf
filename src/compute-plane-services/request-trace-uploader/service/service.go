@@ -126,7 +126,7 @@ func (s *Service) submit(ctx context.Context, item segment.Segment) error {
 		"segment", item.Index,
 		"bytes", item.Size,
 		"status", status)
-	if status != backend.StatusSuccess || !s.backend.Capabilities().Exports {
+	if status != backend.StatusSucceeded || !s.backend.Capabilities().Exports {
 		return nil
 	}
 	if err := os.Remove(item.Path); err != nil {
