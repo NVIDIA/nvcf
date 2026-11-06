@@ -518,7 +518,7 @@ manifest:
       kind: service-image
       requirement: required
       description: Runs account bootstrap and upgrade receipt jobs; check client/server version compatibility.
-      github_url: https://github.com/alpine-docker/k8s
+      upstream_url: https://github.com/alpine-docker/k8s
     - artifact_id: cert-manager-acmesolver
       plane: control
       kind: service-image
@@ -644,6 +644,7 @@ manifest:
       kind: service-image
       requirement: required
       description: Integrates Kubernetes workloads with OpenBao secrets.
+      upstream_url: https://github.com/hashicorp/vault-k8s
     - artifact_id: reval-server
       plane: control
       kind: service-image

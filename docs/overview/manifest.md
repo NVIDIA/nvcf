@@ -42,9 +42,8 @@ The generated image tables below record the selected tags. The `k8s` image
 provides a CLI toolbox used by two independently configured hooks. It is not a
 Kubernetes server image. Retain the selected helper versions when mirroring.
 
-The NATS box also uses Docker Hub by default. Other enabled stacks and optional
-components use upstream registries; inspect every image in the render and
-generated inventory, not just this helper table.
+Other enabled stacks and optional components use upstream registries; inspect
+every image in the render and generated inventory, not just this helper table.
 
 Verify access from cluster nodes. If Docker Hub requires authentication, add
 its pull secret to `global.imagePullSecrets`. The receipt stage forwards this
@@ -91,9 +90,11 @@ upgradeReceipt:
     tag: "1.37.0"
 ```
 
-### Use upstream NATS images
+### Run the upstream NATS images as non-root
 
-To use upstream images, merge these values into
+The stack pulls the upstream NATS server, reloader and box images from Docker
+Hub by default. To run them as non-root and pin the box image by digest, merge
+these values into
 `deploy/stacks/self-managed/environments/<environment>.yaml`. Helmfile passes
 these settings to the selected NATS chart; no chart or release-definition
 changes are needed. This example uses NATS server 2.14.9, reloader 0.25.0, and
@@ -239,8 +240,9 @@ cassandra:
 
 Every `registry`, `repository`, and `tag` key is optional. Any key you leave
 unset keeps its default: for Cassandra, `registry` and `repository` fall back
-to `global.image.registry` and `global.image.repository`; for the reloader and
-account-bootstrap images they fall back to the Docker Hub coordinates above.
+to `global.image.registry` and `global.image.repository`; for the NATS server,
+reloader, NATS box, account-bootstrap and upgrade receipt images they fall back
+to the Docker Hub coordinates above.
 `tag` falls back to the version the stack pins, or to the chart's own default
 when the stack pins none.
 
@@ -340,7 +342,7 @@ The following tables list the complete artifact inventory.
 | `cert-manager-webhook` | `v1.20.5` | `self-managed` | Required | Validates and converts cert-manager API resources. | `quay.io/jetstack/cert-manager-webhook:v1.20.5` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `ess-agent` | `1.4.4` | `self-managed` | Required | Injects encrypted application secrets into function workloads. | `nvcr.io/nvidia/nvcf/ess-agent:1.4.4` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/ess-agent) |
 | `icms-service-oss` | `0.7.7` | `self-managed` | Required | Manages instance and cluster lifecycle operations. | `nvcr.io/nvidia/nvcf/icms-service-oss:0.7.7` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/instance-cluster-management) |
-| `k8s` | `1.37.0` | `self-managed` | Required | Runs account bootstrap and upgrade receipt jobs; check client/server version compatibility. | `docker.io/alpine/k8s:1.37.0` | [GitHub](https://github.com/alpine-docker/k8s) |
+| `k8s` | `1.37.0` | `self-managed` | Required | Runs account bootstrap and upgrade receipt jobs; check client/server version compatibility. | `docker.io/alpine/k8s:1.37.0` | [Upstream](https://github.com/alpine-docker/k8s) |
 | `llm-api-gateway` | `0.14.11` | `self-managed` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `nvcr.io/nvidia/nvcf/llm-api-gateway:0.14.11` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
 | `nats-box` | `0.20.1-nonroot` | `self-managed` | Required | Provides NATS administration and diagnostic utilities. | `docker.io/natsio/nats-box:0.20.1-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
 | `nats-server` | `2.14.9-alpine3.22` | `self-managed` | Required | Provides messaging for function deployment and invocation. | `docker.io/synadia/nats-server:2.14.9-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
@@ -365,7 +367,7 @@ The following tables list the complete artifact inventory.
 | `nvcf-worker-utils-oss` | `1.2.6` | `self-managed` | Required | Proxies NATS traffic between function containers and the control plane. | `nvcr.io/nvidia/nvcf/nvcf-worker-utils-oss:1.2.6` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-utils) |
 | `nvcf_worker_niclls` | `2.118.2` | `self-managed` | Required | Runs Low Latency Streaming workers. | `nvcr.io/nvidia/nvcf/nvcf_worker_niclls:2.118.2` |  |
 | `nvct-service-oss` | `1.66.2` | `self-managed` | Required | Provides tenant-scoped NVCF control-plane operations. | `nvcr.io/nvidia/nvcf/nvct-service-oss:1.66.2` |  |
-| `oss-vault-k8s` | `1.7.4` | `self-managed` | Required | Integrates Kubernetes workloads with OpenBao secrets. | `nvcr.io/nvidia/nvcf/oss-vault-k8s:1.7.4` |  |
+| `oss-vault-k8s` | `1.7.4` | `self-managed` | Required | Integrates Kubernetes workloads with OpenBao secrets. | `nvcr.io/nvidia/nvcf/oss-vault-k8s:1.7.4` | [Upstream](https://github.com/hashicorp/vault-k8s) |
 | `pylon` | `0.18.3` | `self-managed` | Optional | Connects LLM worker pods to the LLM request router. | `nvcr.io/nvidia/nvcf/pylon:0.18.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
 | `reval-server` | `0.20.3` | `self-managed` | Required | Revalidates function state in the background. | `nvcr.io/nvidia/nvcf/reval-server:0.20.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/helm-reval) |
 | `stargate` | `0.18.3` | `self-managed` | Optional | Routes LLM requests to eligible worker instances. | `nvcr.io/nvidia/nvcf/stargate:0.18.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
