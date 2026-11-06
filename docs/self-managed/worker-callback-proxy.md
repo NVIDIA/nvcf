@@ -78,8 +78,10 @@ forwards each one to the pod that holds the request.
    address. Workers resolve every `<dashed-pod-ip>.<workerDomain>` name, not
    only the base name.
 
-   A single cluster does not need this step, because workers there call the
-   pods directly and the proxy is off.
+   A single cluster does not need the proxy or this step, because workers there
+   call the pods directly. Leave `workerCallbackProxy.enabled` false. If you
+   enable the proxy anyway, for example to test it, the stack advertises proxy
+   addresses, so the names must resolve or callbacks fail.
 
    On a local k3d setup with separate control-plane and compute clusters, run
    `make -C tools/ncp-local-cluster configure-worker-callback-dns WORKER_CALLBACK_DOMAIN=grpc-worker.example.com`.
