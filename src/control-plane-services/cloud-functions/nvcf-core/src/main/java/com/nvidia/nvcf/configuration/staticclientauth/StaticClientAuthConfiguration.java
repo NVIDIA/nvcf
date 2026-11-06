@@ -86,14 +86,4 @@ public class StaticClientAuthConfiguration {
 
         private String token;
     }
-
-    @Data
-    @RefreshScope
-    @Configuration
-    @ConditionalOnProperty("nvcf.service-account.static.token")
-    @ConfigurationProperties("nvcf.service-account.static")
-    public static class StaticClientServiceAccountProperties {
-
-        private String token;
-    }
 }
