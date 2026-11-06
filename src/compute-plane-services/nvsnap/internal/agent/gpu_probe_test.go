@@ -11,11 +11,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -435,5 +437,50 @@ func TestConsiderGPUShareFailure_FaultyGPU(t *testing.T) {
 		if kept := err == nil; kept != faulty {
 			t.Errorf("probe %q: pod kept %v", verdict, kept)
 		}
+	}
+}
+
+// With a GPU Operator driver container the driver's device nodes are under
+// its driver root, not in the agent's /dev: the agent makes the ones it
+// lacks, with their device numbers, and leaves its own alone.
+func TestLinkGPUDevices(t *testing.T) {
+	empty, root, dev := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, n := range []string{"nvidiactl", "nvidia-uvm", "nvidia0"} {
+		if err := os.Symlink("/dev/null", filepath.Join(root, n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "nvidia-notadevice"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/null", filepath.Join(root, "sda")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dev, "nvidia0"), nil, 0o600); err != nil { // already there
+		t.Fatal(err)
+	}
+	var null unix.Stat_t
+	if err := unix.Stat("/dev/null", &null); err != nil {
+		t.Fatal(err)
+	}
+	made := map[string]int{}
+	prev := gpuMknod
+	t.Cleanup(func() { gpuMknod = prev })
+	gpuMknod = func(path string, mode uint32, d int) error {
+		if mode&unix.S_IFMT != unix.S_IFCHR {
+			t.Errorf("%s: mode %o is not a character device", path, mode)
+		}
+		made[filepath.Base(path)] = d
+		return nil
+	}
+	linkGPUDevices(dev, []string{empty, root})
+	want := map[string]int{"nvidiactl": int(null.Rdev), "nvidia-uvm": int(null.Rdev)}
+	if !reflect.DeepEqual(made, want) {
+		t.Errorf("made %v, want %v", made, want)
+	}
+	made = map[string]int{}
+	linkGPUDevices(dev, []string{empty})
+	if len(made) != 0 {
+		t.Errorf("made %v from a root without the driver's nodes", made)
 	}
 }
