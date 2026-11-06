@@ -366,6 +366,7 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_by_group_id_and_cluster_id (
 
 -- Full cluster state, keyed by cluster_id for direct lookups.
 CREATE TABLE IF NOT EXISTS sis_api.cluster_by_cluster_id (
+    coderabbit_validation              text,
     cluster_name                       text,
     registration_time                  timestamp,
     cluster_id                         text,
