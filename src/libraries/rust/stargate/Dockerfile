@@ -106,7 +106,7 @@ RUN curl -sSfL -o /usr/local/bin/grpc_health_probe \
 #########################
 ### BASE RUNTIME STAGE ##
 #########################
-FROM nvcr.io/nvidia/distroless/cc:v4.1.6@sha256:1c3f23958b14384dd07e57696954c6722861c3ee5de372fdc2af75a8e4b75313 AS runtime-base
+FROM nvcr.io/nvidia/distroless/cc:v4.1.8@sha256:6578cff0c733f579a3d3dcc9134b7d65fb414dd0b13490d56e2546291222b203 AS runtime-base
 USER 1000:1000
 
 ################################
