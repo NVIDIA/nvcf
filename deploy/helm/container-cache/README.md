@@ -533,11 +533,24 @@ images:
     - nvidia-ngcuser-pull-secret
 ```
 
+Include every required values file and `--set` override from the existing
+installation in both the dry run and upgrade. The example below assumes
+`my-values.yaml` contains the complete override set. Review the current values
+and manifest, then compare them with the rendered upgrade before applying it:
+
 ```bash
+helm get values nvcf-container-cache -n container-caching -o yaml
+helm get manifest nvcf-container-cache -n container-caching
 helm upgrade nvcf-container-cache ./deploy \
   -n container-caching \
-  -f my-values.yaml
+  -f my-values.yaml \
+  --dry-run
 ```
+
+After reviewing the planned resources, run the same upgrade with all required
+values files and overrides, omitting `--dry-run`. If you use `--reuse-values`,
+review and update the image versions explicitly because it retains old chart
+defaults too.
 
 If Docker Hub throttles exporter pulls when monitoring is enabled, provide
 Docker Hub credentials through `images.secrets` or set `images.exporter` to

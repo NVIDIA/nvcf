@@ -31,6 +31,7 @@ assert_has() {
   fi
 }
 
+# assert_no_default_registry rejects registry defaults after image overrides.
 assert_no_default_registry() {
   if grep -Eq "^[[:space:]]*image:[[:space:]]*['\"]?(nvcr\\.io|docker\\.io)/" "${OUT_FILE}"; then
     echo "FAILED: an image override retained a default registry" >&2
