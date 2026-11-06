@@ -298,6 +298,9 @@ releases:
     condition: addons.eventLedger.enabled
     values:
       - ../global.yaml.gotmpl
+    needs:
+      # API Keys must be ready before Event Ledger accepts API key requests.
+      - api-keys/api-keys
     labels:
       release-group: services
 

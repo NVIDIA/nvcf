@@ -3583,6 +3583,9 @@ func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, heade
 	case method == "POST":
 		return harness.HTTPResponse{Status: 403}, nil
 	}
+	if path == "/status" {
+		return harness.HTTPResponse{Status: 200, Body: `{"status":"healthy","auth":{"jwt_jwks":{"status":"available"}}}`}, nil
+	}
 	namespace := strings.Split(path, "/")[4]
 	params, _ := url.ParseQuery(query)
 	switch {

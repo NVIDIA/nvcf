@@ -195,6 +195,12 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/bdd-no-such-namespace/events"
       Then the HTTP status should be 200
 
+      Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
+      When I send a "GET" request to "http://events.localhost:8080/status"
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "status" should equal "healthy"
+      And the HTTP response JSON field "auth.jwt_jwks.status" should equal "available"
+
       # Malformed queries must get a 400 before reaching Cassandra: a half-supplied
       # attribute filter, a disallowed character in a context id, and an unknown stats view.
       Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
