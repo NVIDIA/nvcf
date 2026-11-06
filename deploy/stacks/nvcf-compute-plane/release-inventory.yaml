@@ -14,7 +14,15 @@ states:
     path: deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl
     fullOverrides:
       - global.nvcaOperator.selfManaged.otelCollector.enabled=true
+  - plane: compute-plane
+    path: deploy/stacks/nvcf-compute-plane/inventory/container-cache.yaml.gotmpl
+    fullOverrides:
+      - containerCache.enabled=true
+      - containerCache.monitoring=true
 sourceCharts:
+  nvcf-container-cache:
+    tagPrefix: deploy/helm/container-cache/v
+    path: deploy/helm/container-cache/deploy
   helm-nvca-operator:
     tagPrefix: deploy/helm/nvca-operator/v
     path: deploy/helm/nvca-operator/nvca-operator
