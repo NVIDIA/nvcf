@@ -2,7 +2,9 @@
 
 Self-hosted NVCF installation includes the core components required for NVCF inference. Optional components such as caching and low latency streaming support are also available. Vanity Gateway routing is available only in stack packages that include the Vanity Gateway addon. NVCF UI is available only in stack packages that include the NVCF UI addon.
 
-For a local k3d fresh install, start with the [Quickstart](../overview/quickstart.md). The quickstart uses `nvcf-cli self-hosted up` to install the control plane, register the local k3d cluster, install NVCA, and run basic health checks.
+For an umbrella release, start with [Consume an NVCF release](../overview/umbrella-releases.md). Use the selected bundle and matching docs edition for installation.
+
+For source-based local development on k3d, start with the [Quickstart](../overview/quickstart.md). The quickstart uses `nvcf-cli self-hosted up` to install the control plane, register the local k3d cluster, install NVCA, and run basic health checks.
 
 For a full list of required artifacts, see [self-hosted-artifact-manifest](../overview/manifest.md).
 
@@ -17,7 +19,8 @@ Want to try NVCF locally first? See [Local Development](../dev/local-development
 
 | Path | Use when | Starting point |
 | --- | --- | --- |
-| Local one-click CLI installation | You want the fastest local k3d install and cluster registration path. | [Quickstart](../overview/quickstart.md) |
+| Umbrella release installation | You are deploying or qualifying a selected release combination. | [Consume an NVCF release](../overview/umbrella-releases.md) |
+| Local one-click CLI installation | You are developing from a source checkout on local k3d. | [Quickstart](../overview/quickstart.md) |
 | Helmfile installation | You need manual release control, partial recovery, upgrades, or detailed Helmfile operations. | [Helmfile Installation](./helmfile-installation.md) |
 
 The control plane and GPU cluster can be the same Kubernetes cluster or separate clusters when you use Helmfile or the explicit CLI install primitives. The quickstart supports only a single local k3d cluster. For a complete Amazon EKS example of both topologies, see the [CSP End-to-End Example](./csp-end-to-end-example-installation.md).
@@ -28,27 +31,16 @@ checks. See [Helmfile Installation](./helmfile-installation.md),
 [Self-Managed Clusters](../compute-plane/cluster-management/self-managed.md), and
 [Gateway Routing](./gateway-routing.md).
 
-## Overview
+## Installation order
 
-Every installation path follows the same high-level sequence:
+For a fresh installation, install the control plane and any enabled
+Observability profile, then register each GPU cluster and install the compute
+plane. Existing installations use the
+[upgrade procedure](../overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
 
-1. Clone the [NVCF source repository](https://github.com/nvidia/nvcf) and run
-   repository-based commands from its root directory.
-
-2. Make NVCF artifacts available to your Kubernetes clusters. Pull them
-   directly from NGC when the clusters have NGC access, or follow the
-   [image mirroring instructions](../overview/image-mirroring.md) to copy them to a
-   registry that the clusters can access.
-
-3. Create or select Kubernetes cluster targets. You need a cluster for the control plane and a GPU cluster for function workloads. These can be the same cluster or separate clusters.
-
-4. Install the self-hosted control plane. Use the [Quickstart](../overview/quickstart.md) for a local k3d install or [Helmfile Installation](./helmfile-installation.md) for manual Helmfile operations.
-
-5. Register a GPU cluster and install the NVIDIA Cluster Agent. The local quickstart performs this step for the local k3d cluster. For manual installation paths, see [Self-Managed Clusters](../compute-plane/cluster-management/self-managed.md).
-
-6. Install Low Latency Streaming if needed for streaming workloads. See [LLS Installation](./lls-installation.md).
-
-7. Install optional enhancements, such as caches, low latency streaming, or Vanity Gateway routing, NVCF UI when your stack package includes that addon. See [Simulation Caches](../compute-plane/caches.md), [LLS Installation](./lls-installation.md), [Gateway Routing](./gateway-routing.md), and [NVCF UI](./nvcf-ui.md).
+After the core deployment works, configure the optional features your workload
+needs: [caches](../compute-plane/caches.md), [low latency streaming](./lls-installation.md),
+[Vanity Gateway](./gateway-routing.md) or [NVCF UI](./nvcf-ui.md).
 
 ## Kubernetes Cluster Requirements
 

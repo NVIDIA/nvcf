@@ -39,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -72,6 +73,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -95,6 +97,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.util.ReflectionTestUtils;
 import tools.jackson.databind.json.JsonMapper;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -187,6 +190,48 @@ class FunctionDeploymentReconciliationServiceTest {
 
             assertThat(result).isSameAs(function);
         }
+    }
+
+    @Test
+    void auditsStatusTransitionBeforePublishing() {
+        var statusTransitionService = Mockito.mock(FunctionStatusTransitionService.class);
+        var lookupService = Mockito.mock(FunctionLookupService.class);
+        var auditService = Mockito.mock(FunctionAuditService.class);
+        var deploymentServiceUnderTest = Mockito.mock(
+                FunctionDeploymentService.class, Mockito.CALLS_REAL_METHODS);
+        ReflectionTestUtils.setField(deploymentServiceUnderTest, "functionLookupService",
+                                     lookupService);
+        ReflectionTestUtils.setField(deploymentServiceUnderTest, "functionStatusTransitionService",
+                                     statusTransitionService);
+        ReflectionTestUtils.setField(deploymentServiceUnderTest, "functionAuditService",
+                                     auditService);
+        ReflectionTestUtils.setField(deploymentServiceUnderTest, "jsonMapper",
+                                     Mockito.mock(JsonMapper.class));
+        var function = FunctionEntity.builder()
+                .ncaId(TEST_NCA_ID)
+                .functionId(TEST_FUNCTION_ID)
+                .functionVersionId(TEST_VERSION_ID_1)
+                .functionName(TEST_FUNCTION_NAME)
+                .functionStatus(FunctionStatus.DEPLOYING)
+                .inferenceUrl("http://localhost:8080")
+                .apiBodyFormat(com.nvidia.nvcf.persistence.function.entity.ApiBodyFormat.CUSTOM)
+                .build();
+        var transition = Optional.of(new FunctionStatusTransitionService.Transition(
+                TEST_NCA_ID, TEST_FUNCTION_ID, TEST_VERSION_ID_1, TEST_DEPLOYMENT_ID,
+                FunctionStatus.DEPLOYING, FunctionStatus.ACTIVE, Instant.now()));
+        Mockito.when(lookupService.lookupUsingFunctionIdAndVersionId(
+                TEST_FUNCTION_ID, TEST_VERSION_ID_1)).thenReturn(Optional.of(function));
+        Mockito.when(statusTransitionService.persist(
+                function, TEST_DEPLOYMENT_ID, FunctionStatus.ACTIVE)).thenReturn(transition);
+
+        deploymentServiceUnderTest.transitionFunctionToActive(
+                TEST_FUNCTION_ID, TEST_VERSION_ID_1, TEST_DEPLOYMENT_ID);
+
+        var ordered = inOrder(statusTransitionService, auditService);
+        ordered.verify(statusTransitionService).persist(
+                function, TEST_DEPLOYMENT_ID, FunctionStatus.ACTIVE);
+        ordered.verify(auditService).auditFunctionUpdate(any(), any(), any(), any());
+        ordered.verify(statusTransitionService).publish(transition);
     }
 
     @AfterAll

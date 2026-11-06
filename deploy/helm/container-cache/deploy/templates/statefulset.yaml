@@ -238,7 +238,7 @@ spec:
           image: {{ required "Property '.images.exporter' is required." $.Values.images.exporter | quote }}
           imagePullPolicy: IfNotPresent
           args:
-            - '-nginx.scrape-uri=http://localhost:9145/nginx_status'
+            - '--nginx.scrape-uri=http://localhost:9145/nginx_status'
           ports:
             - name: metrics
               containerPort: 9113

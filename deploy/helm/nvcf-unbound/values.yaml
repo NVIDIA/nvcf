@@ -32,7 +32,7 @@ podDisruptionBudget:
 images:
   server: nvcr.io/nv-ngc-devops/unbound:1.22.0-nv1.3.1
   logger: nvcr.io/nv-ngc-devops/dns-logger:v2.2.1
-  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.10
+  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.15
   secrets:
     - nvcr-regcred
 
@@ -102,7 +102,7 @@ webhook:
   enabled: true
   image: nvcr.io/nv-ngc-devops/nvcf-unbound-webhook:0.9.1
   imagePullPolicy: IfNotPresent
-  certificatesImage: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.10
+  certificatesImage: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.15
   replicas: 2
   failurePolicy: Fail
   timeoutSeconds: 10
