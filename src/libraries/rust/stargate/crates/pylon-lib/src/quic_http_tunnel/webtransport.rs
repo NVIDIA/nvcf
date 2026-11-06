@@ -155,6 +155,14 @@ impl TunnelRequestTransport for WebTransportTunnelTransport<'_> {
         stargate_protocol::finish_webtransport_http_stream(self.send_stream)
             .context("failed to finish WebTransport response stream")
     }
+
+    fn response_stopped(&self) -> impl Future<Output = ()> + Send + 'static {
+        let stopped = self.send_stream.stopped();
+        async move {
+            // A stop code, a reset, and a lost connection all end the response.
+            let _ = stopped.await;
+        }
+    }
 }
 
 async fn handle_webtransport_http_stream(

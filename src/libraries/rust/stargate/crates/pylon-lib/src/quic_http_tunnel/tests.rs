@@ -3779,3 +3779,127 @@ async fn direct_tunnel_reloads_server_identity_for_new_connections() -> Result<(
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[derive(Clone, Copy, Debug)]
+enum AbandonedEngineState {
+    // Queued: the engine holds the response headers.
+    QueuedNoHeaders,
+    // Headers and one SSE event, then silence, as during hidden reasoning.
+    SilentSse,
+    // Headers of a plain (non-SSE) response, then silence until the body is ready.
+    SilentBody,
+    // An SSE event every 100 ms: a failed write also cancels.
+    StreamingSse,
+}
+
+struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl Drop for NotifyOnDrop {
+    fn drop(&mut self) {
+        if let Some(tx) = self.0.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+fn abandoned_engine(
+    state: AbandonedEngineState,
+    engine_dropped_tx: tokio::sync::oneshot::Sender<()>,
+) -> Router {
+    let engine_dropped_tx = Arc::new(std::sync::Mutex::new(Some(engine_dropped_tx)));
+    let handler = post(move || {
+        let guard = NotifyOnDrop(engine_dropped_tx.lock().unwrap().take());
+        async move {
+            match state {
+                    AbandonedEngineState::QueuedNoHeaders => {
+                        let _guard = guard;
+                        future::pending::<Response>().await
+                    }
+                    AbandonedEngineState::SilentBody => {
+                        let body = async_stream::stream! {
+                            let _guard = guard;
+                            future::pending::<()>().await;
+                            yield Ok::<_, std::convert::Infallible>(Bytes::new());
+                        };
+                        Response::builder()
+                            .header(axum::http::header::CONTENT_TYPE, "application/json")
+                            .body(Body::from_stream(body))
+                            .unwrap()
+                    }
+                    AbandonedEngineState::SilentSse | AbandonedEngineState::StreamingSse => {
+                        axum::response::Sse::new(async_stream::stream! {
+                            let _guard = guard;
+                            yield Ok::<_, std::convert::Infallible>(Event::default()
+                                .event("response.created")
+                                .data(r#"{"type":"response.created","sequence_number":0,"response":{"id":"r","status":"in_progress","output":[]}}"#));
+                            if matches!(state, AbandonedEngineState::SilentSse) {
+                                future::pending::<()>().await;
+                            }
+                            for sequence_number in 1u64.. {
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                yield Ok(Event::default()
+                                    .event("response.reasoning_text.delta")
+                                    .data(format!(r#"{{"type":"response.reasoning_text.delta","sequence_number":{sequence_number},"item_id":"rs","output_index":0,"content_index":0,"delta":"t"}}"#)));
+                            }
+                        })
+                        .into_response()
+                    }
+                }
+        }
+    });
+    Router::new()
+        .route("/v1/responses", handler.clone())
+        .route("/v1/messages", handler)
+}
+
+#[tokio::test]
+async fn tunnel_drops_engine_request_when_router_abandons_stream() {
+    let mut still_running = Vec::new();
+    for state in [
+        AbandonedEngineState::QueuedNoHeaders,
+        AbandonedEngineState::SilentSse,
+        AbandonedEngineState::SilentBody,
+        AbandonedEngineState::StreamingSse,
+    ] {
+        let (engine_dropped_tx, engine_dropped_rx) = tokio::sync::oneshot::channel();
+        let config = test_tunnel_config_for(abandoned_engine(state, engine_dropped_tx)).await;
+        let mut tunnel = RawTunnelTest::start(config).await;
+        // Pylon relays Responses as SSE; /v1/messages is relayed as a plain body.
+        let (path, body): (&str, &'static [u8]) = match state {
+            AbandonedEngineState::SilentBody => ("/v1/messages", br#"{"stream":false}"#),
+            _ => ("/v1/responses", br#"{"input":"hi","stream":true}"#),
+        };
+        tunnel
+            .send(
+                tunnel_request_headers(path, "model-responses", "req-abandoned", "11"),
+                body,
+            )
+            .await;
+        if matches!(state, AbandonedEngineState::QueuedNoHeaders) {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        } else {
+            tunnel.response_head(StatusCode::OK).await;
+        }
+
+        // The router abandons a request (client gone, or its header timeout) by
+        // dropping both stream halves; the QUIC connection stays up.
+        let RawTunnelTest {
+            tunnel: handle,
+            _endpoint: endpoint,
+            send,
+            recv,
+        } = tunnel;
+        drop(recv);
+        drop(send);
+        let engine_dropped = tokio::time::timeout(Duration::from_secs(3), engine_dropped_rx).await;
+        drop(endpoint);
+        let _ = tokio::time::timeout(Duration::from_secs(1), handle.shutdown()).await;
+        if engine_dropped.is_err() {
+            still_running.push(state);
+        }
+    }
+    assert!(
+        still_running.is_empty(),
+        "engine requests still running 3 s after the router abandoned the stream: {still_running:?}"
+    );
+}

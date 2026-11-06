@@ -118,6 +118,11 @@ where
             .map_err(h3_error)
             .context("failed to finish h3 response stream")
     }
+
+    fn response_stopped(&self) -> impl Future<Output = ()> + Send + 'static {
+        // h3 exposes no stop signal for a request stream; a failed write still cancels.
+        std::future::pending()
+    }
 }
 
 async fn handle_h3_request(
