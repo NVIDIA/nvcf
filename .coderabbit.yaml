@@ -44,6 +44,44 @@ reviews:
         AGENTS.md commit conventions.
     issue_assessment:
       mode: warning
+    custom_checks:
+      - name: "Database change release metadata"
+        mode: warning
+        instructions: |
+          Evaluate the PR diff for new persistent database tables or columns.
+          Start with migrations/cassandra/keyspaces/**/*.sql, then inspect
+          changed production schema, migration, or schema-initialization code
+          elsewhere in the PR. Include CREATE TABLE, ALTER TABLE ADD, and new
+          columns in existing CREATE TABLE definitions. IF NOT EXISTS does not
+          exempt a change. Compare with the base schema: a moved or reformatted
+          definition, or a new migration for an already-defined column, does not
+          by itself prove a new table or column.
+
+          Exclude vendor code, test fixtures, examples, documentation, comments,
+          and data-only changes. A new application struct field alone does not
+          prove a persistent schema change. Pass as not applicable if the diff
+          introduces no new persistent table or column. If the available diff
+          or schema evidence is insufficient to decide, return Inconclusive and
+          describe the missing evidence.
+
+          For a qualifying change, require the PR title to use
+          feat(<nonempty scope>)!: <nonempty subject>. Ignore the same leading
+          Draft:/[Draft]/[draft]:/WIP markers as the title check. Require a
+          DATABASE CHANGE: line with a substantive reason in the PR description,
+          outside HTML comments and code fences. Empty text or placeholders
+          such as TODO, TBD, or <reason> do not satisfy the requirement.
+          Fail if either requirement is missing. Otherwise pass this metadata
+          check. Cite the changed file and table or column in the result.
+
+          For every qualifying change, including a metadata pass, explain that
+          policy requires a component major-version bump, the appropriate
+          downstream stack major-version bump, and a mandatory upgrade stop.
+          Identify affected components using repository evidence and
+          tools/ci/github-release-subprojects.json. Distinguish the shared
+          migration component from the service that uses the schema. State
+          uncertainty if ownership is unclear. A metadata pass does not verify
+          component or stack versions, the final squash commit, or upgrade-stop
+          enforcement. Refer to CONTRIBUTING.md#database-schema-changes.
   # Skip generated, vendored, and binary-ish files so review focuses on
   # human-authored source.
   path_filters:
@@ -72,6 +110,15 @@ reviews:
       instructions: >-
         Cassandra DDL migrations are forward-only and one keyspace per
         subdirectory. Flag destructive statements and missing IF NOT EXISTS.
+        For new persistent tables or columns, including additive changes and
+        changes to existing CREATE TABLE definitions, cite the schema change
+        and flag the release policy in CONTRIBUTING.md#database-schema-changes:
+        component major bump, downstream stack major bump, and mandatory upgrade
+        stop. IF NOT EXISTS does not exempt a change. Exclude fixtures, examples,
+        comments, data-only changes, and moved or reformatted definitions that
+        introduce no new schema. Check the PR metadata through the custom
+        pre-merge check. Do not claim that valid metadata verifies release
+        propagation or the final squash commit.
     - path: "src/uis/nvcf-ui/ui/src/features/**/*.tsx"
       instructions: >-
         Suspense hook variants (useGetFooSuspense) are expected when data is prefetched in
