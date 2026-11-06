@@ -62,7 +62,6 @@ public class ApiKeysClient {
     private final String evaluationUri;
     private final String requestPropertyName;
     private final String llmEvaluationUri;
-    private final String llmRequestPropertyName;
     private final String accountRateLimitEvaluationUri;
     private final String accountRateLimitRequestPropertyName;
 
@@ -79,13 +78,11 @@ public class ApiKeysClient {
             String evaluationUri,
             @Value("${nvcf.api-keys.request-property-name:apiKey}")
             String requestPropertyName,
-            @Value("${nvcf.llm-api-keys.evaluation-uri:/v1/namespaces/nvcf/evaluations/apikey.llm_allow}")
+            @Value("${nvcf.api-keys.llm-evaluation-uri:/v1/namespaces/nvcf/evaluations/apikey.llm_allow}")
             String llmEvaluationUri,
-            @Value("${nvcf.llm-api-keys.request-property-name:apiKey}")
-            String llmRequestPropertyName,
-            @Value("${nvcf.account-token-rate-limit.evaluation-uri:/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit}")
+            @Value("${nvcf.api-keys.account-rate-limit-evaluation-uri:/v1/namespaces/nvcf/evaluations/apikey.account_rate_limit}")
             String accountRateLimitEvaluationUri,
-            @Value("${nvcf.account-token-rate-limit.request-property-name:tiered_rate_key}")
+            @Value("${nvcf.api-keys.account-rate-limit-request-property-name:tiered_rate_key}")
             String accountRateLimitRequestPropertyName,
             @Value("${spring.security.oauth2.client.registration.api-keys.client-id}")
             String clientId,
@@ -99,7 +96,6 @@ public class ApiKeysClient {
         this.evaluationUri = evaluationUri;
         this.requestPropertyName = requestPropertyName;
         this.llmEvaluationUri = llmEvaluationUri;
-        this.llmRequestPropertyName = llmRequestPropertyName;
         this.accountRateLimitEvaluationUri = accountRateLimitEvaluationUri;
         this.accountRateLimitRequestPropertyName = accountRateLimitRequestPropertyName;
         this.jsonMapper = jsonMapper;
@@ -132,7 +128,7 @@ public class ApiKeysClient {
 
     // LLM-invocation-specific evaluation; its result also carries the account token rate limit.
     public ApiKeyValidationResult fetchLlmApiKeyValidationResult(String apiKey) {
-        return validate(llmEvaluationUri, llmRequestPropertyName, apiKey);
+        return validate(llmEvaluationUri, requestPropertyName, apiKey);
     }
 
     // Unlike the API-key rules, an empty/absent result means no tier configured, not forbidden.
