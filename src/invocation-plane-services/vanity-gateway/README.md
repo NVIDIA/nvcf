@@ -546,7 +546,10 @@ matches `PRIVATE_MODEL_NAME_REGEX_PATTERN` is listed when the NVCF API returns
 the function version it routes to. An entry without `functionVersionID` is
 listed when any version of its function is returned. Expiry,
 `supported_endpoints`, and metadata follow the public-model rules, and
-Anthropic clients get the same models in the Anthropic shape.
+Anthropic clients get the same models in the Anthropic shape. An alias can
+route to different functions per section. A key sees it only for the sections
+whose route it may use: `supported_endpoints` lists only those, and Anthropic
+clients see the alias only when its Messages route is usable.
 
 `GET /v1/models/{model}` follows the same rule, including three-part names
 such as `private/acme/model`. A private name returns its model only when the
@@ -561,7 +564,7 @@ The lookup never fails a request:
 | Key accepted | Public list plus the private models the key may access |
 | NVCF API rejects the key (`401`) | Public list |
 | Key has no `list_functions` or `list_functions_details` scope (`403`) | Public list |
-| NVCF API error, timeout, or redirect | The key's last successful result if it is under 15 minutes old, otherwise the public list |
+| NVCF API error, timeout, or redirect | The key's last successful result if it is under 15 minutes old, otherwise the public list. The key is not looked up again for 10 seconds. |
 | `NVCF_CONTROL_PLANE_ENDPOINT` not set | Public list, no NVCF API call |
 
 Keyed responses carry `Cache-Control: private, no-store` and
@@ -574,8 +577,12 @@ Results are cached per key for one minute, for up to 4096 keys, and survive
 mapping reloads. A reload that changes the set of private functions refreshes
 each key on its next request. Concurrent requests with the same key share one
 lookup. Each pod runs at most 16 lookups at once, each with a 5 second
-timeout. The lookup never follows a redirect, so the key goes only to
-`NVCF_CONTROL_PLANE_ENDPOINT`.
+timeout, and a request never waits for a free slot. Keys without an
+authorized result share a per-pod budget of 50 lookups per second, so random
+tokens cannot drive NVCF API calls. Without a private alias in the mapping,
+there is no lookup. The lookup never follows a redirect, so the key goes only
+to `NVCF_CONTROL_PLANE_ENDPOINT`. A request that the gateway skips under these
+limits gets the key's last successful result or the public list.
 
 ## Invoking the Anthropic Messages Endpoint
 
@@ -857,9 +864,12 @@ the deciding methods in the `shadow.sampling_methods` attribute. Neither
 records cache keys, credentials, or message content.
 
 `nvcf_ai_api_gateway_private_model_lookups_total` counts private model access
-lookups. The `result` label is `authorized`, `unauthenticated`, `forbidden`, or
-`unavailable`. The `cached` label is `true` for cache hits. A failed lookup
-counts as `unavailable` even when the key's last successful result is served.
+lookups. The `result` label is `authorized`, `unauthenticated`, `forbidden`,
+`unavailable`, or `limited`. The `cached` label is `true` for cache hits. A
+failed lookup counts as `unavailable` even when the key's last successful
+result is served, and a request inside the retry window after a failure counts
+as a cached `unavailable`. `limited` counts lookups the gateway skipped under
+its own limits.
 Requests that share an in-flight lookup are not counted again. All label
 combinations are emitted at zero on startup. The request span records
 `private_models.cached` and `private_models.result`.

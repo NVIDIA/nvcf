@@ -124,7 +124,7 @@ func (d *ModelDirector) listAnthropicModels(writer http.ResponseWriter, request 
 func (d *ModelDirector) getAnthropicModel(writer http.ResponseWriter, request *http.Request, modelName string) {
 	info, ok := d.messages.modelNameToModelInfo[modelName]
 	if !ok {
-		info, ok = d.authorizedPrivateModel(writer, request, modelName, d.messages)
+		info, ok = d.authorizedPrivateModel(writer, request, modelName, d.messagesSections())
 	}
 	if !ok {
 		markGatewayRejected(writer, request)

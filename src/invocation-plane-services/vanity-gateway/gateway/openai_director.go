@@ -91,6 +91,7 @@ type ModelDirector struct {
 	// listing is disabled.
 	privateIndex  privateModelIndex
 	privateModels *privateModelAccess
+	sections      []endpointModelMapping // every model section with its path, in listing order
 
 	// Cache for filtered models
 	filteredModelsCache        []ModelInfo
@@ -476,6 +477,7 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 		llmGatewayDirector: llmGatewayDirector,
 		shadower:           shadower,
 	}
+	d.sections = endpoints
 	d.privateIndex = indexPrivateModels(allPrivateModels, d.allMappings()...)
 	return d, nil
 }
@@ -666,11 +668,11 @@ func (d *ModelDirector) ListModels(writer http.ResponseWriter, request *http.Req
 	// A keyed request can also list private models, so shared caches must keep
 	// responses for different keys apart.
 	writer.Header().Add("Vary", "Authorization")
-	privateModels := d.authorizedPrivateModels(writer, request)
 	if middleware.IsAnthropicRequest(request) {
-		d.listAnthropicModels(writer, request, privateModels)
+		d.listAnthropicModels(writer, request, d.authorizedPrivateModels(writer, request, d.messagesSections()))
 		return
 	}
+	privateModels := d.authorizedPrivateModels(writer, request, d.sections)
 
 	// Get filtered models with lazy caching
 	activeModels := d.getFilteredModels()
@@ -729,10 +731,7 @@ func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Reque
 		d.imageVariations.modelNameToModelInfo,
 	)
 	if !ok {
-		modelInfo, ok = d.authorizedPrivateModel(writer, request, modelName,
-			d.completions, d.embeddings, d.chatCompletions, d.responses,
-			d.messages, d.decisions, d.systemOne,
-			d.imageGenerations, d.imageEdits, d.imageVariations)
+		modelInfo, ok = d.authorizedPrivateModel(writer, request, modelName, d.sections)
 	}
 	if !ok {
 		modelMissingError := "Model does not exist by the name of " + modelName

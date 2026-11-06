@@ -267,7 +267,9 @@ func TestListModelsServesLastGoodResultWhileLookupFails(t *testing.T) {
 	require.Equal(t, []string{"acme/public"}, listedModelIDs(t, rec))
 	require.Equal(t, privateModelsUnavailable, rec.Header().Get(PrivateModelsHeader))
 
+	// Recovery is picked up once the retry window after the failure passes.
 	nvcf.failing.Store(false)
+	now = now.Add(privateModelLookupRetryAfter)
 	require.Equal(t, withPrivate, listedModelIDs(t, list()))
 }
 
@@ -373,10 +375,11 @@ func TestPrivateModelLookupCachesResultsPerKey(t *testing.T) {
 	require.Equal(t, privateModelsUnauthenticated, list("bad"))
 	require.EqualValues(t, 3, nvcf.calls.Load())
 
-	// Failures are retried instead of cached.
+	// A failure is not cached as a result, and the key is not retried until
+	// the retry window passes.
 	require.Equal(t, privateModelsUnavailable, list("broken"))
 	require.Equal(t, privateModelsUnavailable, list("broken"))
-	require.EqualValues(t, 5, nvcf.calls.Load())
+	require.EqualValues(t, 4, nvcf.calls.Load())
 }
 
 func TestPrivateModelLookupSharesConcurrentRequests(t *testing.T) {
@@ -497,6 +500,149 @@ func TestPrivateModelsOnNativeProtocolSections(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, listModels(t, mux, "/v1/models/private/team/decide", nil).Code)
 }
 
+// A failed lookup holds back further lookups for the key until the retry
+// window passes, so a failing NVCF API sees one call per key per window.
+func TestPrivateModelLookupBacksOffAfterFailure(t *testing.T) {
+	nvcf, endpoint := newFakeFunctionIDs(t)
+	mux := privateModelsMux(t, endpoint)
+	access := sharedAccess(t, endpoint)
+	now := time.Now()
+	access.now = func() time.Time { return now }
+	nvcf.failing.Store(true)
+
+	for range 10 {
+		rec := listModels(t, mux, "/v1/models", keyHeaders("good"))
+		require.Equal(t, []string{"acme/public"}, listedModelIDs(t, rec))
+		require.Equal(t, privateModelsUnavailable, rec.Header().Get(PrivateModelsHeader))
+	}
+	require.EqualValues(t, 1, nvcf.calls.Load())
+
+	now = now.Add(privateModelLookupRetryAfter)
+	listModels(t, mux, "/v1/models", keyHeaders("good"))
+	require.EqualValues(t, 2, nvcf.calls.Load())
+}
+
+// A full lookup pool answers at once instead of waiting for a slot, and that
+// is not a failure that holds back the next lookup.
+func TestPrivateModelLookupDoesNotWaitForASlot(t *testing.T) {
+	nvcf, endpoint := newFakeFunctionIDs(t)
+	mux := privateModelsMux(t, endpoint)
+	access := sharedAccess(t, endpoint)
+
+	require.True(t, access.slots.TryAcquire(privateModelLookupConcurrency))
+	start := time.Now()
+	rec := listModels(t, mux, "/v1/models", keyHeaders("good"))
+	require.Less(t, time.Since(start), privateModelLookupTimeout/5)
+	require.Equal(t, []string{"acme/public"}, listedModelIDs(t, rec))
+	require.Equal(t, privateModelsUnavailable, rec.Header().Get(PrivateModelsHeader))
+	require.Zero(t, nvcf.calls.Load())
+
+	access.slots.Release(privateModelLookupConcurrency)
+	rec = listModels(t, mux, "/v1/models", keyHeaders("good"))
+	require.Equal(t, privateModelsAuthorized, rec.Header().Get(PrivateModelsHeader))
+	require.EqualValues(t, 1, nvcf.calls.Load())
+}
+
+// Keys that have never been authorized share a lookup budget, so random
+// tokens cannot drive NVCF API calls. A key with an authorized result
+// refreshes without it.
+func TestPrivateModelLookupLimitsNewKeys(t *testing.T) {
+	nvcf, endpoint := newFakeFunctionIDs(t)
+	mux := privateModelsMux(t, endpoint)
+	access := sharedAccess(t, endpoint)
+	now := time.Now()
+	access.now = func() time.Time { return now }
+	access.newKeys = newTokenBucket(0, 1)
+	result := func(token string) string {
+		return listModels(t, mux, "/v1/models", keyHeaders(token)).Header().Get(PrivateModelsHeader)
+	}
+
+	require.Equal(t, privateModelsAuthorized, result("good"))
+	for _, token := range []string{"bad", "random-1", "random-2"} {
+		require.Equal(t, privateModelsUnavailable, result(token), token)
+	}
+	require.EqualValues(t, 1, nvcf.calls.Load())
+
+	now = now.Add(privateModelLookupCacheTTL)
+	require.Equal(t, privateModelsAuthorized, result("good"))
+	require.EqualValues(t, 2, nvcf.calls.Load())
+}
+
+// Without private aliases a key cannot add anything, so there is no lookup.
+func TestPrivateModelLookupSkippedWithoutPrivateAliases(t *testing.T) {
+	nvcf, endpoint := newFakeFunctionIDs(t)
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = openAIHost
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+		"public": {ModelName: "acme/public", FunctionID: publicFunctionID},
+	}
+	mux, err := buildChiMux(mappings, Config{
+		NvcfApiEndpoint:              "http://nvcf.invalid",
+		NvcfControlPlaneEndpoint:     endpoint,
+		PrivateModelNameRegexPattern: "^private/",
+	})
+	require.NoError(t, err)
+
+	for _, target := range []string{"/v1/models", "/v1/models/private/team/allowed"} {
+		require.Empty(t, listModels(t, mux, target, keyHeaders("good")).Header().Get(PrivateModelsHeader), target)
+	}
+	require.Zero(t, nvcf.calls.Load())
+}
+
+// The lookup is not the request's upstream dispatch, so it leaves the
+// pre-upstream processing outcome to the request.
+func TestPrivateModelLookupKeepsTheProcessingOutcome(t *testing.T) {
+	reader := processingReader(t)
+	_, endpoint := newFakeFunctionIDs(t)
+	mux := privateModelsMux(t, endpoint)
+
+	require.Equal(t, http.StatusNotFound, listModels(t, mux, "/v1/models/private/team/nope", keyHeaders("good")).Code)
+	require.Equal(t, http.StatusOK, listModels(t, mux, "/v1/models", keyHeaders("other")).Code)
+
+	outcomes := map[string]string{}
+	for _, point := range metricPoints(t, reader, processingMetric) {
+		route, _ := point.Attributes.Value("http.route")
+		outcome, _ := point.Attributes.Value("outcome")
+		outcomes[route.AsString()] = outcome.AsString()
+	}
+	require.Equal(t, map[string]string{
+		"/v1/models/{prefix}/{company}/{model}": "gateway_rejected",
+		"/v1/models":                            "local",
+	}, outcomes)
+}
+
+// An alias can route to different functions per section. The key sees it only
+// for the sections it may use, in both list shapes and in model lookup.
+func TestPrivateModelsListedOnlyForUsableSections(t *testing.T) {
+	_, endpoint := newFakeFunctionIDs(t)
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = openAIHost
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+		"split": {ModelName: "private/team/split", FunctionID: allowedPrivateFunctionID},
+	}
+	mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{
+		"split": {ModelName: "private/team/split", FunctionID: deniedPrivateFunctionID},
+	}
+	mux, err := buildChiMux(mappings, Config{
+		NvcfApiEndpoint:              "http://nvcf.invalid",
+		NvcfControlPlaneEndpoint:     endpoint,
+		PrivateModelNameRegexPattern: "^private/",
+	})
+	require.NoError(t, err)
+	anthropic := keyHeaders("good")
+	anthropic["anthropic-version"] = "2023-06-01"
+
+	// The Messages route is not usable, so supported_endpoints is dropped.
+	rec := listModels(t, mux, "/v1/models", keyHeaders("good"))
+	require.Equal(t, `{"object":"list","data":[{"id":"private/team/split","object":"model","created":735790403,"owned_by":"private"}]}`+"\n", rec.Body.String())
+	require.Equal(t, http.StatusOK, listModels(t, mux, "/v1/models/private/team/split", keyHeaders("good")).Code)
+
+	var page anthropicModelPage
+	require.NoError(t, json.Unmarshal(listModels(t, mux, "/v1/models", anthropic).Body.Bytes(), &page))
+	require.Empty(t, pageIDs(page))
+	require.Equal(t, http.StatusNotFound, listModels(t, mux, "/v1/models/private/team/split", anthropic).Code)
+}
+
 // A mapping reload builds a new router but keeps the cached lookups.
 func TestPrivateModelLookupCacheSurvivesMappingReload(t *testing.T) {
 	nvcf, endpoint := newFakeFunctionIDs(t)
@@ -522,10 +668,11 @@ func TestPrivateModelAccessCacheExpiresAndStaysBounded(t *testing.T) {
 		return access.authorizedVersions(req, []byte("good"), index)
 	}
 
-	// Only functions behind private aliases are kept, with their versions.
+	// Only functions behind private aliases are kept, and only versions that
+	// aliases pin. This index pins none.
 	versions, result := lookup()
 	require.Equal(t, privateModelsAuthorized, result)
-	require.Equal(t, authorizedVersions{allowed: {strings.ToLower(allowedVersionID): {}}}, versions)
+	require.Equal(t, authorizedVersions{allowed: {}}, versions)
 	lookup()
 	require.EqualValues(t, 1, nvcf.calls.Load())
 
@@ -610,5 +757,7 @@ func TestPrivateModelLookupMetricsInitializeAndCount(t *testing.T) {
 		{privateModelsUnauthenticated, true}:  0,
 		{privateModelsUnavailable, false}:     0,
 		{privateModelsUnavailable, true}:      0,
+		{privateModelsLimited, false}:         0,
+		{privateModelsLimited, true}:          0,
 	}, counts)
 }
