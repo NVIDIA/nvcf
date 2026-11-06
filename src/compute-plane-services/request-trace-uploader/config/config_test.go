@@ -220,10 +220,3 @@ func testLookup(values map[string]string) LookupFunc {
 		return value, ok
 	}
 }
-
-func mapLookup(values map[string]string) LookupFunc {
-	return func(name string) (string, bool) {
-		value, ok := values[name]
-		return value, ok
-	}
-}
