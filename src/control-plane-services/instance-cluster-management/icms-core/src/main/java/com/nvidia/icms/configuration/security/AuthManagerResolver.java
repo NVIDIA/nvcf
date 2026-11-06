@@ -336,7 +336,7 @@ public class AuthManagerResolver {
             // Grant the exact scope set legacy cluster agents received via
             // their OpenBao-issued OAuth token (see nvcf-openbao-migrations
             // migrations/14_setup_nvca.sh: SCOPES="nvca-cluster,instance_request_update").
-            //   - nvca-cluster: /v1/nvca/clusters/{id}/{register,heartbeat,credentials,jwks}
+            //   - nvca-cluster: /v1/nvca/clusters/{id}/{register,register/validate,heartbeat,credentials,jwks}
             //   - instance_request_update: /v1/sirs/{id} PUT + /v1/sirs/{id}/{instanceId} POST
             // ReVal's helmreval:render is NOT granted here — NVCA → ReVal uses a
             // separate PSAT with ReVal audience, authorized by ReVal's OIDC middleware.

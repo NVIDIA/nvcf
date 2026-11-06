@@ -31,6 +31,7 @@ import com.amazonaws.services.sqs.model.QueueAttributeName;
 import com.nvidia.icms.configuration.byoc.ByocConfigurationProperties;
 import com.nvidia.icms.configuration.nvca.NvcaConfigurationProperties;
 import com.nvidia.icms.errors.PreConditionFailedException;
+import com.nvidia.icms.errors.IcmsActiveInstancesConflictException;
 import com.nvidia.icms.errors.IcmsBadRequestException;
 import com.nvidia.icms.errors.IcmsConflictException;
 import com.nvidia.icms.errors.IcmsNotFoundException;
@@ -237,9 +238,132 @@ public class NvcaClusterRegistrationService {
                 StringUtils.isNotBlank(nvcaRegistrationRequest.getOidcIssuer()),
                 StringUtils.isNotBlank(nvcaRegistrationRequest.getJwks()));
 
+        ValidatedRegistration validated = validateRegistration(nvcaRegistrationRequest, clusterId);
+        ClusterEntity clusterInfo = validated.clusterInfo();
+        // Validation only reads clusterInfo, so this copy is still the stored state.
+        ClusterEntity entityBefore = CopyUtil.deepCopy(clusterInfo);
+        Set<GpuV5Udt> existingGpus = validated.existingGpus();
+        Set<GpuV5Udt> providedGpus = validated.providedGpus();
+        Set<String> removedGpuNames = validated.removedGpuNames();
+
+        // Setting up clusterTargeting in clusterInfo
+        setAllowTargetingField(clusterInfo, nvcaRegistrationRequest);
+
+        // Setting up task creation queue flag in clusterInfo
+        setAllowTaskClusterCreationQueues(clusterInfo, nvcaRegistrationRequest);
+
+        // Generating creation queue for missing GPUs
+        // Currently Air gapped == nats enabled
+        // If nats is enabled then don't create creation queues
+        // TODO: When we want to add NATS in AWS SIS at that time we need one more property from NVCA to know what NVCA is using
+        if (!instanceServiceHelper.isNatsEnabled()) {
+
+            // Generating creation queue for newly added GPUs
+            createCreationQueues(clusterInfo, existingGpus, providedGpus);
+
+            // Generating termination queue if not already generated
+            createTerminationQueue(clusterInfo);
+
+        }
+
+        // Delete queues for removed GPUs
+        // We should delete queue for removed GPUs after queue creation of newly added GPUs
+        // this will make sure if there is any error in queue creation then we don't delete queue before returning the error
+        if (!isSetEmptyOrNull(removedGpuNames)) {
+            deleteQueueForRemovedGpus(removedGpuNames, validated.clusterByGroupIdList(),
+                                      clusterInfo);
+        }
+
+        // Updating GPUs from NVCA
+        if (!isSetEmptyOrNull(providedGpus)) {
+            clusterInfo.setGpusV4(toGpusV4(providedGpus));
+            clusterInfo.setGpusV5(providedGpus);
+        }
+
+        clusterInfo.setClusterStatus(nvcaRegistrationRequest.getStatus());
+        clusterInfo.setK8sVersion(nvcaRegistrationRequest.getK8sVersion());
+        clusterInfo.setNvcaLastConnected(instanceServiceHelper.getCurrentTimestamp());
+        // If NVCA version is provided then update it in clusterInfo
+        if (StringUtils.isNotBlank(nvcaRegistrationRequest.getNvcaVersion())) {
+            clusterInfo.setNvcaVersion(nvcaRegistrationRequest.getNvcaVersion());
+        }
+        // If clusterSource is not set then set it to ngc-managed in registration
+        if (StringUtils.isBlank(clusterInfo.getClusterSource())) {
+            clusterInfo.setClusterSource(ClusterSource.NGC_MANAGED.toString());
+        }
+
+        applyOidcIdentityIfPresent(nvcaRegistrationRequest, clusterInfo,
+                                   validated.jwksFingerprint());
+
+        // Generating response
+        NvcaAccessCreds nvcaQueueAccessCreds =
+                clusterQueueAccessCredsService.generateCredsForNvcaQueues(clusterInfo);
+
+        updateEntityInDb(clusterInfo, entityBefore, auditProps);
+
+        return NvcaRegistrationResponse.builder()
+                .credentials(nvcaQueueAccessCreds)
+                .clusterId(clusterId)
+                .clusterGroupId(clusterInfo.getClusterGroupId())
+                .build();
+    }
+
+    /**
+     * Runs the checks of {@link #nvcaClusterRegistration} without applying the
+     * registration: no queues are created or deleted, no credentials are issued, and the
+     * cluster is not updated. It throws what those checks would throw for the same request,
+     * so NVCA can find out whether ICMS accepts a configuration before applying it. A
+     * registration that passes validation can still fail: its checks run again against
+     * state that may have changed, for example when an instance lands in between, and its
+     * queue management, credentials, and cluster update can fail on their own.
+     *
+     * @param nvcaRegistrationRequest NVCA registration request
+     * @param clusterId               clusterId from authentication token
+     */
+    @Observed
+    public void validateNvcaClusterRegistration(
+            NvcaRegistrationRequest nvcaRegistrationRequest,
+            String clusterId) {
+
+        log.info(
+                "Received cluster registration validation request from {} cluster: status {}, "
+                        + "gpuCount {}",
+                clusterId,
+                nvcaRegistrationRequest.getStatus(),
+                nvcaRegistrationRequest.getGpus() == null
+                        ? 0
+                        : nvcaRegistrationRequest.getGpus().size());
+
+        validateRegistration(nvcaRegistrationRequest, clusterId);
+    }
+
+    /**
+     * Result of {@link #validateRegistration}: the cluster as read, and what the
+     * registration needs to apply the request.
+     *
+     * @param jwksFingerprint fingerprint of the validated JWKS, or null when the request
+     *                        carries no cluster OIDC identity to apply
+     */
+    private record ValidatedRegistration(
+            ClusterEntity clusterInfo,
+            Set<GpuV5Udt> existingGpus,
+            Set<GpuV5Udt> providedGpus,
+            Set<String> removedGpuNames,
+            List<ClusterByGroupIdAndIdEntity> clusterByGroupIdList,
+            @Nullable String jwksFingerprint) {
+    }
+
+    /**
+     * Runs every registration check: cluster, status, GPUs, instance types with active
+     * instances, and JWKS. It only reads, so validation stops here, and registration
+     * applies the returned result.
+     */
+    private ValidatedRegistration validateRegistration(
+            NvcaRegistrationRequest nvcaRegistrationRequest,
+            String clusterId) {
+
         // 1. Check if valid cluster-id provided
         ClusterEntity clusterInfo = validateClusterId(clusterId);
-        ClusterEntity entityBefore = CopyUtil.deepCopy(clusterInfo);
 
         validateStatus(nvcaRegistrationRequest.getStatus());
 
@@ -277,64 +401,10 @@ public class NvcaClusterRegistrationService {
             validateRemovedInstanceTypes(removedInstanceTypes, clusterId);
         }
 
-        // Setting up clusterTargeting in clusterInfo
-        setAllowTargetingField(clusterInfo, nvcaRegistrationRequest);
+        String jwksFingerprint = validateOidcIdentityIfPresent(nvcaRegistrationRequest, clusterId);
 
-        // Setting up task creation queue flag in clusterInfo
-        setAllowTaskClusterCreationQueues(clusterInfo, nvcaRegistrationRequest);
-
-        // Generating creation queue for missing GPUs
-        // Currently Air gapped == nats enabled
-        // If nats is enabled then don't create creation queues
-        // TODO: When we want to add NATS in AWS SIS at that time we need one more property from NVCA to know what NVCA is using
-        if (!instanceServiceHelper.isNatsEnabled()) {
-
-            // Generating creation queue for newly added GPUs
-            createCreationQueues(clusterInfo, existingGpus, providedGpus);
-
-            // Generating termination queue if not already generated
-            createTerminationQueue(clusterInfo);
-
-        }
-
-        // Delete queues for removed GPUs
-        // We should delete queue for removed GPUs after queue creation of newly added GPUs
-        // this will make sure if there is any error in queue creation then we don't delete queue before returning the error
-        if (!isSetEmptyOrNull(removedGpuNames)) {
-            deleteQueueForRemovedGpus(removedGpuNames, clusterByGroupIdList, clusterInfo);
-        }
-
-        // Updating GPUs from NVCA
-        if (!isSetEmptyOrNull(providedGpus)) {
-            clusterInfo.setGpusV4(toGpusV4(providedGpus));
-            clusterInfo.setGpusV5(providedGpus);
-        }
-
-        clusterInfo.setClusterStatus(nvcaRegistrationRequest.getStatus());
-        clusterInfo.setK8sVersion(nvcaRegistrationRequest.getK8sVersion());
-        clusterInfo.setNvcaLastConnected(instanceServiceHelper.getCurrentTimestamp());
-        // If NVCA version is provided then update it in clusterInfo
-        if (StringUtils.isNotBlank(nvcaRegistrationRequest.getNvcaVersion())) {
-            clusterInfo.setNvcaVersion(nvcaRegistrationRequest.getNvcaVersion());
-        }
-        // If clusterSource is not set then set it to ngc-managed in registration
-        if (StringUtils.isBlank(clusterInfo.getClusterSource())) {
-            clusterInfo.setClusterSource(ClusterSource.NGC_MANAGED.toString());
-        }
-
-        applyOidcIdentityIfPresent(nvcaRegistrationRequest, clusterInfo, clusterId);
-
-        // Generating response
-        NvcaAccessCreds nvcaQueueAccessCreds =
-                clusterQueueAccessCredsService.generateCredsForNvcaQueues(clusterInfo);
-
-        updateEntityInDb(clusterInfo, entityBefore, auditProps);
-
-        return NvcaRegistrationResponse.builder()
-                .credentials(nvcaQueueAccessCreds)
-                .clusterId(clusterId)
-                .clusterGroupId(clusterInfo.getClusterGroupId())
-                .build();
+        return new ValidatedRegistration(clusterInfo, existingGpus, providedGpus,
+                                         removedGpuNames, clusterByGroupIdList, jwksFingerprint);
     }
 
     /**
@@ -346,13 +416,17 @@ public class NvcaClusterRegistrationService {
         return nvcaConfigurationProperties.isOidcClusterIdentityEnabled();
     }
 
-    private void applyOidcIdentityIfPresent(
+    /**
+     * Validates the JWKS in the request and returns its fingerprint, or null when the
+     * request carries no cluster OIDC identity to apply.
+     */
+    @Nullable
+    private String validateOidcIdentityIfPresent(
             NvcaRegistrationRequest nvcaRegistrationRequest,
-            ClusterEntity clusterInfo,
             String clusterId) {
         if (!isOidcClusterIdentityEnabled()
                 || StringUtils.isBlank(nvcaRegistrationRequest.getJwks())) {
-            return;
+            return null;
         }
 
         String jwks = nvcaRegistrationRequest.getJwks();
@@ -378,9 +452,19 @@ public class NvcaClusterRegistrationService {
         }
 
         clusterOidcIdentityService.validateFingerprintAvailable(jwksFingerprint, clusterId);
+        return jwksFingerprint;
+    }
+
+    private void applyOidcIdentityIfPresent(
+            NvcaRegistrationRequest nvcaRegistrationRequest,
+            ClusterEntity clusterInfo,
+            @Nullable String jwksFingerprint) {
+        if (jwksFingerprint == null) {
+            return;
+        }
         clusterOidcIdentityService.applyOidcIdentity(
                 clusterInfo,
-                jwks,
+                nvcaRegistrationRequest.getJwks(),
                 StringUtils.isNotBlank(nvcaRegistrationRequest.getOidcIssuer())
                         ? nvcaRegistrationRequest.getOidcIssuer()
                         : null,
@@ -767,7 +851,8 @@ public class NvcaClusterRegistrationService {
             log.error(
                     "Active instances exists for cluster-id {} with {} instanceTypes hence avoiding GPUs reconfiguration, active instances - {}",
                     clusterId, removedInstanceTypeNames, activeInstanceIds);
-            throw new IcmsConflictException(errMsg);
+            throw new IcmsActiveInstancesConflictException(
+                    errMsg, removedInstanceTypeNames, activeInstanceIds);
         }
     }
 
