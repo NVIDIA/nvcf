@@ -33,7 +33,8 @@ targetHost: nvcr.io,stg.nvcr.io
 images:
   # Name of the container image containing container-cache Nginx proxy.
   server: nvcr.io/nvidia/nvcf/nvcf-container-cache:v1.1.42
-  # Name of the container image containing Nginx Prometheus exporter.
+  # Nginx Prometheus exporter. Override for a registry mirror; use
+  # images.secrets for authenticated registry pulls.
   exporter: docker.io/nginx/nginx-prometheus-exporter:1.5.3
   # Certificate bundle used for cache certificates.
   certificates: nvcr.io/nvidia/nvcf/nvcf-proxy-tls-certs:v1.2.15
@@ -41,7 +42,7 @@ images:
   # Needs only bash, chown, chmod and find. Empty means the certificates image,
   # which is pulled from the same registry org with the same pull secret.
   init: ""
-  # Optional pull secrets for private registries.
+  # Pull secrets for private images or authenticated Docker Hub pulls.
   secrets: []
 
 # Configuration options related to cache behavior.
