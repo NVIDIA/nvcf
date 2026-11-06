@@ -19,7 +19,7 @@ func namedSuppression() Config {
 	cfg := DefaultConfig()
 	cfg.Suppression = suppress.Config{Rules: []suppress.Rule{
 		{Name: "tenants", Headers: []string{"x-tenant"}, Values: []string{"t1"}, Action: suppress.DropRecord},
-		{Name: "nca_id", Headers: suppress.DefaultHeaders, Values: []string{"acme"}, Action: suppress.StripPayload},
+		{Name: "nca_id", Headers: []string{"nvcf-ncaid", "nvcf-nca-id"}, Values: []string{"acme"}, Action: suppress.StripPayload},
 	}}
 	return cfg
 }

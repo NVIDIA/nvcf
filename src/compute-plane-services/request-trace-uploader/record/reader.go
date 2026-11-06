@@ -24,6 +24,9 @@ type Stats struct {
 	Bytes       int64
 	// LostBytes counts compressed bytes that could not be decompressed.
 	LostBytes int64
+	// UnsupportedVersion counts Dynamo v1.3.x AuditRecords, which are
+	// dropped. See ErrLegacyAuditRecord.
+	UnsupportedVersion int
 
 	cut int
 }
@@ -69,8 +72,8 @@ func (r *Reader) Next() bool {
 		rec, err := parseLine(line)
 		if err != nil {
 			if errors.Is(err, ErrLegacyAuditRecord) {
-				r.err = fmt.Errorf("line %d: %w", r.lines.Number(), err)
-				return false
+				r.stats.UnsupportedVersion++
+				continue
 			}
 			r.stats.Unparseable++
 			continue

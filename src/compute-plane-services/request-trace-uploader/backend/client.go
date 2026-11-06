@@ -71,13 +71,6 @@ type Capabilities struct {
 	// segment after an unconfirmed or failed attempt without side effects
 	// beyond the intended upload.
 	ResubmitSafe bool
-	// TerminalOutcomeSync reports whether Submit does not return until the
-	// outcome is durable, so a Status call has nothing left to confirm. An
-	// asynchronous job backend reports false.
-	TerminalOutcomeSync bool
-	// OutOfOrderTolerant reports whether the backend accepts segments in an
-	// order other than the one segment.Discover produced them in.
-	OutOfOrderTolerant bool
 	// AcceptedFormats lists the segment encodings this backend can ingest.
 	AcceptedFormats []Format
 	// MaxObjectBytes bounds one submitted file. Zero means no bound. A file
