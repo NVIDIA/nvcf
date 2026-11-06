@@ -21,8 +21,7 @@ a private registry.
 Control-plane commands run from `$BUNDLE_DIR/deploy/stacks/self-managed`.
 Compute-plane commands run from the extracted `BUNDLE_DIR` with `make -C`.
 Keep all selected stack directories together and use an installed `nvcf-cli`
-binary. The [consumption guide](../overview/umbrella-releases.md) defines the
-package layout and customer artifact access settings.
+binary.
 
 ## Installation order
 
@@ -113,11 +112,6 @@ Use the [chart and image access settings](./helmfile-installation.md#configure-a
 for both stack environments. HTTPS chart authentication, Kubernetes image pull
 secrets and worker credentials are separate inputs. An OCI login alone does
 not authenticate the HTTPS chart catalog.
-
-This example uses `nvcr-pull-secret` as the image pull secret name in both
-planes. Replace the consumption guide's example `nvcf-registry` entry with
-that name when merging the values. Keep one `global.imagePullSecrets` list;
-do not paste duplicate keys or add a second secret name.
 
 ## Step 1: Install the Gateway and capture the load balancer address
 

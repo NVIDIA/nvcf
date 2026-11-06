@@ -37,5 +37,4 @@ range does not change the contents of an existing archive.
 
 Follow the [1.0.4 upgrade notes](release-notes/1.0.2-to-1.0.4-upgrade.md)
 for the docs edition 1.0.2 baseline and required upgrade order. Use
-[Consume an NVCF release](umbrella-releases.md) for package downloads and
-customer registry configuration.
+[Consume an NVCF release](umbrella-releases.md) for package downloads.

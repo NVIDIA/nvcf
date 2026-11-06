@@ -12,7 +12,7 @@ remote deployment, or for separate control-plane and GPU clusters, use
 
 <Note>
 This source-development quickstart does not select an umbrella release.
-For an umbrella release, use [Consume an umbrella release](umbrella-releases.md)
+For an umbrella release, use [Consume an NVCF release](umbrella-releases.md)
 and its packaged stack paths.
 </Note>
 

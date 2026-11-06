@@ -3,8 +3,8 @@
 This section covers manual Helmfile installation of the NVCF control plane and
 GPU cluster components for self-hosted NVCF deployments.
 
-For a selected umbrella release, first follow [Consume an umbrella release](../overview/umbrella-releases.md)
-to download and configure its bundle. Use this Helmfile guide for explicit release control, partial
+For a selected release, first follow [Consume an NVCF release](../overview/umbrella-releases.md)
+to download its stack packages. Use this Helmfile guide for explicit release control, partial
 recovery and direct access to Helmfile values. Existing installations must
 follow the [upgrade notes](../overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
 
@@ -81,7 +81,7 @@ Helmfile `1.3.0+` re-introduced sequential execution via the `--sequential-helmf
 - A kubernetes cluster (CSP agnostic or on-prem).
 - Gateway API ingress prepared as described in [Gateway quickstart](./gateway-routing.md#gateway-quickstart) if you are exposing NVCF through Gateway API
 - Configure authenticated customer chart and image access for the [selected artifacts](../overview/manifest.md), or use an accessible [mirror](../overview/image-mirroring.md). Workload artifacts use their own registry credentials.
-- Download and verify the [umbrella bundle](../overview/umbrella-releases.md), and preserve its sibling stack directories.
+- Download the [selected stack packages](../overview/umbrella-releases.md), and keep the stack directories together.
 
 <Accordion title="Install helm-diff plugin">
 

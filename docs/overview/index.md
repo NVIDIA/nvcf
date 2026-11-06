@@ -17,8 +17,8 @@ NVCF ships as three independently versioned Helm stacks.
 
 ## Getting started
 
-- [Consume an umbrella release](umbrella-releases.md)
-  : Download and verify the selected bundle, configure customer access, and deploy its stacks.
+- [Consume an NVCF release](umbrella-releases.md)
+  : Download the selected stack packages or umbrella archive.
 - [Quickstart](./quickstart.md)
   : Develop locally from a source checkout with the one-click CLI flow.
 - [Deployment](../self-managed/installation.md)

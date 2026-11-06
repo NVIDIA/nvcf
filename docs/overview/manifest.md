@@ -2,8 +2,7 @@
 
 The generated tables list the stack packages, charts and images selected by
 this docs edition. Stack, chart and image versions are independent. Use
-[Consume an NVCF release](umbrella-releases.md) to obtain the packages and
-configure customer registry access.
+[Consume an NVCF release](umbrella-releases.md) to obtain the packages.
 
 `Publication pending` means the catalog has no verified customer download
 location for that exact artifact. Bundled charts are included in their stack

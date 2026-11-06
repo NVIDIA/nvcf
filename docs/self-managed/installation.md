@@ -2,7 +2,7 @@
 
 Self-hosted NVCF installation includes the core components required for NVCF inference. Optional components such as caching and low latency streaming support are also available. Vanity Gateway routing is available only in stack packages that include the Vanity Gateway addon. NVCF UI is available only in stack packages that include the NVCF UI addon.
 
-For an umbrella release, start with [Consume an umbrella release](../overview/umbrella-releases.md). Use the selected bundle and matching docs edition for installation.
+For an umbrella release, start with [Consume an NVCF release](../overview/umbrella-releases.md). Use the selected bundle and matching docs edition for installation.
 
 For source-based local development on k3d, start with the [Quickstart](../overview/quickstart.md). The quickstart uses `nvcf-cli self-hosted up` to install the control plane, register the local k3d cluster, install NVCA, and run basic health checks.
 
@@ -19,7 +19,7 @@ Want to try NVCF locally first? See [Local Development](../dev/local-development
 
 | Path | Use when | Starting point |
 | --- | --- | --- |
-| Umbrella release installation | You are deploying or qualifying a selected release combination. | [Consume an umbrella release](../overview/umbrella-releases.md) |
+| Umbrella release installation | You are deploying or qualifying a selected release combination. | [Consume an NVCF release](../overview/umbrella-releases.md) |
 | Local one-click CLI installation | You are developing from a source checkout on local k3d. | [Quickstart](../overview/quickstart.md) |
 | Helmfile installation | You need manual release control, partial recovery, upgrades, or detailed Helmfile operations. | [Helmfile Installation](./helmfile-installation.md) |
 
