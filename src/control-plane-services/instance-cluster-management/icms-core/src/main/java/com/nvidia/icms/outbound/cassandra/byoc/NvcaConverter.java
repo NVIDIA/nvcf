@@ -24,8 +24,6 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupByGroupIdEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAccountEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAccountKey;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccountsEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccountsKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
@@ -96,22 +94,6 @@ public class NvcaConverter {
                 .creationQueueType(entity.getCreationQueueType())
                 .gpus(entity.getGpus())
                 .authorizedNcaIds(entity.getAuthorizedNcaIds())
-                .build();
-    }
-
-    public static ClusterGroupsByAuthorizedAccountsEntity toClusterGroupsByAuthorizedAccountsEntity(
-            ClusterEntity entity, String ncaId) {
-        return ClusterGroupsByAuthorizedAccountsEntity.builder()
-                .key(ClusterGroupsByAuthorizedAccountsKey.builder()
-                             .clusterGroupName(entity.getClusterGroupName())
-                             .clusterGroupId(entity.getClusterGroupId())
-                             .ncaIdKey(entity.getNcaId())
-                             .build())
-                .creationQueueUrl(entity.getCreationQueueUrl())
-                .creationQueueType(entity.getCreationQueueType())
-                .gpus(entity.getGpus())
-                .authorizedNcaIds(entity.getAuthorizedNcaIds())
-                .ncaId(ncaId)
                 .build();
     }
 

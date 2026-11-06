@@ -1072,23 +1072,6 @@ public class TestUtil {
                 .build();
     }
 
-    public static GpuUdt getDummyGpuFroBart(String name, String value, int gpuCount, String gpuName) {
-        if (gpuName == null) {
-            return null;
-        }
-        InstanceTypeUdt instanceType = InstanceTypeUdt.builder()
-                .name(name)
-                .value(value)
-                .gpuCount(gpuCount)
-                .build();
-
-        return GpuUdt.builder()
-                .instanceTypes(Set.of(instanceType))
-                .name(gpuName)
-                .build();
-
-    }
-
     public static ClusterGroupsByAccountEntity getDummyClusterGroupsByAccountEntity(
             String clusterGroupName, String ncaId) {
         return ClusterGroupsByAccountEntity.builder()

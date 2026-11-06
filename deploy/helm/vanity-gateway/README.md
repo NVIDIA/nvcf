@@ -81,6 +81,10 @@ Important settings to review before deployment:
 - `vanityGateway.replicaCount`, resource requests, and limits for your
   environment
 - `vanityGateway.config.nvcfApiEndpoint` for the invocation endpoint
+- `vanityGateway.config.nvcfControlPlaneEndpoint` for the NVCF API base URL
+  used to list the private models a caller's API key may access, empty
+  (disabled) by default. In the self-managed stack, set it to
+  `http://api.nvcf.svc.cluster.local:8080`.
 - `vanityGateway.config.llmGatewayEndpoint` for the LLM Gateway endpoint, used
   only by models that set `functionType: LLM`
 - `vanityGateway.config.otelExporterOtlpEndpoint` for trace export, empty by

@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -50,7 +51,38 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 		}
 		inventories[spec.Key] = inventory
 	}
+	return buildCatalogFromStackInventories(repoRoot, inventories, base)
+}
 
+// updateCatalogFromManifest uses only the inventories bound by the selected
+// manifest. Publication status still comes from the existing public catalog.
+func updateCatalogFromManifest(repoRoot, manifestPath, inventoryDir string, base *Catalog) (*Catalog, error) {
+	if base != nil && base.DocsEdition != nil && base.DocsEdition.Status == ReleaseSetQualified {
+		return nil, fmt.Errorf("cannot refresh a qualified docs edition; prepare a new edition from development sources")
+	}
+	manifest, _, err := loadUmbrellaManifest(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	inventories, err := validateUmbrellaSources(repoRoot, manifest, inventoryDir)
+	if err != nil {
+		return nil, err
+	}
+	if base != nil {
+		selected := *base
+		selected.Compatibility = manifest.catalog().Compatibility
+		base = &selected
+	}
+	catalog, err := buildCatalogFromStackInventories(repoRoot, inventories, base)
+	if err != nil {
+		return nil, err
+	}
+	// Exact peer pins describe this selection, not a wider support range.
+	catalog.Compatibility = manifest.catalog().Compatibility
+	return catalog, ValidateCatalog(catalog)
+}
+
+func buildCatalogFromStackInventories(repoRoot string, inventories map[string]resolvedStackInventory, base *Catalog) (*Catalog, error) {
 	combined, err := mergeResolvedStackInventories(inventories)
 	if err != nil {
 		return nil, err
@@ -553,11 +585,20 @@ func isPublicCatalogRegistry(registry Registry) bool {
 }
 
 func publicUpstreamRepository(repository string, artifactType ArtifactType) string {
+	if artifactType == ArtifactTypeChart && isBundledChartRepository(repository) {
+		return repository
+	}
 	repository = canonicalPublicRepository(repository, artifactType)
 	if _, ok := publicUpstreamRegistry(repository, artifactType); !ok || isNVCFPublicationRepository(repository) {
 		return ""
 	}
 	return repository
+}
+
+var bundledChartRepositoryPattern = regexp.MustCompile(`^https://github\.com/(NVIDIA|dsx-ai-factory)/nvcf/tree/[0-9a-f]{40}/deploy/(stacks|helm)/[A-Za-z0-9_./-]+$`)
+
+func isBundledChartRepository(repository string) bool {
+	return bundledChartRepositoryPattern.MatchString(repository) && !strings.Contains(repository, "/../")
 }
 
 func canonicalPublicRepository(repository string, artifactType ArtifactType) string {
@@ -614,6 +655,9 @@ func isNVCFPublicationRepository(repository string) bool {
 
 func upstreamArtifactPath(artifact Artifact) string {
 	repository := strings.TrimSuffix(artifact.UpstreamRepository, "/")
+	if artifact.Type == ArtifactTypeChart && isBundledChartRepository(repository) {
+		return repository + "/" + artifact.Name + "@" + artifact.Version
+	}
 	reference := repository
 	if artifact.Type == ArtifactTypeChart {
 		name := artifact.RepositoryName

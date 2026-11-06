@@ -48,6 +48,7 @@ import com.amazonaws.services.sqs.model.SendMessageBatchResultEntry;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 import com.nvidia.icms.util.GsonCompatMapper;
+import com.nvidia.icms.configuration.nvca.NvcaConfigurationProperties;
 import com.nvidia.icms.inbound.rest.model.CreateSpotInstancesResponse;
 import com.nvidia.icms.inbound.rest.model.GetSpotInstanceRequests;
 import com.nvidia.icms.inbound.rest.model.SpotInstanceInternalState;
@@ -62,6 +63,7 @@ import com.nvidia.icms.inbound.rest.model.byoc.AwsQueueAccessInfo;
 import com.nvidia.icms.inbound.rest.model.nvca.NvcaRegistrationResponse;
 import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
+import com.nvidia.icms.outbound.sqs.QueueManager;
 import com.nvidia.icms.util.JwtKeyUtils;
 import com.nvidia.icms.util.TestUtil;
 import java.nio.charset.StandardCharsets;
@@ -94,6 +96,8 @@ import org.springframework.util.MultiValueMap;
 public class IcmsTest extends IntegrationTest {
     private static final String ClUSTER_CREATION_URL = "/v1/accounts/{ncaId}/clusters";
     private static final String NVCA_REGISTRATION_URL = "/v1/nvca/clusters/{clusterId}/register";
+    private static final String NVCA_REGISTRATION_VALIDATION_URL =
+            "/v1/nvca/clusters/{clusterId}/register/validate";
     private static final String GPU_API_URL = "/v1/si/accounts/{ncaId}/gpus";
     private static final String REGIONS_API_URL = "/v1/si/accounts/{ncaId}/regions";
     private static final String CLUSTER_NAMES_API_URL = "/v1/si/accounts/{ncaId}/clusterNames";
@@ -120,6 +124,12 @@ public class IcmsTest extends IntegrationTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private QueueManager queueManager;
+
+    @Autowired
+    private NvcaConfigurationProperties nvcaConfigurationProperties;
 
     @BeforeEach
     void beforeEach() {
@@ -171,6 +181,27 @@ public class IcmsTest extends IntegrationTest {
                 terminateInstance(instancesResponse.getRequestId());
         validateTerminationResponse(terminateInstancesResponse,
                                     List.of(terminationQueue1, terminationQueue2));
+    }
+
+    @Test
+    void testValidateRegistrationAppliesNothing() throws Exception {
+        // A client ID of its own: the cluster ID derives from it, and queues that other
+        // tests create stay in LocalStack.
+        String clusterId = createCluster("cluster5", "dummy_nca_id_1",
+                                         "nvssa-stg-dummy_" + UUID.randomUUID());
+        ClusterEntity created =
+                clusterRepository.getClusterInfoByClusterId(clusterId, true).orElseThrow();
+        String terminationQueueName = String.format(
+                nvcaConfigurationProperties.getTerminationQueueNameFormat(), clusterId);
+        assertThat(queueManager.queueExists(terminationQueueName)).isFalse();
+
+        validateClusterRegistration(clusterId);
+
+        assertThat(clusterRepository.getClusterInfoByClusterId(clusterId, true)).contains(created);
+        assertThat(queueManager.queueExists(terminationQueueName)).isFalse();
+
+        validateRegistrationResonse(registerCluster(clusterId));
+        assertThat(queueManager.queueExists(terminationQueueName)).isTrue();
     }
 
     @Test
@@ -422,6 +453,15 @@ public class IcmsTest extends IntegrationTest {
                 .andExpect(MockMvcResultMatchers.status().isOk()).andReturn();
         return objectMapper.readValue(mvcResult.getResponse().getContentAsString(),
                                       NvcaRegistrationResponse.class);
+    }
+
+    private void validateClusterRegistration(String clusterId) throws Exception {
+        String request = readClasspathResource(REGISTER_CLUSTER_REQUEST_PATH);
+        mockMvc.perform(MockMvcRequestBuilders.post(NVCA_REGISTRATION_VALIDATION_URL, clusterId)
+                                .contentType(MediaType.APPLICATION_JSON).content(request)
+                                .header(HttpHeaders.AUTHORIZATION, JwtKeyUtils.getAuthHeader(
+                                        clusterId, TestUtil.NVCA_CLUSTER_REGISTRATION_SCOPE)))
+                .andExpect(MockMvcResultMatchers.status().isNoContent());
     }
 
     private String createCluster(String clusterName, String ncaId, String oAuthClientId)

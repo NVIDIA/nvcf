@@ -1092,7 +1092,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
-                            "default": "0.11.1"
+                            "default": "0.11.4"
                         }
                     }
                 },
@@ -1162,7 +1162,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
-                            "default": "0.11.1"
+                            "default": "0.11.4"
                         }
                     }
                 },

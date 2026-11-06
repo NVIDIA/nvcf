@@ -538,9 +538,34 @@ openbao:
       disruptionBudget:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- /* Replaces the chart's whole Raft config; auto-unseal adds its seal stanza here. */}}
+      {{- with dig "openbao" "server" "ha" "raft" "config" "" .Values }}
+      raft:
+        {{- toYaml (dict "config" .) | nindent 8 }}
+      {{- end }}
     {{- with dig "openbao" "server" "annotations" dict .Values }}
     annotations:
       {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- /* For IRSA or workload identity: the KMS seal's credentials hang off this account. */}}
+    {{- with dig "openbao" "server" "serviceAccount" dict .Values }}
+    serviceAccount:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with dig "openbao" "server" "autoUnseal" dict .Values }}
+    {{- $autoUnsealEnabled := dig "enabled" false . }}
+    {{- if not (kindIs "bool" $autoUnsealEnabled) }}
+    {{- fail (printf "openbao.server.autoUnseal.enabled must be a YAML boolean, true or false. Quoted strings, null, and empty values are rejected. Got %q" (toString $autoUnsealEnabled)) }}
+    {{- end }}
+    autoUnseal:
+      {{- toYaml . | nindent 6 }}
+    {{- if $autoUnsealEnabled }}
+    {{- /* The chart skips the unseal Secret under auto-unseal, so drop the Shamir
+           unseal sidecar and the volume that mounts that Secret. */}}
+    extraContainers: []
+    volumes: []
+    volumeMounts: []
+    {{- end }}
     {{- end }}
 
 nats:

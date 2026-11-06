@@ -508,6 +508,26 @@ func TestBuildCatalogFromResolvedInventoryRejectsPinDrift(t *testing.T) {
 	}
 }
 
+func TestCatalogInventoryIncludesSelectedSamba(t *testing.T) {
+	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
+	inventory := testCatalogResolvedInventory(t, source)
+	inventory.Artifacts = append(inventory.Artifacts, resolvedInventoryArtifact{
+		Type: "container-image", Name: "samba", Repository: "nvcr.io/nvidia/nvcf/samba",
+		Version: "1.2.3", Reference: "nvcr.io/nvidia/nvcf/samba:1.2.3",
+		Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "nvca-operator"}},
+	})
+	artifacts, err := catalogArtifactsFromResolvedStackInventory(inventory, &Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, artifact := range artifacts {
+		if artifact.Name == "samba" && artifact.Type == ArtifactTypeImage && artifact.Version == "1.2.3" {
+			return
+		}
+	}
+	t.Fatal("selected Samba image was omitted from the catalog")
+}
+
 func TestBuildCatalogFromResolvedInventoryValidatesStackPinsByType(t *testing.T) {
 	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
 	inventory := testCatalogResolvedInventory(t, source)

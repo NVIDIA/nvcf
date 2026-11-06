@@ -46,7 +46,7 @@ assert_equal "$(yq -o=json -I=0 '.nats.container.image | sort_keys(.)' "$work_di
 assert_equal "$(yq -o=json -I=0 '.nats.natsBox.container.image | sort_keys(.)' "$work_dir/global-mirror.yaml")" \
   "$(yq -o=json -I=0 '.nats.natsBox.container.image | sort_keys(.)' "$work_dir/default.yaml")" 'box independent of NVCF registry'
 # Exercise the documented environment block, not a second copy of its pins.
-awk '/^### Use upstream NATS images/{section=1; next} section && /^```yaml$/{block=1; next} block && /^```$/{exit} block' "$manifest" > "$environment_file"
+awk '/^### Run the upstream NATS images as non-root/{section=1; next} section && /^```yaml$/{block=1; next} block && /^```$/{exit} block' "$manifest" > "$environment_file"
 test -s "$environment_file" || fail 'missing documented environment example'
 write_values "$work_dir/upstream.yaml"
 for path in container reloader natsBox.container; do

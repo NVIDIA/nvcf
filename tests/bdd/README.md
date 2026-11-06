@@ -39,6 +39,21 @@ AGENTS.md   Rules for working in this directory.
 
 ## Running
 
+`TestUpgradeReadOnlyChecks` exercises the downloadable upgrade scripts against
+an existing installation. Export the dedicated kubeconfig/context variables and
+the selected control-plane stack version from the
+[upgrade guide](../../docs/overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
+
+```sh
+unset BDD_CLEANUP_MODE
+cd tests/bdd
+go test -count=1 -run '^TestUpgradeReadOnlyChecks$' -timeout 40m -v
+```
+
+It checks rolling workloads and the upgrade receipt. It does not apply an
+upgrade, replace OnDelete pods, or qualify data preservation across an
+upgrade. Run it alongside the live upgrade rehearsal.
+
 Wiring tests use a fake CommandRunner and do not touch a cluster. Safe in
 CI; fast.
 

@@ -29,6 +29,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import tools.jackson.databind.ObjectMapper;
+import com.nvidia.icms.errors.ActiveInstancesConflictErrorResponse;
+import com.nvidia.icms.errors.IcmsActiveInstancesConflictException;
 import com.nvidia.icms.errors.IcmsInternalServerException;
 import com.nvidia.icms.inbound.rest.model.byoc.AwsQueueAccessInfo;
 import com.nvidia.icms.inbound.rest.model.nvca.NvcaAccessCreds;
@@ -44,8 +46,10 @@ import com.nvidia.icms.service.byoc.nvca.ClusterOidcIdentityService;
 import com.nvidia.icms.service.heartbeats.NvcaHeartbeatService;
 import com.nvidia.icms.util.JwtKeyUtils;
 import com.nvidia.icms.util.TestUtil;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -64,6 +68,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
 class NvcaControllerTest extends IntegrationTest {
 
     private final String NVCA_REGISTRATION_URL = "/v1/nvca/clusters/{clusterId}/register";
+    private final String NVCA_REGISTRATION_VALIDATION_URL = "/v1/nvca/clusters/{clusterId}/register/validate";
 
     private final String NVCA_CREDS_RENEWAL_URL = "/v1/nvca/clusters/{clusterId}/credentials";
     private final String NVCA_RECORD_HEARTBEAT_URL = "/v1/nvca/clusters/{clusterId}/heartbeat";
@@ -217,6 +222,83 @@ class NvcaControllerTest extends IntegrationTest {
         // Assert
         Assertions.assertThat(mvcResult.getResponse().getContentAsString())
                 .isEqualTo("{\"error\":\"Access Denied\"}");
+    }
+
+    @Test
+    void validateClusterRegistration_success_returnsNoContent()
+            throws Exception {
+        // Prepare
+        var request = getDummyNvcaRegistrationRequest();
+        String requestBodyJsonString = objectMapper.writeValueAsString(request);
+
+        // Act
+        mockMvc.perform(MockMvcRequestBuilders.post(NVCA_REGISTRATION_VALIDATION_URL, DUMMY_CLUSTER_ID)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(requestBodyJsonString)
+                                .header(HttpHeaders.AUTHORIZATION,
+                                        JwtKeyUtils.getAuthHeader(DUMMY_CLUSTER_ID,
+                                                                  TestUtil.NVCA_CLUSTER_REGISTRATION_SCOPE)))
+                .andExpect(MockMvcResultMatchers.status().isNoContent());
+
+        // Assert
+        verify(nvcaService).validateNvcaClusterRegistration(eq(request), eq(DUMMY_CLUSTER_ID));
+        verify(nvcaService, Mockito.never()).nvcaClusterRegistration(Mockito.any(), Mockito.any(),
+                                                                     Mockito.any());
+    }
+
+    // Error: 409
+    @Test
+    void validateClusterRegistration_activeInstancesConflict_returnsInstanceTypesAndInstances()
+            throws Exception {
+        // Prepare
+        var request = getDummyNvcaRegistrationRequest();
+        String requestBodyJsonString = objectMapper.writeValueAsString(request);
+        doThrow(new IcmsActiveInstancesConflictException("dummy_conflict_message",
+                                                         Set.of("dummy_instance_type"),
+                                                         Set.of("dummy_instance_2", "dummy_instance_1")))
+                .when(nvcaService).validateNvcaClusterRegistration(eq(request), eq(DUMMY_CLUSTER_ID));
+
+        // Act
+        MvcResult mvcResult =
+                mockMvc.perform(MockMvcRequestBuilders.post(NVCA_REGISTRATION_VALIDATION_URL, DUMMY_CLUSTER_ID)
+                                        .contentType(MediaType.APPLICATION_JSON)
+                                        .content(requestBodyJsonString)
+                                        .header(HttpHeaders.AUTHORIZATION,
+                                                JwtKeyUtils.getAuthHeader(DUMMY_CLUSTER_ID,
+                                                                          TestUtil.NVCA_CLUSTER_REGISTRATION_SCOPE)))
+                        .andExpect(MockMvcResultMatchers.status().isConflict()).andReturn();
+
+        // Assert
+        var response = objectMapper.readValue(mvcResult.getResponse().getContentAsString(),
+                                              ActiveInstancesConflictErrorResponse.class);
+        assertEquals("dummy_conflict_message", response.getError());
+        assertEquals("ACTIVE_INSTANCES_ON_REMOVED_INSTANCE_TYPES", response.getReason());
+        assertEquals(List.of("dummy_instance_type"), response.getInstanceTypes());
+        assertEquals(List.of("dummy_instance_1", "dummy_instance_2"), response.getActiveInstanceIds());
+    }
+
+    // Error: 403
+    @Test
+    void validateClusterRegistration_invalidAccess_throwsException()
+            throws Exception {
+        // Prepare
+        var request = getDummyNvcaRegistrationRequest();
+        String requestBodyJsonString = objectMapper.writeValueAsString(request);
+
+        // Act
+        MvcResult mvcResult =
+                mockMvc.perform(MockMvcRequestBuilders.post(NVCA_REGISTRATION_VALIDATION_URL, DUMMY_CLUSTER_ID)
+                                        .contentType(MediaType.APPLICATION_JSON)
+                                        .content(requestBodyJsonString)
+                                        .header(HttpHeaders.AUTHORIZATION,
+                                                JwtKeyUtils.getAuthHeader(DUMMY_CLUSTER_ID,
+                                                                          TestUtil.SPOT_REQUEST_SCOPE)))
+                        .andExpect(MockMvcResultMatchers.status().isForbidden()).andReturn();
+
+        // Assert
+        Assertions.assertThat(mvcResult.getResponse().getContentAsString())
+                .isEqualTo("{\"error\":\"Access Denied\"}");
+        verify(nvcaService, Mockito.never()).validateNvcaClusterRegistration(Mockito.any(), Mockito.any());
     }
 
     @Test
@@ -681,7 +763,7 @@ class NvcaControllerTest extends IntegrationTest {
                 eq(DUMMY_CLUSTER_ID), eq(validJwks), eq(rotatedIssuer),
                 Mockito.anyString());
         verify(clusterRepository, Mockito.never())
-                .updateClusterInfo(Mockito.any(ClusterEntity.class), Mockito.any(), eq(false));
+                .updateClusterInfo(Mockito.any(ClusterEntity.class));
     }
 
     @Test
@@ -823,7 +905,7 @@ class NvcaControllerTest extends IntegrationTest {
 
         // Regression guard: malformed JWKS must not be persisted anywhere.
         verify(clusterRepository, Mockito.never())
-                .updateClusterInfo(Mockito.any(ClusterEntity.class), Mockito.any(), eq(false));
+                .updateClusterInfo(Mockito.any(ClusterEntity.class));
         verify(clusterOidcIdentityService, Mockito.never()).updateOidcIdentity(
                 Mockito.anyString(), Mockito.anyString(), Mockito.anyString(),
                 Mockito.anyString());

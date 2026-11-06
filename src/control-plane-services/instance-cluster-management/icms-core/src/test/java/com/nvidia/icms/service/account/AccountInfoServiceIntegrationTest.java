@@ -378,7 +378,7 @@ class AccountInfoServiceIntegrationTest extends IntegrationTest {
                                        .build()))
                 .build();
 
-        clusterRepository.saveClusterInfo(clusterEntity);
+         nvcaClusterRepository.saveClusterInfo(clusterEntity);
 
         // Mock service calls
 

@@ -22,8 +22,6 @@ import static com.nvidia.icms.util.TestUtil.DUMMY_AZURE_INSTANCE_TYPE;
 import static com.nvidia.icms.util.TestUtil.DUMMY_AZURE_INSTANCE_TYPE_VALUE;
 import static com.nvidia.icms.util.TestUtil.DUMMY_BYOC_AUTHORIZED_NCA_ID;
 import static com.nvidia.icms.util.TestUtil.DUMMY_BYOC_CLUSTER_GROUP_NAME;
-import static com.nvidia.icms.util.TestUtil.DUMMY_BYOC_INSTANCE_TYPE;
-import static com.nvidia.icms.util.TestUtil.DUMMY_BYOC_INSTANCE_TYPE_VALUE;
 import static com.nvidia.icms.util.TestUtil.DUMMY_BYOC_NCA_ID;
 import static com.nvidia.icms.util.TestUtil.DUMMY_CUSTOMER_1;
 import static com.nvidia.icms.util.TestUtil.DUMMY_OCI_GPU_NAME;
@@ -34,9 +32,7 @@ import static com.nvidia.icms.util.TestUtil.INSTANCE_TYPES_LISTING_SCOPE;
 import static com.nvidia.icms.util.TestUtil.NGC_CLUSTER_NAME_LISTING_SCOPE;
 import static com.nvidia.icms.util.TestUtil.NGC_GPU_LISTING_SCOPE;
 import static com.nvidia.icms.util.TestUtil.NGC_REGION_LISTING_SCOPE;
-import static com.nvidia.icms.util.TestUtil.getDummyGpuFroBart;
 import static com.nvidia.icms.util.TestUtil.getDummyGpuV5;
-import static com.nvidia.icms.util.TestUtil.getDummyInstanceType;
 import static com.nvidia.icms.util.TestUtil.getDummyInstanceTypeV5;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -54,12 +50,9 @@ import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.NvcaClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdKey;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccountsEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccountsKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.CreationQueueUdt;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthKey;
@@ -121,40 +114,6 @@ public class AccountInfoControllerTest extends IntegrationTest {
 
     @MockitoBean
     private ClusterTargetingHelper clusterTargetingHelper;
-
-    @Test
-    void testGetGpusForBart() throws Exception {
-        //prepare
-        String azureClusterGroupId = UUID.randomUUID().toString();
-        String ociClusterGroupId = UUID.randomUUID().toString();
-        var ncaId = "bart_" + DUMMY_BYOC_NCA_ID;
-
-        // BART clusters
-        List<ClusterGroupsByAuthorizedAccountsEntity> clusterGroupsByAuthorizedAccountsEntities =
-                getDummyClusterGroups(azureClusterGroupId, ociClusterGroupId);
-
-        Mockito.when(clusterRepository.getAllClusterGroupsInAuthorizedAccount(ncaId))
-                .thenReturn(clusterGroupsByAuthorizedAccountsEntities);
-
-        List<ClusterByGroupIdAndIdEntity> clustersFromDb =
-                getClusterByGroupIdAndIdEntitiesForBart(azureClusterGroupId, ociClusterGroupId);
-
-        Mockito.when(clusterRepository.getClustersFromClusterGroup(azureClusterGroupId))
-                .thenReturn(clustersFromDb);
-        // Act
-        MvcResult mvcResult = mockMvc.perform(
-                        MockMvcRequestBuilders.get(GPU_API_URL, ncaId)
-                                .contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION,
-                                                                                JwtKeyUtils.getAuthHeader(
-                                                                                        DUMMY_CUSTOMER_1,
-                                                                                        NGC_GPU_LISTING_SCOPE)))
-                .andExpect(MockMvcResultMatchers.status().isOk()).andReturn();
-
-        // Verify
-        String response = mvcResult.getResponse().getContentAsString();
-        assertNotNull(response);
-        assertEquals("{\"gpus\":[]}", response);
-    }
 
     @ParameterizedTest
     @MethodSource("getRegionFilters")
@@ -707,17 +666,6 @@ public class AccountInfoControllerTest extends IntegrationTest {
     }
 
     @NotNull
-    private static List<ClusterGroupsByAuthorizedAccountsEntity> getDummyClusterGroups(
-            String azureClusterGroupId, String ociClusterGroupId) {
-        return List.of(getDummyClusterGroup("AWS", DUMMY_BYOC_NCA_ID,
-                                            Set.of("dummy_common_nca_id", "dummy_aws_2"), "AWS",
-                                            azureClusterGroupId),
-                       getDummyClusterGroup("OCI", DUMMY_BYOC_NCA_ID,
-                                            Set.of("AWS", "dummy_common_nca_id"), "OCI",
-                                            ociClusterGroupId));
-    }
-
-    @NotNull
     private static ClusterByGroupIdAndIdEntity getClusterByGroupIdAndIdEntityForAzure(
             String clusterGroupId, String clusterId) {
         return getDummyClusterGroup("AZURE", clusterGroupId, clusterId,
@@ -739,29 +687,6 @@ public class AccountInfoControllerTest extends IntegrationTest {
                                                          DUMMY_OCI_GPU_NAME)),
                                     Set.of("attr2", "attr3"), Set.of("cattr1", "cattr2"),
                                     "dummy_region_2", ClusterProviderEnum.OCI);
-    }
-
-    @NotNull
-    private static List<ClusterByGroupIdAndIdEntity> getClusterByGroupIdAndIdEntitiesForBart(
-            String azureClusterGroupId, String ociClusterGroupId) {
-        return List.of(getDummyClusterByGroupIdAndIdEntityForBart("AZURE", azureClusterGroupId,
-                                                                  "azure_cluster_name",
-                                                                  Set.of(getDummyGpuFroBart(
-                                                                          DUMMY_BYOC_INSTANCE_TYPE,
-                                                                          DUMMY_BYOC_INSTANCE_TYPE_VALUE,
-                                                                          8, DUMMY_OCI_GPU_NAME)),
-                                                                  Set.of("attr1", "attr2"),
-                                                                  Set.of("cattr1", "cattr2"),
-                                                                  "dummy_region_1"),
-                       getDummyClusterByGroupIdAndIdEntityForBart("OCI", ociClusterGroupId,
-                                                                  "oci_cluster_name",
-                                                                  Set.of(getDummyGpuFroBart(
-                                                                          DUMMY_BYOC_INSTANCE_TYPE,
-                                                                          DUMMY_BYOC_INSTANCE_TYPE_VALUE,
-                                                                          8, "OCI_GPU")),
-                                                                  Set.of("attr2", "attr3"),
-                                                                  Set.of("cattr1", "cattr2"),
-                                                                  "dummy_region_2"));
     }
 
     private static ClustersByAuthorizedAccountsEntity getDummyClustersByAuthorizedAccountRespForAzure(
@@ -846,44 +771,6 @@ public class AccountInfoControllerTest extends IntegrationTest {
                 .status(CloudHealthStatus.HEALTHY)
                 .build();
     }
-
-    private static ClusterByGroupIdAndIdEntity getDummyClusterByGroupIdAndIdEntityForBart(
-            String clusterGroupName, String clusterGroupId, String clusterName, Set<GpuUdt> gpus,
-            Set<String> attributes, Set<String> customAttributes, String region) {
-
-        return ClusterByGroupIdAndIdEntity.builder()
-                .key(ClusterByGroupIdAndIdKey.builder()
-                             .clusterGroupId(clusterGroupId)
-                             .clusterId(UUID.randomUUID().toString())
-                             .build())
-                .clusterGroupName(clusterGroupName)
-                .clusterDescription("dummy_cluster_description").k8sVersion("v1.25.9")
-                .clusterStatus(ClusterStatusEnum.READY).clusterName(clusterName)
-                .ncaId(DUMMY_BYOC_NCA_ID).gpus(gpus).attributes(attributes)
-                .customAttributes(customAttributes).region(region).build();
-    }
-
-    public static ClusterGroupsByAuthorizedAccountsEntity getDummyClusterGroup(String ncaId,
-                                                                               String ncaIdKey,
-                                                                               Set<String> ncaIds,
-                                                                               String clusterGroupName,
-                                                                               String clusterGroupId) {
-
-        return ClusterGroupsByAuthorizedAccountsEntity.builder()
-                .key(ClusterGroupsByAuthorizedAccountsKey.builder()
-                             .ncaIdKey(ncaIdKey)
-                             .clusterGroupId(clusterGroupId)
-                             .clusterGroupName(clusterGroupName)
-                             .build())
-                .ncaId(ncaId).authorizedNcaIds(ncaIds)
-                .gpus(Set.of(getDummyGpu())).build();
-    }
-
-    public static GpuUdt getDummyGpu() {
-        return GpuUdt.builder().name("dummy_gpu_name").instanceTypes(Set.of(getDummyInstanceType()))
-                .build();
-    }
-
 
     private static Stream<Arguments> getAttributeFilters() {
         return Stream.of(Arguments.of(

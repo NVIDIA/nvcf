@@ -69,6 +69,13 @@ func SetPreUpstreamModel(ctx context.Context, model string) {
 	}
 }
 
+// WithoutRequestProcessing detaches a side call made while serving a request,
+// such as an access lookup, from the request's pre-upstream processing record.
+// The call keeps the trace context, but it is not the request's dispatch.
+func WithoutRequestProcessing(ctx context.Context) context.Context {
+	return context.WithValue(ctx, processingContextKey{}, (*requestProcessing)(nil))
+}
+
 // ShadowTelemetryContext isolates mutable inbound telemetry while retaining trace context.
 func ShadowTelemetryContext(ctx context.Context) context.Context {
 	ctx = context.WithValue(ctx, processingContextKey{}, (*requestProcessing)(nil))
