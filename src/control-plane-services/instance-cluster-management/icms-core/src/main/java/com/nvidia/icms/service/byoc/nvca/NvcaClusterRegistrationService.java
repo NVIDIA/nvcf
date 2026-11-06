@@ -240,6 +240,8 @@ public class NvcaClusterRegistrationService {
 
         ValidatedRegistration validated = validateRegistration(nvcaRegistrationRequest, clusterId);
         ClusterEntity clusterInfo = validated.clusterInfo();
+        // Validation only reads clusterInfo, so this copy is still the stored state.
+        ClusterEntity entityBefore = CopyUtil.deepCopy(clusterInfo);
         Set<GpuV5Udt> existingGpus = validated.existingGpus();
         Set<GpuV5Udt> providedGpus = validated.providedGpus();
         Set<String> removedGpuNames = validated.removedGpuNames();
@@ -297,7 +299,7 @@ public class NvcaClusterRegistrationService {
         NvcaAccessCreds nvcaQueueAccessCreds =
                 clusterQueueAccessCredsService.generateCredsForNvcaQueues(clusterInfo);
 
-        updateEntityInDb(clusterInfo, validated.entityBefore(), auditProps);
+        updateEntityInDb(clusterInfo, entityBefore, auditProps);
 
         return NvcaRegistrationResponse.builder()
                 .credentials(nvcaQueueAccessCreds)
@@ -307,11 +309,13 @@ public class NvcaClusterRegistrationService {
     }
 
     /**
-     * Runs every check of {@link #nvcaClusterRegistration} without applying the
+     * Runs the checks of {@link #nvcaClusterRegistration} without applying the
      * registration: no queues are created or deleted, no credentials are issued, and the
-     * cluster is not updated. It throws what a registration with the same request would
-     * throw, so NVCA can find out whether ICMS accepts a configuration before applying it.
-     * A registration can still fail later, for example when an instance lands in between.
+     * cluster is not updated. It throws what those checks would throw for the same request,
+     * so NVCA can find out whether ICMS accepts a configuration before applying it. A
+     * registration that passes validation can still fail: its checks run again against
+     * state that may have changed, for example when an instance lands in between, and its
+     * queue management, credentials, and cluster update can fail on their own.
      *
      * @param nvcaRegistrationRequest NVCA registration request
      * @param clusterId               clusterId from authentication token
@@ -342,7 +346,6 @@ public class NvcaClusterRegistrationService {
      */
     private record ValidatedRegistration(
             ClusterEntity clusterInfo,
-            ClusterEntity entityBefore,
             Set<GpuV5Udt> existingGpus,
             Set<GpuV5Udt> providedGpus,
             Set<String> removedGpuNames,
@@ -361,7 +364,6 @@ public class NvcaClusterRegistrationService {
 
         // 1. Check if valid cluster-id provided
         ClusterEntity clusterInfo = validateClusterId(clusterId);
-        ClusterEntity entityBefore = CopyUtil.deepCopy(clusterInfo);
 
         validateStatus(nvcaRegistrationRequest.getStatus());
 
@@ -401,7 +403,7 @@ public class NvcaClusterRegistrationService {
 
         String jwksFingerprint = validateOidcIdentityIfPresent(nvcaRegistrationRequest, clusterId);
 
-        return new ValidatedRegistration(clusterInfo, entityBefore, existingGpus, providedGpus,
+        return new ValidatedRegistration(clusterInfo, existingGpus, providedGpus,
                                          removedGpuNames, clusterByGroupIdList, jwksFingerprint);
     }
 
