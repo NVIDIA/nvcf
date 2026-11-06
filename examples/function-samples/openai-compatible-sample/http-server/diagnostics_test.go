@@ -19,6 +19,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -53,23 +54,34 @@ func TestMessagesDiagnosticsReportsReplicaAndHeaders(t *testing.T) {
 	if got := recorder.Header().Get(functionVersionHeader); got != "ver-id" {
 		t.Fatalf("%s = %q, want ver-id", functionVersionHeader, got)
 	}
-	backend := responseMap(t, recorder)["x_backend"].(map[string]any)
+	body := responseMap(t, recorder)
+	backend, ok := body["x_backend"].(map[string]any)
+	if !ok {
+		t.Fatalf("x_backend = %#v, want object", body["x_backend"])
+	}
 	if backend["replica"] != "0-sr-test-replica" || backend["function_id"] != "fn-id" || backend["path"] != "/v1/messages" || backend["method"] != "POST" {
 		t.Fatalf("x_backend = %#v", backend)
 	}
-	headers := backend["received_headers"].(map[string]any)
-	if got := headers["x-test-header"].([]any); len(got) != 1 || got[0] != "spoofed" {
+	headers, ok := backend["received_headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("received_headers = %#v, want object", backend["received_headers"])
+	}
+	if got, ok := headers["x-test-header"].([]any); !ok || len(got) != 1 || got[0] != "spoofed" {
 		t.Fatalf("received_headers[x-test-header] = %#v", headers["x-test-header"])
 	}
-	if _, ok := headers["x-api-key"]; !ok {
-		t.Fatalf("received_headers lacks x-api-key (names must be lower-cased): %#v", headers)
+	if got, ok := headers["x-api-key"].([]any); !ok || len(got) != 1 || got[0] != "<redacted>" {
+		t.Fatalf("received_headers[x-api-key] = %#v, want [\"<redacted>\"]", headers["x-api-key"])
 	}
 }
 
 func TestMessagesDiagnosticsFallsBackToHostname(t *testing.T) {
 	t.Setenv("NVCF_INSTANCE_ID", "")
-	if got := replicaID(); got == "" {
-		t.Fatal("replicaID() is empty without NVCF_INSTANCE_ID")
+	host, err := os.Hostname()
+	if err != nil {
+		t.Skipf("os.Hostname: %v", err)
+	}
+	if got := replicaID(); got != host {
+		t.Fatalf("replicaID() = %q, want hostname %q", got, host)
 	}
 }
 

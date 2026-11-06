@@ -36,6 +36,7 @@ const (
 	replicaHeader         = "x-backend-replica"
 	functionVersionHeader = "x-backend-function-version"
 	logRequestsEnv        = "LOG_REQUESTS"
+	redactedValue         = "<redacted>"
 )
 
 // logRequests logs one line per Messages request (method, path, request id,
@@ -70,7 +71,13 @@ func replicaID() string {
 func newBackendDiagnostics(r *http.Request) *backendDiagnostics {
 	headers := make(map[string][]string, len(r.Header))
 	for name, values := range r.Header {
-		headers[strings.ToLower(name)] = append([]string(nil), values...)
+		lower := strings.ToLower(name)
+		switch lower {
+		case "authorization", "proxy-authorization", "x-api-key", "cookie":
+			headers[lower] = []string{redactedValue}
+		default:
+			headers[lower] = append([]string(nil), values...)
+		}
 	}
 	return &backendDiagnostics{
 		Replica:           replicaID(),

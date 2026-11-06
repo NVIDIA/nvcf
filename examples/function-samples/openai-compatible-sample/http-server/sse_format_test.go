@@ -25,10 +25,16 @@ import (
 	"unicode/utf8"
 )
 
-// countingRecorder records every Write call, to prove a stream was split.
+// countingRecorder records every Write and Flush call, to prove a stream was split.
 type countingRecorder struct {
 	*httptest.ResponseRecorder
-	writes [][]byte
+	writes  [][]byte
+	flushes int
+}
+
+func (c *countingRecorder) Flush() {
+	c.flushes++
+	c.ResponseRecorder.Flush()
 }
 
 func (c *countingRecorder) Write(p []byte) (int, error) {
@@ -93,6 +99,9 @@ func TestMessagesStreamSplitsMultibyteText(t *testing.T) {
 	}
 	if !split {
 		t.Fatal("no write ended inside a multi-byte character")
+	}
+	if recorder.flushes < len(recorder.writes) {
+		t.Fatalf("%d flushes for %d writes, want a flush after each piece", recorder.flushes, len(recorder.writes))
 	}
 	if got := recorder.Body.String(); !utf8.ValidString(got) || !strings.Contains(got, `"text":"`+helloChinese+`"`) {
 		t.Fatalf("reassembled stream is wrong: %q", got)

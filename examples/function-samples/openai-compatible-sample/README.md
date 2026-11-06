@@ -191,9 +191,9 @@ Diagnostics are added only to successful responses. Error responses, such as
 status injection, a concurrency 429, or a validation 400, carry no `x_backend`
 and no diagnostic headers.
 
-Header values are echoed as received, including `Authorization` and
-`X-Api-Key`. The caller asks for the echo, but do not point a shared or public
-client at a sample that sees real credentials.
+The values of `Authorization`, `Proxy-Authorization`, `X-Api-Key` and
+`Cookie` are replaced with `<redacted>`. The names stay, so you can still see
+whether a gateway forwarded them. Other header values are echoed as received.
 
 ### Non-streaming request
 
