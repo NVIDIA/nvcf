@@ -20,7 +20,7 @@ class ReviewedUpgradeGates(unittest.TestCase):
 helm() { test "$MISSING_KIND" != chart; }
 docker() { test "$MISSING_KIND" != image; }
 '''
-        command = block_containing(UPGRADE_11, 'export HELM_REPO=')
+        command = block_containing(UPGRADE_11, 'artifact_missing=0')
         for kind in ("none", "chart", "image"):
             with self.subTest(kind=kind):
                 result = subprocess.run(["bash", "-euo", "pipefail", "-c",
