@@ -407,7 +407,26 @@ async fn relay_stream<const CONFIRM_DELIVERY: bool>(
     mut recv: quinn::RecvStream,
     mut send: quinn::SendStream,
 ) -> Result<()> {
-    tokio::io::copy(&mut recv, &mut send).await?;
+    // Pass a stop or reset on explicitly: the copy sees a stop only on its next
+    // write, and quinn finishes a dropped SendStream, which turns a reset into a clean end.
+    let stopped = send.stopped();
+    let copied = tokio::select! {
+        biased;
+        copied = tokio::io::copy(&mut recv, &mut send) => copied,
+        Ok(Some(code)) = stopped => {
+            let _ = recv.stop(code);
+            return Err(anyhow!("receiver stopped the stream with code {code}"));
+        }
+    };
+    if let Err(error) = copied {
+        if let Some(quinn::ReadError::Reset(code)) = error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<quinn::ReadError>())
+        {
+            let _ = send.reset(*code);
+        }
+        return Err(error.into());
+    }
     send.finish()?;
     if CONFIRM_DELIVERY {
         send.stopped().await?;
@@ -836,6 +855,91 @@ mod tests {
         relay_task.abort();
     }
 
+    // Reverse tunnel shape: Stargate (peer) opens the request stream, pylon
+    // (client) sends part of the response body and then resets the stream, as
+    // pylon does when its output timeout fires.
+    #[tokio::test]
+    async fn quic_relay_propagates_response_stream_reset() {
+        let peer_server =
+            Endpoint::server(test_server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let peer_addr = peer_server.local_addr().unwrap();
+        let relay_server =
+            Endpoint::server(test_server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let relay_addr = relay_server.local_addr().unwrap();
+        let relay_endpoints = build_relay_endpoints(
+            RelayEndpointConfig::default(),
+            stargate_tls::build_insecure_quic_client_config().unwrap(),
+        )
+        .expect("relay endpoints");
+
+        let (partial_seen_tx, partial_seen_rx) = tokio::sync::oneshot::channel::<()>();
+        let peer_task = tokio::spawn(async move {
+            let incoming = peer_server.accept().await.expect("peer should accept");
+            let connection = incoming.await.expect("peer connection should complete");
+            let (mut send, mut recv) = connection.open_bi().await.expect("open request stream");
+            send.write_all(b"request").await.expect("write request");
+            send.finish().expect("finish request");
+            let mut partial = [0u8; 15];
+            recv.read_exact(&mut partial)
+                .await
+                .expect("read partial body");
+            assert_eq!(&partial, b"data: partial\n\n");
+            partial_seen_tx.send(()).expect("report partial body");
+            let rest = recv.read_to_end(1024).await;
+            connection.close(0u32.into(), b"test complete");
+            rest
+        });
+
+        let peer = PeerTarget {
+            dial_addr: peer_addr.to_string(),
+            server_name: "stargate".to_string(),
+        };
+        let relay_task = tokio::spawn(async move {
+            let incoming = relay_server.accept().await.expect("relay should accept");
+            let connection = incoming.await.expect("relay connection should complete");
+            let _ = forward_quic_connection(
+                connection,
+                &peer,
+                &relay_endpoints,
+                Duration::from_secs(5),
+            )
+            .await;
+        });
+
+        let mut client_endpoint = Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+        client_endpoint
+            .set_default_client_config(stargate_tls::build_insecure_quic_client_config().unwrap());
+        let client_connection = client_endpoint
+            .connect(relay_addr, "stargate")
+            .unwrap()
+            .await
+            .unwrap();
+        let (mut send, mut recv) = client_connection
+            .accept_bi()
+            .await
+            .expect("pylon should accept the relayed request stream");
+        assert_eq!(recv.read_to_end(1024).await.unwrap(), b"request");
+        send.write_all(b"data: partial\n\n").await.unwrap();
+        partial_seen_rx
+            .await
+            .expect("peer should see the partial body");
+        send.reset(0u32.into()).unwrap();
+
+        let rest = tokio::time::timeout(Duration::from_secs(5), peer_task)
+            .await
+            .expect("peer should observe the end of the response stream")
+            .expect("peer task should not panic");
+        assert!(
+            matches!(
+                rest,
+                Err(quinn::ReadToEndError::Read(quinn::ReadError::Reset(_)))
+            ),
+            "a pylon reset must reach Stargate as a reset, not a clean end: {rest:?}"
+        );
+        client_connection.close(0u32.into(), b"test complete");
+        relay_task.abort();
+    }
+
     #[tokio::test]
     async fn quic_relay_shutdown_drains_admitted_stream_and_stops_accepting_new_streams() {
         let peer_server =
@@ -941,5 +1045,80 @@ mod tests {
             .await
             .expect("peer should observe the drained connection close")
             .expect("peer task should not panic");
+    }
+
+    // Reverse tunnel shape: Stargate (peer) gives up on a request that pylon
+    // (client) has not answered yet and drops its streams. Pylon must see the
+    // STOP_SENDING while it is still silent, so it can cancel the backend request.
+    #[tokio::test]
+    async fn quic_relay_propagates_stop_sending_to_silent_responder() {
+        let peer_server =
+            Endpoint::server(test_server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let peer_addr = peer_server.local_addr().unwrap();
+        let relay_server =
+            Endpoint::server(test_server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let relay_addr = relay_server.local_addr().unwrap();
+        let relay_endpoints = build_relay_endpoints(
+            RelayEndpointConfig::default(),
+            stargate_tls::build_insecure_quic_client_config().unwrap(),
+        )
+        .expect("relay endpoints");
+
+        let (request_read_tx, request_read_rx) = tokio::sync::oneshot::channel::<()>();
+        let peer_task = tokio::spawn(async move {
+            let incoming = peer_server.accept().await.expect("peer should accept");
+            let connection = incoming.await.expect("peer connection should complete");
+            let (mut send, recv) = connection.open_bi().await.expect("open request stream");
+            send.write_all(b"request").await.expect("write request");
+            send.finish().expect("finish request");
+            request_read_rx
+                .await
+                .expect("pylon should read the request");
+            drop(recv);
+            // Keep the connection open: only the stream is abandoned.
+            std::future::pending::<()>().await;
+        });
+
+        let peer = PeerTarget {
+            dial_addr: peer_addr.to_string(),
+            server_name: "stargate".to_string(),
+        };
+        let relay_task = tokio::spawn(async move {
+            let incoming = relay_server.accept().await.expect("relay should accept");
+            let connection = incoming.await.expect("relay connection should complete");
+            let _ = forward_quic_connection(
+                connection,
+                &peer,
+                &relay_endpoints,
+                Duration::from_secs(5),
+            )
+            .await;
+        });
+
+        let mut client_endpoint = Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+        client_endpoint
+            .set_default_client_config(stargate_tls::build_insecure_quic_client_config().unwrap());
+        let client_connection = client_endpoint
+            .connect(relay_addr, "stargate")
+            .unwrap()
+            .await
+            .unwrap();
+        let (send, mut recv) = client_connection
+            .accept_bi()
+            .await
+            .expect("pylon should accept the relayed request stream");
+        assert_eq!(recv.read_to_end(1024).await.unwrap(), b"request");
+        request_read_tx.send(()).expect("report request read");
+
+        let stopped = tokio::time::timeout(Duration::from_secs(5), send.stopped())
+            .await
+            .expect("a silent pylon stream must see STOP_SENDING through the relay");
+        assert!(
+            matches!(stopped, Ok(Some(_))),
+            "expected STOP_SENDING, got {stopped:?}"
+        );
+        client_connection.close(0u32.into(), b"test complete");
+        relay_task.abort();
+        peer_task.abort();
     }
 }
