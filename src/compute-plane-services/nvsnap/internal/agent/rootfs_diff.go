@@ -219,6 +219,10 @@ func replayDiffOpts(excludeMountpoints []string) tarExtractOpts {
 	return tarExtractOpts{
 		skip:      func(name string) bool { return underAny(name, skipped) },
 		skipXattr: func(attr string) bool { return strings.HasPrefix(attr, "trusted.overlay.") },
+		// The placeholder's root comes from its own image, the source's,
+		// and is read-only when the pod's root filesystem is: restoring
+		// its owner failed the whole replay into such a pod.
+		keepRoot: true,
 	}
 }
 

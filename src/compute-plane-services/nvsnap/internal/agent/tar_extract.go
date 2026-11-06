@@ -34,6 +34,9 @@ type tarExtractOpts struct {
 	skip func(name string) bool
 	// skipXattr reports an extended attribute not to restore.
 	skipXattr func(name string) bool
+	// keepRoot leaves the extraction directory's own metadata as it is:
+	// the archive's root entry is not applied.
+	keepRoot bool
 }
 
 // extractTar extracts the archive r into d. It returns the entries it
@@ -59,7 +62,7 @@ func extractTar(r io.Reader, d *confinedDir, o tarExtractOpts) (int, error) {
 		if !ok {
 			return n, fmt.Errorf("archive entry %q leaves the extraction directory", h.Name)
 		}
-		if rel == "." && h.Typeflag != tar.TypeDir {
+		if rel == "." && (h.Typeflag != tar.TypeDir || o.keepRoot) {
 			continue
 		}
 		if o.skip != nil && rel != "." && o.skip(rel) {
