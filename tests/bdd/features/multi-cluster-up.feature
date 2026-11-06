@@ -65,7 +65,7 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
       # pull nvcr.io images. The step is idempotent (kubectl apply).
       # Real users were running this loop manually before reaching the
       # install command.
-      And the "nvcr-pull-secret" image pull secret exists in namespaces:
+      And the "nvcr-pull-secret" image pull secret exists in namespaces using context "k3d-ncp-local-cp":
         | cassandra-system |
         | nats-system      |
         | nvcf             |
@@ -75,6 +75,8 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
         | vault-system     |
         | nvca-operator    |
         | cert-manager     |
+      And the "nvcr-pull-secret" image pull secret exists in namespaces using context "k3d-ncp-local-compute-1":
+        | nvca-operator |
 
     Scenario: Operator installs the control plane on a multi-cluster ncp-local stack
       When I run command:
