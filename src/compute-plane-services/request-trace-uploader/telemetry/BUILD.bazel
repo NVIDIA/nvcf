@@ -20,6 +20,7 @@ alias(
 go_test(
     name = "telemetry_test",
     srcs = [
+        "receiver_test.go",
         "safe_test.go",
         "suppression_test.go",
         "telemetry_test.go",
