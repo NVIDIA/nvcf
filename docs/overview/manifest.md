@@ -192,22 +192,27 @@ certManager:
   image:
     repository: "quay.io/jetstack/cert-manager-controller"
     tag: "v1.20.5"
+    digest: "sha256:62df7490e10bc668edc34d4083a5439b4b684073eb78ddadf58cf35e655d8298"
   webhook:
     image:
       repository: "quay.io/jetstack/cert-manager-webhook"
       tag: "v1.20.5"
+      digest: "sha256:85367b4b5a6662e5a05c0f2465815e2dd9e4eb1957a2123be2b20f9de5135252"
   cainjector:
     image:
       repository: "quay.io/jetstack/cert-manager-cainjector"
       tag: "v1.20.5"
+      digest: "sha256:d08d2695ad3714ba42a04c07f3a15fef6e1accd02716a5ac66ba1fa8f99afca6"
   startupapicheck:
     image:
       repository: "quay.io/jetstack/cert-manager-startupapicheck"
       tag: "v1.20.5"
+      digest: "sha256:edbbd82da8e9110bc2f2ee8b4a6ef0155cbc097c0dbc0b85f8b6cd2f8c96edb3"
   acmesolver:
     image:
       repository: "quay.io/jetstack/cert-manager-acmesolver"
       tag: "v1.20.5"
+      digest: "sha256:ad8df9de893f0200eec00f288550ddd82b99f84aa4085b8dc0339758bb119fac"
 ```
 
 For authenticated mirrors, set `global.imagePullSecrets` for chart pods and
