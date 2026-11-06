@@ -255,9 +255,9 @@ configure-compute-control-plane-dns: ## Configure compute-cluster DNS for local 
 		bash ./scripts/configure-control-plane-dns.sh
 
 .PHONY: configure-worker-callback-dns
-configure-worker-callback-dns: ## Resolve *.WORKER_CALLBACK_DOMAIN to the worker-callback-proxy Service
+configure-worker-callback-dns: ## Resolve *.WORKER_CALLBACK_DOMAIN in the compute cluster (workers resolve DNS there)
 	$(call require,kubectl,See https://kubernetes.io/docs/tasks/tools/)
-	@$(MAKE) ensure-context
+	@$(MAKE) CLUSTER_NAME=$(COMPUTE_CLUSTER_NAME) ensure-context
 	@WORKER_CALLBACK_DOMAIN="$(WORKER_CALLBACK_DOMAIN)" \
 		bash ./scripts/configure-worker-callback-dns.sh
 

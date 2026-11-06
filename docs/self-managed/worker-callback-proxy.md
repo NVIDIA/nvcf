@@ -78,9 +78,19 @@ forwards each one to the pod that holds the request.
    address. Workers resolve every `<dashed-pod-ip>.<workerDomain>` name, not
    only the base name.
 
-   On a local k3d cluster, run
+   A single cluster does not need this step, because workers there call the
+   pods directly and the proxy is off.
+
+   On a local k3d setup with separate control-plane and compute clusters, run
    `make -C tools/ncp-local-cluster configure-worker-callback-dns WORKER_CALLBACK_DOMAIN=grpc-worker.example.com`.
-   It adds a CoreDNS rewrite to `kube-system/coredns-custom`.
+   It adds a CoreDNS rewrite to `kube-system/coredns-custom` in the compute
+   cluster, `COMPUTE_CLUSTER_NAME` (default `ncp-local-compute-1`), where
+   workers resolve DNS, and asks before it switches your kubectl context there.
+   The rewrite points at `worker-callback-proxy.nvcf.svc.cluster.local`, which
+   the compute cluster does not have yet, and the local control plane does not
+   expose the proxy. Until [#3257](https://github.com/dsx-ai-factory/nvcf/issues/3257)
+   adds both, set `WORKER_CALLBACK_PROXY_SERVICE` to a name that the compute
+   cluster resolves to the proxy and that you have exposed yourself.
 
 3. Apply the stack: `HELMFILE_ENV=<environment-name> helmfile sync`.
 

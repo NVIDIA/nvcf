@@ -263,9 +263,15 @@ fi
 if ! grep -q 'CONTROL_PLANE_LB_LLM_QUIC_PORT=50072' "$ROOT_DIR/Makefile"; then
   fail "Makefile must pass the LLM reverse-tunnel container port to endpoint configuration"
 fi
-dns_target="$(awk '/^configure-compute-control-plane-dns:/{show=1} /^deploy-compute-control-plane-endpoints:/{show=0} show{print}' "$ROOT_DIR/Makefile")"
+dns_target="$(awk '/^configure-compute-control-plane-dns:/{show=1} /^\.PHONY: configure-worker-callback-dns/{show=0} /^deploy-compute-control-plane-endpoints:/{show=0} show{print}' "$ROOT_DIR/Makefile")"
 if grep -q 'CLUSTER_NAME' <<<"$dns_target"; then
   fail "compute DNS configuration must not pass unused CLUSTER_NAME"
+fi
+# Workers resolve DNS in the compute cluster, so the worker callback rewrite
+# must check the compute cluster's kubectl context, not the default cluster's.
+callback_dns_target="$(awk '/^configure-worker-callback-dns:/{show=1} /^deploy-compute-control-plane-endpoints:/{show=0} show{print}' "$ROOT_DIR/Makefile")"
+if ! grep -q 'CLUSTER_NAME=\$(COMPUTE_CLUSTER_NAME) ensure-context' <<<"$callback_dns_target"; then
+  fail "worker callback DNS configuration must check the compute cluster context"
 fi
 
 for unsupported_alias in 'api.${domain}' 'api-keys.${domain}'; do
