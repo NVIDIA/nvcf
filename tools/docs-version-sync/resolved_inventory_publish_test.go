@@ -716,6 +716,7 @@ func TestReleaseInventoriesOwnOnlyTheirStackStates(t *testing.T) {
 		{stackInventorySpecs[1], "compute-plane", []string{
 			"deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl",
 			"deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl",
+			"deploy/stacks/nvcf-compute-plane/inventory/container-cache.yaml.gotmpl",
 		}},
 		{stackInventorySpecs[2], "observability", []string{
 			"deploy/stacks/observability/helmfile.d/01-observability.yaml.gotmpl",
