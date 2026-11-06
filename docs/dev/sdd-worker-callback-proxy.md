@@ -23,7 +23,9 @@ Non-goals:
 - Creating the load balancer or the DNS records that expose the proxy. The
   operator owns both.
 - Changing the gRPC callback flow.
-- Distributing a per-stack CA to workers.
+- Owning CA distribution to workers. With the default frontend issuer, workers
+  receive the stack CA through `workerCallbackCaPem` in the compute-plane
+  stack. With a public frontend certificate they need no extra CA.
 
 ## How it fits together
 
@@ -78,13 +80,16 @@ sequenceDiagram
   E-->>W: response
 ```
 
+The diagram shows the default. With `upstreamTls.enabled: false` the target port
+is 8080 and session 2 is plain HTTP, so only session 1 is TLS.
+
 How the pieces fit:
 
 - invocation-service advertises the target
-  `http://<dashed-pod-ip>.invocation.nvcf.svc.cluster.local:8443`. The `http`
-  scheme makes the worker send a forward-proxy request through its TLS session
-  to Envoy, not a CONNECT tunnel. It does not make the worker's connection
-  plain.
+  `http://<dashed-pod-ip>.invocation.nvcf.svc.cluster.local:8443`, or port 8080
+  when `upstreamTls.enabled` is false. The `http` scheme makes the worker send a
+  forward-proxy request through its TLS session to Envoy, not a CONNECT tunnel.
+  It does not make the worker's connection plain.
 - The proxy address is `https://invocation.<workerDomain>:10084`. The worker
   verifies Envoy's certificate for `*.<workerDomain>`.
 - Envoy accepts only absolute-form requests for
@@ -130,7 +135,7 @@ flowchart TB
 | --- | --- | --- |
 | Worker to Envoy | Envoy frontend certificate for `*.<workerDomain>` | The worker's trust store. It holds the system roots plus any CA given through `NVCF_PROXY_CA_PEM`. For the default issuer the worker needs the stack CA. For a public certificate the system roots are enough. |
 | Envoy to invocation pod | Pod certificate for `*.invocation.<namespace>.svc.<clusterDomain>` | `ca.crt` of Secret `invocation-service-worker-tls`, and the pod name |
-| Envoy to grpc-proxy pod | Pod certificate for `*.grpc-headless.<namespace>.svc.<clusterDomain>` | `ca.crt` of Secret `grpc-proxy-worker-tls`, and the pod name |
+| Envoy to grpc-proxy pod | Pod certificate for `*.grpc-headless.<namespace>.svc.<clusterDomain>` | `ca.crt` of Secret `grpc-proxy-worker-tls`, and the fixed name `grpcProxy.tlsServerName`, not the individual pod |
 
 The pod certificates always come from the stack CA. Only the frontend
 certificate is a choice. Envoy reads each CA through file-based SDS and watches
@@ -143,7 +148,7 @@ chart values.
 
 | Stack value | Default | Effect |
 | --- | --- | --- |
-| `workerCallbackProxy.enabled` | `false` | Deploys the proxy and turns on grpc-proxy HTTP/3 and the invocation-service worker TLS listener |
+| `workerCallbackProxy.enabled` | `false` | Deploys the proxy and turns on grpc-proxy HTTP/3. It also turns on the invocation-service worker TLS listener, unless `invocation.upstreamTls.enabled` is false. |
 | `workerCallbackProxy.workerDomain` | none, required | Callback host names are `<dashed-pod-ip>.<workerDomain>`. Must be a plain DNS name. |
 | `workerCallbackProxy.tls.frontend.existingSecret` | empty | Use a `kubernetes.io/tls` Secret for `*.<workerDomain>`, for example a public certificate |
 | `workerCallbackProxy.tls.frontend.certificate.issuerRef` | the stack's OpenBao issuer | Issue the frontend certificate from another cert-manager issuer, for example Let's Encrypt |
@@ -251,16 +256,26 @@ passthrough.
 
 ## Security considerations
 
-- Envoy ends the worker's TLS, so it can read both callbacks. This is the same
-  trade-off the gRPC path already has.
+- Envoy ends the worker's TLS, so it can read gRPC callbacks and forward-proxy
+  HTTP callbacks. A CONNECT tunnel, when it is turned on, is different: Envoy
+  passes raw TCP and cannot read the worker's inner TLS session.
 - The invocation route is not an open proxy. Its authority regex limits targets
   to invocation-service pod names on one port, and its path match limits
   requests to the worker callback path.
-- The grpc-proxy route accepts any host under `*.<workerDomain>`. It is safe
-  only because the upstream TLS handshake needs the grpc-proxy pod certificate.
-- Pod certificates are verified on both paths: chain against the CA Secret, and
-  name against the pod. A certificate that the right CA signed for another name
-  is refused.
+- The grpc-proxy route accepts any host under `*.<workerDomain>`, and the Lua
+  filter turns the dashed IP in the host name into the upstream address. Envoy
+  can therefore start a QUIC handshake with any IP a caller encodes in that
+  name. The upstream certificate check decides which peer can complete the TLS
+  session, but it does not stop the handshake. Limit who can reach the Service,
+  and where the CNI enforces it add the egress NetworkPolicy from the chart
+  README.
+- The two upstream checks differ. For the invocation pod, Envoy verifies the
+  certificate chain against the CA Secret and the certificate name against the
+  pod name from the request authority. For the grpc-proxy pod, it verifies the
+  chain against the CA Secret and a fixed name, `grpcProxy.tlsServerName`
+  (default `*.grpc-headless.<namespace>.svc.<clusterDomain>`), not the
+  individual pod. A certificate that the right CA signed for another name is
+  refused on both.
 - A CONNECT tunnel is a raw TCP connection that Envoy cannot read or restrict,
   so the stack turns it off.
 - Plain HTTP to the pod is for trusted networks only. TLS is the default.

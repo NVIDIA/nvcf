@@ -104,7 +104,7 @@ the invocation-service pod (below). The two sessions never share a certificate:
 | --- | --- | --- | --- | --- |
 | Worker to proxy (HTTP on TCP 10084, gRPC on UDP 443) | Worker | Proxy frontend certificate for `*.<workerDomain>` | The worker's CA bundle: the stack CA for the default issuer, its system roots for a public certificate | `workerCallbackProxy.tls.frontend` |
 | Proxy to invocation-service pod (TCP 8443) | Proxy | Pod certificate for `*.invocation.nvcf.svc.cluster.local`, issued by the stack CA | `ca.crt` of Secret `invocation-service-worker-tls`, and the pod name | `workerCallbackProxy.invocation.upstreamTls.enabled` |
-| Proxy to grpc-proxy pod (UDP 10084) | Proxy | Pod certificate for `*.grpc-headless.nvcf.svc.cluster.local`, issued by the stack CA | `ca.crt` of Secret `grpc-proxy-worker-tls`, and the pod name | Always on |
+| Proxy to grpc-proxy pod (UDP 10084) | Proxy | Pod certificate for `*.grpc-headless.nvcf.svc.cluster.local`, issued by the stack CA | `ca.crt` of Secret `grpc-proxy-worker-tls`, and the fixed name `*.grpc-headless.nvcf.svc.cluster.local` | Always on |
 
 The pod certificates always come from the stack CA. Only the frontend
 certificate is a choice, and workers never see the pod certificates, so workers
