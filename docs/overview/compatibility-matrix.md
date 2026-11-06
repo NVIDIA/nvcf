@@ -41,6 +41,6 @@ for the docs edition 1.0.2 baseline and required upgrade order. Use
 registry configuration.
 
 For the separate 1.1 upgrade path, see its
-[cross-stack upgrade order](release-notes/1.0.x-to-1.1.2-upgrade.md#cross-stack-upgrade-order).
+[cross-stack upgrade order](release-notes/1.0.x-to-1.1.0-upgrade.md#cross-stack-upgrade-order).
 That contract applies to its listed starting releases; it does not change
 the exact 1.0.4 selection above.

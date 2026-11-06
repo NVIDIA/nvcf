@@ -41,6 +41,7 @@ docker() { test "$MISSING_KIND" != image; }
         command = block_containing(UPGRADE_11, "# Releases deployed")
         stubs = r'''
 helm() { printf '%s\n' '[{"name":"api","status":"deployed"}]'; }
+python3() { return 0; }
 kc() {
   case "$*" in
     *'get pods'*'jsonpath'*) printf '%s\n' cassandra-0 ;;
@@ -52,7 +53,8 @@ kc() {
             with self.subTest(pods=pods), tempfile.TemporaryDirectory() as directory:
                 result = subprocess.run(["bash", "-euo", "pipefail", "-c", stubs + command + "\necho CONTINUED"],
                                         env={**os.environ, "PODS": json.dumps({"items": pods}),
-                                             "WORKDIR": directory, "CONTROL_KUBECONFIG": "synthetic"},
+                                             "WORKDIR": directory, "CONTROL_KUBECONFIG": "synthetic",
+                                             "UPGRADE_SCRIPTS": directory},
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode == 0, expected, result.stderr)
                 self.assertEqual("CONTINUED" in result.stdout, expected)

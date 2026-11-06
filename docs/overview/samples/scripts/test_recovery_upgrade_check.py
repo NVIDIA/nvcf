@@ -15,7 +15,7 @@ import unittest
 DOCS = Path(__file__).resolve().parents[3]
 RECOVERY = DOCS / "self-managed/upgrade-recovery.md"
 UPGRADE = DOCS / "overview/release-notes/0.6.1-to-1.0.1-upgrade.md"
-UPGRADE_11 = DOCS / "overview/release-notes/1.0.x-to-1.1.2-upgrade.md"
+UPGRADE_11 = DOCS / "overview/release-notes/1.0.x-to-1.1.0-upgrade.md"
 
 
 def block_containing(path, marker):

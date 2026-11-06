@@ -459,9 +459,9 @@ navigation:
   - section: Upgrade Notes
     skip-slug: true
     contents:
-    - page: 1.0.x to 1.1.2 Upgrade
-      path: ../docs/overview/release-notes/1.0.x-to-1.1.2-upgrade.md
-      slug: 1-0-x-to-1-1-2-upgrade
+    - page: 1.0.x to 1.1.0 Upgrade
+      path: ../docs/overview/release-notes/1.0.x-to-1.1.0-upgrade.md
+      slug: 1-0-x-to-1-1-0-upgrade
     - page: Docs 1.0.2 or 1.0.3 to NVCF 1.0.4 Upgrade
       path: ../docs/overview/release-notes/1.0.2-to-1.0.4-upgrade.md
       slug: 1-0-2-to-1-0-4-upgrade
