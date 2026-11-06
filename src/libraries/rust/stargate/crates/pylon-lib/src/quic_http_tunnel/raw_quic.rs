@@ -118,7 +118,7 @@ pub(super) async fn handle_stream(
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| anyhow::anyhow!("missing required x-path header"))?
         .to_string();
-    forward_tunnel_request(
+    let result = forward_tunnel_request(
         &app,
         TunnelRequestParts {
             method,
@@ -127,7 +127,16 @@ pub(super) async fn handle_stream(
         },
         &mut transport,
     )
-    .await
+    .await;
+    if result.is_ok() {
+        // This stream can hold the last reference to the connection, and
+        // dropping that reference discards response bytes the router has not
+        // acknowledged.
+        if let Err(error) = transport.send_stream.stopped().await {
+            tracing::debug!(%error, "raw QUIC response delivery not confirmed");
+        }
+    }
+    result
 }
 
 fn raw_quic_response_headers(
