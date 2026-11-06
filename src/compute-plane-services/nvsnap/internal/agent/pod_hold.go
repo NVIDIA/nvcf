@@ -383,3 +383,21 @@ func (a *Agent) holdMember(ctx context.Context, session, ns, pod, container stri
 	log := a.log.WithFields(logrus.Fields{"pod": ns + "/" + pod, "session": session})
 	return a.holdPod(holdKey(session, ns, pod), int(info.PID), keep, log)
 }
+
+// thawAfterDump thaws the cgroup a pid-namespace dump froze, and removes
+// its hold record. A dump that ends the container's processes (a capture
+// that stops the instance) leaves no cgroup to thaw: that is the end of
+// the hold, not a failure. A thaw that fails otherwise is retried.
+func thawAfterDump(cg, record string, log *logrus.Entry) {
+	err := setFrozen(cg, false)
+	switch {
+	case err == nil:
+	case os.IsNotExist(err):
+		log.WithField("cgroup", cg).Debug("criu-v2: the dumped container has ended; nothing to thaw")
+	default:
+		log.WithError(err).WithField("cgroup", cg).Warn("criu-v2: cannot thaw the dumped container; retrying")
+		go retryThaw(record, []string{cg}, log)
+		return
+	}
+	_ = os.Remove(record)
+}
