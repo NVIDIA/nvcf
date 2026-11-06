@@ -518,6 +518,11 @@ The `skip_verify = true` is needed because the proxy's dynamically-generated TLS
 
 ### Upgrading private-image installations
 
+For proxy-cache clients that use NVCF Unbound certificate injection, upgrade
+Unbound with the same certificate-helper image version as the cache. Recreate
+existing function pods after the upgrade so they receive the updated CA bundle.
+
+
 Set `images.secrets` explicitly in your values file before upgrading an
 installation that pulls private images. Earlier chart versions supplied
 `nvidia-ngcuser-pull-secret` by default; the default is now an empty list.
