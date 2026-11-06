@@ -109,7 +109,7 @@ export STORAGE_CLASS="gp3"
 
 ### Configure chart and image access
 
-Use the [customer artifact access settings](../overview/umbrella-releases.md#configure-customer-artifact-access)
+Use the [chart and image access settings](./helmfile-installation.md#configure-artifact-access)
 for both stack environments. HTTPS chart authentication, Kubernetes image pull
 secrets and worker credentials are separate inputs. An OCI login alone does
 not authenticate the HTTPS chart catalog.
@@ -459,7 +459,7 @@ cp deploy/stacks/nvcf-compute-plane/environments/base.yaml \
   "deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml"
 ```
 
-Merge the same [customer artifact access settings](../overview/umbrella-releases.md#configure-customer-artifact-access)
+Merge the same [chart and image access settings](./helmfile-installation.md#configure-artifact-access)
 used by the control plane into
 `deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml`. Keep the
 HTTPS chart URL and authentication, image registry and namespace consistent

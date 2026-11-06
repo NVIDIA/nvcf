@@ -33,10 +33,10 @@ checks. See [Helmfile Installation](./helmfile-installation.md),
 
 ## Installation order
 
-Follow the [selected stack deployment order](../overview/umbrella-releases.md#deploy-the-selected-stacks)
-for a fresh installation. It covers the control plane, enabled Observability
-profile, GPU-cluster registration and compute-plane installation. Existing
-installations use the [upgrade procedure](../overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
+For a fresh installation, install the control plane and any enabled
+Observability profile, then register each GPU cluster and install the compute
+plane. Existing installations use the
+[upgrade procedure](../overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
 
 After the core deployment works, configure the optional features your workload
 needs: [caches](../compute-plane/caches.md), [low latency streaming](./lls-installation.md),

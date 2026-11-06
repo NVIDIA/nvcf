@@ -120,7 +120,7 @@ cd "$BUNDLE_DIR"
 touch deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml
 ```
 
-Start with the [customer artifact access values](../../overview/umbrella-releases.md#configure-customer-artifact-access).
+Start with the [chart and image access settings](../../self-managed/helmfile-installation.md#configure-artifact-access).
 Use the same selected chart and image source as the control plane. Add the
 compute-specific settings below to that environment file.
 

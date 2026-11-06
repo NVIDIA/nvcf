@@ -21,7 +21,7 @@ components require the corresponding deployment profile.
 
 ## Prepare Helm charts for Helmfile
 
-Use the [customer artifact access settings](umbrella-releases.md#configure-customer-artifact-access)
+Use the [chart and image access settings](../self-managed/helmfile-installation.md#configure-artifact-access)
 to pull the selected charts directly. For a private registry, follow
 [chart mirroring](image-mirroring.md#pulling-helm-charts). Bundled charts remain
 inside their stack directories and need no separate chart publication.

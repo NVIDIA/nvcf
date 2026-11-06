@@ -256,8 +256,8 @@ cannot collide. Configure the chart and image repositories separately.
 ### Obtain stack packages
 
 Use [Consume an NVCF release](umbrella-releases.md) for the selected stack
-packages or an umbrella archive. That guide owns the download commands and
-sibling directory layout. Continue here when charts or images need a mirror.
+packages or an umbrella archive. That guide owns the download commands.
+Continue here when charts or images need a mirror.
 
 That guide runs in its own Bash child shell and can change the working
 directory. Run `exit` to return to this shell before pushing a chart, so

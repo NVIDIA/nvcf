@@ -480,13 +480,30 @@ Set auto-unseal only on a new install. On an installed cluster, `helmfile apply`
 
 </Warning>
 
+<a id="configure-artifact-access" />
+
 #### `helm` and `image` Configuration
 
-Merge the [customer artifact access settings](../overview/umbrella-releases.md#configure-customer-artifact-access)
-into the environment's `global` section. That guide owns the chart source,
-image source and credential settings for direct NGC access or a private mirror.
-The EKS example above uses a private mirror; replace its source fields when
-using the customer catalog directly. Keep one `global` mapping.
+Set the chart and image sources in the environment's `global` section. For the
+public NVCF catalog:
+
+```yaml
+global:
+  helm:
+    sources:
+      url: https://helm.ngc.nvidia.com/nvidia/nvcf
+      username: "$oauthtoken"
+      password: "<customer NGC API key>"
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf
+  imagePullSecrets:
+    - name: nvcr-pull-secret
+```
+
+Keep credential-bearing files out of source control. For a private mirror, omit
+`url` and set the mirror's `registry` and `repository` instead, as in the EKS
+example above. Keep one `global` mapping.
 
 Before upgrading a mirrored deployment, copy every selected chart and image
 that changed. Use the [artifact manifest](../overview/manifest.md) as the
@@ -1290,7 +1307,7 @@ cluster. The compute-plane Helmfile installs `helm-nvca-operator` and wires it
 to the control plane values returned by cluster registration.
 
 Create an environment file in the compute-plane directory and merge the
-[customer artifact access settings](../overview/umbrella-releases.md#configure-customer-artifact-access)
+[chart and image access settings](#configure-artifact-access)
 into its `global` mapping. Set the service URLs to
 addresses reachable from the GPU cluster. If the GPU cluster reaches the
 control plane through one load balancer with hostname-based Gateway routing,
