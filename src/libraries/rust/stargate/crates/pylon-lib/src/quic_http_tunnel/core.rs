@@ -873,9 +873,8 @@ pub(super) async fn forward_tunnel_request(
     let priority = lifecycle
         .as_ref()
         .and_then(|lifecycle| lifecycle.required.priority);
-    // A write to the tunnel fails only after the peer abandons the request, and
-    // a queued or reasoning backend writes nothing for minutes. Watch for the
-    // stop directly so the backend request is dropped instead of running for nobody.
+    // A queued or reasoning backend can write nothing for minutes, so a failed write
+    // is too late to notice an abandoned request. Watch for the stop directly.
     let response_stopped = transport.response_stopped();
     tokio::pin!(response_stopped);
     let upstream_result = tokio::select! {

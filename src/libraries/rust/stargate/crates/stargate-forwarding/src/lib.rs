@@ -414,6 +414,7 @@ async fn relay_stream<const CONFIRM_DELIVERY: bool>(
         biased;
         copied = tokio::io::copy(&mut recv, &mut send) => copied,
         Ok(Some(code)) = stopped => {
+            // Fails only if the sender already finished or reset; nothing is left to stop.
             let _ = recv.stop(code);
             return Err(anyhow!("receiver stopped the stream with code {code}"));
         }
@@ -423,6 +424,7 @@ async fn relay_stream<const CONFIRM_DELIVERY: bool>(
             .get_ref()
             .and_then(|inner| inner.downcast_ref::<quinn::ReadError>())
         {
+            // Fails only if the stream already closed; the receiver then sees that instead.
             let _ = send.reset(*code);
         }
         return Err(error.into());
@@ -855,9 +857,8 @@ mod tests {
         relay_task.abort();
     }
 
-    // Reverse tunnel shape: Stargate (peer) opens the request stream, pylon
-    // (client) sends part of the response body and then resets the stream, as
-    // pylon does when its output timeout fires.
+    // Reverse tunnel shape: pylon (client) sends part of the response, then resets
+    // the stream, as it does when its output timeout fires.
     #[tokio::test]
     async fn quic_relay_propagates_response_stream_reset() {
         let peer_server =
@@ -1047,9 +1048,8 @@ mod tests {
             .expect("peer task should not panic");
     }
 
-    // Reverse tunnel shape: Stargate (peer) gives up on a request that pylon
-    // (client) has not answered yet and drops its streams. Pylon must see the
-    // STOP_SENDING while it is still silent, so it can cancel the backend request.
+    // Reverse tunnel shape: Stargate (peer) drops a request that pylon (client) has
+    // not answered yet; pylon must see STOP_SENDING while it is still silent.
     #[tokio::test]
     async fn quic_relay_propagates_stop_sending_to_silent_responder() {
         let peer_server =

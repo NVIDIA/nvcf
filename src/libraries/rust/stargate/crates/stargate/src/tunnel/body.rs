@@ -38,7 +38,7 @@ use upload::{ResponseHeadRaceBias, ResponseHeadRaceConfig, race_request_body_and
 
 /// The tunnel peer sent no response headers before the request timeout.
 #[derive(Debug, thiserror::Error)]
-#[error("quic request timed out")]
+#[error("quic request timed out waiting for response headers")]
 pub struct ResponseHeaderTimeout;
 
 pub struct StreamingBody {
