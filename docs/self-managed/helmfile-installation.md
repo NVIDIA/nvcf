@@ -3,32 +3,30 @@
 This section covers manual Helmfile installation of the NVCF control plane and
 GPU cluster components for self-hosted NVCF deployments.
 
-For a fresh install, start with the [Quickstart](../overview/quickstart.md). Use this Helmfile guide when you need explicit release control, partial recovery, upgrades, or direct access to Helmfile values.
+For a selected release, first follow [Consume an NVCF release](../overview/umbrella-releases.md)
+to download its stack packages. Use this Helmfile guide for explicit release control, partial
+recovery and direct access to Helmfile values. Existing installations must
+follow the [upgrade notes](../overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
 
 <Info>
-This guide assumes you have already downloaded and extracted the
-`nvcf-self-managed-stack` Helmfile bundle (see
-[download-nvcf-self-managed-stack](../overview/image-mirroring.md)). Control-plane
-commands run from inside that directory unless otherwise noted. The directory
-contains the control-plane Helmfile definitions, environment templates, and
-sample configurations referenced throughout.
+Keep the extracted `deploy/stacks/self-managed`, `nvcf-compute-plane` and
+`observability` directories together. Control-plane commands run from
+`$BUNDLE_DIR/deploy/stacks/self-managed` unless otherwise noted. The directory
+contains Helmfile definitions, environment templates and secret templates.
 
-GPU clusters use the compute-plane Makefile in
-`deploy/stacks/nvcf-compute-plane`. It registers one GPU cluster at a time and
-installs the NVCA operator into that cluster.
-
-Clone the public repository before the GPU cluster steps:
+GPU-cluster commands use the sibling `deploy/stacks/nvcf-compute-plane`
+Makefile from the extracted root. It registers one GPU cluster at a time and
+installs the NVCA operator into that cluster. Use an installed `nvcf-cli` binary.
+Do not substitute stack directories from current main.
 
 ```bash
-git clone https://github.com/nvidia/nvcf.git
-```
-
-```bash
-cd path/to/nvcf-self-managed-stack
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 ls
 # Expected contents: helmfile.d/  environments/  secrets/  global.yaml.gotmpl  ...
 ```
 
+The [local-development quickstart](../overview/quickstart.md) uses a source
+checkout and local k3d tooling; it does not select this umbrella bundle.
 </Info>
 
 ## Namespace Requirements
@@ -82,8 +80,8 @@ Helmfile `1.3.0+` re-introduced sequential execution via the `--sequential-helmf
 
 - A kubernetes cluster (CSP agnostic or on-prem).
 - Gateway API ingress prepared as described in [Gateway quickstart](./gateway-routing.md#gateway-quickstart) if you are exposing NVCF through Gateway API
-- Artifacts must be available in a registry that your Kubernetes cluster can access. This can be the `nvcf-onprem` registry for NVCF control plane service artifacts, but function containers and helm charts must be configured to a user-managed registry. See [self-hosted-artifact-manifest](../overview/manifest.md) and [self-hosted-image-mirroring](../overview/image-mirroring.md).
-- The `nvcf-self-managed-stack` repository must be downloaded to your local machine (see [download-nvcf-self-managed-stack](../overview/image-mirroring.md)).
+- Configure authenticated customer chart and image access for the [selected artifacts](../overview/manifest.md), or use an accessible [mirror](../overview/image-mirroring.md). Workload artifacts use their own registry credentials.
+- Download the [selected stack packages](../overview/umbrella-releases.md), and keep the stack directories together.
 
 <Accordion title="Install helm-diff plugin">
 
@@ -94,26 +92,18 @@ helm plugin install https://github.com/databus23/helm-diff
 
 </Accordion>
 
-<Warning>
-kubectl version must match your cluster within one minor version. Using a
-kubectl version that is more than one minor version ahead of your Kubernetes
-cluster will cause `kubectl apply` and `kubectl patch` commands to fail, not
-just warn, due to stricter server-side field validation in newer clients.
-
-This is especially common on macOS with Homebrew, where `brew install kubectl`
-or `brew upgrade` can silently install a version much newer than your cluster.
-Verify before proceeding:
+Use a kubectl client within one minor version of the Kubernetes API server,
+as required by the [Kubernetes version-skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+A client outside that range is unsupported, even if individual commands work.
+Check both versions before installing, especially after a package-manager update:
 
 ```bash
 kubectl version
-# Ensure the Client Version and Server Version are within one minor version of each other.
-# Example: Client v1.32.x against Server v1.31.x is OK.
-#          Client v1.32.x against Server v1.29.x will cause failures.
 ```
 
-If your client is too new, install a matching version directly from the [Kubernetes release page](https://kubernetes.io/docs/tasks/tools/).
-
-</Warning>
+For example, kubectl 1.36 supports Kubernetes API servers 1.35 through 1.37.
+If your client is outside the supported range, install a compatible version
+from the [Kubernetes tools page](https://kubernetes.io/docs/tasks/tools/).
 
 ### Access Requirements
 
@@ -204,7 +194,7 @@ environment file. The template below shows the values to configure for Amazon
 EKS ([cp-env-eks-example.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/overview/samples/configs/cp-env-eks-example.yaml)).
 
 ```bash
-cd path/to/nvcf-self-managed-stack
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 export HELMFILE_ENV="<environment-name>"
 cp environments/base.yaml "environments/${HELMFILE_ENV}.yaml"
 ```
@@ -490,69 +480,61 @@ Set auto-unseal only on a new install. On an installed cluster, `helmfile apply`
 
 </Warning>
 
+<a id="configure-artifact-access" />
+
 #### `helm` and `image` Configuration
 
-The `helm` and `image` sections tell NVCF which registries to pull Helm charts and container images from.
-
-- `helm.sources`: The OCI registry where NVCF Helm charts are stored. Helmfile pulls charts from here at deploy time (requires local authentication. See [Access Requirements](#access-requirements)).
-- `image`: The container registry where NVCF service images are stored. Kubernetes pulls images from here at runtime.
+Set the chart and image sources in the environment's `global` section. For the
+public NVCF catalog:
 
 ```yaml
-# Helm Chart Sources Configuration
-helm:
-  sources:
-    registry: "nvcr.io"
-    repository: "YOUR_ORG/YOUR_TEAM"
-    # NGC Example:
-    # registry: nvcr.io
-    # repository: 123456789102/YOUR_TEAM
-    # ECR Example:
-    # registry: <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
-    # repository: <your-ecr-repository-name>
-
-# Container Image Registry Configuration
-image:
-  registry: nvcr.io
-  repository: YOUR_ORG/YOUR_TEAM
-  # NGC Example:
-  # registry: nvcr.io
-  # repository: 123456789102/YOUR_TEAM
-  # ECR Example:
-  # registry: <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
-  # repository: <your-ecr-repository-name>
+global:
+  helm:
+    sources:
+      url: https://helm.ngc.nvidia.com/nvidia/nvcf
+      username: "$oauthtoken"
+      password: "<customer NGC API key>"
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf
+  imagePullSecrets:
+    - name: nvcr-pull-secret
 ```
 
-<Warning>
-If you have mirrored NVCF artifacts to your own registry (e.g., ECR), update both `helm.sources` and `image` to point to your mirror. See [self-hosted-image-mirroring](../overview/image-mirroring.md) for details on mirroring artifacts.
+Keep credential-bearing files out of source control. For a private mirror, omit
+`url` and set the mirror's `registry` and `repository` instead, as in the EKS
+example above. Keep one `global` mapping.
 
-When upgrading to a new `nvcf-self-managed-stack` version, re-mirror all artifacts before running `helmfile sync`. Each stack release may introduce new or updated container images and Helm charts. If these are not present in your private registry, pods will fail with `ImagePullBackOff`. For split installs, mirror both core stack resources listed in the [self-hosted-artifact-manifest](../overview/manifest.md). If you deploy shared observability as a standalone stack, mirror the observability stack resource as well.
+Before upgrading a mirrored deployment, copy every selected chart and image
+that changed. Use the [artifact manifest](../overview/manifest.md) as the
+version list and [Image Mirroring](../overview/image-mirroring.md) for copy
+commands. Registry locations do not supply Kubernetes pull credentials; follow
+[Configure image pull secrets](#step-4-configure-image-pull-secrets-conditional)
+for each namespace that pulls from a private registry.
 
-</Warning>
+#### Migration clients on Kubernetes 1.35
 
-<Note>
-Pulling directly from NGC is the recommended approach and avoids the need to
-manually mirror artifacts on every upgrade. If your environment permits it,
-configure `helm.sources` and `image` to point to the NGC registry (`nvcr.io`)
-and use your NGC API key for authentication. This ensures you always have access
-to the latest artifacts without additional mirroring steps.
+The selected OpenBao migration image includes kubectl 1.37.2 by default and
+1.36.6 for Kubernetes 1.35 clusters. In the control-plane environment, select
+the compatible client before rendering or applying:
 
-</Note>
+```yaml
+openbao:
+  migrations:
+    kubectlMinor: "1.36"
+```
 
-<Note>
-These settings control *where* images are pulled from, not *how* Kubernetes authenticates to pull them. If your `image` registry is private, you may also need to configure image pull secrets -- see [Step 4](./helmfile-installation.md).
+This setting is inherited by OpenBao migrations and enabled SIS HMAC rotation,
+LLM PKI and UI migration hooks. Explicit per-hook `kubectlMinor` settings take
+precedence; remove stale overrides when all hooks should use the shared choice.
+Review rendered Jobs for `NVCF_KUBECTL_MINOR: "1.36"` in their environment.
 
-</Note>
-
-<Tip>
-Quick start summary: If you are using the example EKS environment YAML directly
-and followed [Gateway quickstart](./gateway-routing.md#gateway-quickstart), you
-only need to change:
-
-1. `domain`: Replace `GATEWAY_ADDR` with the Gateway load balancer address
-2. `helm.sources.registry` and `helm.sources.repository`: Point to your Helm chart registry
-3. `image.registry` and `image.repository`: Point to your container image registry
-
-</Tip>
+The selector does not detect the server version automatically. kubectl must
+stay within one minor of the API server; follow the
+[Kubernetes version-skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+The independent upstream account-bootstrap and upgrade-receipt helpers do not
+use this selector. Configure their image versions separately as described in
+[upstream helper images](../overview/manifest.md#supporting-images-that-ship-from-docker-hub).
 
 #### Overriding Helm Chart Values
 
@@ -698,7 +680,7 @@ replace all instances of `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL` with your
 actual base64-encoded registry credentials.
 
 ```bash
-cd path/to/nvcf-self-managed-stack
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 cp secrets/secrets.yaml.template "secrets/${HELMFILE_ENV}-secrets.yaml"
 ```
 
@@ -900,7 +882,7 @@ deployment and will fail if not authenticated.
 Before deploying, preview the rendered Kubernetes manifests:
 
 ```bash
-cd path/to/nvcf-self-managed-stack
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 HELMFILE_ENV=<environment-name> helmfile template
 ```
 
@@ -1320,36 +1302,25 @@ curl -s -X GET "http://${GATEWAY_ADDR}/v2/nvcf/functions" \
 
 ### Step 7. Configure the compute-plane Helmfile environment
 
-Use `deploy/stacks/nvcf-compute-plane` from the source repository for each GPU
+Use `deploy/stacks/nvcf-compute-plane` from the selected bundle for each GPU
 cluster. The compute-plane Helmfile installs `helm-nvca-operator` and wires it
 to the control plane values returned by cluster registration.
 
-Create an environment file in the compute-plane directory. Use the same Helm
-chart and image registry mirror as the control plane. Set the service URLs to
+Create an environment file in the compute-plane directory and merge the
+[chart and image access settings](#configure-artifact-access)
+into its `global` mapping. Set the service URLs to
 addresses reachable from the GPU cluster. If the GPU cluster reaches the
 control plane through one load balancer with hostname-based Gateway routing,
 keep the URL pointed at the load balancer and set the host-header overrides to
 the route hostnames.
 
 ```bash
-cd path/to/nvcf
+cd "$BUNDLE_DIR"
 touch deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml
 ```
 
 ```yaml title="deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml"
 global:
-  helm:
-    sources:
-      registry: <your-chart-registry>
-      repository: <your-chart-repository>
-
-  image:
-    registry: <your-image-registry>
-    repository: <your-image-repository>
-
-  imagePullSecrets:
-    - name: nvcr-pull-secret
-
   nvcaOperator:
     selfManaged:
       icmsServiceURL: "http://<GATEWAY_ADDR>"
@@ -1473,7 +1444,7 @@ nvcf-cli --config <path-to-nvcf-cli-gpu-register.yaml> self-hosted \
 nvcf-cli --config <path-to-nvcf-cli-gpu-register.yaml> init
 ```
 
-Run the compute-plane target from the repository root. The target writes
+Run the compute-plane target from the extracted bundle root. The target writes
 `deploy/stacks/nvcf-compute-plane/registration/<gpu-cluster-name>-register-values.yaml`.
 
 ```bash

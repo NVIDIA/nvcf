@@ -109,19 +109,36 @@ charts. They are not public OCI artifacts. Pull them from
 
 </Warning>
 
-Public NVCF Helm Charts
+The example below uses the selected NVCA Operator chart. For another chart,
+set its name, version and pull reference from the [artifact manifest](manifest.md).
+The commands save one archive for the registry-specific push steps below.
+Repeat for each chart that you need to mirror.
 
 ```bash
-# Add and update the public NVCF Helm repository
-helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
-helm repo update
-
-# Pull the chart
-helm pull nvcf/helm-nvca-operator --version 1.28.0
-
-# Prerelease charts require --devel when searching
-helm search repo nvcf/helm-nvcf-vanity-gateway --versions --devel
+CHART_NAME="helm-nvca-operator"
+CHART_VERSION="1.28.0"
+CHART_REFERENCE="nvcf/helm-nvca-operator"
+CHART_ARCHIVE="${CHART_NAME}-${CHART_VERSION}.tgz"
+(
+set +x
+set -euo pipefail
+umask 077
+HELM_MIRROR_TMP="$(mktemp -d)"
+trap 'rm -rf -- "${HELM_MIRROR_TMP}"' EXIT
+export HELM_REPOSITORY_CONFIG="${HELM_MIRROR_TMP}/repositories.yaml"
+export HELM_REPOSITORY_CACHE="${HELM_MIRROR_TMP}/cache"
+: "${NGC_API_KEY:?Set a scoped NGC_API_KEY}"
+printf '%s\n' "${NGC_API_KEY}" |
+  helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf \
+    --username '$oauthtoken' --password-stdin
+helm repo update nvcf
+helm pull "${CHART_REFERENCE}" --version "${CHART_VERSION}"
+)
 ```
+
+The temporary Helm configuration keeps these credentials separate from your
+existing repository configuration. The downloaded archive remains in the
+current directory.
 
 Other Repository-based Helm Charts (Non-OCI)
 
@@ -231,117 +248,26 @@ cannot collide. Configure the chart and image repositories separately.
 
 </Tip>
 
-### Pulling Resources from NGC
+<a id="pulling-resources-from-ngc" />
+<a id="downloading-nvcf-self-managed-stack-control-plane" />
+<a id="downloading-nvcf-compute-plane-stack" />
+<a id="downloading-nvcf-observability-stack" />
 
-Using NGC CLI
+### Obtain stack packages
 
-First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nvidia.com/setup/installers/cli) using the Personal API key you created.
+Use [Consume an NVCF release](umbrella-releases.md) for the selected stack
+packages or an umbrella archive. That guide owns the download commands.
+Continue here when charts or images need a mirror.
 
-{/*docs-version-sync:BEGIN image-mirroring-resource-examples*/}
-
-```bash
-# Set stack versions
-export STACK_VERSION="1.0.10"
-export COMPUTE_STACK_VERSION="1.0.5"
-export OBSERVABILITY_STACK_VERSION="1.0.0"
-
-# Download a specific control-plane stack version
-ngc registry resource download-version \
-  "nvidia/nvcf/nvcf-self-managed-stack:${STACK_VERSION}"
-
-# Download a specific compute-plane stack version
-ngc registry resource download-version \
-  "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}"
-
-# Download a specific observability stack version
-ngc registry resource download-version \
-  "nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_STACK_VERSION}"
-```
-
-{/*docs-version-sync:END image-mirroring-resource-examples*/}
-
-### Downloading `nvcf-self-managed-stack` (control plane)
-
-The `nvcf-self-managed-stack` repository contains Helmfile configurations for deploying the NVCF control plane components.
-
-Download and extract:
-
-{/*docs-version-sync:BEGIN image-mirroring-stack-snippet*/}
-
-```bash
-# Set the version
-export VERSION="1.0.10"
-
-ngc registry resource download-version "nvidia/nvcf/nvcf-self-managed-stack:${VERSION}" && \
-   mkdir -p nvcf-self-managed-stack && \
-   tar -xzf nvcf-self-managed-stack_v${VERSION}/nvcf-self-managed-stack-${VERSION}.tar.gz -C nvcf-self-managed-stack && \
-   rm -rf nvcf-self-managed-stack_v${VERSION}
-```
-
-{/*docs-version-sync:END image-mirroring-stack-snippet*/}
-
-<Note>
-If you don't have access to this repository, contact your NVIDIA representative.
-
-</Note>
-
-### Downloading `nvcf-compute-plane-stack`
-
-The `nvcf-compute-plane-stack` repository contains Helmfile configurations for deploying compute-plane components.
-
-Download and extract:
-
-{/*docs-version-sync:BEGIN image-mirroring-compute-stack-snippet*/}
-
-```bash
-# Set the version
-export COMPUTE_VERSION="1.0.5"
-
-ngc registry resource download-version "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_VERSION}" && \
-   mkdir -p nvcf-compute-plane-stack && \
-   tar -xzf nvcf-compute-plane-stack_v${COMPUTE_VERSION}/nvcf-compute-plane-stack-${COMPUTE_VERSION}.tar.gz -C nvcf-compute-plane-stack && \
-   rm -rf nvcf-compute-plane-stack_v${COMPUTE_VERSION}
-```
-
-{/*docs-version-sync:END image-mirroring-compute-stack-snippet*/}
-
-<Note>
-Use both core stack bundles for split-stack local and self-managed installs:
-`nvcf-self-managed-stack` for the control plane and
-`nvcf-compute-plane-stack` for compute-plane components.
-
-</Note>
-
-### Downloading `nvcf-observability-stack`
-
-The `nvcf-observability-stack` repository contains Helmfile configurations for
-deploying shared observability components as a standalone stack.
-
-Download and extract:
-
-{/*docs-version-sync:BEGIN image-mirroring-observability-stack-snippet*/}
-
-```bash
-# Set the version
-export OBSERVABILITY_VERSION="1.0.0"
-
-ngc registry resource download-version "nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_VERSION}" && \
-   mkdir -p nvcf-observability-stack && \
-   tar -xzf nvcf-observability-stack_v${OBSERVABILITY_VERSION}/nvcf-observability-stack-${OBSERVABILITY_VERSION}.tar.gz -C nvcf-observability-stack && \
-   rm -rf nvcf-observability-stack_v${OBSERVABILITY_VERSION}
-```
-
-{/*docs-version-sync:END image-mirroring-observability-stack-snippet*/}
-
-<Note>
-Use this bundle when shared observability is deployed separately from the
-control-plane and compute-plane stacks.
-
-</Note>
+Run that guide in a separate terminal. It enables fail-fast mode and changes
+the working directory. Push charts from this terminal so `CHART_NAME`,
+`CHART_ARCHIVE` and the downloaded archive remain available.
 
 ### Downloading `nvcf-cli`
 
 The `nvcf-cli` is a command-line interface for managing NVIDIA Cloud Functions in self-hosted deployments.
+Install and configure the [NGC CLI](https://org.ngc.nvidia.com/setup/installers/cli)
+with your Personal API key before downloading it.
 
 <Warning>
 Use the CLI version shown in the artifact manifest for this stack release.
@@ -451,24 +377,18 @@ docker push <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nats
 
 Push a Helm Chart to ECR
 
+Use the archive and `CHART_NAME` from [Pulling Helm Charts](#pulling-helm-charts).
+
 ```bash
-# 1. Add and update the public NVCF Helm repository
-helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
-helm repo update
-
-# 2. Pull the Helm chart from NGC
-helm pull nvcf/helm-nvca-operator --version 1.28.0
-# This creates: helm-nvca-operator-1.28.0.tgz
-
-# 3. Login to AWS ECR with Helm
+# Login to AWS ECR with Helm
 aws ecr get-login-password --region us-east-1 | \
   helm registry login --username AWS --password-stdin <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com
 
-# 4. Create ECR repository with prefix (must match your environment config)
-aws ecr create-repository --repository-name ${REPO_PREFIX}/helm-nvca-operator --region us-east-1
+# Create the repository if it does not already exist
+aws ecr create-repository --repository-name "${REPO_PREFIX}/${CHART_NAME}" --region us-east-1
 
-# 5. Push to ECR as OCI artifact (include repository prefix)
-helm push helm-nvca-operator-1.28.0.tgz oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
+# Push the downloaded archive as an OCI artifact
+helm push "${CHART_ARCHIVE}" oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
 ```
 
 <Note>
@@ -534,6 +454,8 @@ docker push ${CR_ENDPOINT}/${NAMESPACE}/nats-box:0.19.7-nonroot
 
 Push a Helm Chart to Volcano Engine CR
 
+Use the archive from [Pulling Helm Charts](#pulling-helm-charts).
+
 ```bash
 # Set your registry endpoint and namespace
 CR_ENDPOINT="cr-example-cn-beijing.cr.volces.com"
@@ -541,21 +463,13 @@ NAMESPACE="nvcf-self-hosted"
 CR_USERNAME="your-username"
 CR_PASSWORD="your-password"
 
-# 1. Add and update the public NVCF Helm repository
-helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
-helm repo update
+# Login to Volcano Engine CR with Helm
+printf '%s\n' "${CR_PASSWORD}" |
+  helm registry login "${CR_ENDPOINT}" \
+    --username "${CR_USERNAME}" --password-stdin
 
-# 2. Pull the Helm chart from NGC
-helm pull nvcf/helm-nvca-operator --version 1.28.0
-# This creates: helm-nvca-operator-1.28.0.tgz
-
-# 3. Login to Volcano Engine CR with Helm
-helm registry login ${CR_ENDPOINT} \
-  --username "${CR_USERNAME}" \
-  --password "${CR_PASSWORD}"
-
-# 4. Push to Volcano Engine CR as OCI artifact
-helm push helm-nvca-operator-1.28.0.tgz oci://${CR_ENDPOINT}/${NAMESPACE}
+# Push the downloaded archive as an OCI artifact
+helm push "${CHART_ARCHIVE}" "oci://${CR_ENDPOINT}/${NAMESPACE}"
 ```
 
 ## Troubleshooting

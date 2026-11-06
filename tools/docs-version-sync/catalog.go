@@ -1100,24 +1100,15 @@ func defaultOutputs() []OutputFile {
 			}},
 		},
 		{
+			Path: "docs/overview/umbrella-releases.md",
+			Blocks: []OutputBlock{{
+				Marker:   "stack-package-downloads",
+				Renderer: "stack-package-downloads",
+			}},
+		},
+		{
 			Path: "docs/overview/image-mirroring.md",
 			Blocks: []OutputBlock{
-				{
-					Marker:   "image-mirroring-resource-examples",
-					Renderer: "image-mirroring-resource-examples",
-				},
-				{
-					Marker:   "image-mirroring-stack-snippet",
-					Renderer: "image-mirroring-stack-snippet",
-				},
-				{
-					Marker:   "image-mirroring-compute-stack-snippet",
-					Renderer: "image-mirroring-compute-stack-snippet",
-				},
-				{
-					Marker:   "image-mirroring-observability-stack-snippet",
-					Renderer: "image-mirroring-observability-stack-snippet",
-				},
 				{
 					Marker:   "image-mirroring-cli-snippet",
 					Renderer: "image-mirroring-cli-snippet",

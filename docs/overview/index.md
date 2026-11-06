@@ -13,12 +13,14 @@ NVCF ships as three independently versioned Helm stacks.
 - [Observability Stack](../observability/observability.md)
   : Metrics, dashboards, and alerting.
 - [Compatibility Matrix](./compatibility-matrix.md)
-  : Stack releases that are qualified to run together.
+  : Stack versions and the compatibility policy.
 
 ## Getting started
 
+- [Consume an NVCF release](umbrella-releases.md)
+  : Download the selected stack packages or umbrella archive.
 - [Quickstart](./quickstart.md)
-  : Install the control plane, register a GPU cluster, and validate the deployment with the one-click CLI flow.
+  : Develop locally from a source checkout with the one-click CLI flow.
 - [Deployment](../self-managed/installation.md)
   : Compare the one-click and Helmfile installation paths.
 - [GPU Cluster Setup](../compute-plane/cluster-management/index.md)
