@@ -188,6 +188,41 @@ func TestCRIURestore_SkipsWhenItCannotRestore(t *testing.T) {
 	}
 }
 
+// A CRIU capture not restored starts cold anywhere: its record, on the L1
+// backend too, names the capture node, and pinning the pod there (with
+// nothing to mount) left it unschedulable while that node was busy.
+func TestCRIURestore_DeclinedCaptureStartsColdUnpinned(t *testing.T) {
+	cases := map[string]func(*Mutator){
+		"blocked checkpoint": func(m *Mutator) {
+			m.CRIURestoreBlocked = func(context.Context, string) bool { return true }
+		},
+		"capture of another namespace": func(m *Mutator) {
+			man := criuCaptureRecord()
+			man.SourcePodMeta[checkpointstore.CRIUScopeMetaKey] = CRIUNamespaceScope("tenant-a")
+			m.L2Backend = &criuL2Backend{man: man}
+			m.Backend = &criuL2Backend{man: man}
+		},
+	}
+	for name, mod := range cases {
+		m := criuMutator(t, criuCaptureRecord())
+		m.Backend = &criuL2Backend{man: criuCaptureRecord()}
+		mod(m)
+		pod := podWithAnnotation("abc123")
+		pod.Spec = criuFunctionPod().Spec
+		patches, err := m.Mutate(context.Background(), pod)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got := applyPatches(t, pod, patches)
+		if got.Annotations[CRIURestoreAnnotation] != "" || !reflect.DeepEqual(got.Spec.Containers[1].Command, []string{"vllm"}) {
+			t.Errorf("%s: pod was turned into a restore placeholder", name)
+		}
+		if a := got.Spec.Affinity; a != nil && a.NodeAffinity != nil {
+			t.Errorf("%s: cold start pinned to a node: %+v", name, a.NodeAffinity)
+		}
+	}
+}
+
 func TestCRIUNodePreference_KeepsExistingAffinity(t *testing.T) {
 	pod := &corev1.Pod{Spec: corev1.PodSpec{Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 		RequiredDuringSchedulingIgnoredDuringExecution:  &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{}}},

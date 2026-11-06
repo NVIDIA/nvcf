@@ -739,6 +739,19 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		return nil, fmt.Errorf("backend stat: %w", statErr)
 	}
 	haveManifest := statErr == nil
+	// A CRIU capture that criuRestoreFor did not restore (it failed to
+	// restore before, belongs to another scope, or the pod opted out)
+	// leaves a cold start. Its record holds no volumes to mount, only the
+	// capture node: the paths below would pin the pod there with a
+	// required node affinity and nothing else, and a pod pinned to a busy
+	// node never schedules (the platform kills it as "no capacity").
+	if haveManifest && criuCheckpointID(manifest) != "" {
+		plog.Info("CRIU capture not restored; cold start")
+		if len(injectPatches) == 0 {
+			return nil, nil
+		}
+		return mergePatchPlan(injectPatches), nil
+	}
 	// Dispatch on the AUTHORITATIVE capture method stamped at capture
 	// time (v0.0.56). Fall back to the shape heuristic only for
 	// pre-v0.0.56 manifests with no CaptureMethod set.
