@@ -159,7 +159,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	nc, err := invocation.NewNatsConnection(config.NatsFqdn, config.NatsPrivateNKey, serviceName, config.OAuth2Fqdn, config.SecretsPath)
+	nc, natsState, err := invocation.NewNatsConnection(config.NatsFqdn, config.NatsPrivateNKey, serviceName, config.OAuth2Fqdn, config.SecretsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +190,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 		rateLimit = &ratelimit.NoOpRateLimitService{}
 	}
 
-	invoker, err := invocation.NewFunctionInvoker(nc, nvcfClient, connectPaths, config.JetstreamPlacementTag, config.AWSRegion, geoLookup, rateLimit)
+	invoker, err := invocation.NewFunctionInvoker(nc, natsState, nvcfClient, connectPaths, config.JetstreamPlacementTag, config.AWSRegion, geoLookup, rateLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +236,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 		},
 	}
 
-	healthManager, err := healthManager(config.NVCFFqdn, nc)
+	healthManager, err := healthManager(config.NVCFFqdn, natsState)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +309,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 			servers.WithLogger(logger),
 			servers.WithRegisterServer(func(server *grpc.Server) {}),
 			servers.WithHttpHealthEndpoints("/health"),
-			servers.WithAdditionalHTTPHandlers(map[string]http.Handler{"/livez": livenessHandler(nc)}),
+			servers.WithAdditionalHTTPHandlers(map[string]http.Handler{"/livez": livenessHandler(natsState)}),
 			servers.WithAdditionalServers(serverPairs...),
 		),
 	}, nil

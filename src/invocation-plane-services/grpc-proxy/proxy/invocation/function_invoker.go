@@ -57,6 +57,7 @@ type rateLimiter interface {
 
 type FunctionInvoker struct {
 	nc                  *nats.Conn
+	natsState           *ConnState
 	js                  jetstream.JetStream
 	nvcfClient          pb.ProxyClient
 	connectPaths        ConnectPaths
@@ -69,7 +70,7 @@ type FunctionInvoker struct {
 	workStreams *ttlcache.Cache[string, jetstream.Stream]
 }
 
-func NewFunctionInvoker(nc *nats.Conn, nvcfClient pb.ProxyClient, connectPaths ConnectPaths, jetstreamPlacementTag, region string, geoLookup geoLookuper, rateLimit rateLimiter) (*FunctionInvoker, error) {
+func NewFunctionInvoker(nc *nats.Conn, natsState *ConnState, nvcfClient pb.ProxyClient, connectPaths ConnectPaths, jetstreamPlacementTag, region string, geoLookup geoLookuper, rateLimit rateLimiter) (*FunctionInvoker, error) {
 	js, err := jetstream.New(nc)
 	if err != nil {
 		return nil, err
@@ -88,6 +89,7 @@ func NewFunctionInvoker(nc *nats.Conn, nvcfClient pb.ProxyClient, connectPaths C
 
 	return &FunctionInvoker{
 		nc:                  nc,
+		natsState:           natsState,
 		js:                  js,
 		nvcfClient:          nvcfClient,
 		connectPaths:        connectPaths,
@@ -270,11 +272,15 @@ func (f *FunctionInvoker) startNewSession(ctx context.Context, conn net.Conn, re
 		return cancel, false, dispatched, nil
 	}
 	subject := f.requestStreamSubject(functionVersion.FunctionVersionId, requestId)
-	_, err = f.js.PublishMsg(ctx, &nats.Msg{
-		Subject: subject,
-		Header:  otelHeaders(ctx),
-		Data:    marshalledInvokeFunctionRequest,
-	})
+	publishCtx, cancelPublish := context.WithTimeout(ctx, publishTimeout)
+	defer cancelPublish()
+	if err = waitConnected(publishCtx, f.natsState); err == nil {
+		_, err = f.js.PublishMsg(publishCtx, &nats.Msg{
+			Subject: subject,
+			Header:  otelHeaders(ctx),
+			Data:    marshalledInvokeFunctionRequest,
+		})
+	}
 	if err != nil {
 		cancel()
 		return nil, false, nil, fmt.Errorf("failed to publish function invocation request to nats: %w", err)
@@ -356,6 +362,9 @@ func (f *FunctionInvoker) tryRegionForLLS(ctx context.Context, region string, re
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
+	if err := waitConnected(ctx, f.natsState); err != nil {
+		return err
+	}
 	subject := llsRequestSubject(region, functionVersion.FunctionVersionId, requestId)
 	_, err := f.nc.RequestMsgWithContext(ctx, &nats.Msg{
 		Subject: subject,
@@ -371,6 +380,11 @@ func (f *FunctionInvoker) joinExistingSession(ctx context.Context, requestId uui
 	if err != nil {
 		return err
 	}
+	waitCtx, cancel := context.WithTimeout(ctx, publishTimeout)
+	defer cancel()
+	if err := waitConnected(waitCtx, f.natsState); err != nil {
+		return fmt.Errorf("failed to publish function invocation request to nats: %w", err)
+	}
 	subject := reconnectSubject(requestId)
 	err = f.nc.PublishMsg(&nats.Msg{
 		Subject: subject,
@@ -381,6 +395,34 @@ func (f *FunctionInvoker) joinExistingSession(ctx context.Context, requestId uui
 		return fmt.Errorf("failed to publish function invocation request to nats: %w", err)
 	}
 	return nil
+}
+
+// publishTimeout bounds a JetStream or session-join publish, including any wait
+// for a reconnect. It matches JetStream's default API timeout, which is how long
+// a publish already waited for its ack.
+const publishTimeout = 5 * time.Second
+
+// reconnectPollInterval is how often waitConnected checks the connection.
+const reconnectPollInterval = 50 * time.Millisecond
+
+// waitConnected returns once the connection is up, or with an error once ctx
+// ends or the connection is closed. Dispatches, work items and session joins call
+// it before publishing, so they are not queued in the reconnect buffer and sent
+// after an outage to callers that have given up. It reads ConnState, so it never
+// waits on the connection's lock and always honours ctx.
+func waitConnected(ctx context.Context, state *ConnState) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("waiting for nats connection: %w", err)
+		}
+		if state.Closed() {
+			return nats.ErrConnectionClosed
+		}
+		if state.Connected() {
+			return nil
+		}
+		SleepWithContext(ctx, reconnectPollInterval)
+	}
 }
 
 func otelHeaders(ctx context.Context) nats.Header {

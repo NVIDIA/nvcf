@@ -110,60 +110,49 @@ var (
 			Help:      "time to deliver an event to the event ledger, including retries",
 		}, []string{"result"})
 
+	// NatsConnected is 1 while the connection is connected and 0 otherwise. The
+	// connection reconnects without limit, so this, not a restart, is the signal
+	// that a pod has lost NATS. It is set from nats.go's callbacks, so a scrape
+	// never waits on the connection's lock.
+	NatsConnected = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: NatsNamespace,
+		Name:      "connected",
+		Help:      "1 while the nats connection is connected, 0 while it is reconnecting or closed.",
+	})
 	_ = promauto.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: NatsNamespace,
 		Name:      "out_bytes",
 		Help:      "The number of output bytes for this nats connection.",
 	}, func() float64 {
-		nc := nc.Load()
-		if nc == nil {
-			return 0
-		}
-		return float64(nc.Stats().OutBytes)
+		return float64(loadNatsStats().OutBytes)
 	})
 	_ = promauto.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: NatsNamespace,
 		Name:      "in_bytes",
 		Help:      "The number of input bytes for this nats connection.",
 	}, func() float64 {
-		nc := nc.Load()
-		if nc == nil {
-			return 0
-		}
-		return float64(nc.Stats().InBytes)
+		return float64(loadNatsStats().InBytes)
 	})
 	_ = promauto.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: NatsNamespace,
 		Name:      "out_msgs",
 		Help:      "The number of output messages for this nats connection.",
 	}, func() float64 {
-		nc := nc.Load()
-		if nc == nil {
-			return 0
-		}
-		return float64(nc.Stats().OutMsgs)
+		return float64(loadNatsStats().OutMsgs)
 	})
 	_ = promauto.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: NatsNamespace,
 		Name:      "in_msgs",
 		Help:      "The number of input messages for this nats connection.",
 	}, func() float64 {
-		nc := nc.Load()
-		if nc == nil {
-			return 0
-		}
-		return float64(nc.Stats().InMsgs)
+		return float64(loadNatsStats().InMsgs)
 	})
 	_ = promauto.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: NatsNamespace,
 		Name:      "reconnects",
 		Help:      "The number of reconnect attempts for this nats connection.",
 	}, func() float64 {
-		nc := nc.Load()
-		if nc == nil {
-			return 0
-		}
-		return float64(nc.Stats().Reconnects)
+		return float64(loadNatsStats().Reconnects)
 	})
 
 	// Worker tunnel lifecycle. The proxy closes worker tunnels for several
@@ -538,10 +527,51 @@ func init() {
 	}
 }
 
-var nc atomic.Pointer[nats.Conn]
+// natsStatsSampleInterval is how often the connection's statistics are sampled
+// for the gauges above. nc.Stats takes the connection's lock, which nats.go holds
+// through each reconnect attempt, so reading it during a scrape could stall the
+// whole metrics endpoint for seconds. Sampling in the background keeps scrapes
+// off the lock, at the cost of values up to one interval old.
+const natsStatsSampleInterval = 5 * time.Second
 
+var (
+	statsConn atomic.Pointer[nats.Conn]
+	natsStats atomic.Pointer[nats.Statistics]
+)
+
+func loadNatsStats() nats.Statistics {
+	if stats := natsStats.Load(); stats != nil {
+		return *stats
+	}
+	return nats.Statistics{}
+}
+
+// SetNatsStatsConnection samples newNc's statistics until it closes or another
+// connection replaces it.
 func SetNatsStatsConnection(newNc *nats.Conn) {
-	nc.Store(newNc)
+	statsConn.Store(newNc)
+	natsStats.Store(nil)
+	if newNc == nil {
+		return
+	}
+	sampleNatsStats(newNc)
+	go func() {
+		ticker := time.NewTicker(natsStatsSampleInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			if statsConn.Load() != newNc || newNc.IsClosed() {
+				return
+			}
+			sampleNatsStats(newNc)
+		}
+	}()
+}
+
+func sampleNatsStats(nc *nats.Conn) {
+	stats := nc.Stats()
+	if statsConn.Load() == nc {
+		natsStats.Store(&stats)
+	}
 }
 
 func IncrFunctionRequest(functionID, functionVersionID, ncaID string) {

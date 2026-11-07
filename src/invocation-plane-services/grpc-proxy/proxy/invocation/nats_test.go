@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"net"
 
 	"github.com/nats-io/nkeys"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -278,10 +280,11 @@ func TestNewNatsConnectionRecordsInitialConnectFailure(t *testing.T) {
 	failureCounter := metrics.NatsFailureCounter.WithLabelValues(metrics.NatsErrorReasonConnection)
 	before := testutil.ToFloat64(failureCounter)
 
-	nc, err := NewNatsConnection("nats://"+unreachable, string(seed), "test-service", "", "")
+	nc, state, err := NewNatsConnection("nats://"+unreachable, string(seed), "test-service", "", "")
 
 	assert.Error(t, err)
 	assert.Nil(t, nc)
+	assert.Nil(t, state)
 	assert.Equal(t, before+1, testutil.ToFloat64(failureCounter))
 	assert.Len(t, logs.FilterMessage("nats initial connection failed").All(), 1)
 }
@@ -290,10 +293,11 @@ func TestNewNatsConnectionRecordsNkeySetupFailure(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
 	defer zap.ReplaceGlobals(zap.New(core))()
 
-	nc, err := NewNatsConnection("nats://127.0.0.1:4222", "invalid-seed", "test-service", "", "")
+	nc, state, err := NewNatsConnection("nats://127.0.0.1:4222", "invalid-seed", "test-service", "", "")
 
 	assert.Error(t, err)
 	assert.Nil(t, nc)
+	assert.Nil(t, state)
 	assert.Len(t, logs.FilterMessage("nats nkey auth setup failed").All(), 1)
 	// The connect is never attempted, so no connection failure should be logged.
 	assert.Empty(t, logs.FilterMessage("nats initial connection failed").All())
@@ -316,7 +320,7 @@ func TestConnectOptionsReconnectAfterRepeatedAuthRejections(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = server.Close() })
 
-			options := append(connectOptions("test-service", nats.Token(test.FakeNatsToken)),
+			options := append(connectOptions("test-service", nats.Token(test.FakeNatsToken), &ConnState{}),
 				nats.ReconnectWait(10*time.Millisecond),
 				nats.ReconnectJitter(0, 0))
 			if !tc.ignoreAuthErrorAbort {
@@ -341,4 +345,191 @@ func TestConnectOptionsReconnectAfterRepeatedAuthRejections(t *testing.T) {
 			assert.ErrorIs(t, nc.LastError(), nats.ErrAuthorization)
 		})
 	}
+}
+
+// connectOptions must never give up on the connection, and must keep the
+// reconnect buffer so a purge queued during an outage is still sent afterwards.
+// Each assertion fails if its option is changed.
+func TestConnectOptionsReconnectForeverAndKeepTheBuffer(t *testing.T) {
+	options := nats.GetDefaultOptions()
+	for _, option := range connectOptions("test-service", nats.Token(test.FakeNatsToken), &ConnState{}) {
+		require.NoError(t, option(&options))
+	}
+	assert.Equal(t, -1, options.MaxReconnect)
+	assert.True(t, options.IgnoreAuthErrorAbort)
+	assert.Equal(t, nats.DefaultReconnectBufSize, options.ReconnectBufSize)
+}
+
+// connect connects to server with connectOptions and waits for ConnState to
+// report the connection up.
+func connect(t *testing.T, server *test.FakeNatsServer, extra ...nats.Option) (*nats.Conn, *ConnState) {
+	t.Helper()
+	state := &ConnState{}
+	options := append(connectOptions("test-service", nats.Token(test.FakeNatsToken), state),
+		nats.ReconnectWait(10*time.Millisecond), nats.ReconnectJitter(0, 0))
+	nc, err := nats.Connect(server.URL, append(options, extra...)...)
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	require.Eventually(t, state.Connected, 5*time.Second, time.Millisecond)
+	return nc, state
+}
+
+// connectReconnecting connects, then drops the connection and stops listening,
+// so the connection stays reconnecting until the test ends.
+func connectReconnecting(t *testing.T) (*nats.Conn, *ConnState) {
+	t.Helper()
+	server, err := test.NewFakeNatsServer(test.NatsAcceptThenDrop)
+	require.NoError(t, err)
+	nc, state := connect(t, server)
+	require.NoError(t, server.Close())
+	require.Eventually(t, func() bool { return !state.Connected() }, 5*time.Second, time.Millisecond)
+	return nc, state
+}
+
+func TestConnStateFollowsTheConnection(t *testing.T) {
+	// The first connection is dropped and the reconnect is accepted.
+	server, err := test.NewFakeNatsServer(test.NatsAcceptThenDrop)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = server.Close() })
+	nc, state := connect(t, server, nats.ReconnectWait(300*time.Millisecond))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.NatsConnected))
+
+	require.Eventually(t, func() bool { return !state.Connected() }, 5*time.Second, time.Millisecond)
+	assert.False(t, state.Closed())
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.NatsConnected))
+
+	require.Eventually(t, state.Connected, 5*time.Second, time.Millisecond)
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.NatsConnected))
+
+	nc.Close()
+	require.Eventually(t, state.Closed, 5*time.Second, time.Millisecond)
+	assert.False(t, state.Connected())
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.NatsConnected))
+}
+
+// While a reconnect attempt holds the connection's lock, here inside the token
+// handler as when the token endpoint is slow, every reader the probes, metrics
+// and publishers use must still answer at once. The first assertion shows the
+// lock really is held, so the test fails if nats.go stops taking it here and
+// ConnState can be revisited.
+func TestConnStateDoesNotWaitOnTheConnectionLock(t *testing.T) {
+	server, err := test.NewFakeNatsServer(test.NatsAcceptThenDrop)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = server.Close() })
+
+	var tokenCalls atomic.Int32
+	inHandler := make(chan struct{})
+	release := make(chan struct{})
+	token := nats.TokenHandler(func() string {
+		if tokenCalls.Add(1) == 2 {
+			close(inHandler)
+			<-release
+		}
+		return test.FakeNatsToken
+	})
+	state := &ConnState{}
+	nc, err := nats.Connect(server.URL, append(connectOptions("test-service", token, state),
+		nats.ReconnectWait(10*time.Millisecond), nats.ReconnectJitter(0, 0))...)
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	metrics.SetNatsStatsConnection(nc)
+	t.Cleanup(func() { metrics.SetNatsStatsConnection(nil) })
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	select {
+	case <-inHandler:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reconnect never reached the token handler")
+	}
+
+	isClosed := make(chan struct{})
+	go func() {
+		nc.IsClosed()
+		close(isClosed)
+	}()
+	select {
+	case <-isClosed:
+		t.Fatal("nc.IsClosed returned while the reconnect held the lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	assert.False(t, state.Connected())
+	assert.False(t, state.Closed())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	assert.ErrorIs(t, waitConnected(ctx, state), context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), time.Second)
+
+	gathered := make(chan error, 1)
+	go func() {
+		_, err := prometheus.DefaultGatherer.Gather()
+		gathered <- err
+	}()
+	select {
+	case err := <-gathered:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("gathering metrics waited on the connection's lock")
+	}
+
+	close(release)
+	<-isClosed
+	require.Eventually(t, state.Connected, 5*time.Second, time.Millisecond)
+}
+
+func TestWaitConnected(t *testing.T) {
+	t.Run("returns at once when connected", func(t *testing.T) {
+		server, err := test.NewFakeNatsServer()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = server.Close() })
+		_, state := connect(t, server)
+
+		assert.NoError(t, waitConnected(context.Background(), state))
+	})
+
+	t.Run("fails when the caller has already given up", func(t *testing.T) {
+		server, err := test.NewFakeNatsServer()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = server.Close() })
+		_, state := connect(t, server)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		assert.ErrorIs(t, waitConnected(ctx, state), context.Canceled)
+	})
+
+	t.Run("returns once reconnected", func(t *testing.T) {
+		server, err := test.NewFakeNatsServer(test.NatsAcceptThenDrop)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = server.Close() })
+		_, state := connect(t, server, nats.ReconnectWait(300*time.Millisecond))
+		require.Eventually(t, func() bool { return !state.Connected() }, 5*time.Second, time.Millisecond)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		require.NoError(t, waitConnected(ctx, state))
+		assert.True(t, state.Connected())
+	})
+
+	t.Run("gives up when the context ends", func(t *testing.T) {
+		_, state := connectReconnecting(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		assert.ErrorIs(t, waitConnected(ctx, state), context.DeadlineExceeded)
+	})
+
+	t.Run("fails when the connection is closed", func(t *testing.T) {
+		nc, state := connectReconnecting(t)
+		nc.Close()
+		require.Eventually(t, state.Closed, 5*time.Second, time.Millisecond)
+		assert.ErrorIs(t, waitConnected(context.Background(), state), nats.ErrConnectionClosed)
+	})
 }
