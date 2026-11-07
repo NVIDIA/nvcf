@@ -676,23 +676,6 @@ func TestAuthCheckURLs(t *testing.T) {
 				"jwt_jwks": "https://issuer.test/.well-known/jwks.json",
 			},
 		},
-		{
-			name: "policy provider uses configured auth dependencies",
-			auth: config.AuthConfig{
-				Enabled:   true,
-				Provider:  "policy",
-				JWKSetUrl: "https://issuer.test/.well-known/jwks.json",
-				Policy: config.PolicyConfig{
-					TokenIssuerAddr:     "https://issuer.test",
-					PolicyEvaluatorAddr: "https://pdp.test",
-				},
-			},
-			expected: map[string]string{
-				"jwt_jwks":            "https://issuer.test/.well-known/jwks.json",
-				"policy_token_issuer": "https://issuer.test",
-				"policy_evaluator":    "https://pdp.test",
-			},
-		},
 	}
 
 	for _, tt := range tests {

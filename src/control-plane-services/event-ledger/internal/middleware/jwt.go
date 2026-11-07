@@ -148,14 +148,6 @@ func authCheckURLs(authConfig config.AuthConfig) map[string]string {
 	if authConfig.JWKSetUrl != "" {
 		checks["jwt_jwks"] = authConfig.JWKSetUrl
 	}
-	if authConfig.Provider == "policy" {
-		if authConfig.Policy.TokenIssuerAddr != "" {
-			checks["policy_token_issuer"] = authConfig.Policy.TokenIssuerAddr
-		}
-		if authConfig.Policy.PolicyEvaluatorAddr != "" {
-			checks["policy_evaluator"] = authConfig.Policy.PolicyEvaluatorAddr
-		}
-	}
 	return checks
 }
 
