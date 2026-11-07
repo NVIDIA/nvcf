@@ -324,9 +324,7 @@ The following tables list the complete artifact inventory.
 | `helm-nvcf-ui` | `1.1.4` | `self-managed` | Optional | Deploys the optional NVCF UI admin panel. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-ui:1.1.4` |  |
 | `helm-nvcf-vanity-gateway` | `0.5.0` | `self-managed` | Optional | Deploys the optional vanity hostname gateway. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-vanity-gateway:0.5.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/vanity-gateway) |
 | `helm-reval` | `1.4.1` | `self-managed` | Required | Deploys the function revalidation service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-reval:1.4.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/helm-reval) |
-| `nvcf-example-dashboards` | `1.6.0` | `self-managed` | Optional | Deploys example Grafana dashboards for NVCF telemetry. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-example-dashboards:1.6.0` |  |
 | `nvcf-gateway-routes` | `1.18.3` | `self-managed` | Required | Deploys Gateway API routes for NVCF services. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes:1.18.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/gateway-routes) |
-| `nvcf-observability-reference-stack` | `1.10.0` | `self-managed` | Optional | Deploys a reference observability backend for evaluation. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-observability-reference-stack:1.10.0` |  |
 | `nvcf-upgrade-receipt` | `0.1.0` | `self-managed` | Required | Records the deployed stack version after Helmfile completes. | `Bundled with stack` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed/charts/nvcf-upgrade-receipt) |
 
 ### Control plane services and images
@@ -385,7 +383,6 @@ The following tables list the complete artifact inventory.
 | `kai-scheduler` | `v0.17.1` | `compute-plane` | Optional | Deploys the optional KAI Scheduler. | `oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
 | `modelexpress` | `supported` | Independent | Optional | Distributes model weights peer-to-peer between Dynamo workers to reduce scale-out cold starts. Installed separately from the compute-plane stack. | `https://helm.ngc.nvidia.com/nvidia/ai-dynamo` | [Upstream](https://github.com/ai-dynamo/modelexpress) |
 | `nvcf-cluster-topology` | `0.1.0` | `compute-plane` | Required | Configures cluster topology resources for compute scheduling. | `Bundled with stack` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane/charts/nvcf-cluster-topology) |
-| `nvcf-container-cache` | `0.25.22` | `compute-plane` | Optional | Deploys container image caching on GPU cluster nodes. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-container-cache:0.25.22` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache) |
 
 ### Compute plane services and images
 
@@ -393,7 +390,6 @@ The following tables list the complete artifact inventory.
 | --- | --- | --- | --- | --- | --- | --- |
 | `byoo-otel-collector` | `0.160.0-nv-0.2.9` | `compute-plane` | Required | Exports telemetry from Bring Your Own Observability (BYOO) workloads to the endpoints configured for each function or task. NVCA injects it as a sidecar when the BYOObservability feature gate is enabled. | `nvcr.io/nvidia/nvcf/byoo-otel-collector:0.160.0-nv-0.2.9` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector) |
 | `crd-upgrader` | `v0.17.1` | `compute-plane` | Optional | Upgrades KAI Scheduler custom resources. | `ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
-| `fluent-bit` | `3.2` | `compute-plane` | Optional | Collects container logs for Bring Your Own Observability (BYOO) workloads when the BYOOFluentBit feature gate is enabled. NVCA injects it as a sidecar. | `docker.io/fluent/fluent-bit:3.2` | [Upstream](https://github.com/fluent/fluent-bit) |
 | `gpu-operator-validator` | `supported` | Independent | Required | Validates GPU Operator components on GPU nodes. | `https://catalog.ngc.nvidia.com/orgs/nvidia/teams/cloud-native/containers/gpu-operator-validator` | [Upstream](https://github.com/NVIDIA/gpu-operator) |
 | `grove-install-crds` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Installs Grove custom resource definitions. | `ghcr.io/ai-dynamo/grove/grove-install-crds:v0.1.0-alpha.12` | [Upstream](https://github.com/ai-dynamo/grove) |
 | `grove-operator` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Reconciles Grove topology-aware scheduling resources. | `ghcr.io/ai-dynamo/grove/grove-operator:v0.1.0-alpha.12` | [Upstream](https://github.com/ai-dynamo/grove) |
@@ -403,10 +399,8 @@ The following tables list the complete artifact inventory.
 | `nats` | `2.10.21-alpine` | `compute-plane` | Optional | Provides messaging for the optional NVIDIA Dynamo operator. | `docker.io/library/nats:2.10.21-alpine` | [Upstream](https://github.com/nats-io/nats-server) |
 | `nvca` | `3.10.3` | `compute-plane` | Required | Registers GPU clusters and orchestrates deployments in-cluster. | `nvcr.io/nvidia/nvcf/nvca:3.10.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/nvca) |
 | `nvca-operator` | `3.10.3` | `compute-plane` | Required | Reconciles NVCA resources and compute-plane configuration. | `nvcr.io/nvidia/nvcf/nvca-operator:3.10.3` |  |
-| `nvcf-container-cache` | `v1.1.36` | `compute-plane` | Optional | Caches container image layers on GPU cluster nodes. | `nvcr.io/nvidia/nvcf/nvcf-container-cache:v1.1.36` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache) |
 | `nvcf-image-credential-helper` | `0.11.3` | `compute-plane` | Required | Resolves container image credentials for function workloads. | `nvcr.io/nvidia/nvcf/nvcf-image-credential-helper:0.11.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/image-credential-helper) |
 | `nvcf-otel-collector` | `0.160.0-nv-0.2.9` | `compute-plane` | Optional | Collects compute-plane workload telemetry. | `nvcr.io/nvidia/nvcf/nvcf-otel-collector:0.160.0-nv-0.2.9` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector) |
-| `nvcf-proxy-tls-certs` | `v1.2.10` | `compute-plane` | Optional | Configures TLS trust for the optional container cache proxy. | `nvcr.io/nvidia/nvcf/nvcf-proxy-tls-certs:v1.2.10` |  |
 | `operator` | `v0.17.1` | `compute-plane` | Optional | Reconciles KAI Scheduler resources. | `ghcr.io/kai-scheduler/kai-scheduler/operator:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
 | `samba` | `1.0.9` | `compute-plane` | Required | Provides shared model storage for worker pods; retains its root runtime. | `nvcr.io/nvidia/nvcf/samba:1.0.9` | [Upstream](https://github.com/samba-team/samba) |
 

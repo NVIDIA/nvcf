@@ -1,8 +1,9 @@
+umbrella_manifest_sha256: sha256:20656169ea9d017d9168df668ae3632e5dde3699c3e1737d4142ec73bcaf1421
 docs_edition:
   version: 1.0.4
-  status: development
-  previous_version: 1.0.3
-  change: patch
+  status: qualified
+  change: initial
+  qualification: https://github.com/dsx-ai-factory/nvcf/issues/2492
 version: 1
 target: main
 registries:
@@ -133,29 +134,6 @@ publications:
     type: image
     version: 1.7.4
     registry: public-images
-  - name: nvcf-container-cache
-    type: image
-    version: v1.1.36
-    registry: public-images
-  - name: nvcf-proxy-tls-certs
-    type: image
-    version: v1.2.10
-    registry: public-images
-  - name: nvcf-container-cache
-    type: chart
-    version: 0.25.22
-    registry: public-helm
-    chart_format: http
-  - name: nvcf-example-dashboards
-    type: chart
-    version: 1.6.0
-    registry: public-helm
-    chart_format: http
-  - name: nvcf-observability-reference-stack
-    type: chart
-    version: 1.10.0
-    registry: public-helm
-    chart_format: http
   - name: admin-token-issuer-proxy
     type: image
     version: 1.1.2
@@ -467,11 +445,6 @@ manifest:
       requirement: optional
       description: Deploys the optional vanity hostname gateway.
       github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/vanity-gateway
-    - artifact_id: nvcf-example-dashboards
-      plane: control
-      kind: chart
-      requirement: optional
-      description: Deploys example Grafana dashboards for NVCF telemetry.
     - artifact_id: nvcf-gateway-routes
       plane: control
       kind: chart
@@ -508,11 +481,6 @@ manifest:
       requirement: required
       description: Deploys the default metrics storage backend.
       upstream_url: https://github.com/VictoriaMetrics/helm-charts
-    - artifact_id: nvcf-observability-reference-stack
-      plane: control
-      kind: chart
-      requirement: optional
-      description: Deploys a reference observability backend for evaluation.
     - artifact_id: k8s
       plane: control
       kind: service-image
@@ -745,12 +713,6 @@ manifest:
       requirement: optional
       description: Deploys the optional KAI Scheduler.
       upstream_url: https://github.com/NVIDIA/KAI-Scheduler
-    - artifact_id: nvcf-container-cache-chart
-      plane: compute
-      kind: chart
-      requirement: optional
-      description: Deploys container image caching on GPU cluster nodes.
-      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache
     - name: gpu-operator
       version: supported
       distribution: https://helm.ngc.nvidia.com/nvidia
@@ -848,12 +810,6 @@ manifest:
       requirement: optional
       description: Provides messaging for the optional NVIDIA Dynamo operator.
       upstream_url: https://github.com/nats-io/nats-server
-    - artifact_id: fluent-bit
-      plane: compute
-      kind: service-image
-      requirement: optional
-      description: Collects container logs for Bring Your Own Observability (BYOO) workloads when the BYOOFluentBit feature gate is enabled. NVCA injects it as a sidecar.
-      upstream_url: https://github.com/fluent/fluent-bit
     - artifact_id: byoo-otel-collector
       plane: compute
       kind: service-image
@@ -902,17 +858,6 @@ manifest:
       requirement: optional
       description: Connects LLM worker pods to the LLM request router.
       github_url: https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate
-    - artifact_id: nvcf-container-cache-image
-      plane: compute
-      kind: service-image
-      requirement: optional
-      description: Caches container image layers on GPU cluster nodes.
-      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache
-    - artifact_id: nvcf-proxy-tls-certs
-      plane: compute
-      kind: service-image
-      requirement: optional
-      description: Configures TLS trust for the optional container cache proxy.
     - artifact_id: nvcf-self-managed-stack
       plane: shared
       kind: resource
@@ -983,8 +928,8 @@ release_set:
       source_tag: deploy/stacks/observability/v1.0.0
       source_commit: b77e96a3f8c18e9318b93e697e33e596c4ede7d7
       inventory_asset: nvcf-observability-stack-inventory.json
-      documentation_version: 1.0.0
-      status: qualified
+      documentation_version: dev
+      status: development
 compatibility:
   - stack: control-plane
     version: 1.0.10
@@ -1720,36 +1665,6 @@ supplemental_artifacts:
     version: 1.0.0
     stacks:
       - observability
-  - name: nvcf-observability-reference-stack
-    type: chart
-    registry: public-helm
-    version: 1.10.0
-  - name: nvcf-example-dashboards
-    type: chart
-    registry: public-helm
-    version: 1.6.0
-  - id: nvcf-container-cache-image
-    name: nvcf-container-cache
-    type: image
-    registry: public-images
-    version: v1.1.36
-  - id: nvcf-container-cache-chart
-    name: nvcf-container-cache
-    type: chart
-    registry: public-helm
-    version: 0.25.22
-  - name: nvcf-proxy-tls-certs
-    type: image
-    registry: public-images
-    version: v1.2.10
-  - name: fluent-bit
-    type: image
-    registry: public-images
-    upstream_repository: docker.io/fluent/fluent-bit
-    version: "3.2"
-    stacks:
-      - compute-plane
-    requirement: optional
 outputs:
   - path: docs/overview/compatibility-matrix.md
     blocks:
