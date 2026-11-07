@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,14 +53,22 @@ const (
 	otherVersionID   = "6a1f0c2e-0000-4000-8000-000000000102"
 )
 
-// fakeFunctionIDs serves the NVCF function list for fixed test keys: one entry
-// per accessible function version. When gate is set, each response waits until
-// it is closed. While failing is set, every response is a server error.
+// fakeFunctionIDs serves the NVCF function version listings for fixed test
+// keys, one entry per accessible function version. The version ids listing
+// comes in pages of pageSize entries, or in one page when pageSize is zero.
+// While legacy is set, it answers 404 for that listing, like an NVCF API that
+// predates it. The key "invoke" may only invoke, so the function listing
+// rejects it. When gate is set, each response waits until it is closed. While
+// failing is set, every response is a server error.
 type fakeFunctionIDs struct {
-	t       *testing.T
-	calls   atomic.Int32
-	gate    chan struct{}
-	failing atomic.Bool
+	t     *testing.T
+	calls atomic.Int32
+	// functionsCalls counts the requests for the function listing.
+	functionsCalls atomic.Int32
+	gate           chan struct{}
+	failing        atomic.Bool
+	legacy         atomic.Bool
+	pageSize       atomic.Int32
 }
 
 func (f *fakeFunctionIDs) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -67,8 +76,19 @@ func (f *fakeFunctionIDs) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if f.gate != nil {
 		<-f.gate
 	}
-	if r.URL.Path != privateModelLookupPath || r.URL.Query().Get("visibility") != "authorized,private" {
+	query := r.URL.Query()
+	versionIDs := r.URL.Path == privateModelVersionIDsPath
+	if query.Get("visibility") != "authorized,private" ||
+		(versionIDs && query.Get("limit") != "10000") ||
+		(!versionIDs && r.URL.Path != privateModelFunctionsPath) {
 		f.t.Errorf("unexpected NVCF API request %s", r.URL)
+	}
+	if !versionIDs {
+		f.functionsCalls.Add(1)
+	}
+	if versionIDs && f.legacy.Load() {
+		http.NotFound(w, r)
+		return
 	}
 	if f.failing.Load() {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -77,24 +97,44 @@ func (f *fakeFunctionIDs) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	version := func(functionID, versionID string) map[string]string {
 		return map[string]string{"id": strings.ToLower(functionID), "versionId": strings.ToLower(versionID), "name": "fn"}
 	}
+	var functions []map[string]string
 	switch r.Header.Get("Authorization") {
 	case "Bearer good":
-		_ = json.NewEncoder(w).Encode(map[string]any{"functions": []map[string]string{
+		functions = []map[string]string{
 			version(allowedPrivateFunctionID, allowedVersionID),
 			version(expiredPrivateFunctionID, allowedVersionID),
 			version(stagingFunctionID, allowedVersionID),
 			version(publicFunctionID, allowedVersionID),
 			version(unmappedFunctionID, allowedVersionID),
-		}})
+		}
 	case "Bearer other":
-		_ = json.NewEncoder(w).Encode(map[string]any{"functions": []map[string]string{}})
+		functions = []map[string]string{}
+	case "Bearer invoke":
+		if !versionIDs {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		functions = []map[string]string{version(allowedPrivateFunctionID, allowedVersionID)}
 	case "Bearer bad":
 		w.WriteHeader(http.StatusUnauthorized)
+		return
 	case "Bearer noscope":
 		w.WriteHeader(http.StatusForbidden)
+		return
 	default:
 		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
+	page := map[string]any{"functions": functions}
+	if size := int(f.pageSize.Load()); versionIDs && size > 0 {
+		start, _ := strconv.Atoi(query.Get("cursor"))
+		end := min(start+size, len(functions))
+		page["functions"] = functions[start:end]
+		if end < len(functions) {
+			page["nextCursor"] = strconv.Itoa(end)
+		}
+	}
+	_ = json.NewEncoder(w).Encode(page)
 }
 
 func newFakeFunctionIDs(t *testing.T) (*fakeFunctionIDs, string) {
@@ -442,11 +482,11 @@ func TestPrivateModelsRequireAccessToThePinnedVersion(t *testing.T) {
 func TestPrivateModelLookupDoesNotFollowRedirects(t *testing.T) {
 	var redirected atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == privateModelLookupPath {
-			http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
+		if r.URL.Path == "/elsewhere" {
+			redirected.Add(1)
 			return
 		}
-		redirected.Add(1)
+		http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
 	}))
 	t.Cleanup(server.Close)
 
@@ -454,6 +494,80 @@ func TestPrivateModelLookupDoesNotFollowRedirects(t *testing.T) {
 	require.Equal(t, []string{"acme/public"}, listedModelIDs(t, rec))
 	require.Equal(t, privateModelsUnavailable, rec.Header().Get(PrivateModelsHeader))
 	require.Zero(t, redirected.Load())
+}
+
+// The version ids listing accepts a key that may only invoke, so the key sees
+// the private models it can invoke.
+func TestPrivateModelsListedForInvokeOnlyKeys(t *testing.T) {
+	nvcf, endpoint := newFakeFunctionIDs(t)
+	rec := listModels(t, privateModelsMux(t, endpoint), "/v1/models", keyHeaders("invoke"))
+	require.Equal(t, privateModelsAuthorized, rec.Header().Get(PrivateModelsHeader))
+	require.Equal(t, []string{"acme/public", "private/team/allowed"}, listedModelIDs(t, rec))
+	require.Zero(t, nvcf.functionsCalls.Load())
+}
+
+func TestPrivateModelLookupReadsEveryPage(t *testing.T) {
+	nvcf, endpoint := newFakeFunctionIDs(t)
+	nvcf.pageSize.Store(1)
+	rec := listModels(t, privateModelsMux(t, endpoint), "/v1/models", keyHeaders("good"))
+	require.Equal(t, privateModelsAuthorized, rec.Header().Get(PrivateModelsHeader))
+	require.Equal(t, []string{"acme/public", "private/team/allowed", "stg/acme/model"}, listedModelIDs(t, rec))
+	require.EqualValues(t, 5, nvcf.calls.Load())
+}
+
+// An NVCF API that predates the version ids listing answers 404 for it. The
+// gateway then uses the function listing, which needs a list scope, and tries
+// the version ids listing again after privateModelFallbackRecheck.
+func TestPrivateModelLookupFallsBackToTheFunctionListing(t *testing.T) {
+	nvcf, endpoint := newFakeFunctionIDs(t)
+	nvcf.legacy.Store(true)
+	mux := privateModelsMux(t, endpoint)
+	access := sharedAccess(t, endpoint)
+	now := time.Unix(1_800_000_000, 0)
+	access.now = func() time.Time { return now }
+
+	rec := listModels(t, mux, "/v1/models", keyHeaders("good"))
+	require.Equal(t, privateModelsAuthorized, rec.Header().Get(PrivateModelsHeader))
+	require.Equal(t, []string{"acme/public", "private/team/allowed", "stg/acme/model"}, listedModelIDs(t, rec))
+	require.EqualValues(t, 2, nvcf.calls.Load())
+
+	rec = listModels(t, mux, "/v1/models", keyHeaders("invoke"))
+	require.Equal(t, privateModelsForbidden, rec.Header().Get(PrivateModelsHeader))
+	require.EqualValues(t, 3, nvcf.calls.Load())
+	require.EqualValues(t, 2, nvcf.functionsCalls.Load())
+
+	nvcf.legacy.Store(false)
+	now = now.Add(privateModelFallbackRecheck)
+	rec = listModels(t, mux, "/v1/models", keyHeaders("other"))
+	require.Equal(t, privateModelsAuthorized, rec.Header().Get(PrivateModelsHeader))
+	require.EqualValues(t, 4, nvcf.calls.Load())
+	require.EqualValues(t, 2, nvcf.functionsCalls.Load())
+}
+
+// A lookup fails instead of looping when the NVCF API repeats a cursor or
+// never stops paging.
+func TestPrivateModelLookupBoundsPaging(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cursor func(page int32) string
+		calls  int32
+	}{
+		"repeated cursor": {cursor: func(int32) string { return "same" }, calls: 2},
+		"endless pages":   {cursor: func(page int32) string { return strconv.Itoa(int(page)) }, calls: privateModelLookupMaxPages},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				page := calls.Add(1)
+				_ = json.NewEncoder(w).Encode(map[string]any{"functions": []any{}, "nextCursor": tc.cursor(page)})
+			}))
+			t.Cleanup(server.Close)
+
+			rec := listModels(t, privateModelsMux(t, server.URL), "/v1/models", keyHeaders("good"))
+			require.Equal(t, privateModelsUnavailable, rec.Header().Get(PrivateModelsHeader))
+			require.Equal(t, []string{"acme/public"}, listedModelIDs(t, rec))
+			require.Equal(t, tc.calls, calls.Load())
+		})
+	}
 }
 
 // A reload that adds a private function refreshes each key on its next request
