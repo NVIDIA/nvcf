@@ -8,16 +8,21 @@ An open-source Kubernetes-native scheduler for AI workloads at large scale. The 
 
 ## Version pin
 
-KAI moves with the NVCF stack. Cross-check the chart version against the NVCF KAI Scheduler docs version table (linked below) before installing; that table lists the version NVCF has validated against the current NVCA / SIS combination. KAI is an upstream chart, not an NVCF image, so it is not in `manifest.yaml`.
+KAI moves with the NVCF stack. Install the chart version that your selected compute-plane release pins: the `version` of the `kai-scheduler` release in `deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl`, read from that release tag rather than from `main`. KAI is an upstream chart, not an NVCF image, so it is not in `manifest.yaml`. See [NVCF KAI Scheduler docs](https://docs.nvidia.com/cloud-functions/current/latest/cluster-management/kai-scheduler.html) for details.
 
-At the time of writing, the pinned chart version is `v0.14.0`. See [NVCF KAI Scheduler docs](https://docs.nvidia.com/cloud-functions/current/latest/cluster-management/kai-scheduler.html) for the canonical version table.
+From KAI v0.18, the chart turns GPU sharing on unless `global.gpuSharingMode` is set. NVCF workloads request whole GPUs, so the values below set it to `Disabled`.
 
 ## Install
 
 When `addons.kaiScheduler.enabled` is true in `nvcf-compute-plane`, that stack installs KAI Scheduler for you. Skip this section in that case.
 
 ```bash
+KAI_VERSION=<kai-version>  # the selected release's kai-scheduler pin
+
 cat > nvca-values.yaml << 'EOF'
+global:
+  gpuSharingMode: Disabled
+
 scheduler:
   placementStrategy: binpack
   plugins:
@@ -29,6 +34,8 @@ scheduler:
     preempt:
       enabled: false
     consolidation:
+      enabled: false
+    reclaim:
       enabled: false
 
 defaultQueue:
@@ -67,7 +74,7 @@ helm install kai-scheduler \
   oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler \
   -n kai-scheduler \
   --create-namespace \
-  --version v0.14.0 -f nvca-values.yaml \
+  --version "$KAI_VERSION" -f nvca-values.yaml \
   --wait --timeout 5m
 ```
 

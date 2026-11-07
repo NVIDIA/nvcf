@@ -12,6 +12,8 @@ metadata:
 spec:
   partitionLabelValue: ""
   goMemLimitRatio: 0.9
+  args:
+    default-staleness-grace-period: -1s
   placementStrategy:
     gpu: binpack
     cpu: binpack
@@ -24,4 +26,6 @@ spec:
     consolidation:
       enabled: false
     preempt:
+      enabled: false
+    reclaim:
       enabled: false

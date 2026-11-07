@@ -1,0 +1,9 @@
+---
+# Source: grove-charts/templates/priorityclass.yaml
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: grove-operator-priority-critical
+value: 9.9999955e+08
+globalDefault: false
+description: "This class is used to ensure that the grove-operator has a high priority and is not preempted in favor of other pods."

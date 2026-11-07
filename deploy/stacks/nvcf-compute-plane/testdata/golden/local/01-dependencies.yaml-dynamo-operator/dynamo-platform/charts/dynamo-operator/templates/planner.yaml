@@ -5,24 +5,30 @@ kind: ClusterRole
 metadata:
   name: dynamo-operator-planner
   labels:
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 rules:
 - apiGroups: ["nvidia.com"]
-  resources: ["dynamocomponentdeployments", "dynamographdeployments"]
+  resources: ["dynamographdeployments"]
   verbs: ["get", "list", "create", "update", "patch"]
 - apiGroups: ["nvidia.com"]
   resources: ["dynamographdeploymentscalingadapters/scale"]
-  verbs: ["patch"]
+  # Read the authoritative target to detect superseded asynchronous requests.
+  verbs: ["get", "patch"]
 - apiGroups: ["discovery.k8s.io"]
   resources: ["endpointslices"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["nvidia.com"]
   resources: ["dynamoworkermetadatas"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Read Pod lifecycle state to distinguish pending startup from drain before
+# reversing a scale-up. Also used for power-annotation settlement when enabled.
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
 ---
 # Source: dynamo-platform/charts/dynamo-operator/templates/planner.yaml
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -39,4 +45,7 @@ rules:
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# Cluster-wide mode: ClusterRole for planner
+# Cluster-wide mode: ClusterRole for planner.
+# Even though this is a ClusterRole, the operator binds it via a namespace-scoped
+# RoleBinding (internal/rbac/manager.go EnsureServiceAccountWithRBAC), so all
+# permissions — including pods/list — are effective only in the DGD's namespace.

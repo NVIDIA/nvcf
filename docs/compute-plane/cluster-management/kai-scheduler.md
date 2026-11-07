@@ -82,6 +82,9 @@ Create `values.yaml` with the required scheduler and queue settings:
 <Accordion title="values.yaml">
 
 ```yaml title="values.yaml"
+global:
+  gpuSharingMode: Disabled
+
 scheduler:
   placementStrategy: binpack
   plugins:
@@ -93,6 +96,8 @@ scheduler:
     preempt:
       enabled: false
     consolidation:
+      enabled: false
+    reclaim:
       enabled: false
 
 defaultQueue:
@@ -128,6 +133,30 @@ defaultQueue:
 ```
 
 </Accordion>
+
+From KAI v0.18, the chart turns GPU sharing on unless `global.gpuSharingMode`
+is set. NVCF workloads request whole GPUs, so set it to `Disabled`.
+
+The preempt, consolidation, and reclaim actions are disabled so that KAI never
+evicts running NVCF workloads to place other workloads. Reclaim needs the most care. Because NVCF queues have
+unlimited quotas, quota-based reclaim never takes from them. With KAI's default
+`allow-consolidating-reclaim`, however, reclaim can still move running NVCF Pods
+to other nodes to make room for another queue's pending gang. Workloads that
+create their own queues, such as Dynamo, make this possible.
+
+If other teams on a shared cluster rely on reclaim to enforce their queue
+quotas, replace `reclaim.enabled: false` in the values above with the following.
+NVCF Pods are then never moved, and quota-based reclaim between the other queues
+still works:
+
+```yaml
+scheduler:
+  actions:
+    reclaim:
+      enabled: true
+  args:
+    allow-consolidating-reclaim: "false"
+```
 
 For a new installation, replace `<kai-version>` with the `version` of the
 `kai-scheduler` release in

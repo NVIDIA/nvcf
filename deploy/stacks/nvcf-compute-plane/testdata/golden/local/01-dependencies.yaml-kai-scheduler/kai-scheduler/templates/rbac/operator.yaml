@@ -132,6 +132,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - gpu-fractioning.kai.scheduler
+  resources:
+  - gpufractioningconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - kai.scheduler
   resources:
   - configs

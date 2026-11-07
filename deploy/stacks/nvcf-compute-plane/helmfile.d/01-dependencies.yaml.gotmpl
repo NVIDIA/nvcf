@@ -39,17 +39,39 @@ helmDefaults:
   diffArgs:
     - "--dry-run=server"
 
+{{- /*
+     Preferred hostname anti-affinity for one KAI operand, keyed on the "app" label
+     the KAI operator sets to the Deployment name. The operator intends to add this
+     term itself, but its affinity merge returns early when neither the global nor
+     the per-service affinity is set, so both replicas can land on one node
+     (upstream kai-scheduler PR #2529). Preferred, not required: a required term
+     plus the operands' RollingUpdate maxSurge would leave a surge Pod Pending on a
+     pool with no spare node.
+*/}}
+{{- define "kaiScheduler.spreadReplicas" -}}
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app: {{ . }}
+{{- end }}
+
 releases:
 
   - name: kai-scheduler
     # Required by grove-operator and dynamo-operator. Release name and namespace
     # must be "kai-scheduler" per KAI installation requirements.
     # Enable per-environment: addons.kaiScheduler.enabled: true
-    # Per-component resources can be overridden under addons.kaiScheduler.<component>.resources;
-    # defaults below match the managed SBOM template.
+    # Per-component resources can be overridden under addons.kaiScheduler.<component>.resources,
+    # and the replica count under addons.kaiScheduler.replicaCount (default 2; set 1
+    # on single-node clusters).
     condition: addons.kaiScheduler.enabled
     chart: kai-scheduler/kai-scheduler
-    version: v0.17.1
+    version: v0.18.6
     namespace: kai-scheduler
     values:
       - ../global.yaml.gotmpl
@@ -81,7 +103,12 @@ releases:
         {{- $npeRes := dig "numaPlacementExporter" "resources" dict $kai }}
         {{- $npeReq := dig "requests" dict $npeRes }}
         {{- $npeLim := dig "limits" dict $npeRes }}
+        {{- $replicas := dig "replicaCount" 2 $kai }}
         global:
+          # From v0.18 the chart enables GPU sharing (NonMemoryEnforced) when
+          # neither gpuSharingMode nor the removed gpuSharing is set. NVCF
+          # workloads request whole GPUs, so keep sharing off.
+          gpuSharingMode: Disabled
           securityContext:
             runAsUser: 10000
             runAsNonRoot: true
@@ -103,9 +130,15 @@ releases:
           {{- end }}
 
         # Image names stay at chart defaults (ghcr.io/kai-scheduler/kai-scheduler/*).
-        # Managed SBOM uses kai-scheduler-* names with nv-ngc-devops; those do not
-        # resolve against the public chart registry.
         operator:
+          # KAI's global replica count, not just the operator's: it also feeds
+          # Config.spec.global.replicaCount, which sizes every operand (scheduler,
+          # binder, admission, pod-grouper, podgroup-controller, queue-controller).
+          # Above 1, the operator and each operand run leader election (one active,
+          # one hot standby), and the scheduler, pod-grouper and admission get a
+          # PodDisruptionBudget. On a single-node cluster that PDB can block a node
+          # drain, so set addons.kaiScheduler.replicaCount: 1 there.
+          replicaCount: {{ $replicas }}
           resources:
             requests:
               cpu: {{ dig "cpu" "50m" $opReq }}
@@ -122,6 +155,7 @@ releases:
             limits:
               cpu: {{ dig "cpu" "1000m" $pgLim }}
               memory: {{ dig "memory" "4Gi" $pgLim }}
+          {{- include "kaiScheduler.spreadReplicas" "pod-grouper" | nindent 10 }}
 
         podgroupcontroller:
           resources:
@@ -131,6 +165,7 @@ releases:
             limits:
               cpu: {{ dig "cpu" "1000m" $pgcLim }}
               memory: {{ dig "memory" "1Gi" $pgcLim }}
+          {{- include "kaiScheduler.spreadReplicas" "podgroup-controller" | nindent 10 }}
 
         binder:
           resources:
@@ -140,8 +175,16 @@ releases:
             limits:
               cpu: {{ dig "cpu" "4000m" $bdLim }}
               memory: {{ dig "memory" "4Gi" $bdLim }}
+          {{- include "kaiScheduler.spreadReplicas" "binder" | nindent 10 }}
 
         scheduler:
+          {{- if dig "dynamoOperator" "enabled" false .Values.addons }}
+          # Grove's KAI backend owns PodGroup termination for Dynamo workloads.
+          # Disable KAI's independent stale PodGroup eviction, as the Dynamo 1.5+
+          # upgrade guide requires.
+          args:
+            default-staleness-grace-period: "-1s"
+          {{- end }}
           placementStrategy: binpack
           plugins:
             nodeplacement:
@@ -153,6 +196,17 @@ releases:
               enabled: false
             consolidation:
               enabled: false
+            # reclaim is the last KAI action that evicts running Pods. NVCA requires
+            # unlimited queue quotas, so quota-based reclaim never applies. KAI's
+            # default allow-consolidating-reclaim still lets reclaim evict another
+            # queue's running Pods whenever it can re-place them on other nodes,
+            # because moved Pods are not counted against the fair-share check.
+            # Dynamo creates its own queue tree next to NVCA's default-queue, so
+            # this relocates running inference workers to make room for another
+            # workload's pending gang. With reclaim off, a pending gang waits for
+            # free capacity instead of displacing running workloads.
+            reclaim:
+              enabled: false
           resources:
             requests:
               cpu: {{ dig "cpu" "500m" $schReq }}
@@ -160,6 +214,7 @@ releases:
             limits:
               cpu: {{ dig "cpu" "2000m" $schLim }}
               memory: {{ dig "memory" "6Gi" $schLim }}
+          {{- include "kaiScheduler.spreadReplicas" "kai-scheduler-default" | nindent 10 }}
 
         queuecontroller:
           resources:
@@ -169,6 +224,7 @@ releases:
             limits:
               cpu: {{ dig "cpu" "1000m" $qcLim }}
               memory: {{ dig "memory" "1Gi" $qcLim }}
+          {{- include "kaiScheduler.spreadReplicas" "queue-controller" | nindent 10 }}
 
         admission:
           resources:
@@ -178,6 +234,7 @@ releases:
             limits:
               cpu: {{ dig "cpu" "1000m" $adLim }}
               memory: {{ dig "memory" "1Gi" $adLim }}
+          {{- include "kaiScheduler.spreadReplicas" "admission" | nindent 10 }}
 
         nodescaleadjuster:
           resources:
@@ -196,6 +253,14 @@ releases:
             limits:
               cpu: {{ dig "cpu" "1000m" $npeLim }}
               memory: {{ dig "memory" "1Gi" $npeLim }}
+
+        # KAI's bundled Prometheus only feeds time-aware fairness (usage-window
+        # fair share), which this stack does not use: it runs plain proportion
+        # fairness with preempt, consolidation and reclaim disabled. Matches the
+        # chart default; pinned so an upstream default flip cannot quietly stand
+        # up a second Prometheus in the cluster.
+        prometheus:
+          enabled: false
 
         defaultQueue:
           createDefaultQueue: true
@@ -278,9 +343,10 @@ releases:
     # API (NVIDIA/nvcf#1269). Earlier charts also have no nodeSelector support
     # and silently drop the nodeSelector set below, letting the operator
     # schedule onto any node - including one whose architecture its image
-    # does not support.
+    # does not support. dynamo-platform 1.6.x pins Grove v0.1.0-alpha.14 as
+    # its bundled subchart, so Dynamo 1.6 needs at least that.
     chart: nvidia-ai-dynamo-grove/grove-charts
-    version: v0.1.0-alpha.12
+    version: v0.1.0-alpha.16
     namespace: grove-system
     needs:
       - kai-scheduler/kai-scheduler
@@ -289,7 +355,15 @@ releases:
       - replicaCount: 1
         image:
           repository: ghcr.io/ai-dynamo/grove/grove-operator
-          tag: v0.1.0-alpha.12
+          tag: v0.1.0-alpha.16
+        # Protects the operator from preemption and eviction. The chart creates
+        # this PriorityClass itself (999999550 sits above every normal workload
+        # and just below system-cluster-critical); Grove cannot reference an
+        # existing class, so a built-in name must not be used here.
+        priorityClass:
+          enabled: true
+          name: grove-operator-priority-critical
+          value: 999999550
         resources:
           limits:
             memory: 1Gi
@@ -386,10 +460,12 @@ releases:
     # Enable per-environment: addons.dynamoOperator.enabled: true
     # Minimum 1.4.0: earlier releases speak the legacy Grove ClusterTopology
     # API, which no longer exists once Grove is on v0.1.0-alpha.12-rc1+
-    # (NVIDIA/nvcf#1269).
+    # (NVIDIA/nvcf#1269). From 1.5 the DynamoCheckpoint CRD is gone, so NVCA
+    # must not list it as an extra type (see 02-nvca.yaml.gotmpl), and KAI's
+    # stale PodGroup eviction is turned off (see the kai-scheduler release).
     condition: addons.dynamoOperator.enabled
     chart: nvidia-ai-dynamo/dynamo-platform
-    version: 1.4.2
+    version: 1.6.2
     namespace: dynamo-system
     needs:
       - grove-system/grove-operator
@@ -444,12 +520,15 @@ releases:
             image:
               registry: docker.io
               tag: "0.25.0"
-          jetstream:
-            enabled: true
-            fileStore:
+          # JetStream config lives under nats.config.jetstream in the NATS
+          # sub-chart, which silently ignores the same keys at any other path.
+          config:
+            jetstream:
               enabled: true
-              pvc:
+              fileStore:
                 enabled: true
+                pvc:
+                  enabled: true
           {{- $ns := .Values.global.nodeSelector | default dict -}}
           {{- $tol := .Values.global.tolerations | default list -}}
           {{- $nsKey := dig "key" nil $ns -}}

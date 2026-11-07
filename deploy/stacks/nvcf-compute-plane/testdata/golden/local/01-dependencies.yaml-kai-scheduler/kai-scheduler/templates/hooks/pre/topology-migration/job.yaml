@@ -22,8 +22,14 @@ spec:
         - name: nvcr-pull-secret
       containers:
       - name: migration
-        image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1"
+        image: "ghcr.io/kai-scheduler/kai-scheduler/helm-hooks:v0.18.6"
         imagePullPolicy: IfNotPresent
+        resources:
+          limits:
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -31,13 +37,5 @@ spec:
             - ALL
           runAsNonRoot: true
           runAsUser: 10000
-        command: ["/bin/bash", "/scripts/migrate-topologies.sh"]
-        volumeMounts:
-        - name: migration-script
-          mountPath: /scripts
-      volumes:
-      - name: migration-script
-        configMap:
-          name: topology-migration-script
-          defaultMode: 0755
+        args: ["migrate-topologies"]
       restartPolicy: OnFailure
