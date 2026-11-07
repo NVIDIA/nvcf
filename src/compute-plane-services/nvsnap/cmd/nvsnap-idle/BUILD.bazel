@@ -1,5 +1,8 @@
 load("@rules_go//go:def.bzl", "go_test")
 
+# The agent's cold-start tests build and run the program too.
+exports_files(["c/nvsnap-idle.c"])
+
 go_test(
     name = "nvsnap-idle_test",
     srcs = ["idle_test.go"],

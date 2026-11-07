@@ -239,6 +239,7 @@ func TestConsiderGPUShareFailure(t *testing.T) {
 	c := &criuAutoRestorer{a: a}
 	ctx := context.Background()
 	pod := withLibrary(crashing(enginePod(0), 2, 1))
+	pod.OwnerReferences = []metav1.OwnerReference{ownedBy("ReplicaSet", true)}
 	if _, err := cs.CoreV1().Pods("fn").Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -698,5 +699,31 @@ func TestRecordRefusalWithCompanionFallsBack(t *testing.T) {
 	fb, ok := a.criuFallbackFor(context.Background(), "fn", "cache://cfg", 0)
 	if !ok || fb.Reason != criuGroupStateFailed {
 		t.Errorf("the engine's configuration does not fall back: %+v %v", fb, ok)
+	}
+}
+
+// A pod nothing would recreate is left as it is: deleted, it would just be
+// gone. Its configuration is still marked, so its next pods start without
+// the library.
+func TestConsiderGPUShareFailure_KeepsAPodNothingRecreates(t *testing.T) {
+	for name, owners := range map[string][]metav1.OwnerReference{
+		"bare pod":     nil,
+		"custom owner": {ownedBy("ICMSRequest", true)},
+	} {
+		a, cs := fallbackAgent(t)
+		c := &criuAutoRestorer{a: a}
+		ctx := context.Background()
+		pod := withLibrary(crashing(enginePod(0), 2, 1))
+		pod.OwnerReferences = owners
+		if _, err := cs.CoreV1().Pods("fn").Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		c.considerFallback(ctx, pod)
+		if d := getRecord(t, a, criuGroupConfigMapName(fnKey(t, a))); d["state"] != "gpushare-failed" {
+			t.Errorf("%s: configuration not marked: %v", name, d)
+		}
+		if _, err := cs.CoreV1().Pods("fn").Get(ctx, pod.Name, metav1.GetOptions{}); err != nil {
+			t.Errorf("%s: the pod was deleted: %v", name, err)
+		}
 	}
 }

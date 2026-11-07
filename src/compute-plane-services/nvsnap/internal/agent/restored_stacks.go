@@ -145,7 +145,7 @@ func engineRuns(procBase string, pids []int) bool {
 // stacksDue reports whether pod is a restored pod, running and not Ready
 // restoredStacksAfter after its restore.
 func stacksDue(pod *corev1.Pod, now time.Time) bool {
-	if pod.Annotations[webhook.CRIURestoredAnnotation] == "" || pod.DeletionTimestamp != nil ||
+	if pod.Annotations[webhook.CRIURestoredAnnotation] == "" || coldStarted(pod) || pod.DeletionTimestamp != nil ||
 		pod.Status.Phase != corev1.PodRunning || rootfsonly.IsPodReady(pod) {
 		return false
 	}

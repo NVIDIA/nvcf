@@ -231,6 +231,8 @@ func main() {
 
 	flag.IntVar(&config.Webhook.CaptureLivenessBudget, "webhook-capture-liveness-budget", 0,
 		"Seconds of silence every liveness probe is widened to tolerate (its failureThreshold raised), so a capture's freeze does not get the pod restarted; 0 leaves probes as they are.")
+	flag.BoolVar(&config.Webhook.CaptureHold, "webhook-capture-hold", false,
+		"Hold a pod a CRIU capture may freeze out of service (a readiness gate) until the node agent has captured it or decided not to, so that a capture never stops an instance that serves.")
 
 	flag.StringVar(&config.Webhook.HostBundleRoot, "webhook-host-bundle-root", "",
 		"On-host path the nvsnap-agent DaemonSet stages the restore bundle into (default /var/lib/nvsnap/bundle). Function pods mount {root}/nvsnap + {root}/nvsnap-lib via hostPath.")

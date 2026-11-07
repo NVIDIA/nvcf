@@ -35,6 +35,7 @@ import (
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -177,6 +178,7 @@ var gpuProbeRun = func(ctx context.Context, uuid string) (string, error) {
 	if lib == "" {
 		return "", errors.New("no driver library (libcuda.so.1) on the host")
 	}
+	linkGPUDevices("/dev", gpuDeviceRoots)
 	// Without these the driver answers CUDA_ERROR_UNKNOWN for any GPU:
 	// that would be the agent's own setup, not the GPU.
 	for _, dev := range []string{"/dev/nvidiactl", "/dev/nvidia-uvm"} {
@@ -185,6 +187,54 @@ var gpuProbeRun = func(ctx context.Context, uuid string) (string, error) {
 		}
 	}
 	return runGPUProbe(ctx, gpuProbeTool, lib, uuid)
+}
+
+// gpuDeviceRoots are where the driver's device nodes are, as the agent
+// sees the host: a GPU Operator's driver container keeps them under its
+// driver root, not in the host's /dev.
+var gpuDeviceRoots = []string{"/host/run/nvidia/driver/dev", "/host/dev"}
+
+// gpuMknod creates a device node; tests replace it.
+var gpuMknod = unix.Mknod
+
+// linkGPUDevices gives devDir, the agent's own /dev, the driver's device
+// nodes it lacks, from the first of roots that has /nvidiactl. A
+// privileged container's /dev has the nodes the host's /dev had when it
+// started; with a driver container they are elsewhere, and the probe
+// could not open any GPU (seen: every probe "cannot tell", so a GPU fault
+// counted against nvsnap). The nodes keep their device numbers and are
+// made only in the container's own /dev.
+func linkGPUDevices(devDir string, roots []string) {
+	for _, root := range roots {
+		if !isCharDevice(filepath.Join(root, "nvidiactl")) {
+			continue
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if !strings.HasPrefix(e.Name(), "nvidia") {
+				continue
+			}
+			dst := filepath.Join(devDir, e.Name())
+			if _, err := os.Lstat(dst); err == nil {
+				continue
+			}
+			var st unix.Stat_t
+			if unix.Stat(filepath.Join(root, e.Name()), &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFCHR {
+				continue
+			}
+			// Probes run at once: another may have made it (EEXIST).
+			_ = gpuMknod(dst, unix.S_IFCHR|(st.Mode&0o777), int(st.Rdev)) //nolint:gosec // device numbers fit
+		}
+		return
+	}
+}
+
+func isCharDevice(path string) bool {
+	var st unix.Stat_t
+	return unix.Stat(path, &st) == nil && st.Mode&unix.S_IFMT == unix.S_IFCHR
 }
 
 // runGPUProbe runs tool's probe of GPU uuid with driver library lib, for

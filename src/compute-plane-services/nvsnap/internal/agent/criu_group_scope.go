@@ -117,7 +117,11 @@ func (a *Agent) lookupCRIUGroupFor(ctx context.Context, ns, uri string) (webhook
 		a.log.WithError(err).WithField("namespace", ns).Warn("CRIU group restore: cannot read the namespace's scope; cold start")
 		return webhook.CRIUGroup{}, false
 	}
-	g, ok := a.lookupCRIUGroup(ctx, criuGroupKey(uri, scope))
+	key := criuGroupKey(uri, scope)
+	g, ok := a.lookupCRIUGroup(ctx, key)
+	if ok {
+		a.nameRecordLater(key, ns)
+	}
 	if ok && g.VerifyNamespace != "" && g.VerifyNamespace != ns {
 		// Not verified yet: only its own instance restores from it.
 		return webhook.CRIUGroup{}, false

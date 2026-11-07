@@ -40,7 +40,7 @@ func TestParseCRIUGroup(t *testing.T) {
 		"checkpoint.0": "a", "checkpoint.1": "b", "node.0": "n0", "node.1": "n1"}
 	g, ok := parseCRIUGroup("k1", data)
 	if !ok || !reflect.DeepEqual(g, webhook.CRIUGroup{Key: "k1", Checkpoints: []string{"a", "b"}, Nodes: []string{"n0", "n1"}, GPUShare: true,
-		Companion: []bool{false, false}, Containers: []string{"", ""}, Bundles: []string{"", ""}}) {
+		Companion: []bool{false, false}, Containers: []string{"", ""}, Bundles: []string{"", ""}, ColdEntrypoints: []string{"", ""}}) {
 		t.Fatalf("got %+v %v", g, ok)
 	}
 	for name, mut := range map[string]func(map[string]string){
@@ -79,6 +79,37 @@ func TestInstanceRanks(t *testing.T) {
 	w.Labels = map[string]string{lwsGroupKeyLabel: "g1"}
 	if _, err := instanceRanks([]corev1.Pod{l, w}, &l, 2, ord, size, keep); err != nil {
 		t.Errorf("LeaderWorkerSet group: %v", err)
+	}
+}
+
+// TestInstanceRanksKeepsTheLeader: the replicas of a Deployment share its
+// ReplicaSet as their controller and are each rank 0 of an instance of
+// one. The leader's rank is the leader, never another replica the list
+// returns first: a capture decided on one replica dumped another, on
+// another node, while it served.
+func TestInstanceRanksKeepsTheLeader(t *testing.T) {
+	keep := func(p *corev1.Pod) bool { return true }
+	ord, size := modelvolume.CacheOrdinalAnnotation, modelvolume.CacheGroupSizeAnnotation
+	a := stsRank("replica-a", "0", "1", "rs-1", true)
+	b := stsRank("replica-b", "0", "1", "rs-1", true)
+	c := stsRank("replica-c", "0", "1", "rs-1", true)
+	for _, leader := range []corev1.Pod{a, b, c} {
+		ranks, err := instanceRanks([]corev1.Pod{a, b, c}, &leader, 1, ord, size, keep)
+		if err != nil || len(ranks) != 1 || ranks[0].UID != leader.UID {
+			t.Errorf("leader %s: ranks %v err %v", leader.Name, ranks, err)
+		}
+	}
+	// A leader that does not pass keep (not ready) leaves its rank
+	// missing; another replica does not stand in for it.
+	notReady := func(p *corev1.Pod) bool { return p.UID != c.UID }
+	if ranks, err := instanceRanks([]corev1.Pod{a, b, c}, &c, 1, ord, size, notReady); err == nil {
+		t.Errorf("another replica stood in for the leader: %v", ranks[0].Name)
+	}
+	// Multi-pod instance: the other ranks are still found by ordinal.
+	r0 := stsRank("kimi-0", "0", "2", "sts-a", true)
+	r1 := stsRank("kimi-1", "1", "2", "sts-a", true)
+	if ranks, err := instanceRanks([]corev1.Pod{r1, r0}, &r0, 2, ord, size, keep); err != nil || ranks[0].UID != r0.UID || ranks[1].UID != r1.UID {
+		t.Errorf("multi-pod: ranks %v err %v", ranks, err)
 	}
 }
 

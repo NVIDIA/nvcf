@@ -803,14 +803,7 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 			return fmt.Errorf("pid-namespace dump: stop the container: %w", err)
 		}
 		// criu leaves the cgroup as it found it, frozen.
-		defer func() {
-			if err := setFrozen(cg, false); err != nil {
-				log.WithError(err).WithField("cgroup", cg).Warn("criu-v2: cannot thaw the dumped container; retrying")
-				go retryThaw(record, []string{cg}, log)
-				return
-			}
-			_ = os.Remove(record)
-		}()
+		defer thawAfterDump(cg, record, log)
 	}
 	ended, err := endExecSessions(procBase, hostPID, killPID)
 	if err != nil {

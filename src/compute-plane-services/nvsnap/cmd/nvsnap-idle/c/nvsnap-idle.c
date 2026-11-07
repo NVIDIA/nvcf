@@ -14,10 +14,24 @@
  * TICK_SECONDS, so after the raise the next child lands above the range and
  * the last one below it is gone within a tick. A multi-threaded runtime would
  * hold low thread ids for its whole life.
+ *
+ * Cold start in place:
+ *
+ *   nvsnap-idle --cold-start MARKER -- COMMAND [ARG...]
+ *
+ * A placeholder whose restore failed, in a pod nothing would recreate, starts
+ * its workload the way the pod would have without nvsnap. The agent creates
+ * MARKER, on a volume that outlives the container, then kills this program;
+ * killing a pid namespace's init ends everything in it, the restored processes
+ * included. When the container restarts, this program finds MARKER and execs
+ * COMMAND, which becomes the container's init as in a fresh start; so does
+ * every later restart.
  */
 #include <errno.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -28,7 +42,20 @@ static volatile sig_atomic_t stop;
 
 static void on_term(int sig) { (void)sig; stop = 1; }
 
-int main(void) {
+int main(int argc, char **argv) {
+	if (argc > 1) {
+		if (argc < 5 || strcmp(argv[1], "--cold-start") != 0 || argv[2][0] == '\0' ||
+		    strcmp(argv[3], "--") != 0 || argv[4][0] == '\0') {
+			fprintf(stderr, "usage: nvsnap-idle [--cold-start MARKER -- COMMAND [ARG...]]\n");
+			return 2;
+		}
+		if (access(argv[2], F_OK) == 0) {
+			execvp(argv[4], argv + 4);
+			fprintf(stderr, "nvsnap-idle: cannot start %s: %s\n", argv[4], strerror(errno));
+			return 127;
+		}
+	}
+
 	struct sigaction sa = {0};
 	sa.sa_handler = on_term;
 	sigemptyset(&sa.sa_mask);

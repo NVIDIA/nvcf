@@ -202,3 +202,29 @@ func TestEncodePosixACL(t *testing.T) {
 	}
 	_ = strings.TrimSpace
 }
+
+// Replaying a rootfs diff, the archive's own root entry is not applied to
+// the destination: the destination's root is its own (a placeholder's, from its image, and
+// read-only when the pod's root filesystem is: restoring its owner failed
+// every replay into such a pod), and the entries after it are extracted.
+func TestExtractTarLeavesTheRootAlone(t *testing.T) {
+	dst := t.TempDir()
+	if err := os.Chmod(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	uid, gid := os.Getuid(), os.Getgid()
+	a := tarOf(t,
+		&tar.Header{Name: "./", Typeflag: tar.TypeDir, Mode: 0o700, Uid: uid + 1, Gid: gid + 1},
+		&tar.Header{Name: "./f", Typeflag: tar.TypeReg, Size: 2, Mode: 0o644, Uid: uid, Gid: gid},
+	)
+	n, err := extractInto(t, a, dst, replayDiffOpts(nil))
+	if err != nil || n != 1 {
+		t.Fatalf("extracted %d, %v", n, err)
+	}
+	if fi, _ := os.Stat(dst); fi.Mode().Perm() != 0o755 {
+		t.Errorf("the destination's root mode changed to %v", fi.Mode().Perm())
+	}
+	if _, err := os.Stat(filepath.Join(dst, "f")); err != nil {
+		t.Errorf("the entry after the root was not extracted: %v", err)
+	}
+}

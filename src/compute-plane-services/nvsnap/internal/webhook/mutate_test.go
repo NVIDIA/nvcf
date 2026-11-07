@@ -801,3 +801,27 @@ func srcForManifest(t *testing.T, m checkpointstore.Manifest) string {
 	}
 	return srcWith(t, subs...)
 }
+
+// A pod stamped with restore-from before any capture of its hash exists
+// (the platform stamps every pod of a function, the first included) is a
+// cold start that the first capture is taken from: it keeps the gpushare
+// placement every cold GPU pod gets instead of being admitted bare.
+func TestMutate_RestoreFromWithoutCaptureKeepsColdPlacement(t *testing.T) {
+	m := &Mutator{Backend: newBackend(t), GPUShareByDefault: true}
+	pod := gpushareTestPod(false, nil)
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[RestoreFromAnnotation] = "d23465e81347dda19b2069dde2deef96ca6a4f6d1c8fb8191f1a6eecfae8b98c"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	got := applyPatches(t, pod, patches)
+	if envOf(got.Spec.Containers[1], "LD_PRELOAD") == nil {
+		t.Error("cold pod with restore-from and no capture lost the gpushare library")
+	}
+	if got.Annotations[CRIURestoreAnnotation] != "" {
+		t.Error("no capture exists, yet the pod was made a restore placeholder")
+	}
+}

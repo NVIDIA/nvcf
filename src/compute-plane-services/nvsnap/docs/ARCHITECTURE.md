@@ -370,13 +370,37 @@ keys and request data.
 | Failure | What nvsnap does | Code |
 |---|---|---|
 | No usable capture for a pod's hash | The pod is admitted without a restore and starts cold (under CRIU it is still prepared for a later capture) | `internal/webhook/mutate.go` |
-| A CRIU restore fails, or the restored engine dies | The checkpoint is blocked and the pod deleted; its replacement starts cold | `internal/agent/criu_auto_restore.go` `markFailed`; `restored_watch.go` `failRestored` |
-| The checkpoint could not be fetched | The placeholder is deleted so its replacement tries again; not blocked | `criu_auto_restore.go` (`errCheckpointUnavailable`) |
+| A CRIU restore fails, or the restored engine dies | The checkpoint is blocked and the pod deleted; its replacement starts cold. A pod no controller recreates (a bare pod, or one whose owner does not replace its pods) is kept and starts its workload cold in place instead (below) | `internal/agent/criu_auto_restore.go` `markFailed`, `disposeFailedPlaceholder`; `restored_watch.go` `failRestored` |
+| The checkpoint could not be fetched | The placeholder is deleted so its replacement tries again; not blocked. A pod nothing recreates starts cold in place | `criu_auto_restore.go` (`errCheckpointUnavailable`) |
 | A group restore fails | The group's members are deleted. A restore that failed blocks the group's checkpoints and lets the next Ready instance capture anew; a restore that never ran keeps them | `criu_group.go` `failGroup`, `endGroup` (`TestFailGroup_RestoreFailureBlocksAndAllowsRecapture`, `TestFailGroup_StallKeepsCheckpointsAndDeletesEveryRank`) |
 | A member ends before the freeze, or a release is not taken | Every member's capture is aborted. Before gpushare's quiesce vote has passed, the instance runs on; after it, the instance's pods are deleted and their replacements start cold | `group_freeze.go` `driveGroupFreeze`; `criu_group.go` `checkpointInstance` (`stopped`), `captureGroup` |
 | A liveness probe would restart a pod during a capture | The webhook widens probes too tight to survive the freeze, on pods a capture may freeze; an instance with a tighter probe is not captured | `internal/webhook/liveness.go` `livenessBudgetPatches`; `criu_group_guard.go` `freezeTolerated` |
 | The captured pod's model volume is missing at restore | The instance starts cold | `internal/webhook/model_volume.go` `placeholderModelPatches` |
 | An agent rollout during a capture | Captures do not start until every agent runs one revision; an agent that restarts mid-capture fails it (section 8) | `criu_group_guard.go` `agentsSettled`; `criu_group_recover.go` `recoverInterruptedCaptures` |
+
+A lone placeholder's idle program is given the workload's argv: the pod's
+own command and args, or, for an image that names its entrypoint, the
+entrypoint the runtime started the captured container with (recorded on the
+capture as `cold_entrypoint`) and the pod's own args, which the kubelet
+expands for this pod. To start cold in place the agent checks the pod and
+container are still the failed placeholder's, writes a marker on the pod's
+restore work volume, marks the pod `nvsnap.io/criu-cold-started`, and kills
+the container's init. That ends the container's pid namespace, including any
+processes a restore that failed late left running; the container restarts,
+and the idle program, finding the marker, execs the workload as its init, on
+this and every later restart. The restored condition is set so the
+workload's own readiness probe decides. Each step can be repeated, so an
+agent that stops half way is finished by the next. A placeholder admitted
+without the argv (an older webhook), a pod whose containers share one pid
+namespace, and a pod whose containers are never restarted cannot, and are
+deleted as before. The liveness and startup probes the placeholder dropped
+stay dropped for that pod (`internal/agent/cold_start.go`,
+`cmd/nvsnap-idle`). A lone placeholder, and a one-pod capture with no
+companions, runs all of the pod's init containers, so a cold start in place
+has what they set up. A rank of a larger group skips the init containers
+that would only wait on the instance's peers, and keeps every one whose
+output something running in the pod reads, directly or through another kept
+init (`internal/webhook/criu_restore.go` `initsToKeep`).
 
 ## 11. Platform integration (NVCF and NVCA)
 

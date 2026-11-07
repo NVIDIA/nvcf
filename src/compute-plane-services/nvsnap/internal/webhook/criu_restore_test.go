@@ -67,9 +67,12 @@ func TestCRIURestore_PodBecomesThePlaceholder(t *testing.T) {
 	}
 	got := applyPatches(t, pod, patches)
 	c := got.Spec.Containers[1]
-	// Idled by nvsnap-idle, which needs nothing from the engine's image.
-	if !reflect.DeepEqual(c.Command, []string{IdleBin}) || len(c.Args) != 0 {
-		t.Errorf("engine container not idled: %v %v", c.Command, c.Args)
+	// Idled by nvsnap-idle, which needs nothing from the engine's image,
+	// and given the engine's own argv to start cold in place if the
+	// restore fails.
+	if !reflect.DeepEqual(c.Command, []string{IdleBin}) ||
+		!reflect.DeepEqual(c.Args, []string{"--cold-start", ColdStartMarker, "--", "vllm", "serve", "m"}) {
+		t.Errorf("engine container not idled with its cold start: %v %v", c.Command, c.Args)
 	}
 	helperMounted, helperVolume := false, false
 	for _, vm := range c.VolumeMounts {
@@ -181,6 +184,41 @@ func TestCRIURestore_SkipsWhenItCannotRestore(t *testing.T) {
 		got := applyPatches(t, pod, patches)
 		if got.Annotations[CRIURestoreAnnotation] != "" || !reflect.DeepEqual(got.Spec.Containers[1].Command, []string{"vllm"}) {
 			t.Errorf("%s: pod was turned into a restore placeholder", name)
+		}
+	}
+}
+
+// A CRIU capture not restored starts cold anywhere: its record, on the L1
+// backend too, names the capture node, and pinning the pod there (with
+// nothing to mount) left it unschedulable while that node was busy.
+func TestCRIURestore_DeclinedCaptureStartsColdUnpinned(t *testing.T) {
+	cases := map[string]func(*Mutator){
+		"blocked checkpoint": func(m *Mutator) {
+			m.CRIURestoreBlocked = func(context.Context, string) bool { return true }
+		},
+		"capture of another namespace": func(m *Mutator) {
+			man := criuCaptureRecord()
+			man.SourcePodMeta[checkpointstore.CRIUScopeMetaKey] = CRIUNamespaceScope("tenant-a")
+			m.L2Backend = &criuL2Backend{man: man}
+			m.Backend = &criuL2Backend{man: man}
+		},
+	}
+	for name, mod := range cases {
+		m := criuMutator(t, criuCaptureRecord())
+		m.Backend = &criuL2Backend{man: criuCaptureRecord()}
+		mod(m)
+		pod := podWithAnnotation("abc123")
+		pod.Spec = criuFunctionPod().Spec
+		patches, err := m.Mutate(context.Background(), pod)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got := applyPatches(t, pod, patches)
+		if got.Annotations[CRIURestoreAnnotation] != "" || !reflect.DeepEqual(got.Spec.Containers[1].Command, []string{"vllm"}) {
+			t.Errorf("%s: pod was turned into a restore placeholder", name)
+		}
+		if a := got.Spec.Affinity; a != nil && a.NodeAffinity != nil {
+			t.Errorf("%s: cold start pinned to a node: %+v", name, a.NodeAffinity)
 		}
 	}
 }
@@ -358,7 +396,6 @@ func TestCRIURestore_PlaceholderIsTheGPUContainer(t *testing.T) {
 // (a Dynamo worker waiting for its leader) would never end.
 func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
 	alwaysRestart := corev1.ContainerRestartPolicyAlways
-	m := criuMutator(t, criuCaptureRecord())
 	pod := podWithAnnotation("abc123")
 	pod.Spec = criuFunctionPod().Spec
 	pod.Spec.Volumes = []corev1.Volume{
@@ -376,11 +413,73 @@ func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
 		// beacon): skipped, it would exit and be restarted for ever.
 		{Name: "beacon", Image: "img", Command: []string{"serve"}, RestartPolicy: &alwaysRestart},
 	}
+	run := placeholderInits(t, pod, true)
+	want := map[string]bool{"download-model": true, "wait-for-leader": false, "wait-for-nats": false, "own-scratch": false, "beacon": true}
+	for n, w := range want {
+		if run[n] != w {
+			t.Errorf("%s runs = %v, want %v", n, run[n], w)
+		}
+	}
+	// A lone placeholder runs them all, as the pod would without nvsnap: it
+	// waits on no peer, and starts cold in place if its restore fails.
+	for n, r := range placeholderInits(t, pod, false) {
+		if !r {
+			t.Errorf("lone placeholder: %s skipped", n)
+		}
+	}
+	// Through Mutate, a lone pod's inits are untouched.
+	m := criuMutator(t, criuCaptureRecord())
 	patches, err := m.Mutate(context.Background(), pod)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := applyPatches(t, pod, patches)
+	for _, p := range patches {
+		if strings.HasPrefix(p.Path, "/spec/initContainers/") && strings.HasSuffix(p.Path, "/command") {
+			t.Errorf("lone placeholder: init patched: %s", p.Path)
+		}
+	}
+}
+
+// A group placeholder keeps an init whose output reaches a running
+// container only through another init (files one extracts and another
+// merges into the engine's certificates), and one whose output a sidecar
+// reads (a trust bundle for a worker container), as NVCA function pods do.
+func TestCRIURestore_GroupPlaceholderKeepsInitChainsAndSidecarInputs(t *testing.T) {
+	pod := podWithAnnotation("abc123")
+	pod.Spec = criuFunctionPod().Spec
+	empty := corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
+	pod.Spec.Volumes = []corev1.Volume{
+		{Name: "tools", VolumeSource: empty}, {Name: "extracted", VolumeSource: empty},
+		{Name: "merged-certs", VolumeSource: empty}, {Name: "trust-merged", VolumeSource: empty},
+		{Name: "trust-src", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{}}},
+	}
+	pod.Spec.Containers[1].VolumeMounts = []corev1.VolumeMount{{Name: "merged-certs", MountPath: "/certs", ReadOnly: true}}
+	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: "llm-worker", Image: "w",
+		VolumeMounts: []corev1.VolumeMount{{Name: "trust-merged", MountPath: "/tls", ReadOnly: true}}})
+	pod.Spec.InitContainers = []corev1.Container{
+		{Name: "a-toolbox", Command: []string{"cp"}, VolumeMounts: []corev1.VolumeMount{{Name: "tools", MountPath: "/tools"}}},
+		{Name: "b-extract-inference", Command: []string{"/tools/busybox"}, VolumeMounts: []corev1.VolumeMount{
+			{Name: "tools", MountPath: "/tools"}, {Name: "extracted", MountPath: "/extracted"}}},
+		{Name: "fast-merge-certs", Command: []string{"merge"}, VolumeMounts: []corev1.VolumeMount{
+			{Name: "extracted", MountPath: "/extracted"}, {Name: "merged-certs", MountPath: "/merged"}}},
+		{Name: "trust-bundle-install", Command: []string{"install"}, VolumeMounts: []corev1.VolumeMount{
+			{Name: "trust-src", MountPath: "/trust", ReadOnly: true}, {Name: "trust-merged", MountPath: "/merged"}}},
+		{Name: "wait-for-etcd", Command: []string{"sh", "-c", "until nc etcd 2379; do sleep 1; done"}},
+	}
+	run := placeholderInits(t, pod, true)
+	want := map[string]bool{"a-toolbox": true, "b-extract-inference": true, "fast-merge-certs": true, "trust-bundle-install": true, "wait-for-etcd": false}
+	for n, w := range want {
+		if run[n] != w {
+			t.Errorf("%s runs = %v, want %v", n, run[n], w)
+		}
+	}
+}
+
+// placeholderInits applies placeholderInitPatches to pod and reports, by
+// name, whether each init container still runs its own command.
+func placeholderInits(t *testing.T, pod *corev1.Pod, group bool) map[string]bool {
+	t.Helper()
+	got := applyPatches(t, pod, placeholderInitPatches(pod, group))
 	run := map[string]bool{}
 	for _, c := range got.Spec.InitContainers {
 		skipped := len(c.Command) > 1 && c.Command[0] == HelperBin && c.Command[1] == "skip"
@@ -395,12 +494,7 @@ func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
 			}
 		}
 	}
-	want := map[string]bool{"download-model": true, "wait-for-leader": false, "wait-for-nats": false, "own-scratch": false, "beacon": true}
-	for n, w := range want {
-		if run[n] != w {
-			t.Errorf("%s runs = %v, want %v", n, run[n], w)
-		}
-	}
+	return run
 }
 
 // A companion's checkpoint names its container (one of several, picked by
@@ -539,5 +633,77 @@ func TestCRIURestore_StoreReadOnlyAndWorkVolumeReserved(t *testing.T) {
 		if _, err := m.criuRestorePatches(p, "abc123__20261008-101010", man); err == nil {
 			t.Errorf("%s: admitted as a placeholder", what)
 		}
+	}
+}
+
+// The placeholder's idle program is given the argv the pod would start its
+// engine with: the pod's own command and args, else the argv the capture
+// saw the runtime start (an entrypoint-only image), else nothing, and then
+// it cannot start cold in place.
+func TestCRIURestore_PlaceholderKnowsItsColdStart(t *testing.T) {
+	recorded := criuCaptureRecord()
+	recorded.SourcePodMeta[ColdEntrypointMeta] = `["/opt/nim/start.sh"]`
+	shellImage := criuCaptureRecord()
+	shellImage.SourcePodMeta[ColdEntrypointMeta] = `["/bin/sh","-c","test $$ -gt 0 && exec /app $(HOME)"]`
+	for _, tc := range []struct {
+		name    string
+		command []string
+		args    []string
+		man     checkpointstore.Manifest
+		want    []string
+	}{
+		{"pod command and args", []string{"vllm"}, []string{"serve", "m"}, criuCaptureRecord(), []string{"vllm", "serve", "m"}},
+		{"pod command wins over the record", []string{"vllm"}, nil, recorded, []string{"vllm"}},
+		{"entrypoint image: the recorded entrypoint and the pod's args", nil, []string{"--port", "8000"}, recorded, []string{"/opt/nim/start.sh", "--port", "8000"}},
+		// The kubelet expands $(VAR) in the placeholder's own args, for
+		// this pod: the source pod's values are never reused.
+		{"entrypoint image, args with references", nil, []string{"--bind=$(POD_IP)"}, recorded, []string{"/opt/nim/start.sh", "--bind=$(POD_IP)"}},
+		{"entrypoint image, no args", nil, nil, recorded, []string{"/opt/nim/start.sh"}},
+		// The image's own strings were never expanded: escaped, the
+		// kubelet gives them back as the image has them.
+		{"entrypoint image with $ in its own strings", nil, nil, shellImage, []string{"/bin/sh", "-c", "test $$$$ -gt 0 && exec /app $$(HOME)"}},
+		{"entrypoint image, nothing recorded", nil, []string{"--port", "8000"}, criuCaptureRecord(), nil},
+		{"entrypoint image, no args, nothing recorded", nil, nil, criuCaptureRecord(), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := podWithAnnotation("abc123")
+			pod.Spec = criuFunctionPod().Spec
+			pod.Spec.Containers[1].Command, pod.Spec.Containers[1].Args = tc.command, tc.args
+			m := criuMutator(t, tc.man)
+			patches, err := m.Mutate(context.Background(), pod)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := applyPatches(t, pod, patches).Spec.Containers[1]
+			if !reflect.DeepEqual(c.Command, []string{IdleBin}) {
+				t.Fatalf("command = %v, want the idle program", c.Command)
+			}
+			if tc.want == nil {
+				if len(c.Args) != 0 {
+					t.Errorf("args = %v, want none: nothing to start cold", c.Args)
+				}
+				return
+			}
+			if want := append([]string{"--cold-start", ColdStartMarker, "--"}, tc.want...); !reflect.DeepEqual(c.Args, want) {
+				t.Errorf("args = %v, want %v", c.Args, want)
+			}
+		})
+	}
+}
+
+// A record whose argv is unusable gives no cold start, rather than a wrong one.
+func TestColdArgv_RejectsBadRecords(t *testing.T) {
+	c := &corev1.Container{Name: "inference"}
+	for _, raw := range []string{`not json`, `[]`, `[""]`, `["` + IdleBin + `"]`} {
+		man := criuCaptureRecord()
+		man.SourcePodMeta[ColdEntrypointMeta] = raw
+		if got := ColdArgv(c, man); got != nil {
+			t.Errorf("%s: got %v, want nil", raw, got)
+		}
+	}
+	// A pod whose command is already the idle program is a placeholder.
+	c.Command = []string{IdleBin}
+	if got := ColdArgv(c, criuCaptureRecord()); got != nil {
+		t.Errorf("placeholder command: got %v", got)
 	}
 }

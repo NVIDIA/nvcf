@@ -16,6 +16,7 @@ agent releases. Three records, each answering its own question:
 - [Metrics](#metrics)
 - [Summary lines](#summary-lines)
 - [Events and the group record](#events-and-the-group-record)
+- [Which functions are cached](#which-functions-are-cached)
 - [Install](#install)
 <!-- /toc -->
 
@@ -139,6 +140,26 @@ the log store by namespace or pod for one function's history.
   Restores that failed on faulty GPUs are counted under `gpuFaults`, the
   last one's GPUs under `lastGPUFault`; they do not count toward the
   failures that give a capture up (`restoreFailures`).
+- A group record is labelled with the function version it is for
+  (`nvsnap.io/function-version-id`, `nvsnap.io/function-id`,
+  `nvsnap.io/tenant`, `nvsnap.io/namespace`).
+
+## Which functions are cached
+
+One `NvsnapFunction` per function version nvsnap holds anything for, kept
+by nvsnap-server from the group records within 30 seconds, and readable by
+anyone with the `view` role ([design](../design/FUNCTION-CACHE-STATUS.md)):
+
+```
+kubectl get nvsnapfunctions                            # every version: state, method, ranks, last restore
+kubectl get nvsnapfunctions -o wide                    # with the reason a version does not restore
+kubectl get nvsnapfunctions -l nvsnap.io/function-id=<id>
+kubectl get nvsnapfunction <function-version-id> -o yaml   # every configuration, its nodes and restores
+```
+
+`METHOD` is how the version's next pod starts: `criu` (restored), `cachedir`
+(seeded caches after CRIU failed), or empty (cold). A version that is not
+listed starts cold.
 
 ## Install
 

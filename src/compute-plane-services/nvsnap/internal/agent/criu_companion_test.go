@@ -273,6 +273,12 @@ func TestParseCRIUGroup_Containers(t *testing.T) {
 	if g, ok := parseCRIUGroup("k", d); !ok || g.Containers[0] != "" || g.Containers[1] != "" {
 		t.Errorf("old record: %+v, %v", g.Containers, ok)
 	}
+	// A rank's recorded entrypoint reaches the webhook, which starts the
+	// placeholder cold in place with it.
+	d["coldEntrypoint.0"] = `["/opt/start.sh"]`
+	if g, ok := parseCRIUGroup("k", d); !ok || g.ColdEntrypoints[0] != `["/opt/start.sh"]` || g.ColdEntrypoints[1] != "" {
+		t.Errorf("entrypoints: %+v, %v", g.ColdEntrypoints, ok)
+	}
 }
 
 // A companion placeholder is released as soon as a GPU pod of its rollout

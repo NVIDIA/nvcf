@@ -344,6 +344,18 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	go rec.Run(ctx)
 
+	// One NvsnapFunction per function version the capture records name:
+	// which functions are cached, readable by kubectl.
+	if s.kubeClient != nil && s.dynClient != nil {
+		functions := &FunctionStatus{
+			KubeClient: s.kubeClient,
+			DynClient:  s.dynClient,
+			Namespace:  captureManifestNamespace,
+			Log:        s.log.WithField("subsys", "function-status"),
+		}
+		go functions.Run(ctx)
+	}
+
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

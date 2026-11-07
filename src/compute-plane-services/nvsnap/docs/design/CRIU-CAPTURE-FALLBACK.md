@@ -117,7 +117,9 @@ terminated with a failure (exit code not 0, or a signal) twice, and the agent ha
 1. records `state=gpushare-failed` on the configuration's group record, with the bundle version and the container's
    last termination (reason, exit code), creating the record when there is none. A usable record (a complete CRIU
    capture) is left alone: its pods restore and never start under the library;
-2. deletes the pod (UID precondition), so its replacement is admitted again and gets §2.2.
+2. deletes the pod (UID precondition), so its replacement is admitted again and gets §2.2. A pod no controller
+   recreates (a bare pod, or one whose owner does not replace its pods) is left as it is: deleted, it would just be
+   gone. Its configuration's next pods still get §2.2.
 
 - A workload that fails for a reason of its own (a bad argument, a dependency not up yet) is also marked. When a
   pod of a marked configuration, admitted without the library, fails twice the same way, the mark is cleared: the

@@ -59,7 +59,7 @@ func TestCRIUGroupRestore_EachRankRestoresItsCheckpoint(t *testing.T) {
 		if a[CRIURestoreAnnotation] != want || a[CRIUGroupOrdinalAnnotation] != []string{"0", "1"}[i] || a[CRIUGroupSizeAnnotation] != "2" || a[CRIUGroupAnnotation] != *asked {
 			t.Fatalf("rank %d annotations: %v", i, a)
 		}
-		if c := got.Spec.Containers[0]; !reflect.DeepEqual(c.Command, []string{IdleBin}) || len(c.Args) != 0 {
+		if c := got.Spec.Containers[0]; !reflect.DeepEqual(c.Command, []string{IdleBin}) || (len(c.Args) > 0 && c.Args[0] != "--cold-start") {
 			t.Errorf("rank %d engine not idled: %v %v", i, c.Command, c.Args)
 		}
 		var store string
@@ -219,5 +219,86 @@ func TestCRIUGroupRestore_PlaceholderWithoutTheModelStartsCold(t *testing.T) {
 	}
 	if jobs, _ := kc.BatchV1().Jobs("sr-fn").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
 		t.Errorf("created %d download Job(s) for a restore", len(jobs.Items))
+	}
+}
+
+// A one-pod capture restores alone: its placeholder runs its init
+// containers like a lone placeholder's, and gets the entrypoint the capture
+// recorded, with its own args, to start cold in place. A rank of a larger
+// group still skips the init containers that only wait on its peers.
+func TestCRIUGroupRestore_OnePodGroupStartsLikeALonePod(t *testing.T) {
+	withInits := func(p *corev1.Pod) *corev1.Pod {
+		p.Spec.Containers[0].Command = nil
+		p.Spec.Containers[0].Args = []string{"--port", "$(PORT)"}
+		p.Spec.InitContainers = []corev1.Container{{Name: "wait-for-leader", Image: "busybox", Command: []string{"sh", "-c", "until nc leader 80; do sleep 1; done"}}}
+		return p
+	}
+	entry := `["/opt/start.sh"]`
+
+	one := CRIUGroup{Checkpoints: []string{"r0__1"}, Nodes: []string{"n0"}, ColdEntrypoints: []string{entry}}
+	m, _ := groupMutator(t, one, "")
+	pod := withInits(lwsRank("0"))
+	pod.Annotations[lwsSizeAnnotation] = "1"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := applyPatches(t, pod, patches)
+	if got.Annotations[CRIURestoreAnnotation] != "r0__1" {
+		t.Fatalf("not admitted as the restore placeholder: %v", got.Annotations)
+	}
+	want := []string{"--cold-start", ColdStartMarker, "--", "/opt/start.sh", "--port", "$(PORT)"}
+	if c := got.Spec.Containers[0]; !reflect.DeepEqual(c.Args, want) {
+		t.Errorf("args = %v, want %v", c.Args, want)
+	}
+	if c := got.Spec.InitContainers[0]; len(c.Command) > 0 && c.Command[0] == HelperBin {
+		t.Error("a one-pod group skipped its init container")
+	}
+
+	two := CRIUGroup{Checkpoints: []string{"r0__1", "r1__1"}, Nodes: []string{"n0", "n1"}, ColdEntrypoints: []string{entry, entry}}
+	m, _ = groupMutator(t, two, "")
+	pod = withInits(lwsRank("1"))
+	patches, err = m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = applyPatches(t, pod, patches)
+	if c := got.Spec.InitContainers[0]; len(c.Command) == 0 || c.Command[0] != HelperBin {
+		t.Errorf("a rank of a two-pod group runs its wait on its leader: %v", c.Command)
+	}
+}
+
+// A group placeholder gets what the read-only model landing needs in the
+// engine's environment, as the captured pod had: a restored engine keeps its
+// own, but one started cold in place runs with the container's. Its
+// Hugging Face home under the landing would otherwise have it write module
+// sources onto the read-only volume.
+func TestCRIUGroupRestore_PlaceholderGetsTheLandingsEnvironment(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
+	m.CRIUCapture = true
+	m.CheckpointHostRoot = "/var/lib/containerd/nvsnap-checkpoints"
+	m.CRIUGroups = func(_ context.Context, ns, uri string) (CRIUGroup, bool) {
+		return CRIUGroup{Key: "key-of/" + ns + "/" + uri, Checkpoints: []string{"r0__1"}, GPUShare: true}, true
+	}
+	completeModelPV(t, kc, scoped("sr-fn", ngcFunctionKey))
+	pod := ngcFunctionPod()
+	pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env, corev1.EnvVar{Name: "HF_HOME", Value: "/config/models"})
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := applyPatches(t, pod, patches)
+	if got.Annotations[CRIURestoreAnnotation] != "r0__1" {
+		t.Fatalf("not admitted as the restore placeholder: %v", got.Annotations)
+	}
+	modules := ""
+	for _, e := range got.Spec.Containers[0].Env {
+		if e.Name == "HF_MODULES_CACHE" {
+			modules = e.Value
+		}
+	}
+	if modules != criuHFModulesCache {
+		t.Errorf("HF_MODULES_CACHE = %q, want %q off the read-only landing", modules, criuHFModulesCache)
 	}
 }

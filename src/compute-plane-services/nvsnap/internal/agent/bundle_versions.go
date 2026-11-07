@@ -90,6 +90,21 @@ func (a *Agent) podBundle(ctx context.Context, ns, name string) string {
 	return webhook.PodBundleID(pod)
 }
 
+// podGPUShareMounted reports whether the pod's container (any container
+// when container is empty) has the gpushare library or store mounted.
+// A pod that cannot be read reports false: the record then says what the
+// dump itself found.
+func (a *Agent) podGPUShareMounted(ctx context.Context, ns, name, container string) bool {
+	if a.kubeClient == nil || ns == "" || name == "" {
+		return false
+	}
+	pod, err := a.kubeClient.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	return webhook.GPUShareMounted(pod, container)
+}
+
 // bundleVersionMinAge keeps a version a while after it was staged or
 // fetched: a pod admitted to mount it may not show yet.
 const bundleVersionMinAge = time.Hour

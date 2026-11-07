@@ -1,0 +1,6 @@
+# The agent's ClusterRole, read by internal/agent's
+# TestAgentRBACCoversItsClientCalls.
+exports_files(
+    ["helm/nvsnap/templates/agent-rbac.yaml"],
+    visibility = ["//src/compute-plane-services/nvsnap/internal/agent:__pkg__"],
+)

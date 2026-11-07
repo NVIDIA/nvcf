@@ -389,6 +389,14 @@ type Mutator struct {
 	// is a candidate whenever it is set. Nil (captures do not freeze
 	// processes: the capture method is not CRIU) widens no probe.
 	CaptureCandidate func(ctx context.Context, pod *corev1.Pod) bool
+	// CaptureHold keeps a pod a capture may freeze out of service until
+	// the agent settles its capture (capture_hold.go). It needs the
+	// agent of the pod's node to release the pod.
+	CaptureHold bool
+	// CaptureHoldAdmits reports whether pod may be held for its capture:
+	// not a pod of a StatefulSet that creates its pods in order. Nil
+	// admits.
+	CaptureHoldAdmits func(ctx context.Context, pod *corev1.Pod) (bool, string)
 
 	// CRIUCompanionAdmits reports whether a pod without GPUs may be admitted
 	// as a companion of a group restore: not while a GPU rank of its
@@ -631,7 +639,9 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// gpushare placement is independent of every other decision below and
 	// rides along with whichever patches they return.
 	if !isFallback || fallback.Reason != FallbackGPUShareFailed {
-		injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
+		gp := m.gpusharePatches(ctx, pod)
+		injectPatches = append(injectPatches, gp...)
+		injectPatches = append(injectPatches, m.captureHoldPatches(ctx, pod, len(gp) > 0)...)
 	}
 	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
 	injectPatches = append(injectPatches, m.dynamoNamespacePatches(ctx, pod)...)
@@ -729,6 +739,19 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		return nil, fmt.Errorf("backend stat: %w", statErr)
 	}
 	haveManifest := statErr == nil
+	// A CRIU capture that criuRestoreFor did not restore (it failed to
+	// restore before, belongs to another scope, or the pod opted out)
+	// leaves a cold start. Its record holds no volumes to mount, only the
+	// capture node: the paths below would pin the pod there with a
+	// required node affinity and nothing else, and a pod pinned to a busy
+	// node never schedules (the platform kills it as "no capacity").
+	if haveManifest && criuCheckpointID(manifest) != "" {
+		plog.Info("CRIU capture not restored; cold start")
+		if len(injectPatches) == 0 {
+			return nil, nil
+		}
+		return mergePatchPlan(injectPatches), nil
+	}
 	// Dispatch on the AUTHORITATIVE capture method stamped at capture
 	// time (v0.0.56). Fall back to the shape heuristic only for
 	// pre-v0.0.56 manifests with no CaptureMethod set.
@@ -790,9 +813,18 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// L1 path needs the manifest. If L1 doesn't have it (CRIU-only-on-L2
 	// that also missed the L2 branch, or a truly absent capture), cold-start.
 	if !haveManifest {
+		// Nothing to restore yet, but the pod is still what the first
+		// capture will be taken from: keep the placement every cold pod
+		// gets (the gpushare library and store, the tools, the admitted
+		// configuration). Dropped, the platform's restore-from stamp on
+		// a first deployment admits the pod bare and no capture can ever
+		// be taken from it.
 		m.logger().WithField("hash", checkpointstore.ShortHash(hash)).
-			Info("no capture for hash; admitting pod unchanged (cold start)")
-		return nil, nil
+			Info("no capture for hash; cold start")
+		if len(injectPatches) == 0 {
+			return nil, nil
+		}
+		return mergePatchPlan(injectPatches), nil
 	}
 
 	// Note: we do NOT peer-fetch the capture bytes here. The webhook

@@ -159,7 +159,9 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 // keeps the mounts it was dumped with (they are external to the dump and
 // bound from the placeholder at the same paths), so the landing must be
 // there; it does not load weights, compile or download, so no download
-// step, prewarm or cache environment comes with it. A hostPath landing is
+// step, prewarm or compile-cache environment comes with it, only what the
+// read-only landing itself needs (criuModelEnvPatches), for a cold start in
+// place. A hostPath landing is
 // bound after the pod starts, so the placeholder waits for it as a reader
 // does. (nil, nil): the captured pod had no model volume either. An error
 // (the volume lookup failed, or the model is not complete: the captured
@@ -203,6 +205,10 @@ func (m *Mutator) placeholderModelPatches(ctx context.Context, pod *corev1.Pod) 
 	if m.ModelVolume.Cfg.ReaderMode() == modelvolume.ReaderHostPath {
 		patches = append(patches, m.downloadStepPatches(pod, main, res.Landing, res.Identity, false)...)
 	}
+	// The environment the captured pod's engine had for the read-only
+	// landing: a restored engine keeps its own, but one started cold in
+	// place, after a failed restore, runs with the container's.
+	patches = append(patches, m.criuModelEnvPatches(main, res.Landing)...)
 	return patches, nil
 }
 

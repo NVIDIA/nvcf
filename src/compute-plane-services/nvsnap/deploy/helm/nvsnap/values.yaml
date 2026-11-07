@@ -661,6 +661,19 @@ webhook:
   # really hangs. An instance with a pod whose probe tolerates less is not
   # captured. 0 leaves probes as they are and does not check.
   captureLivenessBudget: 300
+  # Hold a pod a CRIU capture may freeze (a GPU pod under the gpushare
+  # library) out of service until its node agent has captured it or
+  # decided not to: the pod gets the readiness gate
+  # nvsnap.io/capture-settled, which the agent sets once the pod's
+  # containers are Ready. A capture stops the instance it captures, so
+  # captured while it serves, the instance fails its requests until its
+  # replacement restores; held, it is captured before it serves, and its
+  # restored replacement serves. The first instance of a configuration
+  # becomes Ready later by the warmup and the capture; any other pod is
+  # released as soon as its containers are Ready. A pod whose node agent
+  # is down stays held until the agent is back. false: pods serve as soon
+  # as they are Ready, and a capture may stop an instance that serves.
+  captureHold: true
 
   # Operator salt folded into every cache identity the webhook composes.
   # The identity covers image, model, arguments, cache-relevant env, driver

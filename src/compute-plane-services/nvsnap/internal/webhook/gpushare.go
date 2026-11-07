@@ -303,6 +303,28 @@ func gpushareStoreState(pod *corev1.Pod, storeRoot string, gpuContainers []int) 
 	return false, ""
 }
 
+// GPUShareMounted reports whether the named container (every container
+// when name is empty) has the gpushare library or store mounted: the
+// paths this webhook places in a pod admitted for gpushare. A CRIU dump
+// saves the mounts the process had, so a restore must recreate these
+// mountpoints whether or not the process ended up loading the library.
+func GPUShareMounted(pod *corev1.Pod, name string) bool {
+	if pod == nil {
+		return false
+	}
+	for _, c := range pod.Spec.Containers {
+		if name != "" && c.Name != name {
+			continue
+		}
+		for _, vm := range c.VolumeMounts {
+			if vm.MountPath == nvsnapToolsMountPath || vm.MountPath == GPUShareStorePath {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func mountsVolume(mounts []corev1.VolumeMount, name string) bool {
 	for _, vm := range mounts {
 		if vm.Name == name {

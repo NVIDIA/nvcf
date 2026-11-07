@@ -61,7 +61,7 @@ func (c *criuAutoRestorer) restoredBy(ctx context.Context, pod *corev1.Pod) (res
 
 // considerRestored checks a restored pod's engine.
 func (c *criuAutoRestorer) considerRestored(ctx context.Context, pod *corev1.Pod) {
-	if pod.Annotations[webhook.CRIURestoredAnnotation] == "" || pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
+	if pod.Annotations[webhook.CRIURestoredAnnotation] == "" || coldStarted(pod) || pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
 		return
 	}
 	if _, busy := c.attempted.LoadOrStore("watch/"+string(pod.UID), struct{}{}); busy {
@@ -181,8 +181,12 @@ func (c *criuAutoRestorer) failRestored(ctx context.Context, pod *corev1.Pod, re
 	} else {
 		log.WithError(cause).Error("CRIU restore failed after it ran; its capture was verified, so it is kept and the replacement restores from it again")
 	}
-	c.dropRestoreRecord(pod.UID)
-	if err := c.a.kubeClient.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		log.WithError(err).Error("CRIU restore: could not delete the pod")
+	container := ref.container
+	if container == "" {
+		container = pod.Annotations[webhook.CRIURestoreContainerAnnotation]
 	}
+	c.a.disposeFailedPlaceholder(ctx, pod.Namespace, pod.Name, pod.UID, container, log)
+	// Dropped after: an agent that stops before the pod is marked or gone
+	// finds the record, and the dead engine, again.
+	c.dropRestoreRecord(pod.UID)
 }

@@ -471,3 +471,35 @@ func TestGPUSharePatches_RestoreWorkMount(t *testing.T) {
 		t.Errorf("work mount added beside the pod's own %s volume: %+v", restoreWorkVolume, wm)
 	}
 }
+
+// GPUShareMounted reports the library or the store mounted in the named
+// container, or in any container when no name is given.
+func TestGPUShareMounted(t *testing.T) {
+	pod := func(mounts ...string) *corev1.Pod {
+		var vms []corev1.VolumeMount
+		for _, m := range mounts {
+			vms = append(vms, corev1.VolumeMount{Name: "v", MountPath: m})
+		}
+		return &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{
+			{Name: "utils", VolumeMounts: []corev1.VolumeMount{{Name: "x", MountPath: "/var/inf"}}},
+			{Name: "inference", VolumeMounts: vms},
+		}}}
+	}
+	for _, tc := range []struct {
+		name      string
+		pod       *corev1.Pod
+		container string
+		want      bool
+	}{
+		{"library", pod("/var/inf", nvsnapToolsMountPath), "inference", true},
+		{"store", pod(GPUShareStorePath), "inference", true},
+		{"any container", pod(nvsnapToolsMountPath), "", true},
+		{"other container", pod(nvsnapToolsMountPath), "utils", false},
+		{"neither", pod("/var/inf", "/nvsnap-restore-work"), "inference", false},
+		{"nil pod", nil, "", false},
+	} {
+		if got := GPUShareMounted(tc.pod, tc.container); got != tc.want {
+			t.Errorf("%s: GPUShareMounted = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

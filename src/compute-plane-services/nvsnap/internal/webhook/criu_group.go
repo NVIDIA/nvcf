@@ -56,6 +56,10 @@ type CRIUGroup struct {
 	// Bundles names the node bundle version each member's pod mounted (by
 	// slot); its placeholder mounts the same. Empty for none recorded.
 	Bundles []string
+	// ColdEntrypoints holds, by slot, what each GPU rank's runtime ran
+	// ahead of its pod's args, as JSON (ColdEntrypointMeta). Empty for
+	// none recorded.
+	ColdEntrypoints []string
 	// VerifyNamespace, when set, is the only namespace that may restore
 	// from the capture: the instance stopped for it, whose restore
 	// verifies it. Empty once a restore has succeeded.
@@ -187,8 +191,14 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 	if ordinal < len(g.Bundles) && g.Bundles[ordinal] != "" {
 		man.SourcePodMeta[BundleMeta] = g.Bundles[ordinal]
 	}
+	if ordinal < len(g.ColdEntrypoints) && g.ColdEntrypoints[ordinal] != "" {
+		man.SourcePodMeta[ColdEntrypointMeta] = g.ColdEntrypoints[ordinal]
+	}
 	id := g.Checkpoints[ordinal]
-	cp, err := m.criuRestorePatches(pod, id, man)
+	// A capture of one pod with no companions restores alone: nothing it
+	// waits on is a placeholder, so it runs its init containers like a
+	// lone placeholder.
+	cp, err := m.criuPlaceholderPatches(pod, id, man, len(g.Checkpoints) > 1)
 	if err != nil {
 		log.WithError(err).Warn("CRIU group restore: cannot prepare the pod; cold start")
 		admit(metrics.AdmitCold, "prepare-failed")

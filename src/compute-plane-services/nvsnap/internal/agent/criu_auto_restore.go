@@ -13,6 +13,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -56,7 +57,7 @@ func criuRestoreTarget(pod *corev1.Pod) (checkpointID, container string, ready b
 	checkpointID = pod.Annotations[webhook.CRIURestoreAnnotation]
 	container = pod.Annotations[webhook.CRIURestoreContainerAnnotation]
 	if checkpointID == "" || container == "" || pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning ||
-		pod.Annotations[webhook.CRIURestoredAnnotation] != "" {
+		pod.Annotations[webhook.CRIURestoredAnnotation] != "" || coldStarted(pod) {
 		return checkpointID, container, false
 	}
 	for _, cs := range pod.Status.ContainerStatuses {
@@ -84,6 +85,10 @@ type criuAutoRestorer struct {
 	goneSince sync.Map // restored pod UID -> when its engine was first seen gone
 	verdicts  sync.Map // pod UID, checkpoint, group key -> why its restore is refused ("" admitted); restore_trust.go
 	seenReady sync.Map // pod UID -> struct{}: seen Ready, so its failures are not a failed start (criu_fallback.go)
+	// captureDecided: leader pod UID -> struct{}: whether its instance is
+	// captured is settled (captured, failed or refused), so it is not
+	// held out of service for it (capture_hold.go).
+	captureDecided sync.Map
 	// readyObserved: pod UID -> struct{}: its start was recorded
 	// (lifecycle_metrics.go); pods Ready before watchStart are not.
 	readyObserved sync.Map
@@ -153,10 +158,11 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	c.ensurePlaceholderBundles(ctx, pod)
 	c.considerFallback(ctx, pod)
 	c.considerReservePIDs(ctx, pod)
-	c.considerGroupCapture(ctx, pod)
+	c.considerCaptureHold(ctx, pod, c.considerGroupCapture(ctx, pod))
 	c.considerCompanionPlaceholder(ctx, pod)
 	c.considerRestored(ctx, pod)
 	c.considerRestoredCondition(ctx, pod)
+	c.considerColdStart(ctx, pod)
 	c.considerRestoredStacks(ctx, pod)
 	c.observePodReady(ctx, pod)
 	if !c.admitted(ctx, pod) {
@@ -183,7 +189,7 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 // not deleted, which a controller recreating it with the same annotations
 // would only repeat.
 func (c *criuAutoRestorer) admitted(ctx context.Context, pod *corev1.Pod) bool {
-	if pod.DeletionTimestamp != nil || pod.Annotations[webhook.CRIURestoredAnnotation] != "" {
+	if pod.DeletionTimestamp != nil || pod.Annotations[webhook.CRIURestoredAnnotation] != "" || coldStarted(pod) {
 		return true // nothing to fetch or restore; considerRestored has its own check
 	}
 	why, err := c.restoreRefusal(ctx, pod)
@@ -211,7 +217,7 @@ var errCheckpointUnavailable = errors.New("the checkpoint could not be brought t
 // this node, while its containers start: the restore finds it local.
 func (c *criuAutoRestorer) prefetch(ctx context.Context, pod *corev1.Pod) {
 	id := pod.Annotations[webhook.CRIURestoreAnnotation]
-	if id == "" || pod.Annotations[webhook.CRIURestoredAnnotation] != "" || pod.DeletionTimestamp != nil || pod.Spec.NodeName == "" {
+	if id == "" || pod.Annotations[webhook.CRIURestoredAnnotation] != "" || coldStarted(pod) || pod.DeletionTimestamp != nil || pod.Spec.NodeName == "" {
 		return
 	}
 	if localCheckpointComplete(c.a.config.CheckpointDir, id) {
@@ -304,9 +310,7 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod string, uid type
 	default:
 		log.WithError(err).Error("CRIU auto-restore failed; its capture was verified, so it is kept and the replacement restores from it again")
 	}
-	if derr := a.deletePodRetrying(context.WithoutCancel(ctx), ns, pod, ""); derr != nil {
-		log.WithError(derr).Error("CRIU auto-restore: could not delete the failed pod")
-	}
+	a.disposeFailedPlaceholder(context.WithoutCancel(ctx), ns, pod, uid, container, log)
 }
 
 func (a *Agent) criuFailedNamespace() string {
@@ -408,13 +412,25 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 			checkpointstore.CRIUScopeMetaKey: scope,
 		},
 	}
-	if gpushare {
+	if gpushare || a.podGPUShareMounted(ctx, req.Namespace, req.PodName, req.ContainerName) {
 		// The restore mounts the checkpoint's chunk store and the library.
+		// It must also when the pod had them mounted but its processes
+		// never loaded the library (their GPU state went through the CUDA
+		// plugin): the dump saved those mounts, and CRIU cannot restore a
+		// mount whose mountpoint the placeholder lacks ("Can't stat
+		// mountpoint .../nvsnap").
 		m.SourcePodMeta["gpushare"] = "true"
 	}
 	if id := a.podBundle(ctx, req.Namespace, req.PodName); id != "" {
 		// ... the library of the bundle version the pod ran with.
 		m.SourcePodMeta[webhook.BundleMeta] = id
+	}
+	if entry := a.containerColdEntrypoint(ctx, req.Namespace, req.PodName, req.ContainerName); len(entry) > 0 {
+		// A placeholder whose restore fails, in a pod nothing would
+		// recreate, starts the workload in place with it.
+		if b, err := json.Marshal(entry); err == nil {
+			m.SourcePodMeta[webhook.ColdEntrypointMeta] = string(b)
+		}
 	}
 	if req.CaptureID != "" {
 		m.SourcePodMeta[checkpointstore.InstanceCaptureMetaKey] = "true"

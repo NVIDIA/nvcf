@@ -270,3 +270,38 @@ func TestPodHold_FailedThawIsRetried(t *testing.T) {
 		}
 	}
 }
+
+// After a dump, a frozen cgroup is thawed and its hold record removed; a
+// cgroup gone with the container (the dump ended it) is the end of the
+// hold, not a failure to retry.
+func TestThawAfterDump(t *testing.T) {
+	log := logrus.NewEntry(logrus.New())
+	dir := t.TempDir()
+	cg := filepath.Join(dir, "cg")
+	if err := os.MkdirAll(cg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cg, "cgroup.freeze"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(dir, "rec.json")
+	if err := writeHoldRecord(record, []string{cg}); err != nil {
+		t.Fatal(err)
+	}
+	thawAfterDump(cg, record, log)
+	if b, _ := os.ReadFile(filepath.Join(cg, "cgroup.freeze")); string(b) != "0" {
+		t.Errorf("cgroup.freeze = %q, want 0", b)
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Error("the hold record of a thawed cgroup was kept")
+	}
+
+	gone := filepath.Join(dir, "gone")
+	if err := writeHoldRecord(record, []string{gone}); err != nil {
+		t.Fatal(err)
+	}
+	thawAfterDump(gone, record, log)
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Error("the hold record of a cgroup gone with its container was kept")
+	}
+}
