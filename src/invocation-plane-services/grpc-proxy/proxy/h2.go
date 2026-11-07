@@ -23,12 +23,14 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
-	"math"
 	"net"
 	"net/http"
 	"nvcf-grpc-proxy/proxy/middleware"
 	"nvcf-grpc-proxy/proxy/worker"
 )
+
+// Bound per-connection handler concurrency while leaving headroom for gRPC clients.
+const maxConcurrentStreams = 1024
 
 // newProxyMux builds the HTTP mux served by the http/2 listener: proxied
 // traffic on "/", the health check on "/health", and the GET /info
@@ -49,7 +51,7 @@ func createHttp2Server(director *StreamDirector, addr string, healthManager *hea
 	return &InterceptedHttpServer{http.Server{
 		Addr: addr,
 		Handler: h2c.NewHandler(tracedMux, &http2.Server{
-			MaxConcurrentStreams: math.MaxInt32,
+			MaxConcurrentStreams: maxConcurrentStreams,
 		}),
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			return worker.CtxWithConn(ctx, c.(*worker.ConnectionTrackingConn))
