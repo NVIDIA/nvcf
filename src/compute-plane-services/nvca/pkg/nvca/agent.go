@@ -1010,7 +1010,7 @@ func (a *Agent) registerWithICMS(ctx context.Context, regBackendGPUs []types.Reg
 	if err != nil {
 		log.WithError(err).WithField("req", rreq).Error("Register with ICMS")
 		if nvcaerrors.GetHTTPStatusCode(err) == http.StatusConflict {
-			if hint := a.backendk8scache.overheadRemovedInstanceTypesHint(ctx); hint != "" {
+			if hint := a.backendk8scache.registrationConflictHint(ctx, icmsRegistrationError(err)); hint != "" {
 				return nil, fmt.Errorf("register with ICMS: %w; %s", err, hint)
 			}
 		}
@@ -1034,10 +1034,20 @@ func (a *Agent) registerWithICMS(ctx context.Context, regBackendGPUs []types.Reg
 	return res, nil
 }
 
-// buildICMSRegistrationRequest constructs the registration request payload without side effects
-func (a *Agent) buildICMSRegistrationRequest(k8sVersion string, regBackendGPUs []types.RegistrationGPU) types.ICMSRegistrationRequest {
+// icmsRegistrationError returns the ICMS error body that err carries, or nil.
+func icmsRegistrationError(err error) *types.ICMSRegistrationError {
+	var resp *ICMSErrorResponse
+	if errors.As(err, &resp) {
+		return &resp.Body
+	}
+	return nil
+}
+
+// buildICMSRegistrationRequest constructs the registration request payload without
+// side effects. `nvca preflight-registration` builds its request with it too.
+func (o *AgentOptions) buildICMSRegistrationRequest(k8sVersion string, regBackendGPUs []types.RegistrationGPU) types.ICMSRegistrationRequest {
 	clusterStatus := "READY"
-	switch a.MaintenanceMode {
+	switch o.MaintenanceMode {
 	case types.MaintenanceModeCordon:
 		clusterStatus = "CORDON"
 	case types.MaintenanceModeCordonAndDrain:
@@ -1047,13 +1057,13 @@ func (a *Agent) buildICMSRegistrationRequest(k8sVersion string, regBackendGPUs [
 	return types.ICMSRegistrationRequest{
 		ClusterStatus:    clusterStatus,
 		K8sVersion:       k8sVersion,
-		ClusterTargeting: a.ClusterTargetingEnabled,
+		ClusterTargeting: o.ClusterTargetingEnabled,
 		BackendGPUs:      regBackendGPUs,
 		// Always request task queues. This field is unset in prior NVCA versions
 		// as a backwards compatibility mechanism only.
 		TaskClusterCreationQueues: true,
 		// Set NVCA version
-		NVCAVersion: a.NVCAAgentVersion,
+		NVCAVersion: o.NVCAAgentVersion,
 	}
 }
 

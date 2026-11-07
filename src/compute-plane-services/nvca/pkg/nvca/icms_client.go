@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -352,8 +353,9 @@ func (c *ICMSClient) Register(ctx context.Context, rreq *types.ICMSRegistrationR
 		return nil, err
 	}
 
-	if err := c.checkResponse(log, resp, respBody); err != nil {
-		return nil, err
+	if resp.StatusCode != http.StatusOK {
+		c.logResponseError(log, resp, respBody)
+		return nil, registrationErrorResponse(resp, respBody)
 	}
 
 	rres := &types.ICMSRegistrationResponse{}
@@ -361,6 +363,122 @@ func (c *ICMSClient) Register(ctx context.Context, rreq *types.ICMSRegistrationR
 		return nil, fmt.Errorf("decode queue credentials")
 	}
 	return rres, nil
+}
+
+// ErrRegistrationValidationUnsupported means that ICMS has no route to validate a
+// registration without applying it.
+var ErrRegistrationValidationUnsupported = errors.New("ICMS does not support registration validation")
+
+// ICMSErrorResponse is an ICMS error response to a registration or a registration
+// validation, with the body ICMS writes for the errors it raises itself.
+type ICMSErrorResponse struct {
+	StatusCode int
+	Status     string
+	Body       types.ICMSRegistrationError
+}
+
+func (e *ICMSErrorResponse) Error() string {
+	return fmt.Sprintf("error response from ICMS: %s: %s", e.Status, e.Body.Message)
+}
+
+// registrationErrorResponse returns the error for an unsuccessful registration or
+// registration validation response. It keeps the HTTP status code, and wraps an
+// *ICMSErrorResponse when the body is an ICMS error.
+func registrationErrorResponse(resp *http.Response, respBody []byte) error {
+	if body, ok := parseICMSRegistrationError(respBody); ok {
+		return nvcaerrors.HTTPStatusError(resp.StatusCode,
+			&ICMSErrorResponse{StatusCode: resp.StatusCode, Status: resp.Status, Body: body})
+	}
+	return nvcaerrors.HTTPStatusError(resp.StatusCode, fmt.Errorf("error response from ICMS: %s", resp.Status))
+}
+
+// parseICMSRegistrationError parses the body ICMS writes for the errors it raises
+// itself, {"error": "..."}. Responses from its web framework, such as a 404 for a
+// route it does not have, have another shape.
+func parseICMSRegistrationError(respBody []byte) (types.ICMSRegistrationError, bool) {
+	var body types.ICMSRegistrationError
+	if err := json.Unmarshal(respBody, &body); err != nil || body.Message == "" {
+		return types.ICMSRegistrationError{}, false
+	}
+	return body, true
+}
+
+// ValidateRegistration asks ICMS whether it would accept rreq as the registration of
+// this cluster, without registering. It returns nil when ICMS would accept it. When
+// ICMS has no validation route, the error wraps ErrRegistrationValidationUnsupported.
+// Otherwise the error keeps the HTTP status code, and wraps an *ICMSErrorResponse when
+// ICMS explains the rejection.
+func (c *ICMSClient) ValidateRegistration(ctx context.Context, rreq *types.ICMSRegistrationRequest) error {
+	// The validation route sits next to the register route.
+	custom := ""
+	if c.pathRegister != "" {
+		custom = c.pathRegister + "/validate"
+	}
+	requestURL, err := c.buildURL(c.nvcaPath(custom, "register/validate"))
+	if err != nil {
+		return err
+	}
+	log := core.GetLogger(ctx).WithFields(logrus.Fields{
+		"rpc":       "icms.ValidateRegistration",
+		"endpoint":  requestURL,
+		"clusterID": c.clusterID,
+	})
+
+	jwt, err := c.tokenFetcher.FetchToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	data, err := json.Marshal(rreq)
+	if err != nil {
+		return err
+	}
+
+	req, err := c.newRequest(ctx, http.MethodPost, requestURL,
+		c.nvcaTemplate(custom, "register/validate"), bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	if jwt != "" {
+		req.Header.Set("Authorization", "Bearer "+jwt)
+	}
+
+	log.WithField("body", string(data)).Debug("Sending request to ICMS")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		log.WithError(err).Error("Do request")
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(http.MaxBytesReader(nil, resp.Body, c.maxResponseBytes))
+	if err != nil {
+		log.WithError(err).Error("Read response")
+		return err
+	}
+
+	log = log.WithField("http_status", resp.StatusCode)
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		log.Info("ICMS accepts the registration")
+		return nil
+	case resp.StatusCode == http.StatusNotFound:
+		// An unknown cluster is a 404 with an ICMS error body.
+		if _, ok := parseICMSRegistrationError(respBody); !ok {
+			log.Warn("ICMS has no registration validation route")
+			return nvcaerrors.HTTPStatusError(resp.StatusCode,
+				fmt.Errorf("%w: %s", ErrRegistrationValidationUnsupported, resp.Status))
+		}
+	}
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		log.WithField("response", string(respBody)).Warn("ICMS rejects the registration")
+	} else {
+		c.logResponseError(log, resp, respBody)
+	}
+	return registrationErrorResponse(resp, respBody)
 }
 
 func (c *ICMSClient) GetCreds(ctx context.Context) (*types.ICMSCredentialResponse, error) {

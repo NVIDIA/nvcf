@@ -169,6 +169,63 @@ type ICMSRegistrationResponse struct {
 	Credentials    QueueCredentials `json:"credentials,omitempty"`
 }
 
+// ICMSReasonActiveInstancesOnRemovedInstanceTypes is the ICMSRegistrationError reason
+// for a registration that leaves out instance types that still have active instances.
+const ICMSReasonActiveInstancesOnRemovedInstanceTypes = "ACTIVE_INSTANCES_ON_REMOVED_INSTANCE_TYPES"
+
+// ICMSRegistrationError is the body of an ICMS error response to a registration or a
+// registration validation. Reason, InstanceTypes, and ActiveInstanceIDs are set only by an
+// ICMS that supports registration validation, and only for
+// ICMSReasonActiveInstancesOnRemovedInstanceTypes.
+type ICMSRegistrationError struct {
+	Message           string   `json:"error,omitempty"`
+	Reason            string   `json:"reason,omitempty"`
+	InstanceTypes     []string `json:"instanceTypes,omitempty"`
+	ActiveInstanceIDs []string `json:"activeInstanceIds,omitempty"`
+}
+
+// RegistrationPreflightOutcome is the outcome of `nvca preflight-registration`.
+type RegistrationPreflightOutcome string
+
+const (
+	// RegistrationPreflightAccepted means ICMS would accept the registration.
+	RegistrationPreflightAccepted RegistrationPreflightOutcome = "Accepted"
+	// RegistrationPreflightRejected means ICMS would reject the registration.
+	RegistrationPreflightRejected RegistrationPreflightOutcome = "Rejected"
+	// RegistrationPreflightUnsupported means ICMS cannot validate a registration
+	// without applying it, so callers fall back to the checks they made before.
+	RegistrationPreflightUnsupported RegistrationPreflightOutcome = "Unsupported"
+	// RegistrationPreflightError means the preflight could not reach a verdict,
+	// for example because ICMS was unreachable.
+	RegistrationPreflightError RegistrationPreflightOutcome = "Error"
+)
+
+// ExitCode returns the exit code of `nvca preflight-registration` for the outcome.
+func (o RegistrationPreflightOutcome) ExitCode() int {
+	switch o {
+	case RegistrationPreflightAccepted:
+		return 0
+	case RegistrationPreflightRejected:
+		return 2
+	case RegistrationPreflightUnsupported:
+		return 3
+	default:
+		return 1
+	}
+}
+
+// RegistrationPreflightResult is what `nvca preflight-registration` writes as JSON to
+// its termination message. Reason, InstanceTypes, and ActiveInstanceIDs come from the
+// ICMS rejection.
+type RegistrationPreflightResult struct {
+	Outcome           RegistrationPreflightOutcome `json:"outcome"`
+	HTTPStatus        int                          `json:"httpStatus,omitempty"`
+	Reason            string                       `json:"reason,omitempty"`
+	InstanceTypes     []string                     `json:"instanceTypes,omitempty"`
+	ActiveInstanceIDs []string                     `json:"activeInstanceIds,omitempty"`
+	Message           string                       `json:"message,omitempty"`
+}
+
 type ICMSServerInstanceState struct {
 	InstanceID    string            `json:"instanceId,omitempty"`
 	RequestID     string            `json:"requestId,omitempty"`

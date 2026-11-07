@@ -3211,27 +3211,62 @@ func TestRegisterWithICMSExplainsOverheadConflict(t *testing.T) {
 			NodeCount:       1,
 		}},
 	}}
+	// An ICMS without registration validation sends no structured body.
 	conflict := nvcaerrors.HTTPStatusError(http.StatusConflict, fmt.Errorf("error response from ICMS: 409 Conflict"))
+	icmsConflict := func(instanceTypes ...string) error {
+		return nvcaerrors.HTTPStatusError(http.StatusConflict, &ICMSErrorResponse{
+			StatusCode: http.StatusConflict,
+			Status:     "409 Conflict",
+			Body: types.ICMSRegistrationError{
+				Message:           "cluster registration failed",
+				Reason:            types.ICMSReasonActiveInstancesOnRemovedInstanceTypes,
+				InstanceTypes:     instanceTypes,
+				ActiveInstanceIDs: []string{"i-1", "i-2"},
+			},
+		})
+	}
+	const remedy = "lower byoo.additionalResourceOverhead or another infrastructure container resource " +
+		"(utils.resources, byoo.resources, byoo.fluentbit.resources, storage.sharedStorage.server.resources)"
 
 	tests := []struct {
 		name        string
 		registerErr error
 		overheadCPU string
 		wantStatus  int
-		wantHint    bool
+		wantHint    string
 	}{
 		{
 			name:        "conflict after the overhead removed an instance type",
 			registerErr: conflict,
 			overheadCPU: "7910m",
 			wantStatus:  http.StatusConflict,
-			wantHint:    true,
+			wantHint: "the infrastructure resource overhead of cpu 7910m leaves no room in instance types " +
+				"NCP.GPU.A100_1x, so NVCA left them out of the registration; if they have active instances, " +
+				"ICMS rejects the registration for that reason: " + remedy + ", or remove those instances",
 		},
 		{
 			name:        "conflict while every instance type fits",
 			registerErr: conflict,
 			overheadCPU: "100m",
 			wantStatus:  http.StatusConflict,
+		},
+		{
+			name:        "ICMS names an instance type that the overhead removed",
+			registerErr: icmsConflict("NCP.GPU.A100_1x"),
+			overheadCPU: "7910m",
+			wantStatus:  http.StatusConflict,
+			wantHint: "the infrastructure resource overhead of cpu 7910m leaves no room in instance types " +
+				"NCP.GPU.A100_1x, so NVCA leaves them out of the registration while ICMS still has active " +
+				"instances on them (i-1, i-2): " + remedy + ", or remove those instances",
+		},
+		{
+			name:        "ICMS names an instance type that the overhead did not remove",
+			registerErr: icmsConflict("NCP.GPU.H100_1x"),
+			overheadCPU: "7910m",
+			wantStatus:  http.StatusConflict,
+			wantHint: "the registration leaves out instance types NCP.GPU.H100_1x while ICMS still has " +
+				"active instances on them (i-1, i-2): remove those instances, or restore the nodes that " +
+				"provide those instance types",
 		},
 		{
 			name:        "other registration errors",
@@ -3259,14 +3294,11 @@ func TestRegisterWithICMSExplainsOverheadConflict(t *testing.T) {
 			_, err := a.registerWithICMS(newTestContext(), nil)
 			require.Error(t, err)
 			assert.Equal(t, tt.wantStatus, nvcaerrors.GetHTTPStatusCode(err), "the ICMS error must stay wrapped")
-			if !tt.wantHint {
-				assert.NotContains(t, err.Error(), "leaves no room")
-				return
+			want := "register with ICMS: " + tt.registerErr.Error()
+			if tt.wantHint != "" {
+				want += "; " + tt.wantHint
 			}
-			assert.ErrorContains(t, err, "409 Conflict; the infrastructure resource overhead of cpu 7910m "+
-				"leaves no room in instance types NCP.GPU.A100_1x")
-			assert.ErrorContains(t, err, "if they have active instances, ICMS rejects the registration for that reason")
-			assert.ErrorContains(t, err, "lower byoo.additionalResourceOverhead")
+			assert.EqualError(t, err, want)
 		})
 	}
 }

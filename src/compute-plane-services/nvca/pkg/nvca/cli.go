@@ -19,9 +19,11 @@ package nvca
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bombsimon/logrusr/v4"
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/auth"
@@ -40,6 +42,7 @@ import (
 	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/cmdutil"
 	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	nvcaerrors "github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
@@ -100,184 +103,9 @@ func newCobraCommand(
 		Use:     types.AppName,
 		Short:   "NVIDIA Cluster Agent for NVIDIA Cloud Functions",
 		Version: version.ReleaseString(),
-		RunE: func(cmd *cobra.Command, _ []string) (err error) {
-			ctx := cmd.Context()
-
-			if configFile == "" {
-				return fmt.Errorf("config file is required")
-			}
-
-			cfg, err := nvcaconfig.Init(configFile)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx, opts, err := loadAgentOptions(cmd.Context(), configFile, setFlag, initLogger)
 			if err != nil {
-				return err
-			}
-			hostOverrides, err := readAgentHostOverrides(configFile)
-			if err != nil {
-				return fmt.Errorf("read agent host overrides: %w", err)
-			}
-
-			cfg = cfg.Complete()
-			if err := setDefaults(&cfg); err != nil {
-				return err
-			}
-
-			if cfg.Agent.ICMSURL == "" {
-				return fmt.Errorf("agent.icmsURL is required")
-			}
-
-			log := core.GetLogger(ctx)
-			if log.Logger.Level, err = logrus.ParseLevel(cfg.Agent.LogLevel); err != nil {
-				return err
-			}
-
-			// Move logs from all client-go logs into
-			// the default logrus logger
-			k8sLogger := initLogger(log)
-			ctx = ctrllog.IntoContext(ctx, k8sLogger)
-
-			// Feature flag shim
-			if err := setFlag(&featureflag.CLIFlag{}, strings.Join(cfg.Agent.FeatureFlags, ",")); err != nil {
-				return fmt.Errorf("set featureflag CLI flag for config: %v", err)
-			}
-			if err := featureflag.ConfigureHelmInternalPersistentStorage(ctx, cfg.Agent.InternalPersistentStorage); err != nil {
-				return fmt.Errorf("configure internal persistent storage: %w", err)
-			}
-			// Cluster attributes shim
-			if err := setFlag(&featureflag.AttrCLIFlag{}, strings.Join(cfg.Cluster.Attributes, ",")); err != nil {
-				return fmt.Errorf("set attribute CLI flag for config: %v", err)
-			}
-
-			opts := &AgentOptions{
-				Config: cfg,
-				TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
-					TokenURL:                        cfg.Authz.TokenURL,
-					OAuthClientID:                   cfg.Authz.ClientID,
-					OAuthClientSecretKey:            cfg.Authz.ClientSecretKey,
-					OAuthClientSecretsEnvFile:       cfg.Authz.ClientSecretsEnvFile,
-					OAuthTokenScope:                 cfg.Authz.TokenScope,
-					OAuthPublicKeysetEndpoint:       cfg.Authz.PublicKeysetEndpoint,
-					OAuthTokenFetchFailureThreshold: cfg.Authz.TokenFetchFailureThreshold,
-					NGCServiceAPIKey:                cfg.Authz.NGCServiceAPIKey,
-					NGCServiceAPIKeyFile:            cfg.Authz.NGCServiceAPIKeyFile,
-					SelfHostedEnabled:               featureflag.SelfHosted.Enabled(),
-					SelfHostedVaultSecretsJSONPath:  cfg.Authz.SelfManagedVaultSecretsJSONPath,
-					PSATTokenFilePath:               cfg.Authz.ClusterIssuedTokenFilePath,
-				},
-				NATSURL:                                 cfg.Agent.NATSURL,
-				NATSHostOverride:                        hostOverrides.NATSHostOverride,
-				NCAId:                                   cfg.Cluster.NCAID,
-				ClusterName:                             cfg.Cluster.Name,
-				ClusterID:                               cfg.Cluster.ID,
-				ClusterRegion:                           cfg.Cluster.Region,
-				ClusterGroupID:                          cfg.Cluster.GroupID,
-				ClusterGroupName:                        cfg.Cluster.GroupName,
-				ClusterAttributes:                       featureflag.GetEnabledAttributes(),
-				CloudProvider:                           cfg.Cluster.CloudProvider,
-				ICMSURL:                                 cfg.Agent.ICMSURL,
-				ICMSHostHeaderOverride:                  hostOverrides.ICMSHostHeaderOverride,
-				SystemNamespace:                         cfg.Agent.SystemNamespace,
-				RequestsNamespace:                       cfg.Agent.RequestsNamespace,
-				NamespaceLabels:                         cfg.Agent.NamespaceLabels,
-				ComputeBackend:                          cfg.Agent.ComputeBackend,
-				KubeConfigPath:                          cfg.Agent.KubeconfigPath,
-				NVCASvcAddress:                          cfg.Agent.SvcAddress,
-				NVCAAdminAddr:                           cfg.Agent.AdminAddr,
-				NVCADebugAddr:                           cfg.Agent.DebugAddr,
-				HeartbeatInterval:                       cfg.Agent.HeartbeatInterval,
-				CredRenewInterval:                       cfg.Agent.CredRenewInterval,
-				SyncQueueInterval:                       cfg.Agent.SyncQueueInterval,
-				SyncRequestStatusInterval:               cfg.Agent.SyncRequestStatusInterval,
-				PeriodicInstanceStatusInterval:          cfg.Agent.PeriodicInstanceStatusInterval,
-				ICMSRequestACKInterval:                  cfg.Agent.ICMSRequestAckInterval,
-				GPUCapacity:                             cfg.Agent.StaticGPUCapacity,
-				K8sVersion:                              cfg.Agent.KubernetesVersionOverride,
-				SharedStorageServerImage:                cfg.Agent.SharedStorage.Server.Image,
-				HelmRepositoryPrefix:                    cfg.Agent.HelmRepositoryPrefix,
-				SyncAcknowledgeRequestInterval:          cfg.Agent.SyncAcknowledgeRequestInterval,
-				HelmReValServiceURL:                     cfg.Agent.HelmReValServiceURL,
-				HelmReValServiceHostHeaderOverride:      hostOverrides.HelmReValServiceHostHeaderOverride,
-				HelmReValStageOAuthTokenURL:             cfg.Agent.HelmReValStageOAuthTokenURL,
-				HelmReValStageOAuthPublicKeysetEndpoint: cfg.Agent.HelmReValStageOAuthPublicKeysetEndpoint,
-				HelmReValProdOAuthTokenURL:              cfg.Agent.HelmReValProdOAuthTokenURL,
-				HelmReValProdOAuthPublicKeysetEndpoint:  cfg.Agent.HelmReValProdOAuthPublicKeysetEndpoint,
-				CSIVolumeMountOptions:                   cfg.Agent.CSIVolumeMountOptions,
-				FunctionDeploymentStagesServiceURL:      cfg.Agent.FunctionDeploymentStagesServiceURL,
-				FunctionDeploymentStagesStageOAuthTokenURL:             cfg.Agent.FunctionDeploymentStagesStageOAuthTokenURL,
-				FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint: cfg.Agent.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint,
-				FunctionDeploymentStagesProdOAuthTokenURL:              cfg.Agent.FunctionDeploymentStagesProdOAuthTokenURL,
-				FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint:  cfg.Agent.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint,
-				LogPostingEnabled:                   featureflag.LogPosting.Enabled(),
-				CachingSupportEnabled:               featureflag.CachingSupport.Enabled(),
-				NVMeshEncryptionEnabled:             featureflag.NVMeshEncryption.Enabled(),
-				HelmRBACEnforcementEnabled:          featureflag.HelmRBACEnforcement.Enabled(),
-				HelmResourceConstraintsEnabled:      featureflag.HelmResourceConstraints.Enabled(),
-				DynamicGPUDiscoveryEnabled:          featureflag.DynamicGPUDiscovery.Enabled(),
-				MultipleGPUTypesAllowed:             featureflag.MultipleGPUTypesAllowed.Enabled(),
-				PeriodicInstanceStatusUpdateEnabled: featureflag.PeriodicInstanceStatusUpdate.Enabled(),
-				UniformInstanceLabelsEnabled:        featureflag.UniformInstanceLabels.Enabled(),
-				AutoPurgeDegradedWorkers:            featureflag.AutoPurgeDegradedWorkers.Enabled(),
-				ClusterTargetingEnabled:             featureflag.ClusterTargeting.Enabled(),
-				HelmSharedStorageEnabled:            featureflag.HelmSharedStorage.Enabled(),
-				GXCacheEnabled:                      featureflag.GXCache.Enabled(),
-				LowLatencyStreamingEnabled:          featureflag.LowLatencyStreaming.Enabled(),
-				PVCRebindEnabled:                    featureflag.PVCRebind.Enabled(),
-				MultiNodeWorkloadsEnabled:           featureflag.MultiNodeWorkloads.Enabled(),
-				ClientMetricsEnabled:                featureflag.ClientMetrics.Enabled(),
-				FeatureFlagFetcher:                  featureflag.DefaultFetcher,
-				ICMSRequestAckRetryTimeout:          cfg.Agent.ICMSRequestAckRetryTimeout,
-				NVCAOperatorVersion:                 cfg.Agent.OperatorVersion,
-				NVCAAgentVersion:                    version.ReleaseString(),
-				MaintenanceMode:                     types.MaintenanceMode(cfg.Agent.MaintenanceMode),
-				SkipSelfDestruct:                    cfg.Agent.SkipSelfDestruct,
-				ForceSelfDestruct:                   cfg.Agent.ForceSelfDestruct,
-				ImageCredentialHelperImage:          cfg.Agent.ImageCredentialHelperImage,
-				SecretMirrorSourceNamespace:         cfg.Agent.SecretMirrorSourceNamespace,
-				SecretMirrorLabelSelector:           cfg.Agent.SecretMirrorLabelSelector,
-				K8sTimeConfig: &k8sutil.TimeConfig{
-					MaxRunningTimeout:                         cfg.Workload.MaxRunningTimeout,
-					ModelCacheIdlePeriod:                      cfg.Workload.ModelCacheIdlePeriod,
-					ModelCacheIdleCleanupPeriod:               cfg.Workload.ModelCacheIdleCleanupPeriod,
-					ModelCacheROPVCBindTimeGracePeriod:        cfg.Workload.ModelCacheROPVCBindTimeGracePeriod,
-					ModelCacheVolumeDetachmentTimeout:         cfg.Workload.ModelCacheVolumeDetachmentTimeout,
-					WorkerDegradationTimeout:                  cfg.Workload.WorkerDegradationTimeout,
-					WorkerStartupTimeout:                      cfg.Workload.WorkerStartupTimeout,
-					PodLaunchThresholdSecondsOnFailedRestarts: cfg.Workload.PodLaunchThresholdSecondsOnFailedRestarts,
-					PodLaunchThresholdMinutesOnInitFailure:    cfg.Workload.PodLaunchThresholdMinutesOnInitFailure,
-					PodScheduledThreshold:                     cfg.Workload.PodScheduledThreshold,
-					InitCacheJobFailureThreshold:              cfg.Workload.InitCacheJobFailureThreshold,
-					MaxImagePullErrorThreshold:                cfg.Workload.MaxImagePullErrorThreshold,
-					NamespaceStuckTimeout:                     cfg.Workload.NamespaceStuckTimeout,
-					FailingObjectsBackoffTimeout:              cfg.Workload.FailingObjectsBackoffTimeout,
-					FailingObjectsBackoffRequeueInterval:      cfg.Workload.FailingObjectsBackoffRequeueInterval,
-				},
-				FunctionEnvOverrides: cfg.Workload.EffectiveFunctionEnvOverrides(),
-				TaskEnvOverrides:     cfg.Workload.EffectiveTaskEnvOverrides(),
-			}
-
-			// The operator injects OTEL_EXPORTER via the otel-nvca-config secret, but Viper
-			// auto-binding with prefix "nvca" doesn't map it to tracing.exporter.
-			if opts.Config.Tracing.Exporter == nvcaconfig.NoExporter {
-				if exp := os.Getenv("OTEL_EXPORTER"); exp != "" {
-					opts.Config.Tracing.Exporter = nvcaconfig.OTELExporter(exp)
-				}
-			}
-
-			if opts.Config.Tracing.Exporter == nvcaconfig.LightstepExporter {
-				opts.Config.Tracing.LightstepAccessToken = os.Getenv("LS_ACCESS_TOKEN")
-				if opts.Config.Tracing.LightstepAccessToken == "" {
-					opts.Config.Tracing.LightstepAccessToken = os.Getenv("NVCA_AUTHZ_LIGHTSTEP_ACCESS_TOKEN")
-				}
-				if opts.Config.Tracing.LightstepServiceName == "" {
-					opts.Config.Tracing.LightstepServiceName = os.Getenv("LS_SERVICE_NAME")
-				}
-				if opts.Config.Tracing.LightstepAccessToken == "" {
-					log.Warn("Tracing is set to lightstep but LS_ACCESS_TOKEN is not set; spans will not be exported")
-				}
-			}
-
-			opts.K8sTimeConfig.Complete()
-
-			if err := configureAndCheckCLI(log, opts); err != nil {
 				return err
 			}
 
@@ -287,7 +115,7 @@ func newCobraCommand(
 			}
 
 			if err := a.Start(ctx); err != nil {
-				log.WithError(err).Error("Failed to start agent")
+				core.GetLogger(ctx).WithError(err).Error("Failed to start agent")
 				return err
 			}
 			<-ctx.Done()
@@ -300,6 +128,249 @@ func newCobraCommand(
 		panic(err)
 	}
 
+	cmd.AddCommand(newRegistrationPreflightCommand(&configFile, setFlag, initLogger))
+
+	return cmd
+}
+
+// loadAgentOptions reads the agent config file and returns the agent options as the
+// agent starts with them, and ctx with the configured logger.
+func loadAgentOptions(
+	ctx context.Context,
+	configFile string,
+	setFlag func(cli.Generic, string) error,
+	initLogger func(log *logrus.Entry) logr.Logger,
+) (context.Context, *AgentOptions, error) {
+	if configFile == "" {
+		return ctx, nil, fmt.Errorf("config file is required")
+	}
+
+	cfg, err := nvcaconfig.Init(configFile)
+	if err != nil {
+		return ctx, nil, err
+	}
+	hostOverrides, err := readAgentHostOverrides(configFile)
+	if err != nil {
+		return ctx, nil, fmt.Errorf("read agent host overrides: %w", err)
+	}
+
+	cfg = cfg.Complete()
+	if err := setDefaults(&cfg); err != nil {
+		return ctx, nil, err
+	}
+
+	if cfg.Agent.ICMSURL == "" {
+		return ctx, nil, fmt.Errorf("agent.icmsURL is required")
+	}
+
+	log := core.GetLogger(ctx)
+	if log.Logger.Level, err = logrus.ParseLevel(cfg.Agent.LogLevel); err != nil {
+		return ctx, nil, err
+	}
+
+	// Move logs from all client-go logs into
+	// the default logrus logger
+	k8sLogger := initLogger(log)
+	ctx = ctrllog.IntoContext(ctx, k8sLogger)
+
+	// Feature flag shim
+	if err := setFlag(&featureflag.CLIFlag{}, strings.Join(cfg.Agent.FeatureFlags, ",")); err != nil {
+		return ctx, nil, fmt.Errorf("set featureflag CLI flag for config: %v", err)
+	}
+	if err := featureflag.ConfigureHelmInternalPersistentStorage(ctx, cfg.Agent.InternalPersistentStorage); err != nil {
+		return ctx, nil, fmt.Errorf("configure internal persistent storage: %w", err)
+	}
+	// Cluster attributes shim
+	if err := setFlag(&featureflag.AttrCLIFlag{}, strings.Join(cfg.Cluster.Attributes, ",")); err != nil {
+		return ctx, nil, fmt.Errorf("set attribute CLI flag for config: %v", err)
+	}
+
+	opts := &AgentOptions{
+		Config: cfg,
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			TokenURL:                        cfg.Authz.TokenURL,
+			OAuthClientID:                   cfg.Authz.ClientID,
+			OAuthClientSecretKey:            cfg.Authz.ClientSecretKey,
+			OAuthClientSecretsEnvFile:       cfg.Authz.ClientSecretsEnvFile,
+			OAuthTokenScope:                 cfg.Authz.TokenScope,
+			OAuthPublicKeysetEndpoint:       cfg.Authz.PublicKeysetEndpoint,
+			OAuthTokenFetchFailureThreshold: cfg.Authz.TokenFetchFailureThreshold,
+			NGCServiceAPIKey:                cfg.Authz.NGCServiceAPIKey,
+			NGCServiceAPIKeyFile:            cfg.Authz.NGCServiceAPIKeyFile,
+			SelfHostedEnabled:               featureflag.SelfHosted.Enabled(),
+			SelfHostedVaultSecretsJSONPath:  cfg.Authz.SelfManagedVaultSecretsJSONPath,
+			PSATTokenFilePath:               cfg.Authz.ClusterIssuedTokenFilePath,
+		},
+		NATSURL:                                 cfg.Agent.NATSURL,
+		NATSHostOverride:                        hostOverrides.NATSHostOverride,
+		NCAId:                                   cfg.Cluster.NCAID,
+		ClusterName:                             cfg.Cluster.Name,
+		ClusterID:                               cfg.Cluster.ID,
+		ClusterRegion:                           cfg.Cluster.Region,
+		ClusterGroupID:                          cfg.Cluster.GroupID,
+		ClusterGroupName:                        cfg.Cluster.GroupName,
+		ClusterAttributes:                       featureflag.GetEnabledAttributes(),
+		CloudProvider:                           cfg.Cluster.CloudProvider,
+		ICMSURL:                                 cfg.Agent.ICMSURL,
+		ICMSHostHeaderOverride:                  hostOverrides.ICMSHostHeaderOverride,
+		SystemNamespace:                         cfg.Agent.SystemNamespace,
+		RequestsNamespace:                       cfg.Agent.RequestsNamespace,
+		NamespaceLabels:                         cfg.Agent.NamespaceLabels,
+		ComputeBackend:                          cfg.Agent.ComputeBackend,
+		KubeConfigPath:                          cfg.Agent.KubeconfigPath,
+		NVCASvcAddress:                          cfg.Agent.SvcAddress,
+		NVCAAdminAddr:                           cfg.Agent.AdminAddr,
+		NVCADebugAddr:                           cfg.Agent.DebugAddr,
+		HeartbeatInterval:                       cfg.Agent.HeartbeatInterval,
+		CredRenewInterval:                       cfg.Agent.CredRenewInterval,
+		SyncQueueInterval:                       cfg.Agent.SyncQueueInterval,
+		SyncRequestStatusInterval:               cfg.Agent.SyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval:          cfg.Agent.PeriodicInstanceStatusInterval,
+		ICMSRequestACKInterval:                  cfg.Agent.ICMSRequestAckInterval,
+		GPUCapacity:                             cfg.Agent.StaticGPUCapacity,
+		K8sVersion:                              cfg.Agent.KubernetesVersionOverride,
+		SharedStorageServerImage:                cfg.Agent.SharedStorage.Server.Image,
+		HelmRepositoryPrefix:                    cfg.Agent.HelmRepositoryPrefix,
+		SyncAcknowledgeRequestInterval:          cfg.Agent.SyncAcknowledgeRequestInterval,
+		HelmReValServiceURL:                     cfg.Agent.HelmReValServiceURL,
+		HelmReValServiceHostHeaderOverride:      hostOverrides.HelmReValServiceHostHeaderOverride,
+		HelmReValStageOAuthTokenURL:             cfg.Agent.HelmReValStageOAuthTokenURL,
+		HelmReValStageOAuthPublicKeysetEndpoint: cfg.Agent.HelmReValStageOAuthPublicKeysetEndpoint,
+		HelmReValProdOAuthTokenURL:              cfg.Agent.HelmReValProdOAuthTokenURL,
+		HelmReValProdOAuthPublicKeysetEndpoint:  cfg.Agent.HelmReValProdOAuthPublicKeysetEndpoint,
+		CSIVolumeMountOptions:                   cfg.Agent.CSIVolumeMountOptions,
+		FunctionDeploymentStagesServiceURL:      cfg.Agent.FunctionDeploymentStagesServiceURL,
+		FunctionDeploymentStagesStageOAuthTokenURL:             cfg.Agent.FunctionDeploymentStagesStageOAuthTokenURL,
+		FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint: cfg.Agent.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint,
+		FunctionDeploymentStagesProdOAuthTokenURL:              cfg.Agent.FunctionDeploymentStagesProdOAuthTokenURL,
+		FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint:  cfg.Agent.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint,
+		LogPostingEnabled:                   featureflag.LogPosting.Enabled(),
+		CachingSupportEnabled:               featureflag.CachingSupport.Enabled(),
+		NVMeshEncryptionEnabled:             featureflag.NVMeshEncryption.Enabled(),
+		HelmRBACEnforcementEnabled:          featureflag.HelmRBACEnforcement.Enabled(),
+		HelmResourceConstraintsEnabled:      featureflag.HelmResourceConstraints.Enabled(),
+		DynamicGPUDiscoveryEnabled:          featureflag.DynamicGPUDiscovery.Enabled(),
+		MultipleGPUTypesAllowed:             featureflag.MultipleGPUTypesAllowed.Enabled(),
+		PeriodicInstanceStatusUpdateEnabled: featureflag.PeriodicInstanceStatusUpdate.Enabled(),
+		UniformInstanceLabelsEnabled:        featureflag.UniformInstanceLabels.Enabled(),
+		AutoPurgeDegradedWorkers:            featureflag.AutoPurgeDegradedWorkers.Enabled(),
+		ClusterTargetingEnabled:             featureflag.ClusterTargeting.Enabled(),
+		HelmSharedStorageEnabled:            featureflag.HelmSharedStorage.Enabled(),
+		GXCacheEnabled:                      featureflag.GXCache.Enabled(),
+		LowLatencyStreamingEnabled:          featureflag.LowLatencyStreaming.Enabled(),
+		PVCRebindEnabled:                    featureflag.PVCRebind.Enabled(),
+		MultiNodeWorkloadsEnabled:           featureflag.MultiNodeWorkloads.Enabled(),
+		ClientMetricsEnabled:                featureflag.ClientMetrics.Enabled(),
+		FeatureFlagFetcher:                  featureflag.DefaultFetcher,
+		ICMSRequestAckRetryTimeout:          cfg.Agent.ICMSRequestAckRetryTimeout,
+		NVCAOperatorVersion:                 cfg.Agent.OperatorVersion,
+		NVCAAgentVersion:                    version.ReleaseString(),
+		MaintenanceMode:                     types.MaintenanceMode(cfg.Agent.MaintenanceMode),
+		SkipSelfDestruct:                    cfg.Agent.SkipSelfDestruct,
+		ForceSelfDestruct:                   cfg.Agent.ForceSelfDestruct,
+		ImageCredentialHelperImage:          cfg.Agent.ImageCredentialHelperImage,
+		SecretMirrorSourceNamespace:         cfg.Agent.SecretMirrorSourceNamespace,
+		SecretMirrorLabelSelector:           cfg.Agent.SecretMirrorLabelSelector,
+		K8sTimeConfig: &k8sutil.TimeConfig{
+			MaxRunningTimeout:                         cfg.Workload.MaxRunningTimeout,
+			ModelCacheIdlePeriod:                      cfg.Workload.ModelCacheIdlePeriod,
+			ModelCacheIdleCleanupPeriod:               cfg.Workload.ModelCacheIdleCleanupPeriod,
+			ModelCacheROPVCBindTimeGracePeriod:        cfg.Workload.ModelCacheROPVCBindTimeGracePeriod,
+			ModelCacheVolumeDetachmentTimeout:         cfg.Workload.ModelCacheVolumeDetachmentTimeout,
+			WorkerDegradationTimeout:                  cfg.Workload.WorkerDegradationTimeout,
+			WorkerStartupTimeout:                      cfg.Workload.WorkerStartupTimeout,
+			PodLaunchThresholdSecondsOnFailedRestarts: cfg.Workload.PodLaunchThresholdSecondsOnFailedRestarts,
+			PodLaunchThresholdMinutesOnInitFailure:    cfg.Workload.PodLaunchThresholdMinutesOnInitFailure,
+			PodScheduledThreshold:                     cfg.Workload.PodScheduledThreshold,
+			InitCacheJobFailureThreshold:              cfg.Workload.InitCacheJobFailureThreshold,
+			MaxImagePullErrorThreshold:                cfg.Workload.MaxImagePullErrorThreshold,
+			NamespaceStuckTimeout:                     cfg.Workload.NamespaceStuckTimeout,
+			FailingObjectsBackoffTimeout:              cfg.Workload.FailingObjectsBackoffTimeout,
+			FailingObjectsBackoffRequeueInterval:      cfg.Workload.FailingObjectsBackoffRequeueInterval,
+		},
+		FunctionEnvOverrides: cfg.Workload.EffectiveFunctionEnvOverrides(),
+		TaskEnvOverrides:     cfg.Workload.EffectiveTaskEnvOverrides(),
+	}
+
+	// The operator injects OTEL_EXPORTER via the otel-nvca-config secret, but Viper
+	// auto-binding with prefix "nvca" doesn't map it to tracing.exporter.
+	if opts.Config.Tracing.Exporter == nvcaconfig.NoExporter {
+		if exp := os.Getenv("OTEL_EXPORTER"); exp != "" {
+			opts.Config.Tracing.Exporter = nvcaconfig.OTELExporter(exp)
+		}
+	}
+
+	if opts.Config.Tracing.Exporter == nvcaconfig.LightstepExporter {
+		opts.Config.Tracing.LightstepAccessToken = os.Getenv("LS_ACCESS_TOKEN")
+		if opts.Config.Tracing.LightstepAccessToken == "" {
+			opts.Config.Tracing.LightstepAccessToken = os.Getenv("NVCA_AUTHZ_LIGHTSTEP_ACCESS_TOKEN")
+		}
+		if opts.Config.Tracing.LightstepServiceName == "" {
+			opts.Config.Tracing.LightstepServiceName = os.Getenv("LS_SERVICE_NAME")
+		}
+		if opts.Config.Tracing.LightstepAccessToken == "" {
+			log.Warn("Tracing is set to lightstep but LS_ACCESS_TOKEN is not set; spans will not be exported")
+		}
+	}
+
+	opts.K8sTimeConfig.Complete()
+
+	if err := configureAndCheckCLI(log, opts); err != nil {
+		return ctx, nil, err
+	}
+	return ctx, opts, nil
+}
+
+// runRegistrationPreflightFunc runs `nvca preflight-registration`. Tests replace it.
+var runRegistrationPreflightFunc = runRegistrationPreflight
+
+// newRegistrationPreflightCommand returns `nvca preflight-registration`, which asks
+// ICMS whether it would accept the registration that the agent sends with the config
+// file, without registering.
+func newRegistrationPreflightCommand(
+	configFile *string,
+	setFlag func(cli.Generic, string) error,
+	initLogger func(log *logrus.Entry) logr.Logger,
+) *cobra.Command {
+	var timeout time.Duration
+	cmd := &cobra.Command{
+		Use:   "preflight-registration",
+		Short: "Ask ICMS whether it would accept the cluster registration for a config, without registering",
+		Long: "Builds the ICMS registration that the agent sends with --config and asks ICMS to validate it " +
+			"without applying it. Writes the result as JSON to stdout and to the Kubernetes termination " +
+			"message. Exits with 0 when ICMS would accept the registration, 2 when ICMS would reject it, " +
+			"3 when ICMS cannot validate a registration, and 1 when the preflight reaches no verdict, " +
+			"including when it does not finish within --timeout.",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx, opts, err := loadAgentOptions(cmd.Context(), *configFile, setFlag, initLogger)
+			var result types.RegistrationPreflightResult
+			if err != nil {
+				result = preflightError(fmt.Errorf("load the agent config: %w", err))
+			} else {
+				run := func(ctx context.Context) types.RegistrationPreflightResult {
+					return runRegistrationPreflightFunc(ctx, opts)
+				}
+				result = runRegistrationPreflightWithin(ctx, timeout, run)
+			}
+
+			msg := registrationPreflightTerminationMessage(result)
+			fmt.Fprintln(cmd.OutOrStdout(), string(msg))
+			if err := nvcaerrors.WriteTerminationMessage(msg); err != nil &&
+				!errors.Is(err, nvcaerrors.ErrNotInKubernetesEnv) {
+				core.GetLogger(ctx).WithError(err).Error("Failed to write the termination message")
+			}
+
+			if code := result.Outcome.ExitCode(); code != 0 {
+				return &nvcaerrors.ExitCodeError{Code: code, Err: errors.New(result.Message)}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().DurationVar(&timeout, "timeout", defaultRegistrationPreflightTimeout,
+		"How long the preflight may take before it reports that it reached no verdict")
 	return cmd
 }
 

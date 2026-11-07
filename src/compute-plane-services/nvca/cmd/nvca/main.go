@@ -19,6 +19,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
 
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
 
@@ -32,6 +34,10 @@ func main() {
 
 	cmd := nvca.NewCommand()
 	if err := cmd.ExecuteContext(ctx); err != nil {
+		var exitErr *nvcaerrors.ExitCodeError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.Code)
+		}
 		nvcaerrors.ExitReason(ctx, err)
 		log.Fatal(err)
 	}

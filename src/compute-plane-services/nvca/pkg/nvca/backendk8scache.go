@@ -1943,14 +1943,8 @@ func (c *BackendK8sCache) GetRegisteredBackendGPUs(ctx context.Context,
 	backendGPUs []types.BackendGPU,
 	multiNodeWorkloadsEnabled bool,
 ) ([]types.RegistrationGPU, error) {
-	infraOverhead, err := c.infraOverheadGetter.GetInfraOverhead(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get infra overhead: %w", err)
-	}
-	var (
-		regBackendGPUs = types.BackendGPUs(backendGPUs).ToRegistration(multiNodeWorkloadsEnabled, infraOverhead)
-	)
-	regBackendGPUs, gpuNodeClassifications, err := types.AddInstanceCapacity(ctx, regBackendGPUs, c.nodeLister, c.sharedClusterOn)
+	regBackendGPUs, gpuNodeClassifications, err := registrationGPUs(ctx, backendGPUs,
+		multiNodeWorkloadsEnabled, c.infraOverheadGetter, c.nodeLister, c.sharedClusterOn)
 	if err != nil {
 		return nil, err
 	}
@@ -1961,32 +1955,117 @@ func (c *BackendK8sCache) GetRegisteredBackendGPUs(ctx context.Context,
 	return regBackendGPUs, nil
 }
 
-// overheadRemovedInstanceTypesHint explains, for a registration that ICMS
-// rejected, which instance types the infrastructure resource overhead leaves out
-// of the registration. It returns "" when the overhead leaves none out.
-func (c *BackendK8sCache) overheadRemovedInstanceTypesHint(ctx context.Context) string {
-	overhead, err := c.infraOverheadGetter.GetInfraOverhead(ctx)
-	if err != nil || len(overhead) == 0 {
-		return ""
-	}
-	backendGPUs, err := c.GetAllBackendGPUs(ctx)
+// registrationGPUs returns the GPUs and instance types that NVCA registers with ICMS
+// for backendGPUs. The agent and `nvca preflight-registration` both use it, so the
+// preflight validates the registration that the agent sends.
+func registrationGPUs(
+	ctx context.Context,
+	backendGPUs []types.BackendGPU,
+	multiNodeWorkloadsEnabled bool,
+	infraOverheadGetter enforce.InfraOverheadGetter,
+	nodeLister listersv1.NodeLister,
+	sharedClusterOn *atomic.Bool,
+) ([]types.RegistrationGPU, []types.GPUNodeClassification, error) {
+	infraOverhead, err := infraOverheadGetter.GetInfraOverhead(ctx)
 	if err != nil {
-		return ""
+		return nil, nil, fmt.Errorf("failed to get infra overhead: %w", err)
 	}
-	removed := types.BackendGPUs(backendGPUs).InstanceTypesRemovedByOverhead(
-		c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.MultiNodeWorkloads), overhead)
-	if len(removed) == 0 {
-		return ""
+	regBackendGPUs := types.BackendGPUs(backendGPUs).ToRegistration(multiNodeWorkloadsEnabled, infraOverhead)
+	return types.AddInstanceCapacity(ctx, regBackendGPUs, nodeLister, sharedClusterOn)
+}
+
+// registrationConflictHint explains an ICMS 409 for a registration. icmsErr is the
+// ICMS error body, nil when ICMS sent none. It returns "" when it has nothing to add.
+func (c *BackendK8sCache) registrationConflictHint(
+	ctx context.Context,
+	icmsErr *types.ICMSRegistrationError,
+) string {
+	overhead, err := c.infraOverheadGetter.GetInfraOverhead(ctx)
+	if err != nil {
+		return registrationConflictHint(icmsErr, nil, nil)
 	}
-	names := make([]string, len(removed))
-	for i, it := range removed {
-		names[i] = it.Name
+	var removed []string
+	if len(overhead) > 0 {
+		if backendGPUs, err := c.GetAllBackendGPUs(ctx); err == nil {
+			removed = instanceTypesRemovedByOverhead(backendGPUs,
+				c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.MultiNodeWorkloads), overhead)
+		}
+	}
+	return registrationConflictHint(icmsErr, overhead, removed)
+}
+
+// instanceTypesRemovedByOverhead returns the names of the instance types that the
+// infrastructure resource overhead leaves out of the registration.
+func instanceTypesRemovedByOverhead(
+	backendGPUs []types.BackendGPU,
+	multiNodeWorkloadsEnabled bool,
+	overhead corev1.ResourceList,
+) []string {
+	var names []string
+	for _, it := range types.BackendGPUs(backendGPUs).InstanceTypesRemovedByOverhead(multiNodeWorkloadsEnabled, overhead) {
+		names = append(names, it.Name)
+	}
+	return names
+}
+
+const overheadRemedy = "lower byoo.additionalResourceOverhead or another infrastructure container resource " +
+	"(utils.resources, byoo.resources, byoo.fluentbit.resources, storage.sharedStorage.server.resources)"
+
+// registrationConflictHint explains an ICMS 409 for a registration. An ICMS that
+// supports registration validation names, in icmsErr, the instance types that the
+// registration leaves out and the active instances on them. An older ICMS does not,
+// so the hint then names every instance type that the infrastructure resource
+// overhead, overhead, leaves out: removedByOverhead.
+func registrationConflictHint(
+	icmsErr *types.ICMSRegistrationError,
+	overhead corev1.ResourceList,
+	removedByOverhead []string,
+) string {
+	if icmsErr != nil && icmsErr.Reason == types.ICMSReasonActiveInstancesOnRemovedInstanceTypes &&
+		len(icmsErr.InstanceTypes) > 0 {
+		instances := formatInstanceIDs(icmsErr.ActiveInstanceIDs)
+		if byOverhead := intersectStrings(icmsErr.InstanceTypes, removedByOverhead); len(byOverhead) > 0 {
+			return fmt.Sprintf("the infrastructure resource overhead of %s leaves no room in instance types %s, "+
+				"so NVCA leaves them out of the registration while ICMS still has active instances on them (%s): "+
+				"%s, or remove those instances",
+				k8sutil.FormatResourceList(overhead), strings.Join(byOverhead, ", "), instances, overheadRemedy)
+		}
+		return fmt.Sprintf("the registration leaves out instance types %s while ICMS still has active instances "+
+			"on them (%s): remove those instances, or restore the nodes that provide those instance types",
+			strings.Join(icmsErr.InstanceTypes, ", "), instances)
+	}
+	if len(removedByOverhead) == 0 {
+		return ""
 	}
 	return fmt.Sprintf("the infrastructure resource overhead of %s leaves no room in instance types %s, so NVCA "+
 		"left them out of the registration; if they have active instances, ICMS rejects the registration for that "+
-		"reason: lower byoo.additionalResourceOverhead or another infrastructure container resource (utils.resources, "+
-		"byoo.resources, byoo.fluentbit.resources, storage.sharedStorage.server.resources), or remove those instances",
-		k8sutil.FormatResourceList(overhead), strings.Join(names, ", "))
+		"reason: %s, or remove those instances",
+		k8sutil.FormatResourceList(overhead), strings.Join(removedByOverhead, ", "), overheadRemedy)
+}
+
+// maxHintInstanceIDs bounds how many instance IDs a hint names.
+const maxHintInstanceIDs = 5
+
+func formatInstanceIDs(ids []string) string {
+	if len(ids) <= maxHintInstanceIDs {
+		return strings.Join(ids, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(ids[:maxHintInstanceIDs], ", "), len(ids)-maxHintInstanceIDs)
+}
+
+// intersectStrings returns the items of a that are also in b, in the order of a.
+func intersectStrings(a, b []string) []string {
+	inB := make(map[string]bool, len(b))
+	for _, s := range b {
+		inB[s] = true
+	}
+	var out []string
+	for _, s := range a {
+		if inB[s] {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (c *BackendK8sCache) UpdateInstanceTypeMetrics(
