@@ -24,8 +24,14 @@ spec:
       restartPolicy: Never
       containers:
         - name: deleter
-          image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1"
+          image: "ghcr.io/kai-scheduler/kai-scheduler/helm-hooks:v0.18.6"
           imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -33,12 +39,7 @@ spec:
               - ALL
             runAsNonRoot: true
             runAsUser: 10000
-          command:
-            - /bin/sh
-            - -c
-            - |
-              echo "Deleting KAI operator-managed deployments..."
-              kubectl -n kai-scheduler delete deployment --selector=app.kubernetes.io/managed-by=kai-operator --ignore-not-found=true
-              echo "Deleting kai-config..."
-              kubectl delete Config kai-config --ignore-not-found
-              echo "Cleanup complete."
+          args:
+            - cleanup
+            - --namespace=kai-scheduler
+            - --delete-config=kai-config

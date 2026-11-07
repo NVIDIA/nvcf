@@ -5,10 +5,10 @@ kind: ClusterRole
 metadata:
   name: dynamo-operator-epp
   labels:
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 rules:
 # Gateway API inference resources
@@ -59,4 +59,11 @@ rules:
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# RBAC for `epp-serviceaccount`: EPP components the operator builds from a
+# DynamoGraphDeployment, which run the Dynamo runtime (`DYN_EPP_MODE=dynamo`).
+# The grants below are what that mode reads. Standalone mode is a separate code
+# path that reads a different set, carried on its own ServiceAccount and Role
+# (deploy/inference-gateway/ext-proc/examples/onramp/agg.yaml). Grant standalone
+# permissions there.
 # Cluster-wide mode: ClusterRole for EPP

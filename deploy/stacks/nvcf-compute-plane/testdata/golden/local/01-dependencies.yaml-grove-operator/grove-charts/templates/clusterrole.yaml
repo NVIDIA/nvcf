@@ -5,7 +5,7 @@ kind: ClusterRole
 metadata:
   name: grove:system:grove-operator
   labels:
-    chart: "grove-charts-v0.1.0-alpha.12"
+    chart: "grove-charts-v0.1.0-alpha.16"
     release: "grove-operator"
     app.kubernetes.io/component: operator-clusterrole
     app.kubernetes.io/name: grove-operator
@@ -193,6 +193,7 @@ rules:
   - podcliquesets.grove.io
   - podcliques.grove.io
   - podcliquescalinggroups.grove.io
+  - clustertopologies.grove.io
   - clustertopologybindings.grove.io
   - podgangmaps.grove.io
   - podgangs.scheduler.grove.io
@@ -201,3 +202,10 @@ rules:
   - create
   - update
   - patch
+  - delete
+- apiGroups:
+  - grove.io
+  resources:
+  - clustertopologies
+  verbs:
+  - list

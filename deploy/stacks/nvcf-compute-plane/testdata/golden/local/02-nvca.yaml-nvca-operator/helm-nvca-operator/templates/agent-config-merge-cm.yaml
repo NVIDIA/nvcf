@@ -61,10 +61,6 @@ data:
           resource: podgangs
           version: v1alpha1
         - group: nvidia.com
-          kind: DynamoCheckpoint
-          resource: dynamocheckpoints
-          version: v1alpha1
-        - group: nvidia.com
           kind: DynamoComponentDeployment
           resource: dynamocomponentdeployments
           version: v1alpha1

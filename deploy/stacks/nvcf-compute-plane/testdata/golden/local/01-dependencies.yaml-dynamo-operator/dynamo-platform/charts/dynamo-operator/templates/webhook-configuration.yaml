@@ -25,10 +25,10 @@ metadata:
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
     nvidia.com/dynamo-operator-namespace: dynamo-system
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 webhooks:
 - admissionReviewVersions:
@@ -39,6 +39,7 @@ webhooks:
       namespace: dynamo-system
       path: /mutate/nvidia.com/v1beta1/dynamographdeployments
   failurePolicy: Fail
+  matchPolicy: Equivalent
   name: mdynamographdeployment.kb.io
   rules:
   - apiGroups:
@@ -60,7 +61,7 @@ webhooks:
       namespace: dynamo-system
       path: /mutate-nvidia-com-v1beta1-dynamocomponentdeployment
   failurePolicy: Fail
-  matchPolicy: Exact
+  matchPolicy: Equivalent
   name: mdynamocomponentdeploymentv1beta1.kb.io
   rules:
   - apiGroups:
@@ -128,10 +129,10 @@ metadata:
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
     nvidia.com/dynamo-operator-namespace: dynamo-system
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 webhooks:
 - admissionReviewVersions:
@@ -140,14 +141,15 @@ webhooks:
     service:
       name: dynamo-operator-webhook-service
       namespace: dynamo-system
-      path: /validate-nvidia-com-v1alpha1-dynamocomponentdeployment
+      path: /validate/nvidia.com/v1beta1/dynamocomponentdeployments
   failurePolicy: Fail
+  matchPolicy: Equivalent
   name: vdynamocomponentdeployment.kb.io
   rules:
   - apiGroups:
     - nvidia.com
     apiVersions:
-    - v1alpha1
+    - v1beta1
     operations:
     - CREATE
     - UPDATE
@@ -163,6 +165,7 @@ webhooks:
       namespace: dynamo-system
       path: /validate/nvidia.com/v1beta1/dynamographdeployments
   failurePolicy: Fail
+  matchPolicy: Equivalent
   name: vdynamographdeployment.kb.io
   rules:
   - apiGroups:
@@ -174,27 +177,6 @@ webhooks:
     - UPDATE
     resources:
     - dynamographdeployments
-  sideEffects: None
-  timeoutSeconds: 10
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: dynamo-operator-webhook-service
-      namespace: dynamo-system
-      path: /validate-nvidia-com-v1alpha1-dynamocheckpoint
-  failurePolicy: Fail
-  name: vdynamocheckpoint.kb.io
-  rules:
-  - apiGroups:
-    - nvidia.com
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - dynamocheckpoints
   sideEffects: None
   timeoutSeconds: 10
 - admissionReviewVersions:

@@ -181,6 +181,13 @@ Override KAI component resources under `addons.kaiScheduler.<component>.resource
 (for example `addons.kaiScheduler.scheduler.resources.requests.memory`). Defaults
 are set in `helmfile.d/01-dependencies.yaml.gotmpl`.
 
+KAI runs two replicas of each control-plane component, with leader election and
+spread across nodes where possible. On a single-node cluster, set
+`addons.kaiScheduler.replicaCount: 1`: with two replicas, the KAI
+PodDisruptionBudgets can block a node drain. The stack disables KAI's preempt,
+consolidation, and reclaim actions, so KAI never evicts running workloads to
+place new ones. A pending workload waits for free capacity.
+
 Dynamo's bundled NATS server defaults to
 `docker.io/library/nats:2.10.21-alpine`. Redirect it to a private mirror with:
 

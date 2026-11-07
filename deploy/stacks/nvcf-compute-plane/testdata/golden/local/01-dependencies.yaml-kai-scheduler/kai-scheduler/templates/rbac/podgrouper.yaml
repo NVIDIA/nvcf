@@ -9,13 +9,10 @@ rules:
   - ""
   resources:
   - configmaps
+  - namespaces
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - ""
@@ -28,14 +25,6 @@ rules:
   - list
   - patch
   - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - namespaces
-  verbs:
-  - get
-  - list
   - watch
 - apiGroups:
   - ""
@@ -260,6 +249,14 @@ rules:
   - patch
   - update
 - apiGroups:
+  - nvidia.com
+  resources:
+  - dynamographdeployments
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - ray.io
   resources:
   - rayclusters
@@ -289,6 +286,7 @@ rules:
   - kartas
   - runaijobs
   - trainingworkloads
+  - workloadrunners
   verbs:
   - get
   - list

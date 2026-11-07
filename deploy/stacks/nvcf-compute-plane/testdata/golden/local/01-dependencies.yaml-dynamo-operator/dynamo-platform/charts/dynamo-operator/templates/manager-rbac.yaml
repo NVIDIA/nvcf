@@ -20,10 +20,10 @@ kind: ClusterRole
 metadata:
   name: dynamo-operator-manager-role
   labels:
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 rules:
 - apiGroups:
@@ -79,6 +79,24 @@ rules:
   - list
   - update
   - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions/status
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - apps
   resources:
@@ -199,6 +217,12 @@ rules:
   - update
   - watch
 - apiGroups:
+  - grove.io
+  resources:
+  - podcliquesets/finalizers
+  verbs:
+  - update
+- apiGroups:
   - inference.networking.k8s.io
   resources:
   - inferencepools
@@ -251,13 +275,12 @@ rules:
 - apiGroups:
   - nvidia.com
   resources:
-  - dynamocheckpoints
   - dynamocomponentdeployments
   - dynamographdeploymentrequests
   - dynamographdeployments
   - dynamographdeploymentscalingadapters
   - dynamomodels
-  - podsnapshotcontents
+  - lpxgraphdeployments
   verbs:
   - create
   - delete
@@ -269,25 +292,22 @@ rules:
 - apiGroups:
   - nvidia.com
   resources:
-  - dynamocheckpoints/finalizers
   - dynamocomponentdeployments/finalizers
   - dynamographdeploymentrequests/finalizers
   - dynamographdeployments/finalizers
   - dynamomodels/finalizers
-  - podsnapshots/finalizers
+  - lpxgraphdeployments/finalizers
   verbs:
   - update
 - apiGroups:
   - nvidia.com
   resources:
-  - dynamocheckpoints/status
   - dynamocomponentdeployments/status
   - dynamographdeploymentrequests/status
   - dynamographdeployments/status
   - dynamographdeploymentscalingadapters/status
   - dynamomodels/status
-  - podsnapshotcontents/status
-  - podsnapshots/status
+  - lpxgraphdeployments/status
   verbs:
   - get
   - patch
@@ -297,11 +317,21 @@ rules:
   resources:
   - podsnapshots
   verbs:
-  - create
+  - delete
   - get
   - list
   - patch
-  - update
+  - watch
+- apiGroups:
+  - nvidia.com
+  resources:
+  - snapshotjobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io
@@ -336,6 +366,7 @@ rules:
   - resource.k8s.io
   resources:
   - deviceclasses
+  - resourceclaims
   verbs:
   - get
   - list
@@ -351,6 +382,16 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - scheduling.lpu.nvidia.com
+  resources:
+  - lpupipelinerequests
+  verbs:
+  - create
+  - delete
+  - get
+  - list
   - watch
 - apiGroups:
   - scheduling.run.ai
@@ -459,35 +500,20 @@ rules:
 - apiGroups:
   - nvidia.com
   resources:
-  - podsnapshots
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - nvidia.com
-  resources:
-  - dynamocheckpoints/finalizers
   - dynamocomponentdeployments/finalizers
   - dynamographdeploymentrequests/finalizers
   - dynamographdeployments/finalizers
   - dynamomodels/finalizers
-  - podsnapshots/finalizers
   verbs:
   - update
 - apiGroups:
   - nvidia.com
   resources:
-  - dynamocheckpoints/status
   - dynamocomponentdeployments/status
   - dynamographdeploymentrequests/status
   - dynamographdeployments/status
   - dynamographdeploymentscalingadapters/status
   - dynamomodels/status
-  - podsnapshots/status
   verbs:
   - get
   - patch
@@ -545,10 +571,10 @@ metadata:
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 rules:
 - apiGroups:
@@ -570,10 +596,10 @@ metadata:
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 rules:
 - apiGroups:
@@ -594,10 +620,10 @@ metadata:
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 rules:
 - apiGroups:
@@ -610,43 +636,6 @@ rules:
   - watch
 ---
 # Source: dynamo-platform/charts/dynamo-operator/templates/manager-rbac.yaml
-# Helm keeps PodSnapshotContent access separate because a namespace-restricted Role cannot grant it.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: dynamo-operator-dynamo-system-podsnapshotcontents
-  labels:
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/created-by: dynamo-operator
-    app.kubernetes.io/part-of: dynamo-operator
-    helm.sh/chart: dynamo-operator-1.4.2
-    app.kubernetes.io/name: dynamo-operator
-    app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
-    app.kubernetes.io/managed-by: Helm
-rules:
-- apiGroups:
-  - nvidia.com
-  resources:
-  - podsnapshotcontents
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - nvidia.com
-  resources:
-  - podsnapshotcontents/status
-  verbs:
-  - get
-  - patch
-  - update
----
-# Source: dynamo-platform/charts/dynamo-operator/templates/manager-rbac.yaml
 # Helm binds the selected manager role kind to this release's controller ServiceAccount.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -656,10 +645,10 @@ metadata:
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -680,10 +669,10 @@ metadata:
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -704,10 +693,10 @@ metadata:
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -728,39 +717,15 @@ metadata:
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
-    helm.sh/chart: dynamo-operator-1.4.2
+    helm.sh/chart: dynamo-operator-1.6.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
+    app.kubernetes.io/version: "1.6.2"
     app.kubernetes.io/managed-by: Helm
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: dynamo-operator-dynamo-system-deviceclass-reader
-subjects:
-- kind: ServiceAccount
-  name: 'dynamo-operator-controller-manager'
-  namespace: 'dynamo-system'
----
-# Source: dynamo-platform/charts/dynamo-operator/templates/manager-rbac.yaml
-# Helm binds the separate cluster-scoped PodSnapshotContent grant to the controller ServiceAccount.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: dynamo-operator-dynamo-system-podsnapshotcontents-binding
-  labels:
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/created-by: dynamo-operator
-    app.kubernetes.io/part-of: dynamo-operator
-    helm.sh/chart: dynamo-operator-1.4.2
-    app.kubernetes.io/name: dynamo-operator
-    app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.2"
-    app.kubernetes.io/managed-by: Helm
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: dynamo-operator-dynamo-system-podsnapshotcontents
 subjects:
 - kind: ServiceAccount
   name: 'dynamo-operator-controller-manager'

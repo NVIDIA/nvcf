@@ -29,7 +29,7 @@ data:
           runAsUser: 10000
         additionalImagePullSecrets:
           - nvcr-pull-secret
-        replicaCount: 1
+        replicaCount: 2
         vpa:
           enabled: false
           resourcePolicy:
@@ -45,6 +45,7 @@ data:
             minReplicas: 1
             updateMode: InPlaceOrRecreate
         queueLabelKey: "kai.scheduler/queue"
+        gpuSharingMode: Disabled
     
       binder:
         service:
@@ -52,7 +53,7 @@ data:
           image:
             name: binder
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.17.1
+            tag: v0.18.6
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -61,6 +62,18 @@ data:
             requests:
               cpu: 50m
               memory: 2Gi
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+              - podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app: binder
+                  topologyKey: kubernetes.io/hostname
+                weight: 100
+          podDisruptionBudget:
+            enabled: true
+            maxUnavailable: 1
         metricsPort: 8080
         resourceReservation:
           namespace: kai-resource-reservation
@@ -69,7 +82,7 @@ data:
           image:
             name: resourcereservation
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.17.1
+            tag: v0.18.6
             pullPolicy: IfNotPresent
     
       podGrouper:
@@ -78,7 +91,7 @@ data:
           image:
             name: podgrouper
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.17.1
+            tag: v0.18.6
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -87,6 +100,15 @@ data:
             requests:
               cpu: 50m
               memory: 512Mi
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+              - podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app: pod-grouper
+                  topologyKey: kubernetes.io/hostname
+                weight: 100
           podDisruptionBudget:
             enabled: true
             maxUnavailable: 1
@@ -99,7 +121,7 @@ data:
           image:
             name: podgroupcontroller
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.17.1
+            tag: v0.18.6
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -108,6 +130,15 @@ data:
             requests:
               cpu: 50m
               memory: 256Mi
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+              - podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app: podgroup-controller
+                  topologyKey: kubernetes.io/hostname
+                weight: 100
     
       queueController:
         service:
@@ -115,7 +146,7 @@ data:
           image:
             name: queuecontroller
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.17.1
+            tag: v0.18.6
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -124,6 +155,18 @@ data:
             requests:
               cpu: 50m
               memory: 256Mi
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+              - podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app: queue-controller
+                  topologyKey: kubernetes.io/hostname
+                weight: 100
+          podDisruptionBudget:
+            enabled: true
+            maxUnavailable: 1
     
       admission:
         service:
@@ -131,7 +174,7 @@ data:
           image:
             name: admission
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.17.1
+            tag: v0.18.6
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -140,10 +183,18 @@ data:
             requests:
               cpu: 50m
               memory: 256Mi
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+              - podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app: admission
+                  topologyKey: kubernetes.io/hostname
+                weight: 100
           podDisruptionBudget:
             enabled: true
             maxUnavailable: 1
-        gpuSharing: false
         blockNvidiaVisibleDevices: false
         queueLabelSelector: false
         webhook:
@@ -159,7 +210,7 @@ data:
           image:
             name: nodescaleadjuster
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.17.1
+            tag: v0.18.6
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -173,7 +224,7 @@ data:
           scalingPodImage:
             name: scalingpod
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.17.1
+            tag: v0.18.6
             pullPolicy: IfNotPresent
     
       scheduler:
@@ -182,7 +233,7 @@ data:
           image:
             name: scheduler
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.17.1
+            tag: v0.18.6
             pullPolicy: IfNotPresent
           resources:
             limits:
@@ -191,6 +242,15 @@ data:
             requests:
               cpu: 500m
               memory: 3Gi
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+              - podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app: kai-scheduler-default
+                  topologyKey: kubernetes.io/hostname
+                weight: 100
           podDisruptionBudget:
             enabled: true
             maxUnavailable: 1
@@ -202,7 +262,7 @@ data:
           image:
             name: numa-placement-exporter
             repository: ghcr.io/kai-scheduler/kai-scheduler
-            tag: v0.17.1
+            tag: v0.18.6
             pullPolicy: IfNotPresent
           resources:
             limits:

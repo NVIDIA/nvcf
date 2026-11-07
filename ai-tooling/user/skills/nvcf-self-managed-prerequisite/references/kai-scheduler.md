@@ -30,6 +30,8 @@ scheduler:
       enabled: false
     consolidation:
       enabled: false
+    reclaim:
+      enabled: false
 
 defaultQueue:
   createDefaultQueue: true

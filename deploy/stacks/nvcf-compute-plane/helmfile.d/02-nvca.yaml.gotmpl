@@ -178,8 +178,11 @@ helmDefaults:
       ) }}
 {{- end }}
 {{- if or $dynamoOperatorEnabled (has "DynamoOperatorSupport" $featureGateValues) }}
+{{- /* DynamoCheckpoint is deliberately not listed. Dynamo 1.5 removed its CRD,
+       and NVCA can only watch or list an extra type whose CRD exists: older
+       agents never finish syncing their watch cache and exit, and newer ones
+       still list every allowed type when cleaning up a terminated workload. */}}
 {{-   $extraTypes = concat $extraTypes (list
-        (dict "group" "nvidia.com" "version" "v1alpha1" "kind" "DynamoCheckpoint" "resource" "dynamocheckpoints")
         (dict "group" "nvidia.com" "version" "v1alpha1" "kind" "DynamoComponentDeployment" "resource" "dynamocomponentdeployments")
         (dict "group" "nvidia.com" "version" "v1alpha1" "kind" "DynamoGraphDeployment" "resource" "dynamographdeployments")
         (dict "group" "nvidia.com" "version" "v1alpha1" "kind" "DynamoGraphDeploymentRequest" "resource" "dynamographdeploymentrequests")
