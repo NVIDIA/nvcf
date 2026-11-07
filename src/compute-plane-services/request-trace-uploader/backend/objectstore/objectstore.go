@@ -173,7 +173,7 @@ func loadCredentials(path string) (credentials, error) {
 	return creds, nil
 }
 
-// Submit uploads the segment at request.Path and returns once the store has
+// Submit uploads the request's one file and returns once the store has
 // durably accepted it. The returned id is the object key: Status looks
 // nothing up because Capabilities declares TerminalOutcomeSync.
 //
@@ -181,7 +181,11 @@ func loadCredentials(path string) (credentials, error) {
 // along with the bucket and size, and returns without opening the file or
 // contacting a store.
 func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (string, error) {
-	info, err := os.Stat(request.Path)
+	path, err := request.SinglePath()
+	if err != nil {
+		return "", fmt.Errorf("objectstore backend: %w", err)
+	}
+	info, err := os.Stat(path)
 	if err != nil {
 		return "", fmt.Errorf("objectstore backend: stat segment: %w", err)
 	}
@@ -189,7 +193,7 @@ func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (str
 		return "", fmt.Errorf("objectstore backend: segment is %d bytes, over the %d byte single-object limit", info.Size(), maxObjectBytes)
 	}
 
-	key := c.key(request.Path)
+	key := c.key(path)
 	if c.dryRun {
 		slog.Info("objectstore backend: dry run, not uploading",
 			"segment", request.Segment.Index,
@@ -199,7 +203,7 @@ func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (str
 		return key, nil
 	}
 
-	file, err := os.Open(request.Path)
+	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("objectstore backend: open segment: %w", err)
 	}
@@ -224,7 +228,7 @@ func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (str
 // Status always reports success. PutObject in Submit already blocked until
 // the store returned a durable response, so there is nothing left to poll.
 func (c *Client) Status(context.Context, string) (backend.Status, error) {
-	return backend.StatusSuccess, nil
+	return backend.StatusSucceeded, nil
 }
 
 // Capabilities declares that PutObject is a single synchronous, idempotent

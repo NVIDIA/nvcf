@@ -115,7 +115,7 @@ func (b *stubBackend) Status(_ context.Context, id string) (backend.Status, erro
 	if b.status != "" {
 		return b.status, nil
 	}
-	return backend.StatusSuccess, nil
+	return backend.StatusSucceeded, nil
 }
 
 func (b *stubBackend) Capabilities() backend.Capabilities {

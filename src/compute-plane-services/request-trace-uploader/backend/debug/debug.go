@@ -52,7 +52,11 @@ func New(cfg config.Config) (backend.Client, error) {
 // response body: this is a diagnostic aid, and its output is subject to the
 // same containment rules as any other uploader log regardless of verbosity.
 func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (string, error) {
-	reader, err := record.Open(request.Path)
+	path, err := request.SinglePath()
+	if err != nil {
+		return "", fmt.Errorf("debug backend: %w", err)
+	}
+	reader, err := record.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("debug backend: %w", err)
 	}
@@ -118,7 +122,7 @@ func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (str
 
 // Status reports success. Nothing was transmitted, so nothing can be pending.
 func (c *Client) Status(context.Context, string) (backend.Status, error) {
-	return backend.StatusSuccess, nil
+	return backend.StatusSucceeded, nil
 }
 
 // Capabilities declares that debug exports nothing, so a caller must never

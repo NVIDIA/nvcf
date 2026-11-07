@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dsx-ai-factory/nvcf/src/compute-plane-services/request-trace-uploader/backend"
@@ -176,7 +177,7 @@ func TestSubmitUploadsAndReportsSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if status != backend.StatusSuccess {
+	if status != backend.StatusSucceeded {
 		t.Errorf("Status() = %v, want success", status)
 	}
 }
@@ -410,7 +411,7 @@ func TestSubmitDryRunLogsAndDoesNotUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if status != backend.StatusSuccess {
+	if status != backend.StatusSucceeded {
 		t.Errorf("Status() = %v, want success", status)
 	}
 }
@@ -440,5 +441,36 @@ func TestCapabilitiesDryRunDoesNotExport(t *testing.T) {
 	}
 	if client.Capabilities().Exports {
 		t.Error("Capabilities().Exports = true, want false for a dry run")
+	}
+}
+
+func TestSubmitUploadsAFilesOnlyRequest(t *testing.T) {
+	withHostname(t, "pod-a")
+	var gotPath string
+	var gotBody []byte
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b","session_token":"c"}`), server.URL)
+	cfg.ObjectStore.KeyPrefix = "segments"
+	client, err := newClient(cfg, server.Client().Transport)
+	if err != nil {
+		t.Fatalf("newClient() error = %v", err)
+	}
+
+	path := writeSegment(t, "compressed-fixture")
+	id, err := client.Submit(context.Background(), backend.SubmitRequest{Files: []backend.File{{Path: path, Bytes: int64(len("compressed-fixture"))}}})
+	if err != nil {
+		t.Fatalf("Submit() error = %v, want the one file in Files uploaded", err)
+	}
+	if id != "segments/pod-a/request-trace.000000.jsonl.gz" {
+		t.Errorf("Submit() id = %q, want the key named after the file", id)
+	}
+	if !strings.HasSuffix(gotPath, "/segments/pod-a/request-trace.000000.jsonl.gz") || string(gotBody) != "compressed-fixture" {
+		t.Errorf("uploaded %q to %q, want the file bytes under its key", gotBody, gotPath)
 	}
 }
