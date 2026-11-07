@@ -47,6 +47,8 @@ public class NatsHealthConfiguration extends
                 builder.up();
             } else {
                 builder.down();
+                connection.lastFailureReason()
+                        .ifPresent(reason -> builder.withDetail("reason", reason.tag()));
             }
         }
     }
