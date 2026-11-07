@@ -9,6 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
 	github.com/aws/smithy-go v1.24.2
 	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/cenkalti/backoff/v7 v7.0.3
 	github.com/dsx-ai-factory/nvcf/src/libraries/go/lib v0.0.0-20260807010315-d791d3c11262
 	github.com/dsx-ai-factory/nvcf/src/libraries/go/worker v0.0.0-20261015164739-acd237d2f0af
 	github.com/google/uuid v1.6.0
