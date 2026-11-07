@@ -137,6 +137,53 @@ Getting the actual commit type 100% perfect is not as important as separating it
 - Customer types (appear in release notes): `feat`, `fix`, `perf`
 - Foundational types (do not appear in release notes): `docs`, `build`, `test`, `refactor`, `ci`, `chore`, `style`, `revert`
 
+### Database schema changes
+
+A new persistent database table or column requires a major-version bump for
+the affected component under the NVCF release policy, even when the change is
+additive. The release must also carry that requirement through to the
+appropriate downstream stack major version and a mandatory upgrade stop.
+`IF NOT EXISTS` does not exempt the change.
+
+For these changes, use `feat(component)!: description` as the PR title and
+include a `DATABASE CHANGE:` line with the reason in the PR description.
+Replace `component` with the affected component's scope. For example, the
+intended squash commit has this form:
+
+```text
+feat(sis)!: persist cluster identity
+
+DATABASE CHANGE: Store the cluster issuer and keys for identity verification.
+```
+
+Before merge, preserve the PR title as the squash commit subject. Copy the
+`DATABASE CHANGE:` explanation into the squash commit body. Verify both in
+the merge dialog, since a PR check cannot verify a future commit.
+
+CodeRabbit reviews non-draft PRs that target `main`. Its database metadata
+check runs in warning mode and evaluates the PR title and description when it
+detects a new persistent table or column. The explanation belongs outside
+HTML comments and code fences. Empty explanations and placeholders do not
+satisfy the check. Fixtures, examples, comments, data-only changes, and moved
+or reformatted definitions without a new table or column are outside its scope.
+AI review can miss or misclassify a change. An inconclusive result identifies
+evidence that a maintainer must resolve.
+
+The check does not verify release propagation. The `stack upgrade policy` CI
+check accepts additive migrations without a major bump, so a passing result
+does not establish compliance with this policy.
+
+Before release, identify the
+affected service and migration component using the schema references and
+`tools/ci/github-release-subprojects.json`. The shared Cassandra migrations
+have their own release path, so a migration-only commit does not establish a
+major release for the service that uses the schema. Verify the required
+component major versions and downstream chart and stack selections through
+the [release process](RELEASE.md). Stacks use version files and maintenance
+branches, so a component's `!` marker alone does not select a stack major
+version. Confirm the stack major version and the mandatory upgrade stop in
+the release and upgrade guidance before publication.
+
 ---
 
 ## Code Style
