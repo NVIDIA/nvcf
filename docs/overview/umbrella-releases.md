@@ -28,12 +28,12 @@ window; do not extract over an existing deployment's configuration.
 Start a dedicated Bash child shell with `bash`, then run the examples below.
 Fail-fast mode returns to the original terminal on an error. Inspect any
 partial download or extraction before retrying; keep existing deployment
-directories intact. Set the release version to an available published version
-and choose a persistent location:
+directories intact. This edition documents NVCF 1.0.4. Use that release
+version and choose a persistent location:
 
 ```bash
 set -euo pipefail
-RELEASE_VERSION="X.Y.Z"
+RELEASE_VERSION="1.0.4"
 INSTALL_ROOT="$HOME/nvcf/releases/$RELEASE_VERSION"
 ASSET_DIR="$INSTALL_ROOT/downloads"
 BUNDLE_DIR="$INSTALL_ROOT/stack-files"
