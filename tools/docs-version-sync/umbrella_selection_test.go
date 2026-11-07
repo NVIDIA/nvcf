@@ -118,11 +118,11 @@ func TestUmbrellaReleaseLocalSelectionAndBundle(t *testing.T) {
 	if err := (umbrellaPublisher{}).publish(manifest, fixture.source, "candidate", nil, true); err == nil || !strings.Contains(err.Error(), "whole-combination qualification") {
 		t.Fatalf("unqualified release-local promotion accepted: %v", err)
 	}
-	if _, err := umbrellaDocsCatalog(fixture.root, manifest, data); err == nil || !strings.Contains(err.Error(), "schema 2") {
-		t.Fatalf("release-local docs used Development pins: %v", err)
+	if _, err := umbrellaDocsCatalog(fixture.root, manifest, data, umbrellaDocsInputs{}); err == nil || !strings.Contains(err.Error(), "immutable product tag commit") {
+		t.Fatalf("release-local docs accepted missing immutable inputs: %v", err)
 	}
-	if err := validateUmbrellaDocsCatalog(fixture.root, manifest, data, fixture.catalog); err == nil || !strings.Contains(err.Error(), "schema 2") {
-		t.Fatalf("release-local docs activation accepted: %v", err)
+	if err := validateUmbrellaDocsCatalog(fixture.root, manifest, data, fixture.catalog, umbrellaDocsInputs{}); err == nil || !strings.Contains(err.Error(), "immutable product tag commit") {
+		t.Fatalf("release-local docs validation accepted missing immutable inputs: %v", err)
 	}
 }
 

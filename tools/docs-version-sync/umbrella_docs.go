@@ -95,11 +95,14 @@ func validateUmbrellaDocsCatalogIdentity(manifest *umbrellaManifest, catalog *Ca
 	return nil
 }
 
-func umbrellaDocsCatalog(root string, manifest *umbrellaManifest, data []byte) (*Catalog, error) {
+func umbrellaDocsCatalog(root string, manifest *umbrellaManifest, data []byte, inputs umbrellaDocsInputs) (*Catalog, error) {
+	var catalog *Catalog
+	var err error
 	if manifest.SchemaVersion == 2 {
-		return nil, fmt.Errorf("maintained docs preparation and activation for release-local schema 2 manifests are not yet supported; retain the existing docs edition until selected-inventory catalog support is available (https://github.com/NVIDIA/nvcf/issues/2798)")
+		catalog, err = schema2UmbrellaDocsCatalog(root, manifest, inputs)
+	} else {
+		catalog, err = catalogAtCommit(root, manifest.SourceCommit)
 	}
-	catalog, err := catalogAtCommit(root, manifest.SourceCommit)
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +114,8 @@ func umbrellaDocsCatalog(root string, manifest *umbrellaManifest, data []byte) (
 	return catalog, ValidateCatalog(catalog)
 }
 
-func validateUmbrellaDocsCatalog(root string, manifest *umbrellaManifest, data []byte, catalog *Catalog) error {
-	expected, err := umbrellaDocsCatalog(root, manifest, data)
+func validateUmbrellaDocsCatalog(root string, manifest *umbrellaManifest, data []byte, catalog *Catalog, inputs umbrellaDocsInputs) error {
+	expected, err := umbrellaDocsCatalog(root, manifest, data, inputs)
 	if err != nil {
 		return err
 	}
@@ -190,7 +193,11 @@ func verifyUmbrellaDocsRef(root string, release editionRelease, remote bool) (*C
 	if err != nil {
 		return nil, err
 	}
-	if err := validateUmbrellaDocsCatalog(root, manifest, data, catalog); err != nil {
+	inputs, err := umbrellaDocsRevisionInputs(root, release, manifest)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateUmbrellaDocsCatalog(root, manifest, data, catalog, inputs); err != nil {
 		return nil, err
 	}
 	embedded, err := gitOutput(root, "show", release.Commit+":docs/umbrella-manifest.json")
@@ -264,6 +271,7 @@ func runUmbrellaDocs(command string, args []string) error {
 	digest := flags.String("manifest-sha256", "", "trusted product manifest digest")
 	commit := flags.String("commit", "", "full reviewed docs source commit")
 	out := flags.String("out", "", "new docs preparation directory outside the repository")
+	inventories := flags.String("inventories", "", "schema 2 preparation: original product inventory directory; default downloads the published product")
 	local := flags.Bool("local-refs", false, "local fixture refs only; publication checks origin")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -274,18 +282,22 @@ func runUmbrellaDocs(command string, args []string) error {
 	release := editionRelease{Version: *version, Ref: "docs/versions/" + *version, Commit: *commit, Mode: "umbrella", Umbrella: &umbrellaDocsBinding{ProductCommit: *product, ManifestSHA256: *digest, Revisions: []string{*commit}}}
 	switch command {
 	case "docs-revise":
-		if *out != "" {
-			return fmt.Errorf("docs-revise does not take --out")
+		if *out != "" || *inventories != "" {
+			return fmt.Errorf("docs-revise does not take --out or --inventories")
 		}
 		return reviseUmbrellaDocs(*root, release, !*local)
 	case "docs-prepare":
-		return prepareUmbrellaDocs(*root, *out, release, !*local)
+		return prepareUmbrellaDocsWithInventories(*root, *out, release, !*local, *inventories)
 	default:
 		return fmt.Errorf("unknown umbrella docs command %s", command)
 	}
 }
 
 func prepareUmbrellaDocs(root, out string, release editionRelease, remote bool) error {
+	return prepareUmbrellaDocsWithInventories(root, out, release, remote, "")
+}
+
+func prepareUmbrellaDocsWithInventories(root, out string, release editionRelease, remote bool, inventoryDir string) error {
 	if out == "" {
 		return fmt.Errorf("docs preparation requires --out")
 	}
@@ -293,7 +305,11 @@ func prepareUmbrellaDocs(root, out string, release editionRelease, remote bool) 
 	if err != nil {
 		return err
 	}
-	catalog, err := umbrellaDocsCatalog(root, manifest, data)
+	inputs, err := umbrellaDocsPreparationInputs(root, release, manifest, inventoryDir, remote)
+	if err != nil {
+		return err
+	}
+	catalog, err := umbrellaDocsCatalog(root, manifest, data, inputs)
 	if err != nil {
 		return err
 	}
@@ -329,6 +345,15 @@ func prepareUmbrellaDocs(root, out string, release editionRelease, remote bool) 
 	}
 	if err := os.WriteFile(filepath.Join(staged, "docs/umbrella-manifest.json"), data, 0o644); err != nil {
 		return err
+	}
+	for name, inventory := range inputs.Inventories {
+		directory := filepath.Join(staged, umbrellaDocsInventoryDirectory)
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(directory, name), inventory, 0o644); err != nil {
+			return err
+		}
 	}
 	if err := SyncDocs(staged, catalog, false); err != nil {
 		return err

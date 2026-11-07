@@ -168,8 +168,20 @@ func TestCanonicalDocsStageLegacyUnchanged(t *testing.T) {
 }
 
 func TestUmbrellaDocsProductAssetReadback(t *testing.T) {
+	for _, schema := range []int{1, 2} {
+		t.Run("schema-"+strconv.Itoa(schema), func(t *testing.T) {
+			testUmbrellaDocsProductAssetReadback(t, schema)
+		})
+	}
+}
+
+func testUmbrellaDocsProductAssetReadback(t *testing.T, schema int) {
 	fixture := umbrellaBundleFixture(t)
-	if err := runUmbrella(fixture.prepareArgs()[1:]); err != nil {
+	args := fixture.prepareArgs()
+	if schema == 2 {
+		args = fixture.releaseLocalArgs()
+	}
+	if err := runUmbrella(args[1:]); err != nil {
 		t.Fatal(err)
 	}
 	manifest, _, err := loadUmbrellaManifest(fixture.manifestPath)
@@ -201,6 +213,8 @@ func TestUmbrellaDocsProductAssetReadback(t *testing.T) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	remote := umbrellaRelease{ID: 1, Tag: umbrellaTag(manifest.Version)}
+	unavailable := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/repos/dsx-ai-factory/nvcf")
 		if r.Method != "GET" || r.Header.Get("Authorization") != "" {
@@ -210,7 +224,7 @@ func TestUmbrellaDocsProductAssetReadback(t *testing.T) {
 		case strings.HasPrefix(path, "/git/ref/tags/"):
 			json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"type": "commit", "sha": product}})
 		case strings.HasPrefix(path, "/releases/tags/"):
-			json.NewEncoder(w).Encode(umbrellaRelease{ID: 1, Tag: umbrellaTag(manifest.Version)})
+			json.NewEncoder(w).Encode(remote)
 		case path == "/releases/1/assets":
 			list := []umbrellaReleaseAsset{}
 			for i, name := range names {
@@ -220,6 +234,10 @@ func TestUmbrellaDocsProductAssetReadback(t *testing.T) {
 			}
 			json.NewEncoder(w).Encode(list)
 		case strings.HasPrefix(path, "/releases/assets/"):
+			if unavailable {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
 			id, _ := strconv.Atoi(strings.TrimPrefix(path, "/releases/assets/"))
 			if id < 10 || id >= 10+len(names) {
 				w.WriteHeader(404)
@@ -232,22 +250,41 @@ func TestUmbrellaDocsProductAssetReadback(t *testing.T) {
 	}))
 	defer server.Close()
 	publisher := umbrellaPublisher{api: server.URL, repository: "dsx-ai-factory/nvcf", client: server.Client()}
-	if err := verifyPublishedDocsProduct(fixture.root, release, publisher); err != nil {
+	readback, err := readPublishedDocsProduct(fixture.root, release, publisher)
+	if err != nil {
 		t.Fatal(err)
 	}
-	bundle := umbrellaBundleName(manifest.Version)
-	original := assets[bundle]
-	delete(assets, bundle)
-	if err := verifyPublishedDocsProduct(fixture.root, release, publisher); err == nil || !strings.Contains(err.Error(), "missing") {
-		t.Fatalf("missing public asset accepted: %v", err)
+	for name, want := range assets {
+		if !bytes.Equal(readback[name], want) {
+			t.Fatalf("public readback changed original asset %s", name)
+		}
 	}
-	assets[bundle] = append(original, 1)
-	if err := verifyPublishedDocsProduct(fixture.root, release, publisher); err == nil || !strings.Contains(err.Error(), "checksum") {
-		t.Fatalf("changed public asset accepted: %v", err)
+	for _, state := range []string{"draft", "prerelease"} {
+		t.Run(state, func(t *testing.T) {
+			remote.Draft, remote.Prerelease = state == "draft", state == "prerelease"
+			if err := verifyPublishedDocsProduct(fixture.root, release, publisher); err == nil || !strings.Contains(err.Error(), "publicly stable") {
+				t.Fatalf("accepted nonpublic product: %v", err)
+			}
+		})
 	}
-	assets[bundle] = original
-	assets["manifest.json"] = []byte("{}")
-	if err := verifyPublishedDocsProduct(fixture.root, release, publisher); err == nil || !strings.Contains(err.Error(), "differs") {
-		t.Fatalf("changed public manifest accepted: %v", err)
+	remote.Draft, remote.Prerelease = false, false
+	unavailable = true
+	if err := verifyPublishedDocsProduct(fixture.root, release, publisher); err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("accepted unavailable product assets: %v", err)
+	}
+	unavailable = false
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			original := assets[name]
+			delete(assets, name)
+			if err := verifyPublishedDocsProduct(fixture.root, release, publisher); err == nil || !strings.Contains(err.Error(), "missing") {
+				t.Fatalf("missing public asset accepted: %v", err)
+			}
+			assets[name] = append(append([]byte(nil), original...), 1)
+			if err := verifyPublishedDocsProduct(fixture.root, release, publisher); err == nil {
+				t.Fatal("changed public asset accepted")
+			}
+			assets[name] = original
+		})
 	}
 }

@@ -391,10 +391,9 @@ release asset index, so the manifest never needs to contain its own hash or the
 hash of an archive that embeds it.
 
 Documentation corrections do not change this product manifest or its version.
-This preparation command does not change the current immutable-docs-edition
-policy. Schema 1 maintained docs retain their separate workflow. Schema 2
-maintained docs preparation and activation are deferred until selected-inventory
-catalog support is available; see [the docs follow-up](https://github.com/NVIDIA/nvcf/issues/2798).
+Product preparation does not activate documentation. Both manifest schemas use
+the separate [maintained-docs workflow](#same-version-umbrella-docs-revisions)
+after publication. Existing legacy docs editions remain immutable.
 
 Commit candidate pins at `deploy/releases/X.Y.Z/manifest.json`. Candidate CI
 checks changed manifests on pull requests and the matching `release-nvcf/X.Y.Z`
@@ -706,9 +705,10 @@ verifies trigger isolation. This test does not publish to GitHub.
 
 ### Same-version umbrella docs revisions
 
-This workflow supports schema 1 product manifests. Schema 2 preparation and
-activation return an error until the selected-inventory docs catalog follow-up
-is complete. Existing published docs and their correction workflow stay in place.
+This workflow supports qualified schema 1 and schema 2 product manifests.
+Schema 1 uses the catalog at the manifest's `source_commit`. Schema 2 builds
+the catalog from the three exact selected original inventories. It verifies
+their hashes, stack versions, tags, commits, and deployment-plane ownership.
 
 Legacy `docs/releases/X.Y.Z` entries remain immutable. New registry entries
 can use `mode: umbrella` and a maintained `docs/versions/X.Y.Z` source. The
@@ -716,7 +716,8 @@ entry's product commit and manifest digest never change. Its docs `commit`
 selects an approved revision; `umbrella.revisions` retains previous approvals
 for rollback. Advancing the source branch does not approve its new HEAD.
 
-Prepare from a reviewed prose source and the qualified product identity:
+Prepare from a reviewed docs source containing the supported tooling and the
+qualified product identity. The docs source and product tag commits may differ:
 
 ```bash
 go run -C tools/docs-version-sync . umbrella docs-prepare \
@@ -726,10 +727,25 @@ go run -C tools/docs-version-sync . umbrella docs-prepare \
   --commit REVIEWED_DOCS_SOURCE_COMMIT --out /tmp/nvcf-product-docs
 ```
 
-The prepared catalog comes from the product's locked source catalog. It never
-selects latest stack releases. Review the prepared prose for this product,
-commit it on `docs/versions/X.Y.Z`, and push that branch. Then prepare a
-canonical registry change:
+For schema 2, preparation downloads and verifies the stable product release's
+assets anonymously. To use already downloaded assets, add
+`--inventories /path/to/product-assets`; their bytes must match the bound
+manifest. Local fixture runs with `--local-refs` require this directory.
+Preparation embeds the original bytes under `docs/umbrella-inventories/` and
+the product manifest at `docs/umbrella-manifest.json`. Keep these files in the
+maintained branch. Revision validation rebuilds from those exact bytes.
+
+The product tag commit freezes classifications, output definitions, and
+matching publication records. Current Development pins and runtime version
+overrides cannot replace the selected inventory versions. Only supplemental
+resources explicitly classified as shared, with no stack ownership, retain
+their independent versions and provenance, such as the CLI. Unselected
+runtime artifacts are excluded. Schema 2's `source_commit` supplies provenance
+and license files; its catalog does not select the product's artifacts.
+
+Review the prepared prose for this product, commit it on
+`docs/versions/X.Y.Z`, and merge its reviewed content PR. Then prepare a
+canonical registry change selecting the merged commit:
 
 ```bash
 go run -C tools/docs-version-sync . umbrella docs-revise \
@@ -747,10 +763,10 @@ with the same command. For rollback, select a previous approved commit.
 
 Registry validation checks that the selected commit remains reachable from the
 maintained source branch. It validates only that approved content, including
-its generated blocks, navigation, product manifest, and immutable catalog
-inputs. Catalog output locations and descriptive manifest text may change;
-artifact versions, distribution locations, compatibility, and product inputs
-may not. Carry applicable fixes into Development and other supported versions
+its generated blocks, navigation, product manifest, original inventories, and
+immutable catalog inputs. Catalog output locations and descriptive manifest
+text may change; artifact versions, distribution locations, compatibility, and
+product inputs may not. Carry applicable fixes into Development and other supported versions
 through separate reviewed changes; do not copy unrelated next-release prose.
 
 Run `go test -C tools/docs-version-sync -run TestUmbrellaDocsRevisionE2E -v`.

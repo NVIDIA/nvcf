@@ -71,23 +71,28 @@ func copyDocsTree(source, destination string) error {
 }
 
 func verifyPublishedDocsProduct(root string, release editionRelease, publisher umbrellaPublisher) error {
+	_, err := readPublishedDocsProduct(root, release, publisher)
+	return err
+}
+
+func readPublishedDocsProduct(root string, release editionRelease, publisher umbrellaPublisher) (map[string][]byte, error) {
 	manifest, data, err := umbrellaDocsProduct(root, release, false)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var remote umbrellaRelease
 	if err := publisher.json("GET", "/releases/tags/"+umbrellaTag(release.Version), nil, &remote); err != nil {
-		return err
+		return nil, err
 	}
 	if remote.Draft || remote.Prerelease || remote.Tag != umbrellaTag(release.Version) {
-		return fmt.Errorf("docs product release must be publicly stable")
+		return nil, fmt.Errorf("docs product release must be publicly stable")
 	}
 	if err := publisher.verifyTag(remote.Tag, release.Umbrella.ProductCommit, false); err != nil {
-		return err
+		return nil, err
 	}
 	assets, err := publisher.assets(remote.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	required := []string{"manifest.json", "release-assets.json", "inventory.json", umbrellaBundleName(release.Version)}
 	for _, stack := range manifest.Stacks {
@@ -95,27 +100,27 @@ func verifyPublishedDocsProduct(root string, release editionRelease, publisher u
 	}
 	temporary, err := os.MkdirTemp("", "nvcf-docs-product-")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer os.RemoveAll(temporary)
 	for _, name := range required {
 		asset, ok := assets[name]
 		if !ok || asset.State != "uploaded" {
-			return fmt.Errorf("docs product release is missing %s", name)
+			return nil, fmt.Errorf("docs product release is missing %s", name)
 		}
 		content, err := publisher.request("GET", fmt.Sprintf("%s/repos/%s/releases/assets/%d", publisher.api, publisher.repository, asset.ID), "download", nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if name == "manifest.json" && !bytes.Equal(content, data) {
-			return fmt.Errorf("published product manifest differs from docs binding")
+			return nil, fmt.Errorf("published product manifest differs from docs binding")
 		}
 		if err := os.WriteFile(filepath.Join(temporary, name), content, 0o644); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	_, _, err = readUmbrellaReleaseAssets(temporary)
-	return err
+	_, contents, err := readUmbrellaReleaseAssets(temporary)
+	return contents, err
 }
 
 func runDocsMode(args []string) error {
