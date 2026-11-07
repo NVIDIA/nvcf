@@ -405,6 +405,7 @@ Currently initialized metrics:
 | Metric | Label | Values to maintain |
 |--------|-------|-------------------|
 | `K8sAPISuccessTotal` / `K8sAPIFailureTotal` | `resource` | K8s resource types used in `TrackK8sAPICall()` calls |
+| `InstancePodReadsTotal` | `source`, `result` | `AllInstancePodReadSources` and `AllInstancePodReadResults` in `internal/metrics/metrics.go` |
 | `MiniServiceEventErrorTotal` | `event_kind` | Event constants in `internal/miniservice/` |
 | `OrphanedResourceCleanupTotal` | `resource_type` | Constants in `internal/metrics/gctypes/types.go` |
 | `OrphanedResourceCleanupTotal` | `status` | `success`, `failure` |

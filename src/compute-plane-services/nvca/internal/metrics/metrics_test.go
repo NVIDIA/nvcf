@@ -286,8 +286,52 @@ func TestMetricsNilSafety(t *testing.T) {
 		metrics.TrackK8sAPICall("pod", nil)
 	})
 
+	assert.NotPanics(t, func() {
+		metrics.RecordInstancePodRead(InstancePodReadSourceCache, nil)
+	})
+
 	// Note: We don't test with &Metrics{} (uninitialized fields) because that's a code bug.
 	// Metrics should always be created via NewDefaultMetrics which initializes all fields.
+}
+
+func TestRecordInstancePodRead(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics := NewDefaultMetrics("nca-123", "test-cluster", "test-group", "v1.0.0", WithRegisterer(reg))
+	t.Cleanup(metrics.Destroy)
+	value := func(source, result string) float64 {
+		var m promdto.Metric
+		require.NoError(t, metrics.InstancePodReadsTotal.WithLabelValues(metrics.WithDefaultLabelValues(source, result)...).Write(&m))
+		return m.GetCounter().GetValue()
+	}
+
+	metrics.RecordInstancePodRead(InstancePodReadSourceCache, nil)
+	metrics.RecordInstancePodRead(InstancePodReadSourceCache, nil)
+	metrics.RecordInstancePodRead(InstancePodReadSourceMiss, k8serrors.NewNotFound(schema.GroupResource{Resource: "pods"}, "p"))
+	metrics.RecordInstancePodRead(InstancePodReadSourceConfirm, errors.New("connection refused"))
+	metrics.RecordInstancePodRead(InstancePodReadSourceHeartbeat, nil)
+	metrics.RecordInstancePodRead(InstancePodReadSourceRefresh, nil)
+	metrics.RecordInstancePodRead("unknown", nil)
+
+	assert.Equal(t, float64(2), value(InstancePodReadSourceCache, InstancePodReadResultFound))
+	assert.Equal(t, float64(1), value(InstancePodReadSourceMiss, InstancePodReadResultNotFound))
+	assert.Equal(t, float64(1), value(InstancePodReadSourceConfirm, InstancePodReadResultError))
+	assert.Equal(t, float64(1), value(InstancePodReadSourceHeartbeat, InstancePodReadResultFound))
+	assert.Equal(t, float64(1), value(InstancePodReadSourceRefresh, InstancePodReadResultFound))
+	assert.Equal(t, float64(0), value(InstancePodReadSourceMiss, InstancePodReadResultFound))
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	for _, mf := range families {
+		if *mf.Name == InstancePodReadsTotalMetricName {
+			assert.Len(t, mf.Metric, len(AllInstancePodReadSources)*len(AllInstancePodReadResults),
+				"an unknown source must not add a series")
+		}
+	}
+
+	// The status loop records a read per Pod instance per pass.
+	assert.Zero(t, testing.AllocsPerRun(100, func() {
+		metrics.RecordInstancePodRead(InstancePodReadSourceCache, nil)
+	}))
 }
 
 // TestK8sAPIMetricsResourceTypes tests all the different resource types we've instrumented
@@ -1864,6 +1908,35 @@ func TestMetricsInitializedToZero(t *testing.T) {
 				}
 				assert.True(t, found, "SchedulerWorkloadCount should be initialized for scheduler=%s, workload_kind=%s", scheduler, wk)
 				assert.Equal(t, float64(0), value, "SchedulerWorkloadCount should be zero for scheduler=%s, workload_kind=%s", scheduler, wk)
+			}
+		}
+	})
+
+	t.Run("InstancePodReadsTotal initialized to zero", func(t *testing.T) {
+		values := map[[2]string]float64{}
+		for _, mf := range metricFamilies {
+			if *mf.Name != InstancePodReadsTotalMetricName {
+				continue
+			}
+			for _, metric := range mf.Metric {
+				var key [2]string
+				for _, label := range metric.Label {
+					switch *label.Name {
+					case InstancePodReadSourceLabel:
+						key[0] = *label.Value
+					case InstancePodReadResultLabel:
+						key[1] = *label.Value
+					}
+				}
+				values[key] = *metric.Counter.Value
+			}
+		}
+		assert.Len(t, values, len(AllInstancePodReadSources)*len(AllInstancePodReadResults))
+		for _, source := range AllInstancePodReadSources {
+			for _, result := range AllInstancePodReadResults {
+				value, found := values[[2]string{source, result}]
+				assert.True(t, found, "InstancePodReadsTotal should be initialized for source=%s, result=%s", source, result)
+				assert.Equal(t, float64(0), value, "InstancePodReadsTotal should be zero for source=%s, result=%s", source, result)
 			}
 		}
 	})

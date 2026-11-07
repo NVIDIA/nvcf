@@ -125,15 +125,19 @@ type ContainerImagePullIssues struct {
 
 func ImagePullIssuesReported(ps corev1.PodStatus) ([]ContainerImagePullIssues, bool) {
 	imagePullIssues := []ContainerImagePullIssues{}
-	for _, cs := range append(ps.InitContainerStatuses, ps.ContainerStatuses...) {
-		if cs.State.Waiting != nil && (strings.EqualFold(cs.State.Waiting.Reason, ImagePullIssueReason) ||
-			strings.EqualFold(cs.State.Waiting.Reason, ImagePullIssueAlternateReason)) {
-			imagePullIssues = append(imagePullIssues, ContainerImagePullIssues{
-				Name:    cs.Name,
-				Image:   cs.Image,
-				Message: cs.State.Waiting.Message,
-				Reason:  cs.State.Waiting.Reason,
-			})
+	// Read both slices in place: appending one to the other writes into the spare capacity of
+	// the first, which belongs to the informer cache when ps comes from a cached Pod.
+	for _, statuses := range [...][]corev1.ContainerStatus{ps.InitContainerStatuses, ps.ContainerStatuses} {
+		for _, cs := range statuses {
+			if cs.State.Waiting != nil && (strings.EqualFold(cs.State.Waiting.Reason, ImagePullIssueReason) ||
+				strings.EqualFold(cs.State.Waiting.Reason, ImagePullIssueAlternateReason)) {
+				imagePullIssues = append(imagePullIssues, ContainerImagePullIssues{
+					Name:    cs.Name,
+					Image:   cs.Image,
+					Message: cs.State.Waiting.Message,
+					Reason:  cs.State.Waiting.Reason,
+				})
+			}
 		}
 	}
 	return imagePullIssues, len(imagePullIssues) > 0

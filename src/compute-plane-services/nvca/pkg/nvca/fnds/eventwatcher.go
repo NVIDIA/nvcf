@@ -156,8 +156,12 @@ func ProcessFnDSStageTransitionEvent(
 	}
 
 	containerImages := make(map[string]ImageMetadata, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
-	for _, c := range append(pod.Spec.Containers, pod.Spec.InitContainers...) {
-		containerImages[c.Image] = ImageMetadata{}
+	// pod is the informer's cached object: read both slices in place, since appending one to
+	// the other writes into the spare capacity of the first.
+	for _, containers := range [...][]corev1.Container{pod.Spec.Containers, pod.Spec.InitContainers} {
+		for _, c := range containers {
+			containerImages[c.Image] = ImageMetadata{}
+		}
 	}
 
 	node, err := getNode(pod.Spec.NodeName)

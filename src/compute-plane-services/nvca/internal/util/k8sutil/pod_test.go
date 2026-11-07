@@ -18,6 +18,7 @@ limitations under the License.
 package k8sutil
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -767,6 +768,51 @@ func TestImagePullIssuesReported(t *testing.T) {
 			}
 		})
 	}
+}
+
+// cachedPodStatusWithSpareCapacity returns a status whose InitContainerStatuses has room to
+// grow, as a decoded informer object can, together with that backing array.
+func cachedPodStatusWithSpareCapacity() (corev1.PodStatus, []corev1.ContainerStatus) {
+	waiting := func(reason string) corev1.ContainerState {
+		return corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason}}
+	}
+	initStatuses := make([]corev1.ContainerStatus, 1, 3)
+	initStatuses[0] = corev1.ContainerStatus{Name: "init", State: waiting(ImagePullIssueReason)}
+	return corev1.PodStatus{
+		InitContainerStatuses: initStatuses,
+		ContainerStatuses: []corev1.ContainerStatus{
+			{Name: "main", State: waiting(ImagePullIssueAlternateReason)},
+		},
+	}, initStatuses
+}
+
+func TestImagePullIssuesReported_DoesNotWriteIntoStatusSlices(t *testing.T) {
+	status, initStatuses := cachedPodStatusWithSpareCapacity()
+
+	issues, ok := ImagePullIssuesReported(status)
+
+	require.True(t, ok)
+	require.Len(t, issues, 2)
+	assert.Equal(t, "init", issues[0].Name)
+	assert.Equal(t, "main", issues[1].Name)
+	assert.Equal(t, make([]corev1.ContainerStatus, 2), initStatuses[1:cap(initStatuses)],
+		"the spare capacity of InitContainerStatuses must stay untouched")
+}
+
+// Status helpers run concurrently on one cached Pod, so they must only read it. Run with -race.
+func TestImagePullIssuesReported_ConcurrentReadersOfOnePod(t *testing.T) {
+	status, _ := cachedPodStatusWithSpareCapacity()
+
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, ok := ImagePullIssuesReported(status)
+			assert.True(t, ok)
+		}()
+	}
+	wg.Wait()
 }
 
 func TestParseImageRegistry(t *testing.T) {

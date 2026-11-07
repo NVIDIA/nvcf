@@ -559,6 +559,30 @@ rate(nvca_k8s_api_failure_total[5m]) > 0.1
 
 ---
 
+### `nvca_instance_pod_reads_total`
+
+Type: Counter
+
+Description: Total number of Pod instance reads by the instance status loop. With the `InstancePodCacheReads` feature flag enabled (the default), the loop reads each Pod instance from the informer cache. It reads the Pod live from the API server only when the cache does not have it, before it reports a changed state or a periodic status or purges the Pod, and about every 2 minutes. The Pod of an instance already reported terminated is expected to be gone, so when the cache does not have it, the loop reads it live only before a periodic status and about every 2 minutes. Live reads also count in `nvca_k8s_api_success_total` and `nvca_k8s_api_failure_total` with `resource="pod"`. With the flag disabled, every read is live and this counter stays at zero.
+
+Labels:
+
+- `source` - `cache` (informer cache), `miss` (live read of a Pod the cache did not have, including the periodic reads of an instance already reported terminated, which return `notfound`), `confirm` (live read before acting on a change or purge seen in the cache), `heartbeat` (live read before the periodic report of an unchanged state), or `refresh` (periodic live read of a Pod served from the cache)
+- `result` - `found`, `notfound`, or `error`
+
+Usage:
+
+```promql
+# Live Pod reads per second, by source
+sum by (source) (rate(nvca_instance_pod_reads_total{source!="cache"}[5m]))
+
+# Live reads per cache read
+sum(rate(nvca_instance_pod_reads_total{source!="cache"}[5m])) /
+sum(rate(nvca_instance_pod_reads_total{source="cache"}[5m]))
+```
+
+---
+
 ## Storage Controller Metrics
 
 ### `nvca_model_cache_result_total`
