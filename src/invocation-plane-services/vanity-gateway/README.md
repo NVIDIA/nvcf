@@ -875,8 +875,9 @@ combinations are emitted at zero on startup. The request span records
 `private_models.cached` and `private_models.result`.
 
 Every response on the model API host (`openai.host`) carries one
-`X-Request-Id`. The gateway keeps the caller's value or creates a UUID and sends
-the same value upstream, so the LLM Gateway logs the request under the same ID.
+`X-Request-Id`. The gateway keeps a caller value only when it is at most 128
+characters and uses `A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, or `-`. Otherwise it
+creates a UUID. The same ID is sent upstream and used in the LLM Gateway logs.
 An ID the upstream returns is replaced. Each shadow copy gets its own ID. The
 request log line includes the ID. Pass-through vanity hosts do not add or
 replace request IDs; the caller's and the function's headers pass through
