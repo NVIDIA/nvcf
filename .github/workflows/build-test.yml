@@ -214,6 +214,12 @@ jobs:
       - name: Test vanity-gateway chart probes
         run: bash deploy/helm/vanity-gateway/tests/chart-render/verify-probes.sh
 
+      - name: Test worker callback proxy chart rendering
+        run: bash deploy/helm/worker-callback-proxy/tests/chart-render/verify-render.sh
+
+      - name: Validate worker callback proxy Envoy configuration
+        run: bash deploy/helm/worker-callback-proxy/tests/chart-render/validate-envoy.sh
+
       - name: Check for uncommitted helm dependency artifacts
         run: |
           set -euo pipefail

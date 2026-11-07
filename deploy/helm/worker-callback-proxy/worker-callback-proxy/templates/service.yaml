@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- $c := .Values.workerCallbackProxy }}
+{{- if $c.service.create }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "workerCallbackProxy.serviceName" . | quote }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "workerCallbackProxy.labels" . | nindent 4 }}
+    {{- with $c.service.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $c.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $c.service.type | quote }}
+  {{- with $c.service.loadBalancerClass }}
+  loadBalancerClass: {{ . | quote }}
+  {{- end }}
+  {{- with $c.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ . | quote }}
+  {{- end }}
+  selector:
+    {{- include "workerCallbackProxy.selectorLabels" . | nindent 4 }}
+  ports:
+    {{- if $c.grpcProxy.enabled }}
+    - name: grpc-quic
+      port: {{ $c.service.ports.grpcQuic }}
+      targetPort: grpc-quic
+      protocol: UDP
+    {{- end }}
+    {{- if $c.invocation.enabled }}
+    - name: invocation-tcp
+      port: {{ $c.service.ports.invocationTcp }}
+      targetPort: invocation-tcp
+      protocol: TCP
+    {{- end }}
+{{- end }}

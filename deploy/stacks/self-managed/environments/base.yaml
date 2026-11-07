@@ -79,9 +79,16 @@ global:
     # own address. Every replica advertises a set value, so invocation-service
     # stays at one replica under HA when it is set.
     invocationServiceURL: ""
+    # Proxy that workers dial for invocation callbacks
+    # (WORKER_STREAM_PROPERTIES__PROXY_ADDRESS). Used only when
+    # workerCallbackProxy.enabled is true; empty uses
+    # https://invocation.<workerDomain>:10084. Set it when workers reach Envoy
+    # through another https name under *.<workerDomain>.
+    invocationProxyURL: ""
     # gRPC proxy worker CONNECT endpoint advertised by the proxy. Empty
     # advertises each pod's IP. Every replica advertises a set value, so
-    # grpc-proxy stays at one replica under HA when it is set.
+    # grpc-proxy stays at one replica under HA when it is set, unless
+    # grpcproxy.http3 is enabled, which puts each pod's IP in front of it.
     grpcProxyWorkerConnectURL: ""
     # Pylon discovery endpoint. Empty uses
     # llm-request-router-backend-router.nvcf.svc.cluster.local:50071 when backend
@@ -808,6 +815,87 @@ grpcproxy:
   # an external compute-worker endpoint.
   natsServiceURL: ""
   workerConnectBaseURL: ""
+
+# Worker callback proxy (Envoy), for workers in another cluster that cannot
+# reach control-plane pod IPs. Envoy routes each callback to the grpc-proxy or
+# invocation-service pod that holds the request. Single-cluster installs do
+# not need it: workers call the pod directly, and highAvailability scales both
+# services either way.
+#
+# With it enabled, grpc-proxy serves HTTP/3 callbacks and advertises
+# https://<dashed-pod-ip>.<workerDomain>, and invocation-service sends worker
+# streams through the proxy. The OpenBao service PKI issues the Envoy and
+# grpc-proxy certificates through addons.llm.pki's issuer
+# (ClusterIssuer/nvcf-openbao-pki by default), without the LLM add-on.
+# Requires openbao.enabled and cert-manager. Not supported with split-plane
+# worker URLs (global.workerEndpoints.invocationServiceURL,
+# global.workerEndpoints.grpcProxyWorkerConnectURL, or
+# grpcproxy.workerConnectBaseURL).
+#
+# Before enabling:
+#   - Resolve *.<workerDomain> to the worker-callback-proxy Service from the
+#     compute plane, for example with a wildcard DNS record or, on k3s and
+#     AKS, a CoreDNS rewrite in kube-system/coredns-custom:
+#       rewrite stop {
+#         name regex (.+)\.<workerDomain with dots escaped>\.$ worker-callback-proxy.nvcf.svc.cluster.local.
+#         answer auto
+#       }
+#   - Give workers the CA that issued Envoy's frontend certificate through
+#     global.nvcaOperator.agent.workerCallbackCaPem in the compute-plane stack.
+#     Workers need no stack CA when Envoy's frontend certificate comes from a
+#     public CA (tls.frontend below).
+# Workers' TLS always ends at Envoy. Envoy then opens its own TLS session to
+# the invocation-service pod and checks it against the stack CA, unless
+# invocation.upstreamTls.enabled is false.
+# See docs/self-managed/worker-callback-proxy.md.
+workerCallbackProxy:
+  enabled: false
+  # REQUIRED when enabled. Workers call back on <dashed-pod-ip>.<workerDomain>,
+  # for example grpc-worker.example.com. The stack adds it to the OpenBao
+  # signing role's allowed domains when addons.llm.pki.allowedDomains does not
+  # already cover it.
+  workerDomain: ""
+  # Set only for source-tree validation. Empty uses the released OCI chart.
+  chartPath: ""
+  # Envoy's frontend certificate, the one workers verify for *.<workerDomain>.
+  # It is independent of the grpc-proxy and invocation-service pod
+  # certificates, which the stack CA always issues. Default: issued by the
+  # stack's OpenBao issuer. Set one of these to use a public CA instead:
+  # tls:
+  #   frontend:
+  #     existingSecret: <kubernetes.io/tls Secret for *.<workerDomain>>
+  #     certificate:
+  #       issuerRef: { kind: ClusterIssuer, name: <issuer> }
+  # How Envoy reaches the invocation-service pod. The worker's own TLS session
+  # ends at Envoy either way.
+  invocation:
+    upstreamTls:
+      # true: Envoy opens a separate TLS session to the pod on 8443 and checks
+      # the pod certificate against the stack CA. false: Envoy sends plain HTTP
+      # to the pod on 8080, only for a trusted network between them.
+      enabled: true
+    connect:
+      # CONNECT is a raw TCP tunnel to the pod that Envoy cannot read or
+      # restrict, and the worker runs its own TLS through it. The stack gives
+      # workers only http:// targets, which they send as forward-proxy
+      # requests, so it is off. Set true only for workers older than
+      # worker-utils 1.3.2. Forward-proxy requests reach only the worker
+      # callback path.
+      enabled: false
+  # replicaCount defaults to the chart value (2).
+  # replicaCount: 2
+  # Workers in another cluster reach Envoy through this Service, so expose it,
+  # for example as a LoadBalancer, and point *.<workerDomain> and
+  # global.workerEndpoints.invocationProxyURL at its address. Passed to the
+  # chart as is.
+  # service:
+  #   type: LoadBalancer
+  # The chart defaults to the upstream image, docker.io/envoyproxy/envoy.
+  # Set registry and repository together to use a mirror:
+  # image:
+  #   registry: <your-registry>
+  #   repository: <your-repository>/envoy
+  #   tag: v1.40.1
 
 # Control-plane high availability.
 # global.yaml.gotmpl maps mode onto chart values (replicaCount, affinity, zone
