@@ -114,5 +114,34 @@ jobs:
           DOCS_PREVIEW_CONFIG: ${{ inputs.preview == 'canonical' && 'fern/docs.yml' || '' }}
         run: |
           set -euo pipefail
-          ./tools/ci/preview-docs | tee "$RUNNER_TEMP/docs-preview.log"
-          grep '^Preview URL:' "$RUNNER_TEMP/docs-preview.log" >> "$GITHUB_STEP_SUMMARY"
+          # Rehearsal branch only: full static delivery on a separate Fern instance.
+          go run -C tools/docs-version-sync . umbrella docs-stage \
+            --repo "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/approved-docs"
+          cp "$RUNNER_TEMP/approved-docs/docs-build-receipt.json" "$RUNNER_TEMP/docs-build-receipt.json"
+          cd "$RUNNER_TEMP/approved-docs"
+          python3 - <<'PYCONFIG'
+          from pathlib import Path
+          p = Path("fern/docs.yml")
+          s = p.read_text()
+          old = "nvidia-nvcf.docs.buildwithfern.com/nvcf"
+          new = "nvidia-nvcf-maintained-104-20261106.docs.buildwithfern.com/nvcf"
+          assert s.count(old) == 1
+          s = s.replace(old, new).replace("    custom-domain: docs.nvidia.com/nvcf\n", "")
+          s = s.replace('canonical-host: "docs.nvidia.com/nvcf"', 'canonical-host: "' + new + '"')
+          s = s.replace('canonical-host: docs.nvidia.com/nvcf', 'canonical-host: "' + new + '"')
+          assert "custom-domain:" not in s.split("title:", 1)[0]
+          assert "nvidia-nvcf.docs.buildwithfern.com" not in s
+          p.write_text(s)
+          PYCONFIG
+          "$GITHUB_WORKSPACE/tools/ci/run-fern" check
+          "$GITHUB_WORKSPACE/tools/ci/run-fern" generate --docs \
+            --instance nvidia-nvcf-maintained-104-20261106.docs.buildwithfern.com/nvcf \
+            --strict-broken-links --no-prompt | tee "$RUNNER_TEMP/docs-preview.log"
+          echo 'Staging URL: https://nvidia-nvcf-maintained-104-20261106.docs.buildwithfern.com/nvcf' >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain staging source receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: docs-staging-receipt
+          path: ${{ runner.temp }}/docs-build-receipt.json
+          if-no-files-found: ignore
