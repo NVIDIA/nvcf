@@ -99,10 +99,53 @@ async fn test_health_cache() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Liveness probes /info, so it must keep answering after /health has observed
+// each dependency fail.
+#[tokio::test]
+async fn test_info_survives_dependency_failures() -> anyhow::Result<()> {
+    let (_localstack, nats, mock_nvcf_api, config) = fixtures().await;
+
+    let mut app = app(config, None).await?;
+    let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
+    assert_eq!(call_health(app).await?.status(), StatusCode::OK);
+    assert_eq!(call(app, "/info").await?.status(), StatusCode::OK);
+
+    mock_nvcf_api.set_unhealthy().await;
+    tokio::time::sleep(Duration::from_secs(HEALTH_CACHE_TTL.into())).await;
+    assert_eq!(
+        call_health(app).await?.status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(call(app, "/info").await?.status(), StatusCode::OK);
+
+    mock_nvcf_api.set_healthy().await;
+    assert_eq!(call_health(app).await?.status(), StatusCode::OK);
+
+    nats.stop().await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let status = call_health(app).await?.status();
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "health stayed {status} after NATS stopped"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(call(app, "/info").await?.status(), StatusCode::OK);
+    Ok(())
+}
+
 async fn call_health(app: &mut Router) -> anyhow::Result<Response> {
+    call(app, "/health").await
+}
+
+async fn call(app: &mut Router, uri: &str) -> anyhow::Result<Response> {
     let request = axum::http::Request::builder()
         .method(Method::GET)
-        .uri("/health")
+        .uri(uri)
         .body(Body::empty())?;
     let response = app.call(request).await?;
     Ok(response)

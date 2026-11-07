@@ -82,14 +82,19 @@ invocation:
       memory: 512Mi
 
   # This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+  # Liveness uses /info, which checks only this process (image 0.13.0 or later),
+  # so an nvcf-api or NATS outage does not restart the pod.
+  # Readiness uses /health, which checks NATS and nvcf-api. Its nvcf-api check
+  # has a 2 s timeout, so the probe allows 3 s.
   livenessProbe:
     httpGet:
-      path: /health
+      path: /info
       port: http
   readinessProbe:
     httpGet:
       path: /health
       port: http
+    timeoutSeconds: 3
 
   # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
   autoscaling:
