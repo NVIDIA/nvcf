@@ -187,6 +187,12 @@ func validateUmbrellaTransition(previous, current *umbrellaManifest) error {
 }
 
 func validateUmbrellaSources(root string, manifest *umbrellaManifest, inventoryDir string) (map[string]resolvedStackInventory, error) {
+	return validateUmbrellaSourcesWithReader(root, manifest, func(name string) ([]byte, error) {
+		return os.ReadFile(filepath.Join(inventoryDir, name))
+	})
+}
+
+func validateUmbrellaSourcesWithReader(root string, manifest *umbrellaManifest, readInventory func(string) ([]byte, error)) (map[string]resolvedStackInventory, error) {
 	var catalog *Catalog
 	if manifest.SchemaVersion == 1 {
 		var err error
@@ -219,7 +225,7 @@ func validateUmbrellaSources(root string, manifest *umbrellaManifest, inventoryD
 		if trimOutput(actual) != stack.SourceCommit {
 			return nil, fmt.Errorf("umbrella %s source tag does not resolve to %s", name, stack.SourceCommit)
 		}
-		data, err := os.ReadFile(filepath.Join(inventoryDir, stack.InventoryAsset))
+		data, err := readInventory(stack.InventoryAsset)
 		if err != nil {
 			return nil, err
 		}

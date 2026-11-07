@@ -13,10 +13,11 @@ For an umbrella product release, use the
 Its `docs/versions/X.Y.Z` branch accepts reviewed prose corrections without
 allocating a new product or docs patch. The canonical registry selects the
 approved docs commit independently from the immutable product manifest.
-Check the supported manifest schema before activation. Schema 2 product
-bundles do not yet enable the maintained-docs flow; follow the limitations in
-the umbrella guide. Do not convert a published legacy URL to a different stack
-combination.
+Both schema 1 and schema 2 product manifests support this flow. Schema 2 keeps
+the three original selected inventories with the docs source and verifies them
+against the immutable product binding. Corrections need a content PR into the
+maintained branch, then a registry PR on main selecting the merged docs commit.
+Do not convert a published legacy URL to a different stack combination.
 
 ## Choose the version and combination
 
