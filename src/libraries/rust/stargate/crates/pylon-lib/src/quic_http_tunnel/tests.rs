@@ -3779,3 +3779,181 @@ async fn direct_tunnel_reloads_server_identity_for_new_connections() -> Result<(
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[derive(Clone, Copy, Debug)]
+enum AbandonedEngineState {
+    // Queued: the engine holds the response headers.
+    QueuedNoHeaders,
+    // Headers and one SSE event, then silence, as during hidden reasoning.
+    SilentSse,
+    // Headers of a plain (non-SSE) response, then silence until the body is ready.
+    SilentBody,
+    // An SSE event every 100 ms: a failed write also cancels.
+    StreamingSse,
+}
+
+struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl Drop for NotifyOnDrop {
+    fn drop(&mut self) {
+        if let Some(tx) = self.0.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+fn abandoned_engine(
+    state: AbandonedEngineState,
+    engine_dropped_tx: tokio::sync::oneshot::Sender<()>,
+) -> Router {
+    let engine_dropped_tx = Arc::new(std::sync::Mutex::new(Some(engine_dropped_tx)));
+    let handler = post(move || {
+        let guard = NotifyOnDrop(engine_dropped_tx.lock().unwrap().take());
+        async move {
+            match state {
+                    AbandonedEngineState::QueuedNoHeaders => {
+                        let _guard = guard;
+                        future::pending::<Response>().await
+                    }
+                    AbandonedEngineState::SilentBody => {
+                        let body = async_stream::stream! {
+                            let _guard = guard;
+                            future::pending::<()>().await;
+                            yield Ok::<_, std::convert::Infallible>(Bytes::new());
+                        };
+                        Response::builder()
+                            .header(axum::http::header::CONTENT_TYPE, "application/json")
+                            .body(Body::from_stream(body))
+                            .unwrap()
+                    }
+                    AbandonedEngineState::SilentSse | AbandonedEngineState::StreamingSse => {
+                        axum::response::Sse::new(async_stream::stream! {
+                            let _guard = guard;
+                            yield Ok::<_, std::convert::Infallible>(Event::default()
+                                .event("response.created")
+                                .data(r#"{"type":"response.created","sequence_number":0,"response":{"id":"r","status":"in_progress","output":[]}}"#));
+                            if matches!(state, AbandonedEngineState::SilentSse) {
+                                future::pending::<()>().await;
+                            }
+                            for sequence_number in 1u64.. {
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                yield Ok(Event::default()
+                                    .event("response.reasoning_text.delta")
+                                    .data(format!(r#"{{"type":"response.reasoning_text.delta","sequence_number":{sequence_number},"item_id":"rs","output_index":0,"content_index":0,"delta":"t"}}"#)));
+                            }
+                        })
+                        .into_response()
+                    }
+                }
+        }
+    });
+    Router::new()
+        .route("/v1/responses", handler.clone())
+        .route("/v1/messages", handler)
+}
+
+// Opens a request on a fresh tunnel, then abandons it the way the router does
+// (client gone, or its header timeout): drop both stream halves, keep the connection.
+// Returns whether the engine request was dropped within 3 s.
+async fn router_abandons_request(
+    protocol: TunnelTransportProtocol,
+    state: AbandonedEngineState,
+) -> bool {
+    let (engine_dropped_tx, engine_dropped_rx) = tokio::sync::oneshot::channel();
+    let mut config = test_tunnel_config_for(abandoned_engine(state, engine_dropped_tx)).await;
+    config.tunnel_protocol = protocol;
+    // Pylon relays Responses as SSE; /v1/messages is relayed as a plain body.
+    let (path, body): (&str, &'static [u8]) = match state {
+        AbandonedEngineState::SilentBody => ("/v1/messages", br#"{"stream":false}"#),
+        _ => ("/v1/responses", br#"{"input":"hi","stream":true}"#),
+    };
+    let headers = tunnel_request_headers(path, "model-responses", "req-abandoned", "11");
+    let wait_for_head = !matches!(state, AbandonedEngineState::QueuedNoHeaders);
+    let engine_dropped = match protocol {
+        TunnelTransportProtocol::RawQuic => {
+            let mut tunnel = RawTunnelTest::start(config).await;
+            tunnel.send(headers, body).await;
+            if wait_for_head {
+                tunnel.response_head(StatusCode::OK).await;
+            } else {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            let RawTunnelTest {
+                tunnel: handle,
+                _endpoint: endpoint,
+                send,
+                recv,
+            } = tunnel;
+            drop(recv);
+            drop(send);
+            let engine_dropped =
+                tokio::time::timeout(Duration::from_secs(3), engine_dropped_rx).await;
+            drop(endpoint);
+            let _ = tokio::time::timeout(Duration::from_secs(1), handle.shutdown()).await;
+            engine_dropped
+        }
+        TunnelTransportProtocol::WebTransport => {
+            let tunnel = start_quic_http_tunnel(config).await.unwrap();
+            let session = open_direct_webtransport_session(tunnel.listen_addr()).await;
+            let (mut send, mut recv) = session.connection.open_bi().await.unwrap();
+            let request_head = stargate_protocol::WebTransportHttpRequestHead {
+                method: reqwest::Method::POST,
+                path_and_query: path.to_string(),
+                headers,
+            };
+            let bidi_header = stargate_protocol::WebTransportBidiHeader::new(session.session_id)
+                .unwrap()
+                .to_bytes();
+            stargate_protocol::write_webtransport_http_request_head_after_prefix(
+                &mut send,
+                bidi_header,
+                &request_head,
+            )
+            .await
+            .unwrap();
+            write_direct_webtransport_request_body(&mut send, Bytes::from_static(body)).await;
+            if wait_for_head {
+                let head = stargate_protocol::read_webtransport_http_response_head(&mut recv)
+                    .await
+                    .unwrap();
+                assert_eq!(head.status, StatusCode::OK);
+            } else {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            drop(recv);
+            drop(send);
+            let engine_dropped =
+                tokio::time::timeout(Duration::from_secs(3), engine_dropped_rx).await;
+            session.connection.close(0u32.into(), b"test complete");
+            drop(session);
+            let _ = tokio::time::timeout(Duration::from_secs(1), tunnel.shutdown()).await;
+            engine_dropped
+        }
+        TunnelTransportProtocol::Http3 => panic!("HTTP/3 tunnels cancel only on a failed write"),
+    };
+    engine_dropped.is_ok()
+}
+
+#[tokio::test]
+async fn tunnel_drops_engine_request_when_router_abandons_stream() {
+    let mut still_running = Vec::new();
+    for protocol in [
+        TunnelTransportProtocol::RawQuic,
+        TunnelTransportProtocol::WebTransport,
+    ] {
+        for state in [
+            AbandonedEngineState::QueuedNoHeaders,
+            AbandonedEngineState::SilentSse,
+            AbandonedEngineState::SilentBody,
+            AbandonedEngineState::StreamingSse,
+        ] {
+            if !router_abandons_request(protocol, state).await {
+                still_running.push((protocol, state));
+            }
+        }
+    }
+    assert!(
+        still_running.is_empty(),
+        "engine requests still running 3 s after the router abandoned the stream: {still_running:?}"
+    );
+}

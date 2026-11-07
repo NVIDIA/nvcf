@@ -580,6 +580,10 @@ pub(super) trait TunnelRequestTransport: ResponseBodyEventSink {
     async fn send_response_head(&mut self, status: StatusCode, headers: HeaderMap) -> Result<()>;
 
     async fn finish_response(&mut self) -> Result<()>;
+
+    /// Completes when nobody will read the response: the tunnel peer stopped or
+    /// reset the stream, or the connection is gone.
+    fn response_stopped(&self) -> impl Future<Output = ()> + Send + 'static;
 }
 
 async fn send_complete_response(
@@ -869,20 +873,31 @@ pub(super) async fn forward_tunnel_request(
     let priority = lifecycle
         .as_ref()
         .and_then(|lifecycle| lifecycle.required.priority);
-    let response = match send_upstream_request(
-        app,
-        lifecycle.as_mut(),
-        UpstreamRequestParts {
-            method,
-            path_and_query: &path_and_query,
-            headers: &request_headers,
-            body: body_bytes,
-            health_request,
-            priority,
-        },
-    )
-    .await
-    {
+    // A queued or reasoning backend can write nothing for minutes, so a failed write
+    // is too late to notice an abandoned request. Watch for the stop directly.
+    let response_stopped = transport.response_stopped();
+    tokio::pin!(response_stopped);
+    let upstream_result = tokio::select! {
+        result = send_upstream_request(
+            app,
+            lifecycle.as_mut(),
+            UpstreamRequestParts {
+                method,
+                path_and_query: &path_and_query,
+                headers: &request_headers,
+                body: body_bytes,
+                health_request,
+                priority,
+            },
+        ) => result,
+        () = &mut response_stopped => {
+            if let Some(lifecycle) = lifecycle.as_mut() {
+                lifecycle.cancel();
+            }
+            return Err(anyhow!("tunnel peer stopped the response stream"));
+        }
+    };
+    let response = match upstream_result {
         Ok(response) => response,
         Err(error) if matches!(&error, UpstreamRequestError::Send(source) if source.is_connect()) =>
         {
@@ -907,8 +922,13 @@ pub(super) async fn forward_tunnel_request(
         }
     };
 
-    let outcome = match relay_upstream_response(app, lifecycle.as_mut(), response, transport).await
-    {
+    let relay_result = tokio::select! {
+        result = relay_upstream_response(app, lifecycle.as_mut(), response, transport) => result,
+        () = &mut response_stopped => Err(ResponseRelayError::Downstream(anyhow!(
+            "tunnel peer stopped the response stream"
+        ))),
+    };
+    let outcome = match relay_result {
         Ok(outcome) => outcome,
         Err(ResponseRelayError::Upstream(error)) => {
             if let Some(lifecycle) = lifecycle.as_mut() {
@@ -2068,6 +2088,10 @@ mod tests {
                 return Err(anyhow!("client stopped before response completion"));
             }
             Ok(())
+        }
+
+        fn response_stopped(&self) -> impl Future<Output = ()> + Send + 'static {
+            std::future::pending()
         }
     }
 

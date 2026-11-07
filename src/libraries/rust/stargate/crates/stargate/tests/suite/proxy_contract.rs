@@ -3577,17 +3577,21 @@ async fn submitted_post_is_not_replayed_after_header_timeout() {
     let model = "review-duplicate-post";
     let hits = Arc::new(AtomicUsize::new(0));
     let backend_hits = hits.clone();
+    let slow_completed = Arc::new(AtomicUsize::new(0));
+    let backend_slow_completed = slow_completed.clone();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = listener.local_addr().unwrap();
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/v1/chat/completions", post(move |req: Request| {
             let hits = backend_hits.clone();
+            let slow_completed = backend_slow_completed.clone();
             async move {
                 axum::body::to_bytes(req.into_body(), 1024 * 1024).await.unwrap();
                 let prior = hits.fetch_add(1, Ordering::SeqCst);
                 if prior == 0 {
                     tokio::time::sleep(Duration::from_millis(900)).await;
+                    slow_completed.fetch_add(1, Ordering::SeqCst);
                 }
                 Response::builder()
                     .header("content-type", "text/event-stream")
@@ -3658,6 +3662,9 @@ async fn submitted_post_is_not_replayed_after_header_timeout() {
     let status = response.status();
     let body = response.text().await.unwrap();
     let accepted = hits.load(Ordering::SeqCst);
+    // Outlast the slow backend: the timed-out request must have been cancelled.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let slow_completed = slow_completed.load(Ordering::SeqCst);
     let ambiguous = fixture
         .handle
         .metrics()
@@ -3668,10 +3675,14 @@ async fn submitted_post_is_not_replayed_after_header_timeout() {
     fixture.shutdown().await;
     backend_task.abort();
     let _ = backend_task.await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
     assert_eq!(
         accepted, 1,
         "one POST was accepted {accepted} times; final status={status}, body={body}"
+    );
+    assert_eq!(
+        slow_completed, 0,
+        "the backend request kept running after the header timeout"
     );
     let ambiguous = ambiguous.expect("ambiguous delivery counter missing");
     assert_eq!(ambiguous.get_metric().len(), 1);

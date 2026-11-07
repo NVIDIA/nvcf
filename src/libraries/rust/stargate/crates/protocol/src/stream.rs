@@ -80,8 +80,10 @@ impl SendStream {
         Ok(())
     }
 
-    pub async fn stopped(&mut self) -> Result<Option<VarInt>, StoppedError> {
-        self.send.stopped().await
+    pub fn stopped(
+        &self,
+    ) -> impl Future<Output = Result<Option<VarInt>, StoppedError>> + Send + Sync + 'static {
+        self.send.stopped()
     }
 }
 

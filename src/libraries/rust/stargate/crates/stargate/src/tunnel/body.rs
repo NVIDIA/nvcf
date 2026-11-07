@@ -15,7 +15,7 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::http::{HeaderMap, StatusCode};
 use bytes::Buf;
@@ -35,6 +35,11 @@ mod upload;
 
 pub(super) use upload::RequestBodySendTask;
 use upload::{ResponseHeadRaceBias, ResponseHeadRaceConfig, race_request_body_and_response_head};
+
+/// The tunnel peer sent no response headers before the request timeout.
+#[derive(Debug, thiserror::Error)]
+#[error("quic request timed out waiting for response headers")]
+pub struct ResponseHeaderTimeout;
 
 pub struct StreamingBody {
     inner: StreamingBodyInner,
@@ -306,7 +311,7 @@ async fn recv_raw_quic_response_headers_until(
 ) -> Result<HeaderMap> {
     tokio::time::timeout_at(deadline, recv_stream.recv_header())
         .await
-        .map_err(|_| anyhow!("quic request timed out"))?
+        .map_err(|_| ResponseHeaderTimeout)?
         .context("failed to receive response headers")
 }
 
@@ -319,7 +324,7 @@ async fn recv_webtransport_response_head_until(
         stargate_protocol::read_webtransport_http_response_head(recv_stream),
     )
     .await
-    .map_err(|_| anyhow!("quic request timed out"))?
+    .map_err(|_| ResponseHeaderTimeout)?
     .context("failed to receive WebTransport response head")
 }
 
@@ -349,7 +354,7 @@ async fn recv_h3_response_until(
 ) -> Result<http::Response<()>> {
     tokio::time::timeout_at(deadline, recv_stream.recv_response())
         .await
-        .map_err(|_| anyhow!("quic request timed out"))?
+        .map_err(|_| ResponseHeaderTimeout)?
         .map_err(h3_error)
         .context("failed to receive h3 response headers")
 }

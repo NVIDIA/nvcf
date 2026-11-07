@@ -235,6 +235,7 @@ Common errors:
 | `503` | `overloaded_error` | Capacity or admission rejection. | Treat as serving failure. |
 | `503` | `local_connect_failure` | Pylon could not connect to its model server. | Treat as serving failure. |
 | `503` | `model_generation_unavailable` | Pylon has not admitted the model generation. | Treat as serving failure. |
+| `504` | `upstream_timeout` | No response headers before `--quic-request-timeout-ms`. | Treat as serving failure. |
 
 Stargate strips pylon retry metadata before returning downstream:
 `x-stargate-retryable`, `x-stargate-retry-reason`,
@@ -255,11 +256,14 @@ metadata and does not forward the upstream header downstream.
 
 Queued requests can wait a long time before their first output. Stargate waits
 up to `--quic-request-timeout-ms` (default 300000) for response headers from
-Pylon. After the engine returns headers, Pylon waits up to
-`--pylon-first-output-timeout-ms` (default 300000) for the first streamed output
-and `--pylon-output-chunk-timeout-ms` (default 30000) between outputs. The two
-waits run one after the other, so a single attempt can wait for their sum before
-its first output, and each retry can wait that long again.
+Pylon. When that wait ends, Stargate returns `504` and drops the tunnel stream.
+Pylon then cancels the engine request, as it does when the caller disconnects.
+This works over raw QUIC tunnels, direct or through `stargate-k8s-router`, and
+over direct WebTransport tunnels. After the engine returns headers, Pylon waits
+up to `--pylon-first-output-timeout-ms` (default 300000) for the first streamed
+output and `--pylon-output-chunk-timeout-ms` (default 30000) between outputs.
+The two waits run one after the other, so a single attempt can wait for their
+sum before its first output, and each retry can wait that long again.
 
 Gateway rules:
 

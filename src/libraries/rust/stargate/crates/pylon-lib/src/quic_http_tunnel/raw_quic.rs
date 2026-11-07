@@ -88,6 +88,14 @@ impl TunnelRequestTransport for RawQuicTunnelTransport {
             .finish()
             .context("failed to finish response stream")
     }
+
+    fn response_stopped(&self) -> impl Future<Output = ()> + Send + 'static {
+        let stopped = self.send_stream.stopped();
+        async move {
+            // A stop code, a reset, and a lost connection all end the response.
+            let _ = stopped.await;
+        }
+    }
 }
 
 pub(super) async fn handle_stream(
