@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use crate::metrics;
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use problem_details::ProblemDetails;
 use tonic::{Code, Status};
@@ -37,7 +37,15 @@ impl IntoResponse for AppError {
         );
         let span = Span::current();
         span.record("app_error", "true");
-        self.0.into_response()
+        let unavailable = self.0.status == Some(StatusCode::SERVICE_UNAVAILABLE);
+        let mut response = self.0.into_response();
+        if unavailable {
+            // Every 503 here is temporary; tell clients when to retry.
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+        }
+        response
     }
 }
 
@@ -84,6 +92,10 @@ impl AppError {
                 ProblemDetails::from_status_code(StatusCode::TOO_MANY_REQUESTS)
                     .with_detail(err.to_string()),
             ),
+            crate::nats::Error::Unavailable(detail) => AppError(
+                ProblemDetails::from_status_code(StatusCode::SERVICE_UNAVAILABLE)
+                    .with_detail(detail),
+            ),
             crate::nats::Error::Other(err) => err.context("failed to send nats request").into(),
         }
     }
@@ -107,5 +119,31 @@ fn grpc_status_to_http_status(status: &Status) -> StatusCode {
         }
         Code::Internal | Code::Unknown | Code::DataLoss => StatusCode::INTERNAL_SERVER_ERROR,
         Code::Unauthenticated => StatusCode::UNAUTHORIZED,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_nats_returns_503_with_retry_after() {
+        let response = AppError::map_nats_err(crate::nats::Error::Unavailable("no ack".into()))
+            .into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+    }
+
+    #[test]
+    fn full_queue_stays_429_without_retry_after() {
+        let full: async_nats::jetstream::Error = serde_json::from_value(serde_json::json!({
+            "code": 503,
+            "err_code": 10077,
+            "description": "maximum messages exceeded"
+        }))
+        .unwrap();
+        let response = AppError::map_nats_err(crate::nats::Error::Publish(full)).into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().get(header::RETRY_AFTER).is_none());
     }
 }

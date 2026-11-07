@@ -93,6 +93,12 @@ pub struct NatsRetryStrategy {
     pub retries: usize,
     pub initial_delay_ms: u64,
     pub backoff_factor: f64,
+    /// Total time for one request's publish, including every retry. When JetStream cannot
+    /// ack in time, for example after losing quorum, the request fails with 503 instead of
+    /// retrying past the client's own timeout.
+    pub publish_timeout_ms: u64,
+    /// How long one publish attempt waits for its ack.
+    pub attempt_timeout_ms: u64,
 }
 
 impl Default for NatsRetryStrategy {
@@ -101,6 +107,8 @@ impl Default for NatsRetryStrategy {
             retries: 5,
             initial_delay_ms: 1000,
             backoff_factor: 2.0,
+            publish_timeout_ms: 5000,
+            attempt_timeout_ms: 2000,
         }
     }
 }
@@ -113,6 +121,10 @@ pub enum Error {
 
     #[error("Jetstream error: {0}")]
     Publish(#[from] jetstream::Error),
+
+    /// JetStream cannot accept the request now, for example while it has no quorum.
+    #[error("JetStream unavailable: {0}")]
+    Unavailable(String),
 
     /// Error from something else
     #[error("Other error: {0}")]
@@ -145,6 +157,39 @@ impl From<PublishError> for Error {
             _ => Self::Other(anyhow::Error::new(err).context("Error publishing to nats")),
         }
     }
+}
+
+/// True when a store failure means the request stream holds its maximum number of messages.
+fn is_queue_full(js_err: &jetstream::Error) -> bool {
+    js_err.error_code() == ErrorCode::STREAM_STORE_FAILED
+        && js_err.to_string().contains("maximum messages exceeded")
+}
+
+/// True when stream or consumer setup failed because JetStream cannot serve requests now:
+/// the request timed out, or the cluster has no quorum (`CLUSTER_NOT_AVAILABLE`, 10008).
+fn is_jetstream_unavailable(err: &anyhow::Error) -> bool {
+    let unavailable = |js: &jetstream::Error| js.error_code() == ErrorCode::CLUSTER_NOT_AVAILABLE;
+    err.chain().any(|cause| {
+        if let Some(err) = cause.downcast_ref::<CreateStreamError>() {
+            return match err.kind() {
+                CreateStreamErrorKind::TimedOut | CreateStreamErrorKind::JetStreamUnavailable => {
+                    true
+                }
+                CreateStreamErrorKind::JetStream(js) => unavailable(&js),
+                _ => false,
+            };
+        }
+        if let Some(err) = cause.downcast_ref::<ConsumerError>() {
+            return match err.kind() {
+                ConsumerErrorKind::TimedOut => true,
+                ConsumerErrorKind::JetStream(js) => unavailable(&js),
+                _ => false,
+            };
+        }
+        cause
+            .downcast_ref::<jetstream::Error>()
+            .is_some_and(unavailable)
+    })
 }
 
 fn de_csv_str<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -543,10 +588,23 @@ impl NatsService {
             .inspect_err(|_err| {
                 record_nats_error_total();
             })?;
-        stream.purge().filter(subject).await.inspect_err(|_err| {
-            record_nats_error_total();
-        })?;
-        Ok(())
+        // A 504 waits for this purge, so bound it like a publish attempt.
+        let attempt_timeout =
+            Duration::from_millis(self.nats_properties.retry_strategy.attempt_timeout_ms);
+        match tokio::time::timeout(attempt_timeout, stream.purge().filter(subject)).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(err)) => {
+                record_nats_error_total();
+                Err(err.into())
+            }
+            Err(_) => {
+                record_nats_error_total();
+                Err(anyhow!(
+                    "purge timed out after {} ms",
+                    attempt_timeout.as_millis()
+                ))
+            }
+        }
     }
 
     /// Fire-and-forget cancel broadcast to every worker for this function
@@ -585,7 +643,7 @@ impl NatsService {
                     // We need to differentiate between stream full vs duplicate subject
                     // Both use the same error code, so check the description after matching the code
                     let error_message = js_err.to_string();
-                    if error_message.contains("maximum messages exceeded") {
+                    if is_queue_full(js_err) {
                         // we *could* retry, but since the stream is full we don't want to spam it.
                         tracing::trace!("Maximum messages exceeded on stream, terminal error");
                         return PublishErrorClassification::Terminal;
@@ -609,6 +667,28 @@ impl NatsService {
         version: Uuid,
         payload: Bytes,
     ) -> Result<(), Error> {
+        let publish_timeout =
+            Duration::from_millis(self.nats_properties.retry_strategy.publish_timeout_ms);
+        tokio::time::timeout(
+            publish_timeout,
+            self.publish_with_retries(request_id, version, payload),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            record_nats_error_total();
+            Err(Error::Unavailable(format!(
+                "no JetStream ack within {} ms",
+                publish_timeout.as_millis()
+            )))
+        })
+    }
+
+    async fn publish_with_retries(
+        &self,
+        request_id: RequestId,
+        version: Uuid,
+        payload: Bytes,
+    ) -> Result<(), Error> {
         // Attempt the initial publish
         let ack = self
             .publish_to_stream(request_id, version, payload.clone())
@@ -623,7 +703,9 @@ impl NatsService {
                     // Don't keep trying to create the stream in retry if that one also gives a stream not found.
                     // A stream create success followed by a not found could mean flapping.
                     // We do not want to rapidly create streams as that is an expensive operation.
-                    self.create_request_stream(version).await?;
+                    self.create_request_stream(version)
+                        .await
+                        .map_err(Self::stream_setup_error)?;
                 }
                 PublishErrorKind::Other => {
                     match Self::classify_publish_error(&err, request_id) {
@@ -672,11 +754,41 @@ impl NatsService {
                 },
                 retry_strategy,
             )
-            .await?;
+            .await
+            .map_err(Self::exhausted_publish_error)?;
         }
 
         // If we made it here, either the initial publish succeeded or the retry succeeded
         Ok(())
+    }
+
+    /// Retries are spent only on transient failures; a full queue stays a terminal `Publish`
+    /// error (429). Anything else left after the last retry means JetStream cannot accept
+    /// requests right now.
+    fn exhausted_publish_error(err: Error) -> Error {
+        match err {
+            Error::Other(err) => Error::Unavailable(err.to_string()),
+            Error::Publish(js_err) if !is_queue_full(&js_err) => {
+                Error::Unavailable(js_err.to_string())
+            }
+            err => err,
+        }
+    }
+
+    /// A polling record JetStream cannot store now is unavailable, like a request publish
+    /// whose retries ran out. A full stream stays a `Publish` error (429).
+    fn tracking_publish_error(err: PublishError) -> Error {
+        Self::exhausted_publish_error(Error::from(err))
+    }
+
+    /// Creating a missing stream fails while JetStream has no quorum. Report that as
+    /// unavailable so clients retry, and keep other setup failures as internal errors.
+    fn stream_setup_error(err: anyhow::Error) -> Error {
+        if is_jetstream_unavailable(&err) {
+            Error::Unavailable(err.to_string())
+        } else {
+            Error::Other(err)
+        }
     }
 
     #[tracing::instrument(level = Level::TRACE, skip(self), err)]
@@ -812,6 +924,16 @@ impl NatsService {
         }
     }
 
+    /// Waits for a publish ack for at most `attempt_timeout_ms`.
+    async fn await_ack(&self, ack: PublishAckFuture) -> Result<(), PublishError> {
+        let attempt_timeout =
+            Duration::from_millis(self.nats_properties.retry_strategy.attempt_timeout_ms);
+        tokio::time::timeout(attempt_timeout, ack)
+            .await
+            .unwrap_or_else(|_| Err(PublishError::new(PublishErrorKind::TimedOut)))
+            .map(|_| ())
+    }
+
     #[tracing::instrument(level = Level::DEBUG, skip(self, payload), err)]
     async fn publish_to_stream(
         &self,
@@ -828,8 +950,8 @@ impl NatsService {
             .publish_with_headers(subject, otel_context(), payload)
             .await
         {
-            Ok(ack) => match ack.await {
-                Ok(_) => {
+            Ok(ack) => match self.await_ack(ack).await {
+                Ok(()) => {
                     record_nats_jetstream_publish(stream_name, "Ok".to_string());
                     Ok(())
                 }
@@ -863,36 +985,50 @@ impl NatsService {
         request_id: RequestId,
         tracking: &WorkerResultTracking,
         owner: &PollingRequestOwner,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), Error> {
         let region = region.unwrap_or(&self.nats_properties.region);
         // Keep invocation-service metadata outside the shared protobuf payload.
         let headers = owner.to_headers()?;
-        let pub_ack = self
+        match self
             .publish_to_request_mapping(region, request_id, tracking, &headers)
-            .await?;
-        match pub_ack.await {
+            .await
+        {
             Err(err) if err.kind() == PublishErrorKind::StreamNotFound => {
-                // create stream and try again
-                self.create_request_tracking_stream().await?;
-                self.publish_to_request_mapping(region, request_id, tracking, &headers)
-                    .await?
+                // create stream and try again, bounded like one publish attempt
+                let attempt_timeout =
+                    Duration::from_millis(self.nats_properties.retry_strategy.attempt_timeout_ms);
+                let recreate_and_publish = async {
+                    self.create_request_tracking_stream()
+                        .await
+                        .map_err(Self::stream_setup_error)?;
+                    self.publish_to_request_mapping(region, request_id, tracking, &headers)
+                        .await
+                        .map_err(|err| {
+                            // track the error if it fails to wait for the actual publish acknowledgment from NATS.
+                            record_nats_error_total();
+                            Self::tracking_publish_error(err)
+                        })
+                };
+                tokio::time::timeout(attempt_timeout, recreate_and_publish)
                     .await
-                    .inspect_err(|_err| {
-                        // track the error if it fails to wait for the actual publish acknowledgment from NATS.
-                        // use inspect_err here as cargo clippy suggested
+                    .unwrap_or_else(|_| {
                         record_nats_error_total();
-                    })?;
-                Ok(())
+                        Err(Error::Unavailable(format!(
+                            "request tracking stream not ready within {} ms",
+                            attempt_timeout.as_millis()
+                        )))
+                    })
             }
             Err(err) => {
                 record_nats_error_total();
-                Err(err.into())
+                Err(Self::tracking_publish_error(err))
             }
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
         }
     }
 
-    /// Publish the shared payload with invocation-service ownership headers.
+    /// Publish the shared payload with invocation-service ownership headers. The publish
+    /// and its ack together take at most `attempt_timeout_ms`.
     #[tracing::instrument(level = Level::TRACE, skip(self, tracking, headers), err)]
     async fn publish_to_request_mapping(
         &self,
@@ -900,12 +1036,21 @@ impl NatsService {
         request_id: RequestId,
         tracking: &WorkerResultTracking,
         headers: &HeaderMap,
-    ) -> Result<PublishAckFuture, PublishError> {
+    ) -> Result<(), PublishError> {
         let payload = tracking.encode_to_vec().into();
         let subject = format!("requestToFunctionVersion.{}.{}", region, request_id);
-        self.jetstream
-            .publish_with_headers(subject, headers.clone(), payload)
+        let attempt_timeout =
+            Duration::from_millis(self.nats_properties.retry_strategy.attempt_timeout_ms);
+        let publish = async {
+            self.jetstream
+                .publish_with_headers(subject, headers.clone(), payload)
+                .await?
+                .await
+                .map(|_| ())
+        };
+        tokio::time::timeout(attempt_timeout, publish)
             .await
+            .unwrap_or_else(|_| Err(PublishError::new(PublishErrorKind::TimedOut)))
     }
 
     /// Find the tracking record and its ownership metadata in any configured region.
@@ -1047,6 +1192,67 @@ mod tests {
     use tempfile::NamedTempFile;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
+
+    fn jetstream_error(err_code: u64) -> jetstream::Error {
+        described_jetstream_error(err_code, "test error")
+    }
+
+    fn described_jetstream_error(err_code: u64, description: &str) -> jetstream::Error {
+        serde_json::from_value(serde_json::json!({
+            "code": 503,
+            "err_code": err_code,
+            "description": description
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn stream_setup_without_quorum_is_unavailable() {
+        let no_quorum =
+            CreateStreamError::from(CreateStreamErrorKind::JetStream(jetstream_error(10008)));
+        let err = anyhow::Error::new(no_quorum).context("failed to create stream");
+        assert!(matches!(
+            NatsService::stream_setup_error(err),
+            Error::Unavailable(_)
+        ));
+
+        let timed_out = anyhow::Error::new(ConsumerError::from(ConsumerErrorKind::TimedOut));
+        assert!(matches!(
+            NatsService::stream_setup_error(timed_out),
+            Error::Unavailable(_)
+        ));
+    }
+
+    #[test]
+    fn other_stream_setup_failures_stay_internal() {
+        let invalid = CreateStreamError::from(CreateStreamErrorKind::InvalidStreamName);
+        assert!(matches!(
+            NatsService::stream_setup_error(anyhow::Error::new(invalid)),
+            Error::Other(_)
+        ));
+    }
+
+    #[test]
+    fn exhausted_retries_are_unavailable_but_full_queue_is_not() {
+        assert!(matches!(
+            NatsService::exhausted_publish_error(Error::Other(anyhow!("timed out"))),
+            Error::Unavailable(_)
+        ));
+        assert!(matches!(
+            NatsService::exhausted_publish_error(Error::Publish(described_jetstream_error(
+                10077,
+                "maximum messages exceeded"
+            ))),
+            Error::Publish(_)
+        ));
+        assert!(matches!(
+            NatsService::exhausted_publish_error(Error::Publish(described_jetstream_error(
+                10077,
+                "store closed"
+            ))),
+            Error::Unavailable(_)
+        ));
+    }
 
     #[test]
     fn polling_owner_header_round_trips_without_header_injection() {
