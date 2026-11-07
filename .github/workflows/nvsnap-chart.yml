@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Render nvsnap's Helm chart and run its checks: RBAC rules the server and
+# agent need, CRDs in sync with deploy/crds/, every image tag set, and the
+# server Service never public by default. Runs only when nvsnap or this
+# workflow changes.
+#
+# If this fails on your change, run the same check locally (needs helm,
+# the subchart repos added as in the "Fetch" step, and one
+# `helm dependency build`):
+#
+#   helm dependency build src/compute-plane-services/nvsnap/deploy/helm/nvsnap
+#   bash src/compute-plane-services/nvsnap/scripts/test-helm-chart.sh
+
+name: nvsnap chart
+
+on:
+  push:
+    branches: [main, 'release-**']
+    paths: &paths
+      - 'src/compute-plane-services/nvsnap/deploy/**'
+      - 'src/compute-plane-services/nvsnap/scripts/test-helm-chart.sh'
+      - '.github/workflows/nvsnap-chart.yml'
+  pull_request:
+    branches: [main, 'release-**']
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nvsnap-chart-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: render and check the nvsnap chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install helm
+        env:
+          HELM_VERSION: "3.21.4"
+          HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -sSL --retry 3 -o helm.tar.gz \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
+          tar xzf helm.tar.gz linux-amd64/helm
+          mkdir -p "${RUNNER_TEMP}/bin"
+          mv linux-amd64/helm "${RUNNER_TEMP}/bin/"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Fetch the chart's subcharts
+        run: |
+          set -euo pipefail
+          # helm dependency build resolves each dependency's repository URL
+          # through a configured repo; register the ones Chart.yaml names.
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+          helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm dependency build src/compute-plane-services/nvsnap/deploy/helm/nvsnap
+
+      - name: Run the chart checks
+        run: bash src/compute-plane-services/nvsnap/scripts/test-helm-chart.sh

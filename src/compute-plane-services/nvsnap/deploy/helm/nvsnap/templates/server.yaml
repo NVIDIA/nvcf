@@ -199,6 +199,13 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "nvsnap.server.labels" . | nindent 4 }}
+  {{- if and (eq .Values.server.service.type "LoadBalancer") (empty .Values.server.service.annotations) }}
+  {{- fail "server.service.type=LoadBalancer needs server.service.annotations that make the load balancer internal; the server API must not be public. Use ClusterIP and kubectl port-forward instead." }}
+  {{- end }}
+  {{- with .Values.server.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.server.service.type }}
   selector:

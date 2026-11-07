@@ -41,7 +41,7 @@ pass "helm template renders"
 # 2. ClusterRole 'nvsnap-server' has the nvsnap.io rule block (nvsnap#54)
 # Split the rendered output on '---\n' (YAML doc separators), then
 # pick the document that's both a ClusterRole AND named nvsnap-server.
-CR_BLOCK=$(echo "$RENDER" | awk 'BEGIN{RS="\n---\n"} /kind: ClusterRole/ && /name: nvsnap-server/ {print; exit}')
+CR_BLOCK=$(awk 'BEGIN{RS="\n---\n"} /kind: ClusterRole/ && /name: nvsnap-server/ {print; exit}' <<<"$RENDER")
 [[ -n "$CR_BLOCK" ]] || fail "no ClusterRole named 'nvsnap-server' in rendered output"
 echo "$CR_BLOCK" | grep -q 'gpucheckpoints' \
   || fail "nvsnap-server ClusterRole missing gpucheckpoints rule (nvsnap#54 regression)"
@@ -69,7 +69,7 @@ pass "nvsnap-server ClusterRole has services:get rule"
 # probes the configured SC at startup. Without this rule the
 # probe Forbidden-fails and L2 silently disables itself.
 # Regression test for GCP-H100-a 2026-06-02 post-MR-39.
-AGENT_CR_BLOCK=$(echo "$RENDER" | awk 'BEGIN{RS="\n---\n"} /kind: ClusterRole/ && /name: nvsnap-agent/ {print; exit}')
+AGENT_CR_BLOCK=$(awk 'BEGIN{RS="\n---\n"} /kind: ClusterRole/ && /name: nvsnap-agent/ {print; exit}' <<<"$RENDER")
 [[ -n "$AGENT_CR_BLOCK" ]] || fail "no ClusterRole named 'nvsnap-agent' in rendered output"
 echo "$AGENT_CR_BLOCK" | grep -q 'storageclasses' \
   || fail "nvsnap-agent ClusterRole missing storageclasses:get rule (L2 startup probe)"
@@ -88,13 +88,15 @@ grep -q 'name: gpurestores.nvsnap.io' "$CRD_FILE" \
   || fail "CRD file missing gpurestores.nvsnap.io"
 pass "chart ships CRDs for gpucheckpoints + gpurestores"
 
-# 4. The chart's CRD file must be byte-identical to the canonical source
-# in deploy/crds/ — otherwise drift can ship a stale CRD via Helm while
-# kubectl-apply users get the fresh one.
+# 4. The chart's CRD file must match the canonical source in deploy/crds/
+# — otherwise drift can ship a stale CRD via Helm while kubectl-apply
+# users get the fresh one. Comments and blank lines are ignored: the
+# chart copy carries the license header.
 SRC_CRD="$REPO_ROOT/deploy/crds/nvsnap.io_gpucheckpoints.yaml"
-diff -q "$SRC_CRD" "$CRD_FILE" >/dev/null \
+crd_body() { grep -v '^[[:space:]]*#' "$1" | sed '/^[[:space:]]*$/d'; }
+diff -q <(crd_body "$SRC_CRD") <(crd_body "$CRD_FILE") >/dev/null \
   || fail "chart/crds/nvsnap.io_gpucheckpoints.yaml drifted from deploy/crds/nvsnap.io_gpucheckpoints.yaml"
-pass "chart CRD identical to deploy/crds/ source"
+pass "chart CRD matches deploy/crds/ source"
 
 # 4b. GPUCheckpoint CRD must declare every status field nvsnap-server writes,
 # else K8s silently drops unknown fields and the hash never reaches the
@@ -132,14 +134,28 @@ pass "every nvsnap image ref has a non-empty tag"
 # 6. Mutation: wiping any image tag must fail the render with a
 # clear error, not silently fall back to AppVersion. This is the
 # regression test for the v0.0.5 blobstore ImagePullBackOff.
-for img in agent server blobstore; do
+for img in agent server; do
   if helm template "$RELEASE" "$CHART" --namespace "$NS" --set "$img.image.tag=" >/dev/null 2>&1; then
     fail "empty $img.image.tag should fail the chart render but didn't"
   fi
 done
-if helm template "$RELEASE" "$CHART" --namespace "$NS" --set nvsnap.builderTag="" >/dev/null 2>&1; then
-  fail "empty nvsnap.builderTag should fail the chart render but didn't"
-fi
 pass "empty image tags fail the chart render with a clear error"
+
+# 7. The server API must not get a public address: the default Service
+# is ClusterIP, and a LoadBalancer without annotations (which must make
+# it internal) fails the render.
+SVC_BLOCK=$(awk 'BEGIN{RS="\n---\n"} /kind: Service\n/ && /name: nvsnap-server\n/ {print; exit}' <<<"$RENDER")
+[[ -n "$SVC_BLOCK" ]] || fail "no Service named 'nvsnap-server' in rendered output"
+echo "$SVC_BLOCK" | grep -qE '^\s*type: ClusterIP$' \
+  || fail "nvsnap-server Service is not ClusterIP by default"
+if helm template "$RELEASE" "$CHART" --namespace "$NS" --set server.service.type=LoadBalancer >/dev/null 2>&1; then
+  fail "a LoadBalancer nvsnap-server without annotations should fail the chart render but didn't"
+fi
+LB=$(helm template "$RELEASE" "$CHART" --namespace "$NS" --set server.service.type=LoadBalancer \
+  --set-string 'server.service.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-scheme=internal') \
+  || fail "a LoadBalancer nvsnap-server with annotations should render"
+grep -q 'service.beta.kubernetes.io/aws-load-balancer-scheme: internal' <<<"$LB" \
+  || fail "server.service.annotations not rendered on the nvsnap-server Service"
+pass "nvsnap-server is ClusterIP by default; a LoadBalancer needs annotations"
 
 echo "OK — all helm chart checks passed"

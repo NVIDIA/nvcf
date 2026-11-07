@@ -20,9 +20,9 @@ Next steps:
      kubectl -n {{ .Release.Namespace }} rollout status ds/nvsnap-agent
 {{- if and .Values.server.enabled (eq .Values.server.service.type "LoadBalancer") }}
 
-3. nvsnap-server is exposed via LoadBalancer. Get its external IP:
+3. nvsnap-server is on an internal LoadBalancer. Get its address:
      kubectl -n {{ .Release.Namespace }} get svc nvsnap-server
-   Then point a browser at http://<EXTERNAL-IP>:{{ .Values.server.service.port }}
+   Then, from inside the network, open http://<EXTERNAL-IP>:{{ .Values.server.service.port }}
 {{- else if .Values.server.enabled }}
 
 3. nvsnap-server is on a {{ .Values.server.service.type }} service. To
