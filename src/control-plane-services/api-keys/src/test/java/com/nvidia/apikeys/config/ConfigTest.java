@@ -29,7 +29,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.ApplicationContext;
 import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.test.context.ContextConfiguration;
 
 @Slf4j
@@ -47,6 +49,14 @@ class ConfigTest extends BaseIntegrationTest {
 
     @Autowired
     private JwtService jwtService;
+
+    @Autowired
+    private ApplicationContext context;
+
+    @Test
+    void shouldNotCreateDefaultUser() {
+        assertThat(context.getBeanNamesForType(UserDetailsService.class).length).isZero();
+    }
 
     @Test
     void vaultPropertiesShouldBeSet() {

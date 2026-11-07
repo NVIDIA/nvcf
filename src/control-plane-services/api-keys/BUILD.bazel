@@ -40,6 +40,7 @@ API_KEYS_DEPS = [
     "@nv_third_party_deps//:org_springdoc_springdoc_openapi_starter_webmvc_api",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_security",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_actuator",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_jackson",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_security",
