@@ -18,16 +18,22 @@ limitations under the License.
 package webhook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -391,4 +397,148 @@ func TestWebhookPlugin(t *testing.T) {
 			})
 		})
 	})
+}
+
+// TestWebhookPluginAuditLog checks the audit entry written for allowed and denied requests.
+func TestWebhookPluginAuditLog(t *testing.T) {
+	tests := []struct {
+		name     string
+		response testServerResponse
+		wantErr  bool
+		want     map[string]any
+	}{
+		{
+			name:     "allow",
+			response: testServerResponse{statusCode: http.StatusOK, responseBody: createSuccessfulResponse()},
+			want: map[string]any{
+				"level":       "AUDIT",
+				"msg":         "[AUDIT] Webhook authentication",
+				"plugin":      "webhook",
+				"account":     "test-account",
+				"plugin_name": "webhook-alias",
+				"result":      "allow",
+				"user_id":     "test-user-123",
+			},
+		},
+		{
+			name:     "deny",
+			response: testServerResponse{statusCode: http.StatusUnauthorized},
+			wantErr:  true,
+			want: map[string]any{
+				"level":       "AUDIT",
+				"msg":         "[AUDIT] Webhook authentication",
+				"plugin":      "webhook",
+				"account":     "test-account",
+				"plugin_name": "webhook-alias",
+				"result":      "deny",
+				"error":       "webhook authentication failed",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := createTestServer([]testServerResponse{tt.response})
+			defer server.Close()
+			plugin, err := NewPlugin(Config{URL: server.URL, Timeout: 5 * time.Second, RetryAttempts: 1}, zaptest.NewLogger(t))
+			require.NoError(t, err)
+			var out bytes.Buffer
+			plugin.auditLogger = newAuditLogger(zapcore.AddSync(&out))
+
+			authReq := &types.Request{Account: "test-account", PluginName: "webhook-alias", Payload: "test-token"}
+			_, err = plugin.Authenticate(context.Background(), authReq)
+			assert.Equal(t, tt.wantErr, err != nil, "Authenticate error: %v", err)
+
+			require.Equal(t, 1, strings.Count(out.String(), "\n"), "want exactly one audit entry, got %q", out.String())
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(out.Bytes(), &entry))
+			assert.NotEmpty(t, entry["ts"])
+			delete(entry, "ts")
+			assert.Equal(t, tt.want, entry)
+			assert.NotContains(t, out.String(), authReq.Payload, "audit entry must not contain the token")
+		})
+	}
+}
+
+// TestWebhookPluginAuditLogOmitsURLCredentials checks that a failed request does not
+// write credentials from the configured webhook URL or a redirect Location to the
+// audit entry or the error.
+func TestWebhookPluginAuditLogOmitsURLCredentials(t *testing.T) {
+	secrets := []string{"audit-user", "audit-password", "audit-query-secret", "redirect-secret"}
+	tests := []struct {
+		name      string
+		handler   http.HandlerFunc
+		timeout   time.Duration
+		wantError string
+	}{
+		{
+			name: "transport failure",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					conn.Close()
+				}
+			},
+			wantError: "webhook request failed: Post: connection failed",
+		},
+		{
+			name: "timeout",
+			handler: func(_ http.ResponseWriter, r *http.Request) {
+				// Reading the body lets the server notice the client hanging up.
+				_, _ = io.Copy(io.Discard, r.Body)
+				<-r.Context().Done()
+			},
+			timeout:   50 * time.Millisecond,
+			wantError: "webhook request failed: Post: timeout",
+		},
+		{
+			name: "malformed redirect location",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Location", "http://[::1%zz?token="+secrets[3])
+				w.WriteHeader(http.StatusFound)
+			},
+			wantError: "webhook request failed: Post: request error",
+		},
+		{
+			name: "retries exhausted",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			},
+			wantError: "webhook request failed: retries exhausted",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			defer server.Close()
+			webhookURL, err := url.Parse(server.URL)
+			require.NoError(t, err)
+			webhookURL.User = url.UserPassword(secrets[0], secrets[1])
+			webhookURL.RawQuery = "token=" + secrets[2]
+
+			timeout := 5 * time.Second
+			if tt.timeout > 0 {
+				timeout = tt.timeout
+			}
+			plugin, err := NewPlugin(Config{URL: webhookURL.String(), Timeout: timeout, RetryAttempts: 1}, zaptest.NewLogger(t))
+			require.NoError(t, err)
+			var out bytes.Buffer
+			plugin.auditLogger = newAuditLogger(zapcore.AddSync(&out))
+
+			authReq := &types.Request{Account: "test-account", PluginName: "webhook-alias", Payload: "test-token"}
+			_, err = plugin.Authenticate(context.Background(), authReq)
+			require.Error(t, err)
+			assert.Equal(t, tt.wantError, err.Error())
+
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(out.Bytes(), &entry))
+			assert.Equal(t, "deny", entry["result"])
+			assert.Equal(t, err.Error(), entry["error"])
+			for _, secret := range secrets {
+				assert.NotContains(t, err.Error(), secret, "error must not contain URL credentials")
+				assert.NotContains(t, out.String(), secret, "audit entry must not contain URL credentials")
+			}
+		})
+	}
 }

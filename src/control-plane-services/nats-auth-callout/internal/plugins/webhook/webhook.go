@@ -20,17 +20,25 @@ package webhook
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"time"
 
 	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
 	"github.com/dsx-ai-factory/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
+	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/nvkit/audit"
 
 	"github.com/hashicorp/go-retryablehttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // Config contains Webhook plugin configuration.
@@ -53,6 +61,7 @@ type Plugin struct {
 	config      *Config
 	retryClient *retryablehttp.Client
 	logger      *zap.Logger
+	auditLogger *zap.Logger
 }
 
 // Request represents the request sent to webhook endpoint.
@@ -105,20 +114,46 @@ func NewPlugin(configData any, logger *zap.Logger) (*Plugin, error) {
 		config:      webhookConfig,
 		retryClient: retryClient,
 		logger:      logger.With(zap.String("plugin", "webhook")),
+		auditLogger: newAuditLogger(zapcore.AddSync(os.Stdout)),
 	}
 
 	return plugin, nil
+}
+
+// newAuditLogger returns a logger that writes entries at the AUDIT level. It does
+// not use the service log level or sampling, so every decision is recorded.
+func newAuditLogger(ws zapcore.WriteSyncer) *zap.Logger {
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	encoderConfig.EncodeLevel = audit.AuditLevelEncoder
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(encoderConfig), ws, zapcore.InfoLevel)
+	return zap.New(core).With(zap.String("plugin", "webhook"))
 }
 
 // Authenticate validates the request using webhook and returns auth result.
 func (p *Plugin) Authenticate(ctx context.Context, req *types.Request) (*types.Result, error) {
 	// Call webhook with retries
 	authResult, err := p.callWebhook(ctx, req.Account, req.PluginName, req.Payload)
+	p.auditAuthentication(req, authResult, err)
 	if err != nil {
 		return nil, err
 	}
 
 	return authResult, nil
+}
+
+// auditAuthentication records the allow or deny decision for an authentication request.
+func (p *Plugin) auditAuthentication(req *types.Request, result *types.Result, err error) {
+	fields := []zap.Field{
+		zap.String("account", req.Account),
+		zap.String("plugin_name", req.PluginName),
+	}
+	if err != nil {
+		fields = append(fields, zap.String("result", "deny"), zap.Error(err))
+	} else {
+		fields = append(fields, zap.String("result", "allow"), zap.String("user_id", result.UserID))
+	}
+	p.auditLogger.Info("[AUDIT] Webhook authentication", fields...)
 }
 
 // callWebhook calls the webhook endpoint with retries.
@@ -154,8 +189,7 @@ func (p *Plugin) callWebhook(ctx context.Context, account, pluginName, payload s
 	// Execute request with retries
 	resp, err := p.retryClient.Do(retryReq)
 	if err != nil {
-		// untested: network-level failures are complex to test reliably
-		return nil, types.NewAuthError(types.ErrTypeInternalError, fmt.Sprintf("webhook request failed: %v", err), 500)
+		return nil, types.NewAuthError(types.ErrTypeInternalError, "webhook request failed: "+describeRequestError(err), 500)
 	}
 	defer resp.Body.Close()
 
@@ -165,6 +199,38 @@ func (p *Plugin) callWebhook(ctx context.Context, account, pluginName, payload s
 	}
 
 	return p.parseSuccessResponse(resp)
+}
+
+// describeRequestError describes a failed webhook request with a fixed category.
+// The retryable client and net/http put the request URL and upstream values such
+// as a redirect Location into their error text, and the configured URL can carry
+// credentials in its userinfo or query string, so none of that text is kept.
+func describeRequestError(err error) string {
+	var (
+		urlErr  *url.Error
+		netErr  net.Error
+		opErr   *net.OpError
+		certErr *tls.CertificateVerificationError
+	)
+	var category string
+	switch {
+	case errors.Is(err, context.Canceled):
+		category = "canceled"
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		category = "timeout"
+	case errors.As(err, &certErr):
+		category = "certificate verification failed"
+	case errors.As(err, &opErr), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		category = "connection failed"
+	case errors.As(err, &urlErr):
+		category = "request error"
+	default:
+		return "retries exhausted"
+	}
+	if errors.As(err, &urlErr) {
+		return urlErr.Op + ": " + category
+	}
+	return category
 }
 
 // handleErrorResponse handles non-2xx HTTP responses and converts them to appropriate auth errors.
