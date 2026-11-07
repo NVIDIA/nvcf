@@ -169,7 +169,11 @@ or reformatted definitions without a new table or column are outside its scope.
 AI review can miss or misclassify a change. An inconclusive result identifies
 evidence that a maintainer must resolve.
 
-The check does not verify release propagation. Before release, identify the
+The check does not verify release propagation. The `stack upgrade policy` CI
+check accepts additive migrations without a major bump, so a passing result
+does not establish compliance with this policy.
+
+Before release, identify the
 affected service and migration component using the schema references and
 `tools/ci/github-release-subprojects.json`. The shared Cassandra migrations
 have their own release path, so a migration-only commit does not establish a
