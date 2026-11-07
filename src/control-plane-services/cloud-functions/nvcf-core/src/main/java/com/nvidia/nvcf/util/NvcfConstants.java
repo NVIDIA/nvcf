@@ -213,6 +213,11 @@ public final class NvcfConstants {
     // defaultValue property instead of an expression.
     public static final String DEFAULT_VISIBILITY = "authorized,private,public";
 
+    // Page size bounds for listing function version ids. The default is a String for the same
+    // reason as DEFAULT_VISIBILITY.
+    public static final String DEFAULT_FUNCTION_VERSION_IDS_LIMIT = "1000";
+    public static final int MAX_FUNCTION_VERSION_IDS_LIMIT = 10_000;
+
     public static final String ACCOUNT_NAME_REGEX = "^[a-z0-9A-Z][a-z0-9A-Z\\-_]*$";
 
     // TODO lower to 5m when all python workers are gone and we can trust the heartbeat to extend the ttl

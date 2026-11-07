@@ -133,6 +133,7 @@ bearer" means which saved CLI credential type can be sent as
 | Queue details | `GET /v2/nvcf/queues/functions/{functionId}/versions/{versionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `queue_details` |
 | Function management | `GET /v2/nvcf/functions` | `NVCF_TOKEN` or `NVCF_API_KEY` | `list_functions` or `list_functions_details` |
 | Function management | `GET /v2/nvcf/functions/ids` | `NVCF_TOKEN` or `NVCF_API_KEY` | `list_functions` or `list_functions_details` |
+| Function management | `GET /v2/nvcf/functions/versions/ids` | `NVCF_TOKEN` or `NVCF_API_KEY` | `list_functions`, `list_functions_details`, or `invoke_function` |
 | Function management | `POST /v2/nvcf/functions` | `NVCF_TOKEN` or `NVCF_API_KEY` | `register_function` |
 | Function management | `GET /v2/nvcf/functions/{functionId}/versions` | `NVCF_TOKEN` or `NVCF_API_KEY` | `list_functions` or `list_functions_details` |
 | Function management | `POST /v2/nvcf/functions/{functionId}/versions` | `NVCF_TOKEN` or `NVCF_API_KEY` | `register_function` |

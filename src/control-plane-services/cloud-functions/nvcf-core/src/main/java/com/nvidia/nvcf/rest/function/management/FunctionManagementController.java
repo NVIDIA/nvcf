@@ -16,6 +16,7 @@
  */
 package com.nvidia.nvcf.rest.function.management;
 
+import static com.nvidia.nvcf.util.NvcfConstants.DEFAULT_FUNCTION_VERSION_IDS_LIMIT;
 import static com.nvidia.nvcf.util.NvcfConstants.DEFAULT_VISIBILITY;
 import static com.nvidia.nvcf.util.NvcfConstants.SPAN_TAG_NCA_ID;
 import static org.springframework.http.MediaType.APPLICATION_JSON_VALUE;
@@ -24,6 +25,7 @@ import com.nvidia.nvcf.rest.function.management.dto.CreateFunctionRequest;
 import com.nvidia.nvcf.rest.function.management.dto.CreateFunctionResponse;
 import com.nvidia.nvcf.rest.function.management.dto.FunctionResponse;
 import com.nvidia.nvcf.rest.function.management.dto.ListFunctionIdsResponse;
+import com.nvidia.nvcf.rest.function.management.dto.ListFunctionVersionIdsResponse;
 import com.nvidia.nvcf.rest.function.management.dto.ListFunctionsResponse;
 import com.nvidia.nvcf.rest.function.management.dto.UpdateFunctionRequest;
 import com.nvidia.nvcf.rest.function.management.dto.VisibilityEnum;
@@ -36,6 +38,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.annotation.Nullable;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.Map;
@@ -239,6 +242,51 @@ public class FunctionManagementController {
         NvcfUtils.addTagsToCurrentSpan(tracer, Map.of(SPAN_TAG_NCA_ID, ncaId));
         rateLimiterService.verifyLimits(ncaId);
         return functionManagementFacade.getFunctionIds(ncaId, authentication, visibility);
+    }
+
+    @GetMapping("/v2/nvcf/functions/versions/ids")
+    @Operation(
+            summary = "List Function Version Ids",
+            description = """
+                    Lists the function id and version id of each function version that the caller
+                     may access, in pages. Each version passes the same account and API key checks
+                     as function invocation. Pages come in an unspecified order. Pass 'nextCursor'
+                     from a response as 'cursor' to get the next page; the last page has no
+                     'nextCursor'. Requires a bearer token with 'list_functions',
+                     'list_functions_details', or 'invoke_function' scope in the HTTP
+                     Authorization header.
+                    """
+    )
+    @PreAuthorize("hasAnyAuthority('list_functions', 'list_functions_details', " +
+            "'invoke_function', 'apikey:list_functions', 'apikey:list_functions_details', " +
+            "'apikey:invoke_function')")
+    public ListFunctionVersionIdsResponse getFunctionVersionIds(
+            @Parameter(description = """
+                    Query param 'visibility' indicates the kind of functions to be included
+                     in the response.
+                    """)
+            @RequestParam(required = false,
+                    defaultValue = DEFAULT_VISIBILITY) Set<VisibilityEnum> visibility,
+            @Parameter(description = """
+                    Query param 'limit' is the maximum number of function versions in the
+                     response, from 1 to 10000.
+                    """)
+            @RequestParam(required = false,
+                    defaultValue = DEFAULT_FUNCTION_VERSION_IDS_LIMIT) int limit,
+            @Parameter(description = """
+                    Query param 'cursor' is the 'nextCursor' value of the previous page. Omit it
+                     to get the first page.
+                    """)
+            @RequestParam(required = false) @Nullable String cursor,
+            Authentication authentication) {
+        var ncaId = accountService.getNcaId(authentication);
+        NvcfUtils.addTagsToCurrentSpan(tracer, Map.of(SPAN_TAG_NCA_ID, ncaId));
+        rateLimiterService.verifyLimits(ncaId);
+        return functionManagementFacade.getFunctionVersionIds(ncaId,
+                                                              authentication,
+                                                              visibility,
+                                                              limit,
+                                                              cursor);
     }
 
     @DeleteMapping("/v2/nvcf/functions/{functionId}/versions/{functionVersionId}")

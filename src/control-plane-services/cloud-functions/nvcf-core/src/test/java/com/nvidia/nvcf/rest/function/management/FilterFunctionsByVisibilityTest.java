@@ -46,7 +46,9 @@ import com.nvidia.nvcf.rest.account.TestAccountService;
 import com.nvidia.nvcf.rest.azp.TestAuthorizedPartiesService;
 import com.nvidia.nvcf.rest.azp.dto.AuthorizedPartyDto;
 import com.nvidia.nvcf.rest.function.management.dto.FunctionDto;
+import com.nvidia.nvcf.rest.function.management.dto.FunctionVersionIdDto;
 import com.nvidia.nvcf.rest.function.management.dto.ListFunctionIdsResponse;
+import com.nvidia.nvcf.rest.function.management.dto.ListFunctionVersionIdsResponse;
 import com.nvidia.nvcf.rest.function.management.dto.ListFunctionsResponse;
 import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult.Resource;
 import com.nvidia.nvcf.service.common.TestCommonService;
@@ -289,6 +291,63 @@ class FilterFunctionsByVisibilityTest {
         assertThat(responseBody.functionIds()).hasSize(expectedFunctions.size());
         assertThat(responseBody.functionIds())
                 .containsExactlyInAnyOrderElementsOf(expectedFunctions);
+    }
+
+    // The version ids listing returns exactly the versions of the full listing.
+    @ParameterizedTest
+    @MethodSource("filterFunctionsByVisibilityArgs")
+    void shouldFilterFunctionVersionIdsByVisibility(
+            @Nullable List<UUID> expectedFunctions,
+            @Nullable Set<UUID> expectedVersions,
+            @Nullable String visibility,
+            HttpStatus expectedStatus) {
+        var tokenSupplier = (Supplier<String>) () -> {
+            setResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                        List.of(new Resource("function", TEST_FUNCTION_ID_2 + "/*"),
+                                new Resource("account-functions", "*")),
+                        List.of(SCOPE_LIST_FUNCTIONS));
+            return "nvapi-stg-some-key";
+        };
+        var token = TestUtil.getToken(tokenSupplier);
+
+        testAuthPartiesService.createTestFunction(TEST_FUNCTION_ID, TEST_VERSION_ID_1,
+                                                  TEST_NCA_ID, TEST_FUNCTION_NAME);
+        testAuthPartiesService.createTestFunction(TEST_FUNCTION_ID_2, TEST_VERSION_ID_2,
+                                                  TEST_NCA_ID_2, TEST_FUNCTION_NAME_2);
+        var authorizedParties1 = Set.of(
+                AuthorizedPartyDto.builder().ncaId(TEST_NCA_ID).build()
+        );
+        testAuthPartiesService.associateAuthParties(TEST_NCA_ID_2, TEST_FUNCTION_ID_2,
+                                                    Optional.empty(), authorizedParties1);
+
+        var query = Optional.ofNullable(visibility).orElse("");
+        var responseEntity = testRestTemplate.exchange(
+                RequestEntity.get(URI.create("/v2/nvcf/functions/versions/ids" + query))
+                        .header("Authorization", "Bearer " + token)
+                        .build(),
+                ListFunctionVersionIdsResponse.class);
+        assertThat(responseEntity.getStatusCode()).isEqualTo(expectedStatus);
+        if (expectedStatus.isError()) {
+            return;
+        }
+        var responseBody = responseEntity.getBody();
+        assertThat(responseBody).isNotNull();
+        assertThat(responseBody.nextCursor()).isNull();
+        assertThat(responseBody.functions().stream().map(FunctionVersionIdDto::versionId))
+                .containsExactlyInAnyOrderElementsOf(expectedVersions);
+        assertThat(responseBody.functions().stream().map(FunctionVersionIdDto::id).distinct())
+                .containsExactlyInAnyOrderElementsOf(expectedFunctions);
+
+        var fullListing = testRestTemplate.exchange(
+                RequestEntity.get(URI.create("/v2/nvcf/functions" + query))
+                        .header("Authorization", "Bearer " + token)
+                        .build(),
+                ListFunctionsResponse.class);
+        assertThat(fullListing.getBody()).isNotNull();
+        assertThat(responseBody.functions()).containsExactlyInAnyOrderElementsOf(
+                fullListing.getBody().functions().stream()
+                        .map(dto -> new FunctionVersionIdDto(dto.id(), dto.versionId()))
+                        .toList());
     }
 
     @ParameterizedTest
