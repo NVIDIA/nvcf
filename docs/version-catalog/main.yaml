@@ -1,7 +1,7 @@
 docs_edition:
-  version: 1.0.4
+  version: 1.0.5
   status: development
-  previous_version: 1.0.3
+  previous_version: 1.0.4
   change: patch
 version: 1
 target: main
