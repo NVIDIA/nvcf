@@ -84,8 +84,17 @@ make install CLUSTER_NAME=<name> HELMFILE_ENV=<env>
 
 Skip this step when `addons.kaiScheduler.enabled` is true in `nvcf-compute-plane`. That stack installs KAI Scheduler (release and namespace `kai-scheduler`). Enable that flag whenever Grove or Dynamo is enabled. Use the standalone install below when you need KAI without the compute-plane add-on (for example the NVCA `KAIScheduler` feature gate alone).
 
+Set `KAI_VERSION` to the `version` of the `kai-scheduler` release in
+`deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl`, read
+from your selected compute-plane release tag, not from `main`.
+
 ```bash
+KAI_VERSION=<kai-version>
+
 cat > nvca-values.yaml << 'EOF'
+global:
+  gpuSharingMode: Disabled
+
 scheduler:
   placementStrategy: binpack
   plugins:
@@ -97,6 +106,8 @@ scheduler:
     preempt:
       enabled: false
     consolidation:
+      enabled: false
+    reclaim:
       enabled: false
 
 defaultQueue:
@@ -135,7 +146,7 @@ EOF
 helm install kai-scheduler \
   oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler \
   -n kai-scheduler --create-namespace -f nvca-values.yaml \
-  --version v0.14.0 \
+  --version "$KAI_VERSION" \
   --wait --timeout 5m
 ```
 

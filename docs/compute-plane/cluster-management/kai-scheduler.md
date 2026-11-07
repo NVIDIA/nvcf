@@ -145,11 +145,15 @@ to other nodes to make room for another queue's pending gang. Workloads that
 create their own queues, such as Dynamo, make this possible.
 
 If other teams on a shared cluster rely on reclaim to enforce their queue
-quotas, keep reclaim enabled and set the following instead. NVCF Pods are then
-never moved, and quota-based reclaim between the other queues still works:
+quotas, replace `reclaim.enabled: false` in the values above with the following.
+NVCF Pods are then never moved, and quota-based reclaim between the other queues
+still works:
 
 ```yaml
 scheduler:
+  actions:
+    reclaim:
+      enabled: true
   args:
     allow-consolidating-reclaim: "false"
 ```
