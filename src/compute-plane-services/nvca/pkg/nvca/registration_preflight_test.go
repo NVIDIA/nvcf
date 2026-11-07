@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/sirupsen/logrus"
@@ -358,7 +359,7 @@ agent:
 			)
 			var out bytes.Buffer
 			cmd.SetOut(&out)
-			cmd.SetArgs([]string{"preflight-registration", "--config=" + cfgFilePath})
+			cmd.SetArgs([]string{"preflight-registration", "--config=" + cfgFilePath, "--timeout=30s"})
 
 			err := cmd.ExecuteContext(t.Context())
 
@@ -377,4 +378,32 @@ agent:
 			assert.EqualError(t, err, "result "+string(outcome))
 		})
 	}
+}
+
+func TestRegistrationPreflightWithin(t *testing.T) {
+	t.Run("returns the result of a run that finishes in time", func(t *testing.T) {
+		result := runRegistrationPreflightWithin(t.Context(), time.Minute,
+			func(context.Context) types.RegistrationPreflightResult {
+				return types.RegistrationPreflightResult{Outcome: types.RegistrationPreflightAccepted}
+			})
+		assert.Equal(t, types.RegistrationPreflightAccepted, result.Outcome)
+	})
+
+	t.Run("reports Error at the deadline when the run ignores its context", func(t *testing.T) {
+		release := make(chan struct{})
+		t.Cleanup(func() { close(release) })
+		runCtxCh := make(chan context.Context, 1)
+
+		result := runRegistrationPreflightWithin(t.Context(), 50*time.Millisecond,
+			func(ctx context.Context) types.RegistrationPreflightResult {
+				runCtxCh <- ctx
+				<-release
+				return types.RegistrationPreflightResult{Outcome: types.RegistrationPreflightAccepted}
+			})
+
+		assert.Equal(t, types.RegistrationPreflightError, result.Outcome)
+		assert.Equal(t, "the preflight did not finish within 50ms: context deadline exceeded", result.Message)
+		assert.Equal(t, 1, result.Outcome.ExitCode())
+		assert.ErrorIs(t, (<-runCtxCh).Err(), context.DeadlineExceeded, "the run's context ends at the deadline")
+	})
 }

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bombsimon/logrusr/v4"
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/auth"
@@ -331,13 +332,15 @@ func newRegistrationPreflightCommand(
 	setFlag func(cli.Generic, string) error,
 	initLogger func(log *logrus.Entry) logr.Logger,
 ) *cobra.Command {
-	return &cobra.Command{
+	var timeout time.Duration
+	cmd := &cobra.Command{
 		Use:   "preflight-registration",
 		Short: "Ask ICMS whether it would accept the cluster registration for a config, without registering",
 		Long: "Builds the ICMS registration that the agent sends with --config and asks ICMS to validate it " +
 			"without applying it. Writes the result as JSON to stdout and to the Kubernetes termination " +
 			"message. Exits with 0 when ICMS would accept the registration, 2 when ICMS would reject it, " +
-			"3 when ICMS cannot validate a registration, and 1 when the preflight reaches no verdict.",
+			"3 when ICMS cannot validate a registration, and 1 when the preflight reaches no verdict, " +
+			"including when it does not finish within --timeout.",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -347,7 +350,10 @@ func newRegistrationPreflightCommand(
 			if err != nil {
 				result = preflightError(fmt.Errorf("load the agent config: %w", err))
 			} else {
-				result = runRegistrationPreflightFunc(ctx, opts)
+				run := func(ctx context.Context) types.RegistrationPreflightResult {
+					return runRegistrationPreflightFunc(ctx, opts)
+				}
+				result = runRegistrationPreflightWithin(ctx, timeout, run)
 			}
 
 			msg := registrationPreflightTerminationMessage(result)
@@ -363,6 +369,9 @@ func newRegistrationPreflightCommand(
 			return nil
 		},
 	}
+	cmd.Flags().DurationVar(&timeout, "timeout", defaultRegistrationPreflightTimeout,
+		"How long the preflight may take before it reports that it reached no verdict")
+	return cmd
 }
 
 func setDefaults(cfg *nvcaconfig.Config) error {

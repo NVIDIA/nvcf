@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"github.com/dsx-ai-factory/nvcf/src/libraries/go/lib/pkg/core"
@@ -76,6 +77,30 @@ func runRegistrationPreflight(ctx context.Context, opts *AgentOptions) types.Reg
 			opts.ICMSHostHeaderOverride, tokenFetcher, nvcaotel.NewTracer()),
 	}
 	return p.run(ctx)
+}
+
+// defaultRegistrationPreflightTimeout bounds the preflight. It leaves room for the
+// retries of the ICMS client.
+const defaultRegistrationPreflightTimeout = 2 * time.Minute
+
+// runRegistrationPreflightWithin runs run with a deadline of timeout. It returns an
+// Error result once the deadline passes, even when run is blocked in a call that
+// does not honor its context.
+func runRegistrationPreflightWithin(
+	ctx context.Context,
+	timeout time.Duration,
+	run func(context.Context) types.RegistrationPreflightResult,
+) types.RegistrationPreflightResult {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	done := make(chan types.RegistrationPreflightResult, 1)
+	go func() { done <- run(ctx) }()
+	select {
+	case result := <-done:
+		return result
+	case <-ctx.Done():
+		return preflightError(fmt.Errorf("the preflight did not finish within %s: %w", timeout, ctx.Err()))
+	}
 }
 
 func (p *registrationPreflight) run(ctx context.Context) types.RegistrationPreflightResult {
