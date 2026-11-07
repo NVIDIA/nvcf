@@ -214,6 +214,8 @@ func TestEditionGeneratedStackLinksPreserveSelection(t *testing.T) {
 	for _, renderer := range []string{"manifest-artifact-registry-paths", "compatibility-matrix"} {
 		t.Run(renderer, func(t *testing.T) {
 			catalog := loadMainCatalog(t)
+			// Exercise the maintained binding even when the checkout is Development.
+			catalog.UmbrellaManifestSHA256 = "sha256:" + strings.Repeat("a", 64)
 			catalog.DocsEdition = &DocsEdition{Version: "1.0.0", Status: ReleaseSetDevelopment, Change: "initial"}
 			got, err := Render(renderer, catalog)
 			if err != nil {
@@ -228,6 +230,7 @@ func TestEditionGeneratedStackLinksPreserveSelection(t *testing.T) {
 				t.Error("edition output links to the default edition")
 			}
 			catalog.DocsEdition = nil
+			catalog.UmbrellaManifestSHA256 = ""
 			got, err = Render(renderer, catalog)
 			if err != nil {
 				t.Fatal(err)
