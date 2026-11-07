@@ -86,6 +86,7 @@ type Reconciler struct {
 	cfg nvcaconfig.Config
 
 	Client      client.Client
+	apiReader   client.Reader
 	RESTConfig  *rest.Config
 	Decoder     runtime.Decoder
 	ReValClient ReValClient
@@ -667,7 +668,7 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	genericWorkloadMutator := newGenericMutator(r.FeatureFlagFetcher, ms, icmsReq,
 		r.ClusterRegion, r.ClusterName, functionName, taskName, false)
 
-	if err := r.ensureInstanceNamespace(ctx, ms, icmsReq); err != nil {
+	if err := r.ensureInstanceNamespace(ctx, ms, icmsReq, nvsnapNamespaceLabels(workloadObjs)); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -1051,13 +1052,61 @@ func (r *Reconciler) doUpdateWorkload(ctx context.Context,
 		return reconcile.Result{}, err
 	}
 
+	// An update can add a model cache path the install did not have, so reconcile the namespace labels
+	// before the updated objects can create pods.
+	// Decide from the rendered objects now: applying them writes the live objects back into workloadObjs.
+	nvsnapLabels := nvsnapNamespaceLabels(workloadObjs)
+	previousNamespace := &corev1.Namespace{}
+	if nvsnapLabels != nil {
+		key := client.ObjectKey{Name: ms.Spec.Namespace}
+		if err := r.nvsnapLiveReader().Get(ctx, key, previousNamespace); err != nil && !apierrors.IsNotFound(err) {
+			if k8sutil.IsTransientK8sError(err) {
+				log.V(1).Info("Transient error reading the namespace before the workload update, will retry", "error", err)
+				return reconcile.Result{Requeue: true}, nil
+			}
+			return reconcile.Result{}, fmt.Errorf("get namespace %q before the update of MiniService %q: %w",
+				ms.Spec.Namespace, ms.Name, err)
+		}
+	}
+	if err := r.ensureInstanceNamespace(ctx, ms, icmsReq, nvsnapLabels); err != nil {
+		// Other controllers write the namespace too, so a conflict here is expected and resolves on retry.
+		if k8sutil.IsTransientK8sError(err) {
+			log.V(1).Info("Transient error ensuring the instance namespace, will retry", "error", err)
+			return reconcile.Result{Requeue: true}, nil
+		}
+		return reconcile.Result{}, fmt.Errorf("ensure instance namespace %q for MiniService %q: %w",
+			ms.Spec.Namespace, ms.Name, err)
+	}
+
 	if err := r.applySSAWorkload(ctx, ms, genericWorkloadMutator, workloadObjs...); err != nil {
 		if isTerminal(err) {
 			err = unwrapTerminalError(err)
 			log.Error(err, "Failed to apply workload objects with terminal error. MiniService must be updated with new values to progress update; "+
 				"successfully applied objects prior to this error may need to be cleaned up manually")
 		}
+		if nvsnapLabels != nil {
+			if cleanupErr := r.restoreNvSnapOptOutAfterFailedUpdate(ctx, ms, previousNamespace, workloadObjs); cleanupErr != nil {
+				if k8sutil.IsTransientK8sError(cleanupErr) {
+					// The apply error already fails this reconcile and the next one repeats the restore, so a
+					// transient restore error is only logged.
+					log.V(1).Info("Transient error restoring the NvSnap namespace opt-out after the failed update, will retry",
+						"error", cleanupErr)
+				} else {
+					err = errors.Join(err, fmt.Errorf("restore NvSnap namespace opt-out after failed workload update: %w", cleanupErr))
+				}
+			}
+		}
 		return reconcile.Result{}, err
+	}
+
+	// Only now that the updated objects are applied is it safe to give the namespace back to NvSnap.
+	if err := r.releaseNvSnapOptOut(ctx, ms, nvsnapLabels); err != nil {
+		// A conflict with another writer of the namespace is expected and resolves on retry.
+		if k8sutil.IsTransientK8sError(err) {
+			log.V(1).Info("Transient error releasing the NvSnap namespace opt-out, will retry", "error", err)
+			return reconcile.Result{Requeue: true}, nil
+		}
+		return reconcile.Result{}, fmt.Errorf("release the NvSnap namespace opt-out of MiniService %q: %w", ms.Name, err)
 	}
 
 	if err := r.saveWorkloadConfig(ctx, ms, workloadConfig); err != nil {
@@ -1080,10 +1129,12 @@ func (r *Reconciler) doUpdateWorkload(ctx context.Context,
 	return reconcile.Result{}, nil
 }
 
+// ensureInstanceNamespace merges workload and configured metadata while preserving externally managed labels.
 func (r *Reconciler) ensureInstanceNamespace(
 	ctx context.Context,
 	ms *v1alpha1.MiniService,
 	icmsReq *nvcav2beta1.ICMSRequest,
+	workloadLabels map[string]string,
 ) error {
 	namespaceName := ms.Spec.Namespace
 
@@ -1097,6 +1148,8 @@ func (r *Reconciler) ensureInstanceNamespace(
 	}
 	namespace.Annotations = map[string]string{}
 
+	// Workload derived labels go first so labels configured for the cluster take precedence.
+	maps.Copy(namespace.Labels, workloadLabels)
 	maps.Copy(namespace.Labels, r.InstanceNamespaceLabels)
 
 	icmsReqLabels := nvcatypes.GetLabelsForRequest(icmsReq, r.FeatureFlagFetcher)
@@ -1104,6 +1157,14 @@ func (r *Reconciler) ensureInstanceNamespace(
 
 	icmsReqAnnotations := nvcatypes.GetAnnotationsForRequest(icmsReq)
 	maps.Copy(namespace.Annotations, icmsReqAnnotations)
+
+	// Mark an opt-out that came from the workload so it can be removed when the workload stops needing
+	// it. A label set by cluster configuration is not ours to remove.
+	_, workloadOptOut := workloadLabels[NvSnapInjectLabel]
+	_, clusterConfigured := r.InstanceNamespaceLabels[NvSnapInjectLabel]
+	if workloadOptOut && !clusterConfigured {
+		namespace.Annotations[NvSnapInjectManagedAnnotation] = "true"
+	}
 
 	needsEnforcement := !r.enabledAttrs.Empty()
 	if needsEnforcement {
@@ -1117,10 +1178,43 @@ func (r *Reconciler) ensureInstanceNamespace(
 			return nil
 		}
 
-		if !mapContainsAll(namespace.Labels, existingNamespace.Labels) ||
+		// A label that was already there without our mark was not introduced by the workload. Keep whatever
+		// value is there, explicit or not, unless cluster configuration sets one.
+		// Ownership needs the mark and the label it describes. If someone changed the label and left the mark,
+		// their value is kept.
+		owned := existingNamespace.Annotations[NvSnapInjectManagedAnnotation] == "true" &&
+			existingNamespace.Labels[NvSnapInjectLabel] == nvsnapInjectOptOut
+		staleMark := false
+		if _, hasLabel := existingNamespace.Labels[NvSnapInjectLabel]; hasLabel && !owned && !clusterConfigured {
+			delete(namespace.Labels, NvSnapInjectLabel)
+			delete(namespace.Annotations, NvSnapInjectManagedAnnotation)
+			// A mark left on a label that is no longer ours must go too, or a later external opt-out would look
+			// like NVCA's own.
+			_, staleMark = existingNamespace.Annotations[NvSnapInjectManagedAnnotation]
+		}
+
+		staleConditional := hasStaleKey(existingNamespace.Labels, namespace.Labels, instanceNamespaceConditionalLabels) ||
+			hasStaleKey(existingNamespace.Annotations, namespace.Annotations, instanceNamespaceConditionalAnnotations)
+
+		if staleConditional || staleMark ||
+			!mapContainsAll(namespace.Labels, existingNamespace.Labels) ||
 			!mapContainsAll(namespace.Annotations, existingNamespace.Annotations) {
 			log.Info("Updating namespace with missing metadata")
-			if err := r.Client.Update(ctx, namespace); err != nil {
+			// Update the fetched object so labels and annotations added by other controllers survive.
+			if existingNamespace.Labels == nil {
+				existingNamespace.Labels = make(map[string]string, len(namespace.Labels))
+			}
+			if existingNamespace.Annotations == nil {
+				existingNamespace.Annotations = make(map[string]string, len(namespace.Annotations))
+			}
+			maps.Copy(existingNamespace.Labels, namespace.Labels)
+			maps.Copy(existingNamespace.Annotations, namespace.Annotations)
+			if staleMark {
+				delete(existingNamespace.Annotations, NvSnapInjectManagedAnnotation)
+			}
+			dropStaleKeys(existingNamespace.Labels, namespace.Labels, instanceNamespaceConditionalLabels)
+			dropStaleKeys(existingNamespace.Annotations, namespace.Annotations, instanceNamespaceConditionalAnnotations)
+			if err := r.Client.Update(ctx, existingNamespace); err != nil {
 				return err
 			}
 		}
@@ -1135,6 +1229,36 @@ func (r *Reconciler) ensureInstanceNamespace(
 	}
 
 	return nil
+}
+
+// instanceNamespaceConditionalLabels and instanceNamespaceConditionalAnnotations are the keys NVCA sets on an
+// instance namespace only under some settings (GXCache, enforcement). When a reconcile no longer sets one, the
+// value an earlier reconcile left is stale and is removed. Metadata owned by other controllers is kept.
+var (
+	instanceNamespaceConditionalLabels      = []string{nvcatypes.ShaderCacheLabelKey, enforce.NeedsEnforceLabelKey}
+	instanceNamespaceConditionalAnnotations = []string{enforce.EnforcementsAnnotationKey}
+)
+
+// hasStaleKey reports whether existing holds one of keys that desired no longer has.
+func hasStaleKey(existing, desired map[string]string, keys []string) bool {
+	for _, key := range keys {
+		if _, held := existing[key]; !held {
+			continue
+		}
+		if _, wanted := desired[key]; !wanted {
+			return true
+		}
+	}
+	return false
+}
+
+// dropStaleKeys removes from existing the keys that desired no longer has.
+func dropStaleKeys(existing, desired map[string]string, keys []string) {
+	for _, key := range keys {
+		if _, wanted := desired[key]; !wanted {
+			delete(existing, key)
+		}
+	}
 }
 
 func mapContainsAll(src, tgt map[string]string) bool {
